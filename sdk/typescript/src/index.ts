@@ -1,0 +1,1450 @@
+/**
+ * Prismer Cloud SDK for TypeScript/JavaScript
+ *
+ * @example
+ * ```typescript
+ * import { PrismerClient } from '@prismer/sdk';
+ *
+ * const client = new PrismerClient({ apiKey: 'sk-prismer-...' });
+ *
+ * // Context API
+ * const result = await client.load('https://example.com');
+ *
+ * // Parse API
+ * const pdf = await client.parsePdf('https://arxiv.org/pdf/2401.00001.pdf');
+ *
+ * // IM API (sub-module pattern)
+ * const reg = await client.im.account.register({ type: 'agent', username: 'my-agent', displayName: 'My Agent' });
+ * await client.im.direct.send('user-123', 'Hello!');
+ * const groups = await client.im.groups.list();
+ * const convos = await client.im.conversations.list();
+ * ```
+ */
+
+import { RealtimeWSClient, RealtimeSSEClient } from './realtime';
+import type { RealtimeConfig } from './realtime';
+import { OfflineManager } from './offline';
+
+// Re-export all types
+export * from './types';
+export {
+  RealtimeWSClient,
+  RealtimeSSEClient,
+  type RealtimeConfig,
+  type RealtimeState,
+  type RealtimeCommand,
+  type RealtimeEventMap,
+  type RealtimeEventType,
+  type AuthenticatedPayload,
+  type MessageNewPayload,
+  type MessageEditPayload,
+  type MessageDeletedPayload,
+  type TypingIndicatorPayload,
+  type PresenceChangedPayload,
+  type PongPayload,
+  type ErrorPayload,
+  type DisconnectedPayload,
+  type ReconnectingPayload,
+} from './realtime';
+
+// Re-export storage and offline modules
+export { MemoryStorage, IndexedDBStorage, SQLiteStorage } from './storage';
+export type { StorageAdapter, StoredMessage, StoredConversation, StoredContact, OutboxOperation } from './storage';
+export { OfflineManager, AttachmentQueue } from './offline';
+export type { SyncEvent, SyncResult, OfflineEventMap, OfflineEventType, QueuedAttachment } from './offline';
+export { TabCoordinator } from './multitab';
+export { E2EEncryption } from './encryption';
+export {
+  encryptForSend,
+  decryptOnReceive,
+  encryptFile,
+  decryptFile,
+  encryptContext,
+  decryptContext,
+  decryptMessages,
+  type EncryptedMessage,
+  type DecryptResult,
+  type EncryptedFileResult,
+  type EncryptedContextResult,
+} from './encryption-pipeline';
+
+// Re-export evolution mechanism modules
+export { EvolutionCache } from './evolution-cache';
+export { extractSignals, createEnrichedExtractor } from './signal-enrichment';
+export { EvolutionRuntime } from './evolution-runtime';
+export type { EvolutionRuntimeConfig, Suggestion, EvolutionSession, SessionMetrics } from './evolution-runtime';
+export type { GeneSelectionResult, EvolutionSyncSnapshot, EvolutionSyncDelta, ExecutionContext, SignalEnrichmentConfig } from './types';
+
+import type {
+  PrismerConfig,
+  Environment,
+  LoadOptions,
+  LoadResult,
+  SaveOptions,
+  SaveBatchOptions,
+  SaveResult,
+  ParseOptions,
+  ParseResult,
+  IMRegisterOptions,
+  IMRegisterData,
+  IMMeData,
+  IMTokenData,
+  IMSendOptions,
+  IMMessageData,
+  IMPaginationOptions,
+  IMMessage,
+  IMCreateGroupOptions,
+  IMGroupData,
+  IMConversationsOptions,
+  IMConversation,
+  IMContact,
+  IMDiscoverOptions,
+  IMDiscoverAgent,
+  IMCreateBindingOptions,
+  IMBindingData,
+  IMBinding,
+  IMCreditsData,
+  IMTransaction,
+  IMWorkspaceData,
+  IMWorkspaceInitOptions,
+  IMWorkspaceInitGroupOptions,
+  IMAutocompleteResult,
+  IMPresignOptions,
+  IMPresignResult,
+  IMConfirmResult,
+  IMFileQuota,
+  FileInput,
+  UploadOptions,
+  UploadResult,
+  SendFileOptions,
+  SendFileResult,
+  IMMultipartInitResult,
+  IMResult,
+  RequestFn,
+  // Tasks
+  IMCreateTaskOptions,
+  IMUpdateTaskOptions,
+  IMTaskListOptions,
+  IMCompleteTaskOptions,
+  IMTask,
+  IMTaskDetail,
+  // Memory
+  IMCreateMemoryFileOptions,
+  IMUpdateMemoryFileOptions,
+  IMCompactOptions,
+  IMMemoryFile,
+  IMMemoryFileDetail,
+  IMCompactionSummary,
+  IMMemoryLoadResult,
+  // Identity
+  IMRegisterKeyOptions,
+  IMIdentityKey,
+  IMKeyAuditEntry,
+  IMKeyVerifyResult,
+  // Evolution
+  IMCreateGeneOptions,
+  IMAnalyzeOptions,
+  IMRecordOutcomeOptions,
+  IMGene,
+  IMAnalyzeResult,
+  IMEvolutionStats,
+  IMCapsule,
+  IMEvolutionEdge,
+  IMAgentPersonality,
+  IMGeneListOptions,
+  IMForkGeneOptions,
+  // Skills
+  IMSkillInfo,
+  IMSkillInstallResult,
+  IMAgentSkillRecord,
+  IMSkillContent,
+} from './types';
+
+import { ENVIRONMENTS } from './types';
+
+// ============================================================================
+// IM Sub-Clients
+// ============================================================================
+
+/** Account management: register, identity, token refresh */
+export class AccountClient {
+  constructor(private _r: RequestFn) {}
+
+  /** Register an agent or human identity */
+  async register(options: IMRegisterOptions): Promise<IMResult<IMRegisterData>> {
+    return this._r('POST', '/api/im/register', options);
+  }
+
+  /** Get own identity, stats, bindings, credits */
+  async me(): Promise<IMResult<IMMeData>> {
+    return this._r('GET', '/api/im/me');
+  }
+
+  /** Refresh JWT token */
+  async refreshToken(): Promise<IMResult<IMTokenData>> {
+    return this._r('POST', '/api/im/token/refresh');
+  }
+}
+
+/** Direct messaging between two users */
+export class DirectClient {
+  constructor(private _r: RequestFn) {}
+
+  /** Send a direct message to a user */
+  async send(userId: string, content: string, options?: IMSendOptions): Promise<IMResult<IMMessageData>> {
+    return this._r('POST', `/api/im/direct/${userId}/messages`, {
+      content,
+      type: options?.type ?? 'text',
+      metadata: options?.metadata,
+      parentId: options?.parentId,
+    });
+  }
+
+  /** Get direct message history with a user */
+  async getMessages(userId: string, options?: IMPaginationOptions): Promise<IMResult<IMMessage[]>> {
+    const query: Record<string, string> = {};
+    if (options?.limit != null) query.limit = String(options.limit);
+    if (options?.offset != null) query.offset = String(options.offset);
+    return this._r('GET', `/api/im/direct/${userId}/messages`, undefined, query);
+  }
+}
+
+/** Group chat management and messaging */
+export class GroupsClient {
+  constructor(private _r: RequestFn) {}
+
+  /** Create a group chat */
+  async create(options: IMCreateGroupOptions): Promise<IMResult<IMGroupData>> {
+    return this._r('POST', '/api/im/groups', options);
+  }
+
+  /** List groups you belong to */
+  async list(): Promise<IMResult<IMGroupData[]>> {
+    return this._r('GET', '/api/im/groups');
+  }
+
+  /** Get group details */
+  async get(groupId: string): Promise<IMResult<IMGroupData>> {
+    return this._r('GET', `/api/im/groups/${groupId}`);
+  }
+
+  /** Send a message to a group */
+  async send(groupId: string, content: string, options?: IMSendOptions): Promise<IMResult<IMMessageData>> {
+    return this._r('POST', `/api/im/groups/${groupId}/messages`, {
+      content,
+      type: options?.type ?? 'text',
+      metadata: options?.metadata,
+      parentId: options?.parentId,
+    });
+  }
+
+  /** Get group message history */
+  async getMessages(groupId: string, options?: IMPaginationOptions): Promise<IMResult<IMMessage[]>> {
+    const query: Record<string, string> = {};
+    if (options?.limit != null) query.limit = String(options.limit);
+    if (options?.offset != null) query.offset = String(options.offset);
+    return this._r('GET', `/api/im/groups/${groupId}/messages`, undefined, query);
+  }
+
+  /** Add a member to a group (owner/admin only) */
+  async addMember(groupId: string, userId: string): Promise<IMResult<void>> {
+    return this._r('POST', `/api/im/groups/${groupId}/members`, { userId });
+  }
+
+  /** Remove a member from a group (owner/admin only) */
+  async removeMember(groupId: string, userId: string): Promise<IMResult<void>> {
+    return this._r('DELETE', `/api/im/groups/${groupId}/members/${userId}`);
+  }
+}
+
+/** Conversation management */
+export class ConversationsClient {
+  constructor(private _r: RequestFn) {}
+
+  /** List conversations */
+  async list(options?: IMConversationsOptions): Promise<IMResult<IMConversation[]>> {
+    const query: Record<string, string> = {};
+    if (options?.withUnread) query.withUnread = 'true';
+    if (options?.unreadOnly) query.unreadOnly = 'true';
+    return this._r('GET', '/api/im/conversations', undefined, query);
+  }
+
+  /** Get conversation details */
+  async get(conversationId: string): Promise<IMResult<IMConversation>> {
+    return this._r('GET', `/api/im/conversations/${conversationId}`);
+  }
+
+  /** Create a direct conversation */
+  async createDirect(userId: string): Promise<IMResult<IMConversation>> {
+    return this._r('POST', '/api/im/conversations/direct', { userId });
+  }
+
+  /** Mark a conversation as read */
+  async markAsRead(conversationId: string): Promise<IMResult<void>> {
+    return this._r('POST', `/api/im/conversations/${conversationId}/read`);
+  }
+}
+
+/** Low-level message operations (by conversation ID) */
+export class MessagesClient {
+  constructor(private _r: RequestFn) {}
+
+  /** Send a message to a conversation */
+  async send(conversationId: string, content: string, options?: IMSendOptions): Promise<IMResult<IMMessageData>> {
+    return this._r('POST', `/api/im/messages/${conversationId}`, {
+      content,
+      type: options?.type ?? 'text',
+      metadata: options?.metadata,
+      parentId: options?.parentId,
+    });
+  }
+
+  /** Get message history for a conversation */
+  async getHistory(conversationId: string, options?: IMPaginationOptions): Promise<IMResult<IMMessage[]>> {
+    const query: Record<string, string> = {};
+    if (options?.limit != null) query.limit = String(options.limit);
+    if (options?.offset != null) query.offset = String(options.offset);
+    return this._r('GET', `/api/im/messages/${conversationId}`, undefined, query);
+  }
+
+  /** Edit a message */
+  async edit(conversationId: string, messageId: string, content: string, options?: { metadata?: Record<string, any> }): Promise<IMResult<void>> {
+    return this._r('PATCH', `/api/im/messages/${conversationId}/${messageId}`, { content, ...(options?.metadata ? { metadata: options.metadata } : {}) });
+  }
+
+  /** Delete a message */
+  async delete(conversationId: string, messageId: string): Promise<IMResult<void>> {
+    return this._r('DELETE', `/api/im/messages/${conversationId}/${messageId}`);
+  }
+}
+
+/** Contacts and agent discovery */
+export class ContactsClient {
+  constructor(private _r: RequestFn) {}
+
+  /** List contacts (users you've communicated with) */
+  async list(): Promise<IMResult<IMContact[]>> {
+    return this._r('GET', '/api/im/contacts');
+  }
+
+  /** Discover agents by capability or type */
+  async discover(options?: IMDiscoverOptions): Promise<IMResult<IMDiscoverAgent[]>> {
+    const query: Record<string, string> = {};
+    if (options?.type) query.type = options.type;
+    if (options?.capability) query.capability = options.capability;
+    return this._r('GET', '/api/im/discover', undefined, query);
+  }
+}
+
+/** Social bindings (Telegram, Discord, Slack, etc.) */
+export class BindingsClient {
+  constructor(private _r: RequestFn) {}
+
+  /** Create a social binding */
+  async create(options: IMCreateBindingOptions): Promise<IMResult<IMBindingData>> {
+    return this._r('POST', '/api/im/bindings', options);
+  }
+
+  /** Verify a binding with 6-digit code */
+  async verify(bindingId: string, code: string): Promise<IMResult<void>> {
+    return this._r('POST', `/api/im/bindings/${bindingId}/verify`, { code });
+  }
+
+  /** List bindings */
+  async list(): Promise<IMResult<IMBinding[]>> {
+    return this._r('GET', '/api/im/bindings');
+  }
+
+  /** Delete a binding */
+  async delete(bindingId: string): Promise<IMResult<void>> {
+    return this._r('DELETE', `/api/im/bindings/${bindingId}`);
+  }
+}
+
+/** Credits balance and transaction history */
+export class CreditsClient {
+  constructor(private _r: RequestFn) {}
+
+  /** Get credits balance */
+  async get(): Promise<IMResult<IMCreditsData>> {
+    return this._r('GET', '/api/im/credits');
+  }
+
+  /** Get credit transaction history */
+  async transactions(options?: IMPaginationOptions): Promise<IMResult<IMTransaction[]>> {
+    const query: Record<string, string> = {};
+    if (options?.limit != null) query.limit = String(options.limit);
+    if (options?.offset != null) query.offset = String(options.offset);
+    return this._r('GET', '/api/im/credits/transactions', undefined, query);
+  }
+}
+
+/** Workspace management (advanced collaborative environments) */
+export class WorkspaceClient {
+  constructor(private _r: RequestFn) {}
+
+  /** Initialize a 1:1 workspace (1 user + 1 agent) */
+  async init(options: IMWorkspaceInitOptions): Promise<IMResult<IMWorkspaceData>> {
+    return this._r('POST', '/api/im/workspace/init', options);
+  }
+
+  /** Initialize a group workspace (multi-user + multi-agent) */
+  async initGroup(options: IMWorkspaceInitGroupOptions): Promise<IMResult<IMWorkspaceData>> {
+    return this._r('POST', '/api/im/workspace/init-group', options);
+  }
+
+  /** Add an agent to a workspace */
+  async addAgent(workspaceId: string, agentId: string): Promise<IMResult<void>> {
+    return this._r('POST', `/api/im/workspace/${workspaceId}/agents`, { agentId });
+  }
+
+  /** List agents in a workspace */
+  async listAgents(workspaceId: string): Promise<IMResult<any[]>> {
+    return this._r('GET', `/api/im/workspace/${workspaceId}/agents`);
+  }
+
+  /** @mention autocomplete */
+  async mentionAutocomplete(conversationId: string, query?: string): Promise<IMResult<IMAutocompleteResult[]>> {
+    const q: Record<string, string> = { conversationId };
+    if (query) q.q = query;
+    return this._r('GET', '/api/im/workspace/mentions/autocomplete', undefined, q);
+  }
+}
+
+/** Task management: create, list, claim, progress, complete, fail */
+export class TasksClient {
+  constructor(private _r: RequestFn) {}
+
+  /** Create a new task */
+  async create(options: IMCreateTaskOptions): Promise<IMResult<IMTask>> {
+    return this._r('POST', '/api/im/tasks', options);
+  }
+
+  /** List tasks with optional filters */
+  async list(options?: IMTaskListOptions): Promise<IMResult<IMTask[]>> {
+    const query: Record<string, string> = {};
+    if (options?.status) query.status = options.status;
+    if (options?.capability) query.capability = options.capability;
+    if (options?.assigneeId) query.assigneeId = options.assigneeId;
+    if (options?.creatorId) query.creatorId = options.creatorId;
+    if (options?.scheduleType) query.scheduleType = options.scheduleType;
+    if (options?.limit != null) query.limit = String(options.limit);
+    if (options?.cursor) query.cursor = options.cursor;
+    return this._r('GET', '/api/im/tasks', undefined, query);
+  }
+
+  /** Get task details with logs */
+  async get(taskId: string): Promise<IMResult<IMTaskDetail>> {
+    return this._r('GET', `/api/im/tasks/${taskId}`);
+  }
+
+  /** Update a task */
+  async update(taskId: string, options: IMUpdateTaskOptions): Promise<IMResult<IMTask>> {
+    return this._r('PATCH', `/api/im/tasks/${taskId}`, options);
+  }
+
+  /** Claim a pending task */
+  async claim(taskId: string): Promise<IMResult<IMTask>> {
+    return this._r('POST', `/api/im/tasks/${taskId}/claim`);
+  }
+
+  /** Report progress on a task */
+  async progress(taskId: string, options?: { message?: string; metadata?: Record<string, unknown> }): Promise<IMResult<void>> {
+    return this._r('POST', `/api/im/tasks/${taskId}/progress`, options);
+  }
+
+  /** Complete a task with result */
+  async complete(taskId: string, options?: IMCompleteTaskOptions): Promise<IMResult<IMTask>> {
+    return this._r('POST', `/api/im/tasks/${taskId}/complete`, options);
+  }
+
+  /** Fail a task with error */
+  async fail(taskId: string, error: string, metadata?: Record<string, unknown>): Promise<IMResult<IMTask>> {
+    return this._r('POST', `/api/im/tasks/${taskId}/fail`, { error, metadata });
+  }
+}
+
+/** Memory management: files, compaction, session load */
+export class MemoryClient {
+  constructor(private _r: RequestFn) {}
+
+  /** Create a memory file */
+  async createFile(options: IMCreateMemoryFileOptions): Promise<IMResult<IMMemoryFile>> {
+    return this._r('POST', '/api/im/memory/files', options);
+  }
+
+  /** List memory files */
+  async listFiles(options?: { scope?: string; path?: string }): Promise<IMResult<IMMemoryFile[]>> {
+    const query: Record<string, string> = {};
+    if (options?.scope) query.scope = options.scope;
+    if (options?.path) query.path = options.path;
+    return this._r('GET', '/api/im/memory/files', undefined, query);
+  }
+
+  /** Get a memory file by ID */
+  async getFile(fileId: string): Promise<IMResult<IMMemoryFileDetail>> {
+    return this._r('GET', `/api/im/memory/files/${fileId}`);
+  }
+
+  /** Update a memory file (append, replace, or replace_section) */
+  async updateFile(fileId: string, options: IMUpdateMemoryFileOptions): Promise<IMResult<IMMemoryFileDetail>> {
+    return this._r('PATCH', `/api/im/memory/files/${fileId}`, options);
+  }
+
+  /** Delete a memory file */
+  async deleteFile(fileId: string): Promise<IMResult<void>> {
+    return this._r('DELETE', `/api/im/memory/files/${fileId}`);
+  }
+
+  /** Compact conversation messages into a summary */
+  async compact(options: IMCompactOptions): Promise<IMResult<IMCompactionSummary>> {
+    return this._r('POST', '/api/im/memory/compact', options);
+  }
+
+  /** Get compaction summaries for a conversation */
+  async getCompaction(conversationId: string): Promise<IMResult<IMCompactionSummary[]>> {
+    return this._r('GET', `/api/im/memory/compact/${conversationId}`);
+  }
+
+  /** Load memory for session context */
+  async load(scope?: string): Promise<IMResult<IMMemoryLoadResult>> {
+    const query: Record<string, string> = {};
+    if (scope) query.scope = scope;
+    return this._r('GET', '/api/im/memory/load', undefined, query);
+  }
+}
+
+/** Identity key management: Ed25519 keys, attestation, audit */
+export class IdentityClient {
+  constructor(private _r: RequestFn) {}
+
+  /** Get server public key */
+  async getServerKey(): Promise<IMResult<{ publicKey: string }>> {
+    return this._r('GET', '/api/im/keys/server');
+  }
+
+  /** Register or rotate an identity key */
+  async registerKey(options: IMRegisterKeyOptions): Promise<IMResult<IMIdentityKey>> {
+    return this._r('PUT', '/api/im/keys/identity', options);
+  }
+
+  /** Get a user's identity key */
+  async getKey(userId: string): Promise<IMResult<IMIdentityKey>> {
+    return this._r('GET', `/api/im/keys/identity/${userId}`);
+  }
+
+  /** Revoke own identity key */
+  async revokeKey(): Promise<IMResult<void>> {
+    return this._r('POST', '/api/im/keys/identity/revoke');
+  }
+
+  /** Get key audit log for a user */
+  async getAuditLog(userId: string): Promise<IMResult<IMKeyAuditEntry[]>> {
+    return this._r('GET', `/api/im/keys/audit/${userId}`);
+  }
+
+  /** Verify key audit log integrity */
+  async verifyAuditLog(userId: string): Promise<IMResult<IMKeyVerifyResult>> {
+    return this._r('GET', `/api/im/keys/audit/${userId}/verify`);
+  }
+}
+
+/** Conversation security: E2E encryption settings and key management */
+export class SecurityClient {
+  constructor(private _r: RequestFn) {}
+
+  /** Get conversation security settings */
+  async getConversationSecurity(conversationId: string): Promise<IMResult<any>> {
+    return this._r('GET', `/api/im/conversations/${conversationId}/security`);
+  }
+
+  /** Update conversation security settings */
+  async setConversationSecurity(conversationId: string, options: { signingPolicy?: string; encryptionMode?: string }): Promise<IMResult<any>> {
+    return this._r('PATCH', `/api/im/conversations/${conversationId}/security`, options);
+  }
+
+  /** Upload a public key for a conversation */
+  async uploadKey(conversationId: string, publicKey: string, algorithm?: string): Promise<IMResult<any>> {
+    const body: Record<string, any> = { publicKey };
+    if (algorithm) body.algorithm = algorithm;
+    return this._r('POST', `/api/im/conversations/${conversationId}/keys`, body);
+  }
+
+  /** Get keys for a conversation */
+  async getKeys(conversationId: string): Promise<IMResult<any[]>> {
+    return this._r('GET', `/api/im/conversations/${conversationId}/keys`);
+  }
+
+  /** Revoke a key for a specific user in a conversation */
+  async revokeKey(conversationId: string, keyUserId: string): Promise<IMResult<any>> {
+    return this._r('DELETE', `/api/im/conversations/${conversationId}/keys/${keyUserId}`);
+  }
+}
+
+/** Skill Evolution: gene management, analysis, recording, distillation */
+export class EvolutionClient {
+  constructor(private _r: RequestFn) {}
+
+  // ── Public endpoints (no auth required) ──
+
+  /** Get evolution stats */
+  async getStats(): Promise<IMResult<IMEvolutionStats>> {
+    return this._r('GET', '/api/im/evolution/public/stats');
+  }
+
+  /** Get hot/trending genes */
+  async getHotGenes(limit?: number): Promise<IMResult<IMGene[]>> {
+    const query: Record<string, string> = {};
+    if (limit != null) query.limit = String(limit);
+    return this._r('GET', '/api/im/evolution/public/hot', undefined, query);
+  }
+
+  /** Browse published genes */
+  async browseGenes(options?: IMGeneListOptions): Promise<IMResult<IMGene[]>> {
+    const query: Record<string, string> = {};
+    if (options?.category) query.category = options.category;
+    if (options?.search) query.search = options.search;
+    if (options?.sort) query.sort = options.sort;
+    if (options?.page != null) query.page = String(options.page);
+    if (options?.limit != null) query.limit = String(options.limit);
+    return this._r('GET', '/api/im/evolution/public/genes', undefined, query);
+  }
+
+  /** Get a public gene by ID */
+  async getPublicGene(geneId: string): Promise<IMResult<IMGene>> {
+    return this._r('GET', `/api/im/evolution/public/genes/${geneId}`);
+  }
+
+  /** Get capsules for a public gene */
+  async getGeneCapsules(geneId: string, limit?: number): Promise<IMResult<IMCapsule[]>> {
+    const query: Record<string, string> = {};
+    if (limit != null) query.limit = String(limit);
+    return this._r('GET', `/api/im/evolution/public/genes/${geneId}/capsules`, undefined, query);
+  }
+
+  /** Get gene lineage (parent + children) */
+  async getGeneLineage(geneId: string): Promise<IMResult<{ geneId: string; parent?: IMGene; children: IMGene[]; generation: number }>> {
+    return this._r('GET', `/api/im/evolution/public/genes/${geneId}/lineage`);
+  }
+
+  /** Get public evolution feed */
+  async getFeed(limit?: number): Promise<IMResult<any[]>> {
+    const query: Record<string, string> = {};
+    if (limit != null) query.limit = String(limit);
+    return this._r('GET', '/api/im/evolution/public/feed', undefined, query);
+  }
+
+  // ── Authenticated endpoints ──
+
+  /** Analyze signals and get gene recommendation */
+  async analyze(options: IMAnalyzeOptions & { scope?: string }): Promise<IMResult<IMAnalyzeResult>> {
+    const { scope, ...body } = options;
+    const q: Record<string, string> = {};
+    if (scope) q.scope = scope;
+    return this._r('POST', '/api/im/evolution/analyze', body, q);
+  }
+
+  /** Record an outcome (success/failure) for a gene */
+  async record(options: IMRecordOutcomeOptions & { scope?: string }): Promise<IMResult<any>> {
+    const { scope, ...body } = options;
+    const q: Record<string, string> = {};
+    if (scope) q.scope = scope;
+    return this._r('POST', '/api/im/evolution/record', body, q);
+  }
+
+  /**
+   * One-step evolution: analyze context → get gene recommendation → auto-record outcome.
+   * Combines analyze() + record() into a single call for the common case.
+   *
+   * Usage:
+   *   const result = await client.evolution.evolve({
+   *     error: 'Connection timeout after 10s',
+   *     outcome: 'success',
+   *     score: 0.85,
+   *     summary: 'Fixed with exponential backoff',
+   *   });
+   */
+  async evolve(options: {
+    // analyze context (at least one required)
+    error?: string;
+    task_status?: string;
+    task_capability?: string;
+    tags?: string[];
+    signals?: Array<string | { type: string; provider?: string; stage?: string; severity?: string }>;
+    provider?: string;
+    stage?: string;
+    severity?: string;
+    // outcome recording (required)
+    outcome: 'success' | 'failed';
+    score?: number;
+    summary?: string;
+    strategy_used?: string[];
+    // shared
+    scope?: string;
+  }): Promise<IMResult<{ analysis: IMAnalyzeResult; recorded: boolean; edge_updated?: boolean }>> {
+    const { outcome, score, summary, strategy_used, scope, ...analyzeOpts } = options;
+
+    // 1. Analyze to get gene recommendation
+    const analysis = await this.analyze({ ...(analyzeOpts as IMAnalyzeOptions), ...(scope ? { scope } : {}) });
+    if (!analysis.ok || !analysis.data) {
+      return { ok: false, error: analysis.error } as any;
+    }
+
+    const data = analysis.data;
+    const geneId = data.gene_id;
+
+    // 2. If a gene was recommended, record the outcome
+    if (geneId && (data.action === 'apply_gene' || data.action === 'explore')) {
+      const recordResult = await this.record({
+        gene_id: geneId,
+        signals: data.signals || analyzeOpts.signals || [],
+        outcome,
+        score: score ?? (outcome === 'success' ? 0.8 : 0.2),
+        summary: summary || `${outcome === 'success' ? 'Resolved' : 'Failed to resolve'} using ${geneId}`,
+        strategy_used,
+        ...(scope ? { scope } : {}),
+      });
+
+      return {
+        ok: true,
+        data: {
+          analysis: data,
+          recorded: true,
+          edge_updated: recordResult.data?.edge_updated,
+        },
+      };
+    }
+
+    // 3. No gene matched — return analysis only (unmatched signals tracked server-side)
+    return {
+      ok: true,
+      data: { analysis: data, recorded: false },
+    };
+  }
+
+  /** Trigger gene distillation */
+  async distill(dryRun?: boolean): Promise<IMResult<any>> {
+    const query: Record<string, string> = {};
+    if (dryRun) query.dry_run = 'true';
+    return this._r('POST', '/api/im/evolution/distill', undefined, query);
+  }
+
+  /** List own genes */
+  async listGenes(signals?: string, scope?: string): Promise<IMResult<IMGene[]>> {
+    const query: Record<string, string> = {};
+    if (signals) query.signals = signals;
+    if (scope) query.scope = scope;
+    return this._r('GET', '/api/im/evolution/genes', undefined, query);
+  }
+
+  /** Create a new gene */
+  async createGene(options: IMCreateGeneOptions & { scope?: string }): Promise<IMResult<IMGene>> {
+    const { scope, ...body } = options;
+    const q: Record<string, string> = {};
+    if (scope) q.scope = scope;
+    return this._r('POST', '/api/im/evolution/genes', body, q);
+  }
+
+  /** Delete a gene */
+  async deleteGene(geneId: string): Promise<IMResult<void>> {
+    return this._r('DELETE', `/api/im/evolution/genes/${geneId}`);
+  }
+
+  /** Publish a gene. Pass skipCanary=true to bypass canary validation (MVP/admin). */
+  async publishGene(geneId: string, options?: { skipCanary?: boolean }): Promise<IMResult<IMGene>> {
+    return this._r('POST', `/api/im/evolution/genes/${geneId}/publish`, options?.skipCanary ? { skipCanary: true } : undefined);
+  }
+
+  /** Import a published gene */
+  async importGene(geneId: string): Promise<IMResult<IMGene>> {
+    return this._r('POST', '/api/im/evolution/genes/import', { gene_id: geneId });
+  }
+
+  /** Fork a gene with modifications */
+  async forkGene(options: IMForkGeneOptions): Promise<IMResult<IMGene>> {
+    return this._r('POST', '/api/im/evolution/genes/fork', options);
+  }
+
+  /** Get signal-gene edges */
+  async getEdges(options?: { signalKey?: string; geneId?: string; limit?: number; scope?: string }): Promise<IMResult<IMEvolutionEdge[]>> {
+    const query: Record<string, string> = {};
+    if (options?.signalKey) query.signal_key = options.signalKey;
+    if (options?.geneId) query.gene_id = options.geneId;
+    if (options?.limit != null) query.limit = String(options.limit);
+    if (options?.scope) query.scope = options.scope;
+    return this._r('GET', '/api/im/evolution/edges', undefined, query);
+  }
+
+  /** Get agent personality profile */
+  async getPersonality(agentId: string): Promise<IMResult<{ personality: IMAgentPersonality; stats: any }>> {
+    return this._r('GET', `/api/im/evolution/personality/${agentId}`);
+  }
+
+  /** Get own capsule history */
+  async getCapsules(options?: { page?: number; limit?: number; scope?: string }): Promise<IMResult<IMCapsule[]>> {
+    const query: Record<string, string> = {};
+    if (options?.page != null) query.page = String(options.page);
+    if (options?.limit != null) query.limit = String(options.limit);
+    if (options?.scope) query.scope = options.scope;
+    return this._r('GET', '/api/im/evolution/capsules', undefined, query);
+  }
+
+  /** Get evolution report */
+  async getReport(agentId?: string, scope?: string): Promise<IMResult<any>> {
+    const query: Record<string, string> = {};
+    if (agentId) query.agent_id = agentId;
+    if (scope) query.scope = scope;
+    return this._r('GET', '/api/im/evolution/report', undefined, query);
+  }
+
+  /** List available evolution scopes */
+  async listScopes(): Promise<IMResult<string[]>> {
+    return this._r('GET', '/api/im/evolution/scopes');
+  }
+
+  // ─── v0.3.1: Stories, Metrics, Skills ──────────────
+
+  /** Get recent evolution stories (for L1 narrative embedding) */
+  async getStories(options?: { limit?: number; since?: number }): Promise<IMResult<any[]>> {
+    const query: Record<string, string> = {};
+    if (options?.limit != null) query.limit = String(options.limit);
+    if (options?.since != null) query.since = String(options.since);
+    return this._r('GET', '/api/im/evolution/stories', undefined, query);
+  }
+
+  /** Get north-star metrics comparison (standard vs hypergraph) */
+  async getMetrics(): Promise<IMResult<{ standard: any; hypergraph: any; verdict: string }>> {
+    return this._r('GET', '/api/im/evolution/metrics');
+  }
+
+  /** Trigger metrics collection snapshot */
+  async collectMetrics(windowHours?: number): Promise<IMResult<{ standard: any; hypergraph: any }>> {
+    return this._r('POST', '/api/im/evolution/metrics/collect', { window_hours: windowHours ?? 1 });
+  }
+
+  /** Search skills catalog */
+  async searchSkills(options?: { query?: string; category?: string; limit?: number }): Promise<IMResult<any[]>> {
+    const q: Record<string, string> = {};
+    if (options?.query) q.query = options.query;
+    if (options?.category) q.category = options.category;
+    if (options?.limit != null) q.limit = String(options.limit);
+    return this._r('GET', '/api/im/skills/search', undefined, q);
+  }
+
+  /** Get skill catalog stats */
+  async getSkillStats(): Promise<IMResult<any>> {
+    return this._r('GET', '/api/im/skills/stats');
+  }
+
+  /** Install a skill — creates Gene + returns content + install guide */
+  async installSkill(slugOrId: string): Promise<IMResult<IMSkillInstallResult>> {
+    return this._r('POST', `/api/im/skills/${encodeURIComponent(slugOrId)}/install`);
+  }
+
+  /** Uninstall a skill */
+  async uninstallSkill(slugOrId: string): Promise<IMResult<{ uninstalled: boolean }>> {
+    return this._r('DELETE', `/api/im/skills/${encodeURIComponent(slugOrId)}/install`);
+  }
+
+  /** List installed skills for this agent */
+  async installedSkills(): Promise<IMResult<IMAgentSkillRecord[]>> {
+    return this._r('GET', '/api/im/skills/installed');
+  }
+
+  /** Get full skill content (SKILL.md + package info) */
+  async getSkillContent(slugOrId: string): Promise<IMResult<IMSkillContent>> {
+    return this._r('GET', `/api/im/skills/${encodeURIComponent(slugOrId)}/content`);
+  }
+
+  /** Export a Gene as a Skill */
+  async exportAsSkill(geneId: string, options?: { slug?: string; displayName?: string; changelog?: string }): Promise<IMResult<any>> {
+    return this._r('POST', `/api/im/evolution/genes/${geneId}/export-skill`, options);
+  }
+
+  // ─── P0: Report, Achievements, Sync ──────────────
+
+  /** Submit a raw-context evolution report (auto-creates signals + gene match) */
+  async submitReport(options: { rawContext: string; outcome: 'success' | 'failed'; taskContext?: string; taskError?: string; taskId?: string; metadata?: Record<string, unknown> }): Promise<IMResult<any>> {
+    return this._r('POST', '/api/im/evolution/report', {
+      raw_context: options.rawContext,
+      outcome: options.outcome,
+      task_context: options.taskContext,
+      task_error: options.taskError,
+      task_id: options.taskId,
+      metadata: options.metadata,
+    });
+  }
+
+  /** Get status of a submitted report by traceId */
+  async getReportStatus(traceId: string): Promise<IMResult<any>> {
+    return this._r('GET', `/api/im/evolution/report/${traceId}`);
+  }
+
+  /** Get evolution achievements for the current agent */
+  async getAchievements(): Promise<IMResult<any[]>> {
+    return this._r('GET', '/api/im/evolution/achievements');
+  }
+
+  /** Get a sync snapshot (global gene/edge state since a sequence number) */
+  async getSyncSnapshot(since?: number): Promise<IMResult<any>> {
+    const query: Record<string, string> = { scope: 'global' };
+    if (since != null) query.since = String(since);
+    return this._r('GET', '/api/im/evolution/sync/snapshot', undefined, query);
+  }
+
+  /** Bidirectional sync: push local outcomes and pull remote updates */
+  async sync(options?: { pushOutcomes?: any[]; pullSince?: number }): Promise<IMResult<any>> {
+    const body: Record<string, any> = {};
+    if (options?.pushOutcomes) body.push = { outcomes: options.pushOutcomes };
+    if (options?.pullSince != null) body.pull = { since: options.pullSince };
+    return this._r('POST', '/api/im/evolution/sync', body);
+  }
+}
+
+/** Map file extension to MIME type (no external deps) */
+function guessMimeType(fileName: string): string {
+  const ext = fileName.split('.').pop()?.toLowerCase() || '';
+  const map: Record<string, string> = {
+    png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif',
+    webp: 'image/webp', svg: 'image/svg+xml', ico: 'image/x-icon', bmp: 'image/bmp',
+    pdf: 'application/pdf', doc: 'application/msword',
+    docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    xls: 'application/vnd.ms-excel',
+    xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    ppt: 'application/vnd.ms-powerpoint',
+    pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    txt: 'text/plain', csv: 'text/csv', html: 'text/html', css: 'text/css',
+    js: 'text/javascript', json: 'application/json', xml: 'application/xml',
+    md: 'text/markdown', yaml: 'text/yaml', yml: 'text/yaml',
+    zip: 'application/zip', gz: 'application/gzip', tar: 'application/x-tar',
+    mp3: 'audio/mpeg', wav: 'audio/wav', mp4: 'video/mp4', webm: 'video/webm',
+  };
+  return map[ext] || 'application/octet-stream';
+}
+
+/** File upload management (presign → upload → confirm) */
+export class FilesClient {
+  constructor(
+    private _r: RequestFn,
+    private _baseUrl: string,
+    private _fetchFn: typeof fetch,
+    private _getAuthHeaders: () => Record<string, string>,
+  ) {}
+
+  /** Get a presigned upload URL */
+  async presign(options: IMPresignOptions): Promise<IMResult<IMPresignResult>> {
+    return this._r('POST', '/api/im/files/presign', options);
+  }
+
+  /** Confirm an uploaded file (triggers validation + CDN activation) */
+  async confirm(uploadId: string): Promise<IMResult<IMConfirmResult>> {
+    return this._r('POST', '/api/im/files/confirm', { uploadId });
+  }
+
+  /** Get storage quota */
+  async quota(): Promise<IMResult<IMFileQuota>> {
+    return this._r('GET', '/api/im/files/quota');
+  }
+
+  /** Delete a file */
+  async delete(uploadId: string): Promise<IMResult<void>> {
+    return this._r('DELETE', `/api/im/files/${uploadId}`);
+  }
+
+  /** List allowed MIME types */
+  async types(): Promise<IMResult<{ allowedMimeTypes: string[] }>> {
+    return this._r('GET', '/api/im/files/types');
+  }
+
+  /** Initialize a multipart upload (for files > 10 MB) */
+  async initMultipart(opts: { fileName: string; fileSize: number; mimeType: string }): Promise<IMResult<IMMultipartInitResult>> {
+    return this._r('POST', '/api/im/files/upload/init', opts);
+  }
+
+  /** Complete a multipart upload */
+  async completeMultipart(uploadId: string, parts: Array<{ partNumber: number; etag: string }>): Promise<IMResult<IMConfirmResult>> {
+    return this._r('POST', '/api/im/files/upload/complete', { uploadId, parts });
+  }
+
+  // --------------------------------------------------------------------------
+  // High-level convenience methods
+  // --------------------------------------------------------------------------
+
+  /**
+   * Upload a file (full lifecycle: presign → upload → confirm).
+   *
+   * @param input - File, Blob, Buffer, Uint8Array, or file path (Node.js string)
+   * @param opts  - Optional fileName, mimeType, onProgress
+   * @returns Confirmed upload result with CDN URL
+   */
+  async upload(input: FileInput, opts?: UploadOptions): Promise<UploadResult> {
+    // 1. Resolve input → bytes + fileName + fileSize
+    let bytes: Uint8Array;
+    let fileName: string;
+
+    if (typeof input === 'string') {
+      // Node.js file path
+      const fs = await import('fs');
+      const path = await import('path');
+      const buf = await fs.promises.readFile(input);
+      bytes = new Uint8Array(buf);
+      fileName = opts?.fileName || path.basename(input);
+    } else if (typeof Blob !== 'undefined' && input instanceof Blob) {
+      // File extends Blob, so this covers both
+      const ab = await input.arrayBuffer();
+      bytes = new Uint8Array(ab);
+      fileName = opts?.fileName || (input instanceof File ? input.name : '');
+      if (!fileName) throw new Error('fileName is required when uploading Blob without name');
+    } else if (input instanceof Uint8Array) {
+      bytes = input;
+      fileName = opts?.fileName || '';
+      if (!fileName) throw new Error('fileName is required when uploading Buffer or Uint8Array');
+    } else {
+      throw new Error('Unsupported input type');
+    }
+
+    const fileSize = bytes.byteLength;
+
+    // 2. Detect MIME
+    const mimeType = opts?.mimeType || guessMimeType(fileName);
+
+    // 3. Client-side size check
+    if (fileSize > 50 * 1024 * 1024) {
+      throw new Error('File exceeds maximum size of 50 MB');
+    }
+
+    // 4. Simple upload (≤ 10 MB) or multipart (> 10 MB)
+    if (fileSize <= 10 * 1024 * 1024) {
+      return this._uploadSimple(bytes, fileName, fileSize, mimeType, opts?.onProgress);
+    }
+    return this._uploadMultipart(bytes, fileName, fileSize, mimeType, opts?.onProgress);
+  }
+
+  /**
+   * Upload a file and send it as a message in one call.
+   *
+   * @param conversationId - Target conversation
+   * @param input          - File input (same as upload())
+   * @param opts           - Upload options + optional message content/parentId
+   */
+  async sendFile(conversationId: string, input: FileInput, opts?: SendFileOptions): Promise<SendFileResult> {
+    const uploaded = await this.upload(input, opts);
+
+    const msgRes: IMResult = await this._r('POST', `/api/im/messages/${conversationId}`, {
+      content: opts?.content || uploaded.fileName,
+      type: 'file',
+      metadata: {
+        uploadId: uploaded.uploadId,
+        fileUrl: uploaded.cdnUrl,
+        fileName: uploaded.fileName,
+        fileSize: uploaded.fileSize,
+        mimeType: uploaded.mimeType,
+      },
+      parentId: opts?.parentId,
+    });
+
+    if (!msgRes.ok) {
+      throw new Error(msgRes.error?.message || 'Failed to send file message');
+    }
+    return { upload: uploaded, message: msgRes.data };
+  }
+
+  // --------------------------------------------------------------------------
+  // Private upload helpers
+  // --------------------------------------------------------------------------
+
+  private async _uploadSimple(
+    bytes: Uint8Array, fileName: string, fileSize: number, mimeType: string,
+    onProgress?: (uploaded: number, total: number) => void,
+  ): Promise<UploadResult> {
+    // Presign
+    const presignRes = await this.presign({ fileName, fileSize, mimeType });
+    if (!presignRes.ok || !presignRes.data) {
+      throw new Error(presignRes.error?.message || 'Presign failed');
+    }
+    const { uploadId, url, fields } = presignRes.data;
+
+    // Build FormData
+    const formData = new FormData();
+    const isS3 = url.startsWith('http');
+    const uploadUrl = isS3 ? url : `${this._baseUrl}${url}`;
+
+    if (isS3) {
+      for (const [k, v] of Object.entries(fields)) formData.append(k, v);
+    }
+    const ab = new ArrayBuffer(bytes.byteLength);
+    new Uint8Array(ab).set(bytes);
+    formData.append('file', new Blob([ab], { type: mimeType }), fileName);
+
+    // Upload
+    const headers: Record<string, string> = {};
+    if (!isS3) Object.assign(headers, this._getAuthHeaders());
+
+    const resp = await this._fetchFn(uploadUrl, { method: 'POST', body: formData, headers });
+    if (!resp.ok) {
+      const text = await resp.text();
+      throw new Error(`Upload failed (${resp.status}): ${text}`);
+    }
+
+    onProgress?.(fileSize, fileSize);
+
+    // Confirm
+    const confirmRes = await this.confirm(uploadId);
+    if (!confirmRes.ok || !confirmRes.data) {
+      throw new Error(confirmRes.error?.message || 'Confirm failed');
+    }
+    return confirmRes.data;
+  }
+
+  private async _uploadMultipart(
+    bytes: Uint8Array, fileName: string, fileSize: number, mimeType: string,
+    onProgress?: (uploaded: number, total: number) => void,
+  ): Promise<UploadResult> {
+    // Init multipart
+    const initRes = await this.initMultipart({ fileName, fileSize, mimeType });
+    if (!initRes.ok || !initRes.data) {
+      throw new Error(initRes.error?.message || 'Multipart init failed');
+    }
+    const { uploadId, parts: partUrls } = initRes.data;
+
+    // Upload each part
+    const CHUNK_SIZE = 5 * 1024 * 1024; // 5 MB
+    const completedParts: Array<{ partNumber: number; etag: string }> = [];
+    let uploaded = 0;
+
+    for (const part of partUrls) {
+      const start = (part.partNumber - 1) * CHUNK_SIZE;
+      const end = Math.min(start + CHUNK_SIZE, fileSize);
+      const chunk = bytes.slice(start, end);
+
+      const isS3 = part.url.startsWith('http');
+      const partUrl = isS3 ? part.url : `${this._baseUrl}${part.url}`;
+      const headers: Record<string, string> = { 'Content-Type': mimeType };
+      if (!isS3) Object.assign(headers, this._getAuthHeaders());
+
+      const resp = await this._fetchFn(partUrl, { method: 'PUT', body: chunk, headers });
+      if (!resp.ok) {
+        throw new Error(`Part ${part.partNumber} upload failed (${resp.status})`);
+      }
+
+      const etag = resp.headers.get('ETag') || `"part-${part.partNumber}"`;
+      completedParts.push({ partNumber: part.partNumber, etag });
+
+      uploaded += chunk.byteLength;
+      onProgress?.(uploaded, fileSize);
+    }
+
+    // Complete
+    const completeRes = await this.completeMultipart(uploadId, completedParts);
+    if (!completeRes.ok || !completeRes.data) {
+      throw new Error(completeRes.error?.message || 'Multipart complete failed');
+    }
+    return completeRes.data;
+  }
+}
+
+/** Real-time connection factory (WebSocket & SSE) */
+export class IMRealtimeClient {
+  constructor(private _wsBase: string) {}
+
+  /** Get the WebSocket URL */
+  wsUrl(token?: string): string {
+    const base = this._wsBase.replace(/^http/, 'ws');
+    return token ? `${base}/ws?token=${token}` : `${base}/ws`;
+  }
+
+  /** Get the SSE URL */
+  sseUrl(token?: string): string {
+    return token ? `${this._wsBase}/sse?token=${token}` : `${this._wsBase}/sse`;
+  }
+
+  /** Create a WebSocket client. Call .connect() to establish connection. */
+  connectWS(config: RealtimeConfig): RealtimeWSClient {
+    return new RealtimeWSClient(this._wsBase, config);
+  }
+
+  /** Create an SSE client. Call .connect() to establish connection. */
+  connectSSE(config: RealtimeConfig): RealtimeSSEClient {
+    return new RealtimeSSEClient(this._wsBase, config);
+  }
+}
+
+// ============================================================================
+// IM Client (orchestrates sub-modules)
+// ============================================================================
+
+export class IMClient {
+  readonly account: AccountClient;
+  readonly direct: DirectClient;
+  readonly groups: GroupsClient;
+  readonly conversations: ConversationsClient;
+  readonly messages: MessagesClient;
+  readonly contacts: ContactsClient;
+  readonly bindings: BindingsClient;
+  readonly credits: CreditsClient;
+  readonly workspace: WorkspaceClient;
+  readonly tasks: TasksClient;
+  readonly memory: MemoryClient;
+  readonly identity: IdentityClient;
+  readonly security: SecurityClient;
+  readonly evolution: EvolutionClient;
+  readonly files: FilesClient;
+  readonly realtime: IMRealtimeClient;
+  /** Offline manager (null if offline mode not enabled) */
+  readonly offline: OfflineManager | null;
+
+  constructor(
+    request: RequestFn,
+    wsBase: string,
+    fetchFn: typeof fetch,
+    getAuthHeaders: () => Record<string, string>,
+    offlineManager?: OfflineManager | null,
+  ) {
+    this.account = new AccountClient(request);
+    this.direct = new DirectClient(request);
+    this.groups = new GroupsClient(request);
+    this.conversations = new ConversationsClient(request);
+    this.messages = new MessagesClient(request);
+    this.contacts = new ContactsClient(request);
+    this.bindings = new BindingsClient(request);
+    this.credits = new CreditsClient(request);
+    this.workspace = new WorkspaceClient(request);
+    this.tasks = new TasksClient(request);
+    this.memory = new MemoryClient(request);
+    this.identity = new IdentityClient(request);
+    this.security = new SecurityClient(request);
+    this.evolution = new EvolutionClient(request);
+    this.files = new FilesClient(request, wsBase, fetchFn, getAuthHeaders);
+    this.realtime = new IMRealtimeClient(wsBase);
+    this.offline = offlineManager ?? null;
+  }
+
+  /** IM health check */
+  async health(): Promise<IMResult<void>> {
+    return this.account['_r']('GET', '/api/im/health');
+  }
+}
+
+// ============================================================================
+// Prismer Client
+// ============================================================================
+
+export class PrismerClient {
+  private apiKey: string;
+  private readonly baseUrl: string;
+  private readonly timeout: number;
+  private readonly fetchFn: typeof fetch;
+  private readonly imAgent?: string;
+  private _offlineManager: OfflineManager | null = null;
+
+  /** IM API sub-client */
+  readonly im: IMClient;
+
+  constructor(config: PrismerConfig = {}) {
+    if (config.apiKey && !config.apiKey.startsWith('sk-prismer-') && !config.apiKey.startsWith('eyJ')) {
+      console.warn('Warning: API key should start with "sk-prismer-" (or "eyJ" for IM JWT)');
+    }
+
+    this.apiKey = config.apiKey || '';
+    const envUrl = ENVIRONMENTS[config.environment || 'production'];
+    this.baseUrl = (config.baseUrl || envUrl).replace(/\/$/, '');
+    this.timeout = config.timeout || 30000;
+    this.fetchFn = config.fetch || fetch;
+    this.imAgent = config.imAgent;
+
+    // Initialize OfflineManager if offline config is provided
+    if (config.offline) {
+      this._offlineManager = new OfflineManager(
+        config.offline.storage,
+        (m, p, b, q) => this._request(m, p, b, q),
+        config.offline,
+      );
+      this._offlineManager.init().catch(err =>
+        console.warn('[PrismerSDK] Offline storage init failed:', err)
+      );
+    }
+
+    // IM requests go through OfflineManager when offline mode is enabled
+    const imRequest: RequestFn = this._offlineManager
+      ? <T>(m: string, p: string, b?: unknown, q?: Record<string, string>) =>
+          this._offlineManager!.dispatch<T>(m, p, b, q)
+      : <T>(m: string, p: string, b?: unknown, q?: Record<string, string>) =>
+          this._request<T>(m, p, b, q);
+
+    this.im = new IMClient(
+      imRequest,
+      this.baseUrl,
+      this.fetchFn,
+      () => this._getAuthHeaders(),
+      this._offlineManager,
+    );
+  }
+
+  /** Build auth headers for raw HTTP requests (used by file upload) */
+  private _getAuthHeaders(): Record<string, string> {
+    const headers: Record<string, string> = {};
+    if (this.apiKey) headers['Authorization'] = `Bearer ${this.apiKey}`;
+    if (this.imAgent) headers['X-IM-Agent'] = this.imAgent;
+    return headers;
+  }
+
+  /**
+   * Set or update the auth token (API key or IM JWT).
+   * Useful after anonymous registration to set the returned JWT.
+   */
+  setToken(token: string): void {
+    this.apiKey = token;
+  }
+
+  /** Cleanup resources (offline manager, timers). Call when disposing the client. */
+  async destroy(): Promise<void> {
+    if (this._offlineManager) {
+      await this._offlineManager.destroy();
+    }
+  }
+
+  // --------------------------------------------------------------------------
+  // Internal request helper
+  // --------------------------------------------------------------------------
+
+  private async _request<T>(
+    method: string,
+    path: string,
+    body?: unknown,
+    query?: Record<string, string>,
+    _isRetry?: boolean,
+  ): Promise<T> {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+
+    try {
+      let url = `${this.baseUrl}${path}`;
+      if (query && Object.keys(query).length > 0) {
+        url += '?' + new URLSearchParams(query).toString();
+      }
+
+      const headers: Record<string, string> = {};
+      if (this.apiKey) {
+        headers['Authorization'] = `Bearer ${this.apiKey}`;
+      }
+      if (this.imAgent) {
+        headers['X-IM-Agent'] = this.imAgent;
+      }
+
+      const init: RequestInit = { method, headers, signal: controller.signal };
+
+      if (body !== undefined) {
+        headers['Content-Type'] = 'application/json';
+        init.body = JSON.stringify(body);
+      }
+
+      const response = await this.fetchFn(url, init);
+      const data = await response.json();
+
+      // Auto-refresh JWT token on 401 (one attempt, skip if already retrying)
+      if (response.status === 401 && this.apiKey.startsWith('eyJ') && !_isRetry && !path.includes('/token/refresh')) {
+        try {
+          const refreshRes = await this._request<any>('POST', '/api/im/token/refresh', undefined, undefined, true);
+          if (refreshRes?.ok && refreshRes?.data?.token) {
+            this.apiKey = refreshRes.data.token;
+            return this._request<T>(method, path, body, query, true);
+          }
+        } catch { /* refresh failed, return original error */ }
+      }
+
+      if (!response.ok) {
+        const err = data.error || { code: 'HTTP_ERROR', message: `Request failed with status ${response.status}` };
+        return { ...data, success: false, ok: false, error: err } as T;
+      }
+
+      return data as T;
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        return { success: false, ok: false, error: { code: 'TIMEOUT', message: 'Request timed out' } } as T;
+      }
+      return {
+        success: false,
+        ok: false,
+        error: { code: 'NETWORK_ERROR', message: error instanceof Error ? error.message : 'Unknown error' },
+      } as T;
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  // --------------------------------------------------------------------------
+  // Context API
+  // --------------------------------------------------------------------------
+
+  /** Load content from URL(s) or search query */
+  async load(input: string | string[], options: LoadOptions = {}): Promise<LoadResult> {
+    return this._request('POST', '/api/context/load', {
+      input,
+      inputType: options.inputType,
+      processUncached: options.processUncached,
+      search: options.search,
+      processing: options.processing,
+      return: options.return,
+      ranking: options.ranking,
+    });
+  }
+
+  /** Save content to Prismer cache */
+  async save(options: SaveOptions | SaveBatchOptions): Promise<SaveResult> {
+    return this._request('POST', '/api/context/save', options);
+  }
+
+  /** Batch save multiple items (max 50) */
+  async saveBatch(items: SaveOptions[]): Promise<SaveResult> {
+    return this.save({ items });
+  }
+
+  // --------------------------------------------------------------------------
+  // Parse API
+  // --------------------------------------------------------------------------
+
+  /** Parse a document (PDF, image) into structured content */
+  async parse(options: ParseOptions): Promise<ParseResult> {
+    return this._request('POST', '/api/parse', options);
+  }
+
+  /** Convenience: parse a PDF by URL */
+  async parsePdf(url: string, mode: 'fast' | 'hires' | 'auto' = 'fast'): Promise<ParseResult> {
+    return this.parse({ url, mode });
+  }
+
+  /** Check status of an async parse task */
+  async parseStatus(taskId: string): Promise<ParseResult> {
+    return this._request('GET', `/api/parse/status/${taskId}`);
+  }
+
+  /** Get result of a completed async parse task */
+  async parseResult(taskId: string): Promise<ParseResult> {
+    return this._request('GET', `/api/parse/result/${taskId}`);
+  }
+
+  // --------------------------------------------------------------------------
+  // Convenience
+  // --------------------------------------------------------------------------
+
+  /** Search for content (convenience wrapper around load with query mode) */
+  async search(
+    query: string,
+    options?: { topK?: number; returnTopK?: number; format?: 'hqcc' | 'raw' | 'both'; ranking?: 'cache_first' | 'relevance_first' | 'balanced' },
+  ): Promise<LoadResult> {
+    return this.load(query, {
+      inputType: 'query',
+      search: options?.topK ? { topK: options.topK } : undefined,
+      return: (options?.returnTopK || options?.format)
+        ? { topK: options?.returnTopK, format: options?.format }
+        : undefined,
+      ranking: options?.ranking ? { preset: options.ranking } : undefined,
+    });
+  }
+}
+
+export default PrismerClient;
+
+export function createClient(config: PrismerConfig): PrismerClient {
+  return new PrismerClient(config);
+}

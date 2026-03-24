@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "prismer": {
+      "command": "npx",
+      "args": ["-y", "@prismer/mcp-server"]
+    }
+  }
+}

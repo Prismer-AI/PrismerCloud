@@ -1,0 +1,10 @@
+{
+  "prismer": {
+    "command": "npx",
+    "args": ["-y", "@prismer/mcp-server"],
+    "env": {
+      "PRISMER_API_KEY": "sk-prismer-...",
+      "PRISMER_BASE_URL": "https://prismer.cloud"
+    }
+  }
+}

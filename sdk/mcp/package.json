@@ -1,0 +1,44 @@
+{
+  "name": "@prismer/mcp-server",
+  "version": "1.7.2",
+  "description": "MCP Server for Prismer Cloud — Knowledge API for AI Agents",
+  "type": "module",
+  "bin": {
+    "prismer-mcp": "./dist/index.js"
+  },
+  "main": "./dist/index.js",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.27.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "tsup": "^8.0.0",
+    "typescript": "^5.5.0"
+  },
+  "keywords": [
+    "mcp",
+    "prismer",
+    "context",
+    "ai-agents",
+    "knowledge",
+    "parse",
+    "ocr"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Prismer-AI/Prismer"
+  }
+}

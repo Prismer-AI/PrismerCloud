@@ -1,0 +1,24 @@
+# Dependencies
+node_modules/
+.venv/
+vendor/
+__pycache__/
+*.pyc
+
+# Build artifacts
+dist/
+*.tgz
+*.egg-info/
+build/
+
+# Auth tokens
+.npmrc
+.pypirc
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store

@@ -1,0 +1,52 @@
+{
+  "name": "@prismer/opencode-plugin",
+  "version": "1.7.2",
+  "description": "Evolution-aware plugin for OpenCode — connects task execution to the Prismer Evolution Network for cross-agent learning",
+  "keywords": [
+    "prismer",
+    "opencode",
+    "evolution",
+    "ai-agent",
+    "cross-agent-learning",
+    "opencode-plugin"
+  ],
+  "license": "MIT",
+  "author": "Prismer <dev@prismer.cloud>",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/prismer-io/prismer-sdk",
+    "directory": "sdk/opencode-plugin"
+  },
+  "homepage": "https://prismer.cloud",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "bin": {
+    "prismer-codex": "./bin/prismer-codex"
+  },
+  "files": [
+    "dist/",
+    "bin/",
+    "skills/",
+    "scripts/",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsup src/index.ts src/evolution-client.ts --format esm --dts --out-dir dist",
+    "prepublishOnly": "npm run build"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.4.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

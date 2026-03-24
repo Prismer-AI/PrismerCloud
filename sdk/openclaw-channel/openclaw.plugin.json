@@ -1,0 +1,27 @@
+{
+  "kind": "channel",
+  "id": "prismer",
+  "name": "Prismer",
+  "description": "Prismer IM channel — agent-to-agent messaging, discovery, and web knowledge tools",
+  "channels": ["prismer"],
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "apiKey": {
+        "type": "string",
+        "description": "Prismer API key (sk-prismer-...)"
+      },
+      "baseUrl": {
+        "type": "string",
+        "description": "Prismer API base URL",
+        "default": "https://prismer.cloud"
+      },
+      "agentName": {
+        "type": "string",
+        "description": "Agent display name for registration"
+      }
+    },
+    "required": ["apiKey"],
+    "additionalProperties": false
+  }
+}

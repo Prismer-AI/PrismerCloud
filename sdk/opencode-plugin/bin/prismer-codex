@@ -1,0 +1,150 @@
+#!/usr/bin/env bash
+# prismer-codex — wrapper around codex exec with evolution hooks
+#
+# Usage:
+#   prismer-codex "Fix the login timeout bug"
+#   prismer-codex --model gpt-4 "Refactor the auth module"
+#
+# Environment:
+#   PRISMER_API_KEY   — required, your Prismer API key (sk-prismer-...)
+#   PRISMER_BASE_URL  — optional, defaults to https://prismer.cloud
+#   PRISMER_EVOLVE    — set to "off" to disable evolution hooks
+#   CODEX_BIN         — optional, path to codex binary (defaults to "codex")
+
+set -euo pipefail
+
+# ── Configuration ──────────────────────────────────────────────────────
+
+PRISMER_BASE_URL="${PRISMER_BASE_URL:-https://prismer.cloud}"
+CODEX_BIN="${CODEX_BIN:-codex}"
+PRISMER_EVOLVE="${PRISMER_EVOLVE:-on}"
+PROJECT_NAME="$(basename "$PWD")"
+TASK="$*"
+OUTPUT_FILE="$(mktemp /tmp/prismer-codex-XXXXXX.txt)"
+
+# ── Helpers ────────────────────────────────────────────────────────────
+
+cleanup() {
+  rm -f "$OUTPUT_FILE"
+}
+trap cleanup EXIT
+
+log() {
+  echo "[prismer-codex] $1" >&2
+}
+
+evolve_enabled() {
+  [[ "$PRISMER_EVOLVE" == "on" ]] && [[ -n "${PRISMER_API_KEY:-}" ]]
+}
+
+prismer_api() {
+  local endpoint="$1"
+  local payload="$2"
+  curl -s --max-time 10 \
+    -X POST "${PRISMER_BASE_URL}/api/im/evolution/${endpoint}" \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer ${PRISMER_API_KEY}" \
+    -d "$payload" 2>/dev/null || true
+}
+
+# ── Pre-exec: Evolution Analyze ────────────────────────────────────────
+
+if evolve_enabled; then
+  log "Checking evolution network for advice..."
+
+  ANALYZE_RESULT=$(prismer_api "analyze" "$(cat <<ENDJSON
+{
+  "error": $(printf '%s' "$TASK" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))'),
+  "task_status": "pending",
+  "provider": "opencode",
+  "stage": "codex-exec",
+  "tags": ["project:${PROJECT_NAME}"]
+}
+ENDJSON
+)")
+
+  # Extract and display strategy if available
+  if [ -n "$ANALYZE_RESULT" ]; then
+    GENE_ID=$(echo "$ANALYZE_RESULT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('data',{}).get('gene_id',''))" 2>/dev/null || true)
+    GENE_TITLE=$(echo "$ANALYZE_RESULT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('data',{}).get('gene',{}).get('title',''))" 2>/dev/null || true)
+    CONFIDENCE=$(echo "$ANALYZE_RESULT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('data',{}).get('confidence',''))" 2>/dev/null || true)
+
+    if [ -n "$GENE_TITLE" ] && [ "$GENE_TITLE" != "None" ]; then
+      log "Evolution gene: $GENE_TITLE (confidence: $CONFIDENCE)"
+      echo "$ANALYZE_RESULT" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+strategies = data.get('data',{}).get('strategy',[])
+for i, s in enumerate(strategies[:5], 1):
+    print(f'  {i}. {s}')
+" 2>/dev/null || true
+    fi
+  fi
+else
+  if [ -z "${PRISMER_API_KEY:-}" ]; then
+    log "Set PRISMER_API_KEY to enable evolution hooks"
+  fi
+fi
+
+# ── Execute Codex ──────────────────────────────────────────────────────
+
+log "Executing: $CODEX_BIN exec $TASK"
+
+set +e
+"$CODEX_BIN" exec "$TASK" 2>&1 | tee "$OUTPUT_FILE"
+EXIT_CODE=${PIPESTATUS[0]}
+set -e
+
+# ── Post-exec: Evolution Report ────────────────────────────────────────
+
+if evolve_enabled; then
+  # Get last N lines of output for context (avoid sending huge payloads)
+  TAIL_OUTPUT=$(tail -50 "$OUTPUT_FILE" | head -c 4000)
+  ESCAPED_OUTPUT=$(printf '%s' "$TAIL_OUTPUT" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))' 2>/dev/null || echo '""')
+
+  if [ $EXIT_CODE -eq 0 ]; then
+    log "Task succeeded. Recording to evolution network..."
+    prismer_api "report" "$(cat <<ENDJSON
+{
+  "raw_context": $ESCAPED_OUTPUT,
+  "outcome": "success",
+  "task": $(printf '%s' "$TASK" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))'),
+  "provider": "opencode",
+  "stage": "codex-exec",
+  "score": 0.9
+}
+ENDJSON
+)" >/dev/null
+  else
+    log "Task failed (exit $EXIT_CODE). Reporting to evolution network..."
+    prismer_api "report" "$(cat <<ENDJSON
+{
+  "raw_context": $ESCAPED_OUTPUT,
+  "outcome": "failed",
+  "task": $(printf '%s' "$TASK" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))'),
+  "provider": "opencode",
+  "stage": "codex-exec",
+  "severity": "high"
+}
+ENDJSON
+)" >/dev/null
+  fi
+
+  # If we got a gene_id from analyze, also record against that gene
+  if [ -n "${GENE_ID:-}" ] && [ "$GENE_ID" != "None" ] && [ "$GENE_ID" != "" ]; then
+    OUTCOME=$( [ $EXIT_CODE -eq 0 ] && echo "success" || echo "failed" )
+    SCORE=$( [ $EXIT_CODE -eq 0 ] && echo "0.9" || echo "0.1" )
+    prismer_api "record" "$(cat <<ENDJSON
+{
+  "gene_id": "$GENE_ID",
+  "signals": [{"type": "codex_exec_${OUTCOME}", "provider": "opencode", "stage": "codex-exec"}],
+  "outcome": "$OUTCOME",
+  "score": $SCORE,
+  "summary": $(printf '%s' "codex exec: $TASK → $OUTCOME (exit $EXIT_CODE)" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))')
+}
+ENDJSON
+)" >/dev/null
+  fi
+fi
+
+exit $EXIT_CODE
