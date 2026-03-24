@@ -13,22 +13,25 @@
 
 <p align="center">
   <a href="https://github.com/Prismer-AI/PrismerCloud/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/Prismer-AI/PrismerCloud/ci.yml?branch=main&style=flat-square&labelColor=black&label=CI" alt="CI"></a>
+  <a href="https://github.com/Prismer-AI/PrismerCloud/releases/latest"><img src="https://img.shields.io/github/v/release/Prismer-AI/PrismerCloud?style=flat-square&labelColor=black&color=green&label=release" alt="Release"></a>
   <a href="https://github.com/Prismer-AI/PrismerCloud/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?labelColor=black&style=flat-square" alt="License"></a>
   <a href="https://discord.gg/VP2HQHbHGn"><img src="https://img.shields.io/badge/Discord-Join-5865F2?style=flat-square&logo=discord&logoColor=white&labelColor=black" alt="Discord"></a>
 </p>
 
 <p align="center">
-  <a href="https://www.npmjs.com/package/@prismer/sdk"><img src="https://img.shields.io/npm/v/@prismer/sdk?style=flat-square&labelColor=black&color=blue&label=@prismer/sdk" alt="@prismer/sdk"></a>
-  <a href="https://pypi.org/project/prismer/"><img src="https://img.shields.io/pypi/v/prismer?style=flat-square&labelColor=black&color=blue&label=prismer" alt="PyPI"></a>
+  <img src="https://img.shields.io/badge/SDKs-333?style=flat-square" alt="SDKs">
+  <a href="https://www.npmjs.com/package/@prismer/sdk"><img src="https://img.shields.io/npm/v/@prismer/sdk?style=flat-square&labelColor=black&color=cb3837&logo=npm&logoColor=white&label=sdk" alt="npm"></a>
+  <a href="https://pypi.org/project/prismer/"><img src="https://img.shields.io/pypi/v/prismer?style=flat-square&labelColor=black&color=3775A9&logo=python&logoColor=white&label=prismer" alt="PyPI"></a>
   <a href="https://pkg.go.dev/github.com/Prismer-AI/PrismerCloud/sdk/golang"><img src="https://img.shields.io/badge/go-pkg.go.dev-007d9c?style=flat-square&labelColor=black&logo=go&logoColor=white" alt="Go"></a>
-  <a href="https://crates.io/crates/prismer-sdk"><img src="https://img.shields.io/crates/v/prismer-sdk?style=flat-square&labelColor=black&color=dea584&label=prismer-sdk" alt="crates.io"></a>
+  <a href="https://crates.io/crates/prismer-sdk"><img src="https://img.shields.io/crates/v/prismer-sdk?style=flat-square&labelColor=black&color=dea584&logo=rust&logoColor=white&label=prismer--sdk" alt="crates.io"></a>
 </p>
 
 <p align="center">
-  <a href="https://www.npmjs.com/package/@prismer/mcp-server"><img src="https://img.shields.io/npm/v/@prismer/mcp-server?style=flat-square&labelColor=black&color=blue&label=mcp-server" alt="MCP Server"></a>
-  <a href="https://www.npmjs.com/package/@prismer/claude-code-plugin"><img src="https://img.shields.io/npm/v/@prismer/claude-code-plugin?style=flat-square&labelColor=black&color=blue&label=claude-code-plugin" alt="Claude Code Plugin"></a>
-  <a href="https://www.npmjs.com/package/@prismer/opencode-plugin"><img src="https://img.shields.io/npm/v/@prismer/opencode-plugin?style=flat-square&labelColor=black&color=blue&label=opencode-plugin" alt="OpenCode Plugin"></a>
-  <a href="https://www.npmjs.com/package/@prismer/openclaw-channel"><img src="https://img.shields.io/npm/v/@prismer/openclaw-channel?style=flat-square&labelColor=black&color=blue&label=openclaw-channel" alt="OpenClaw Channel"></a>
+  <img src="https://img.shields.io/badge/Plugins-333?style=flat-square" alt="Plugins">
+  <a href="https://www.npmjs.com/package/@prismer/mcp-server"><img src="https://img.shields.io/npm/v/@prismer/mcp-server?style=flat-square&labelColor=black&color=cb3837&logo=npm&logoColor=white&label=mcp--server" alt="MCP Server"></a>
+  <a href="https://www.npmjs.com/package/@prismer/claude-code-plugin"><img src="https://img.shields.io/npm/v/@prismer/claude-code-plugin?style=flat-square&labelColor=black&color=cb3837&logo=npm&logoColor=white&label=claude--code" alt="Claude Code"></a>
+  <a href="https://www.npmjs.com/package/@prismer/opencode-plugin"><img src="https://img.shields.io/npm/v/@prismer/opencode-plugin?style=flat-square&labelColor=black&color=cb3837&logo=npm&logoColor=white&label=opencode" alt="OpenCode"></a>
+  <a href="https://www.npmjs.com/package/@prismer/openclaw-channel"><img src="https://img.shields.io/npm/v/@prismer/openclaw-channel?style=flat-square&labelColor=black&color=cb3837&logo=npm&logoColor=white&label=openclaw" alt="OpenClaw"></a>
 </p>
 
 <p align="center">
