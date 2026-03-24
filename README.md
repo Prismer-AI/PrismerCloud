@@ -13,11 +13,22 @@
 
 <p align="center">
   <a href="https://github.com/Prismer-AI/PrismerCloud/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/Prismer-AI/PrismerCloud/ci.yml?branch=main&style=flat-square&labelColor=black&label=CI" alt="CI"></a>
-  <a href="https://www.npmjs.com/package/@prismer/sdk"><img src="https://img.shields.io/npm/v/@prismer/sdk?style=flat-square&labelColor=black&color=blue&label=npm" alt="npm"></a>
-  <a href="https://pypi.org/project/prismer/"><img src="https://img.shields.io/pypi/v/prismer?style=flat-square&labelColor=black&color=blue&label=pypi" alt="PyPI"></a>
-  <a href="https://crates.io/crates/prismer-sdk"><img src="https://img.shields.io/crates/v/prismer-sdk?style=flat-square&labelColor=black&color=blue&label=crates.io" alt="crates.io"></a>
   <a href="https://github.com/Prismer-AI/PrismerCloud/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?labelColor=black&style=flat-square" alt="License"></a>
   <a href="https://discord.gg/VP2HQHbHGn"><img src="https://img.shields.io/badge/Discord-Join-5865F2?style=flat-square&logo=discord&logoColor=white&labelColor=black" alt="Discord"></a>
+</p>
+
+<p align="center">
+  <a href="https://www.npmjs.com/package/@prismer/sdk"><img src="https://img.shields.io/npm/v/@prismer/sdk?style=flat-square&labelColor=black&color=blue&label=@prismer/sdk" alt="@prismer/sdk"></a>
+  <a href="https://pypi.org/project/prismer/"><img src="https://img.shields.io/pypi/v/prismer?style=flat-square&labelColor=black&color=blue&label=prismer" alt="PyPI"></a>
+  <a href="https://pkg.go.dev/github.com/Prismer-AI/PrismerCloud/sdk/golang"><img src="https://img.shields.io/badge/go-pkg.go.dev-007d9c?style=flat-square&labelColor=black&logo=go&logoColor=white" alt="Go"></a>
+  <a href="https://crates.io/crates/prismer-sdk"><img src="https://img.shields.io/crates/v/prismer-sdk?style=flat-square&labelColor=black&color=dea584&label=prismer-sdk" alt="crates.io"></a>
+</p>
+
+<p align="center">
+  <a href="https://www.npmjs.com/package/@prismer/mcp-server"><img src="https://img.shields.io/npm/v/@prismer/mcp-server?style=flat-square&labelColor=black&color=blue&label=mcp-server" alt="MCP Server"></a>
+  <a href="https://www.npmjs.com/package/@prismer/claude-code-plugin"><img src="https://img.shields.io/npm/v/@prismer/claude-code-plugin?style=flat-square&labelColor=black&color=blue&label=claude-code-plugin" alt="Claude Code Plugin"></a>
+  <a href="https://www.npmjs.com/package/@prismer/opencode-plugin"><img src="https://img.shields.io/npm/v/@prismer/opencode-plugin?style=flat-square&labelColor=black&color=blue&label=opencode-plugin" alt="OpenCode Plugin"></a>
+  <a href="https://www.npmjs.com/package/@prismer/openclaw-channel"><img src="https://img.shields.io/npm/v/@prismer/openclaw-channel?style=flat-square&labelColor=black&color=blue&label=openclaw-channel" alt="OpenClaw Channel"></a>
 </p>
 
 <p align="center">
@@ -145,7 +156,7 @@ Evolution hooks run automatically — errors trigger `suggest()`, outcomes trigg
 <tr><td><strong>SDKs</strong></td><td><strong>Install</strong></td></tr>
 <tr><td>TypeScript / JavaScript</td><td><code>npm i @prismer/sdk</code></td></tr>
 <tr><td>Python</td><td><code>pip install prismer</code></td></tr>
-<tr><td>Go</td><td><code>go get github.com/Prismer-AI/Prismer/sdk/golang</code></td></tr>
+<tr><td>Go</td><td><code>go get github.com/Prismer-AI/PrismerCloud/sdk/golang</code></td></tr>
 <tr><td>Rust</td><td><code>cargo add prismer-sdk</code></td></tr>
 </table>
 
@@ -222,7 +233,7 @@ Raw results: [`docs/benchmark/`](docs/benchmark/)
 ```
 Your Agent (any language, any framework)
     │
-    │  npx @prismer/mcp-server  — or —  npm i @prismer/sdk
+    │   npm i @prismer/sdk
     ▼
 ┌─────────────────────────────────────────────────┐
 │  Prismer Cloud — Agent Harness                   │
@@ -267,7 +278,6 @@ PrismerCloud/
     ├── claude-code-plugin/ # Claude Code hooks + skills
     ├── opencode-plugin/    # OpenCode evolution hooks
     ├── openclaw-channel/   # OpenClaw IM + discovery + 14 tools
-    ├── tests/              # Cross-SDK integration tests
     └── scripts/            # Build & release automation
 ```
 
