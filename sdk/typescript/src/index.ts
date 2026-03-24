@@ -856,6 +856,181 @@ export class EvolutionClient {
     return this._r('GET', `/api/im/skills/${encodeURIComponent(slugOrId)}/content`);
   }
 
+  /**
+   * Install a skill and write SKILL.md to local filesystem.
+   * Combines cloud install + local file sync for Claude Code / OpenClaw / OpenCode.
+   * @param slugOrId - Skill slug or ID
+   * @param options - Local install options
+   */
+  async installSkillLocal(slugOrId: string, options?: {
+    /** Target platforms (default: all detected) */
+    platforms?: Array<'claude-code' | 'openclaw' | 'opencode' | 'plugin'>;
+    /** Write to project-level paths instead of global */
+    project?: boolean;
+    /** Project root directory (for project-level installs) */
+    projectRoot?: string;
+  }): Promise<IMResult<IMSkillInstallResult & { localPaths: string[] }>> {
+    // 1. Cloud install
+    const result = await this.installSkill(slugOrId);
+    if (!result.ok || !result.data) return result as any;
+
+    // 2. Get content
+    let content = (result.data.skill as any)?.content || '';
+    if (!content) {
+      const contentResult = await this.getSkillContent(slugOrId);
+      content = contentResult.data?.content || '';
+    }
+    if (!content) {
+      return { ...result, data: { ...result.data, localPaths: [] } } as any;
+    }
+
+    // 3. Determine slug (sanitize to prevent path traversal)
+    const rawSlug = (result.data.skill as any)?.slug || slugOrId;
+    const slug = rawSlug.replace(/[\/\\]/g, '').replace(/\.\./g, '');
+    if (!slug) {
+      return { ...result, data: { ...result.data, localPaths: [] } } as any;
+    }
+
+    // 4. Write to local paths
+    const localPaths: string[] = [];
+    // Need dynamic import for Node.js APIs (SDK may run in browser too)
+    try {
+      const fs = await import('fs');
+      const path = await import('path');
+      const os = await import('os');
+      const home = os.homedir();
+
+      const pluginBase = process.env.PRISMER_PLUGIN_DIR || path.join(home, '.claude', 'plugins', 'prismer');
+      const platformPaths: Record<string, string> = options?.project
+        ? {
+            'claude-code': path.join(options.projectRoot || '.', '.claude', 'skills', slug),
+            'openclaw': path.join(options.projectRoot || '.', 'skills', slug),
+            'opencode': path.join(options.projectRoot || '.', '.opencode', 'skills', slug),
+            'plugin': path.join(options.projectRoot || '.', '.claude', 'plugins', 'prismer', 'skills', slug),
+          }
+        : {
+            'claude-code': path.join(home, '.claude', 'skills', slug),
+            'openclaw': path.join(home, '.openclaw', 'skills', slug),
+            'opencode': path.join(home, '.config', 'opencode', 'skills', slug),
+            'plugin': path.join(pluginBase, 'skills', slug),
+          };
+
+      const targets = options?.platforms || (Object.keys(platformPaths) as Array<'claude-code' | 'openclaw' | 'opencode' | 'plugin'>);
+
+      for (const platform of targets) {
+        const dir = platformPaths[platform];
+        if (!dir) continue;
+        try {
+          fs.mkdirSync(dir, { recursive: true });
+          const filePath = path.join(dir, 'SKILL.md');
+          fs.writeFileSync(filePath, content, 'utf-8');
+          localPaths.push(filePath);
+        } catch {
+          // Skip if we can't write (e.g., permissions)
+        }
+      }
+    } catch {
+      // Not in Node.js environment — skip local writes
+    }
+
+    return { ...result, data: { ...result.data, localPaths } } as any;
+  }
+
+  /**
+   * Uninstall a skill and remove local SKILL.md files.
+   */
+  async uninstallSkillLocal(slugOrId: string): Promise<IMResult<{ uninstalled: boolean; removedPaths: string[] }>> {
+    const result = await this.uninstallSkill(slugOrId);
+    const removedPaths: string[] = [];
+
+    // Sanitize slug to prevent path traversal
+    const safeSlug = slugOrId.replace(/[\/\\]/g, '').replace(/\.\./g, '');
+    if (!safeSlug) return { ...result, data: { uninstalled: result.data?.uninstalled ?? false, removedPaths } } as any;
+
+    try {
+      const fs = await import('fs');
+      const path = await import('path');
+      const os = await import('os');
+      const home = os.homedir();
+
+      const pluginBase = process.env.PRISMER_PLUGIN_DIR || path.join(home, '.claude', 'plugins', 'prismer');
+      const dirs = [
+        path.join(home, '.claude', 'skills', safeSlug),
+        path.join(home, '.openclaw', 'skills', safeSlug),
+        path.join(home, '.config', 'opencode', 'skills', safeSlug),
+        path.join(pluginBase, 'skills', safeSlug),
+      ];
+
+      for (const dir of dirs) {
+        try {
+          if (fs.existsSync(dir)) {
+            fs.rmSync(dir, { recursive: true });
+            removedPaths.push(dir);
+          }
+        } catch { /* skip */ }
+      }
+    } catch { /* not Node.js */ }
+
+    return { ...result, data: { uninstalled: result.data?.uninstalled ?? false, removedPaths } } as any;
+  }
+
+  /**
+   * Sync all installed skills to local filesystem.
+   */
+  async syncSkillsLocal(options?: {
+    platforms?: Array<'claude-code' | 'openclaw' | 'opencode' | 'plugin'>;
+  }): Promise<{ synced: number; failed: number; paths: string[] }> {
+    const installed = await this.installedSkills();
+    if (!installed.ok || !installed.data) return { synced: 0, failed: 0, paths: [] };
+
+    let synced = 0;
+    let failed = 0;
+    const paths: string[] = [];
+
+    for (const record of installed.data) {
+      const rawSlug = (record.skill as any)?.slug;
+      if (!rawSlug) { failed++; continue; }
+      const slug = rawSlug.replace(/[\/\\]/g, '').replace(/\.\./g, '');
+      if (!slug) { failed++; continue; }
+
+      try {
+        const contentResult = await this.getSkillContent(slug);
+        const content = contentResult.data?.content;
+        if (!content) { failed++; continue; }
+
+        const fs = await import('fs');
+        const path = await import('path');
+        const os = await import('os');
+        const home = os.homedir();
+
+        const pluginBase = process.env.PRISMER_PLUGIN_DIR || path.join(home, '.claude', 'plugins', 'prismer');
+        const platformPaths: Record<string, string> = {
+          'claude-code': path.join(home, '.claude', 'skills', slug),
+          'openclaw': path.join(home, '.openclaw', 'skills', slug),
+          'opencode': path.join(home, '.config', 'opencode', 'skills', slug),
+          'plugin': path.join(pluginBase, 'skills', slug),
+        };
+
+        const targets = options?.platforms || (Object.keys(platformPaths) as any[]);
+        for (const platform of targets) {
+          const dir = platformPaths[platform];
+          if (!dir) continue;
+          try {
+            fs.mkdirSync(dir, { recursive: true });
+            const filePath = path.join(dir, 'SKILL.md');
+            fs.writeFileSync(filePath, content, 'utf-8');
+            paths.push(filePath);
+          } catch { /* skip */ }
+        }
+        synced++;
+      } catch {
+        failed++;
+      }
+    }
+
+    return { synced, failed, paths };
+  }
+
   /** Export a Gene as a Skill */
   async exportAsSkill(geneId: string, options?: { slug?: string; displayName?: string; changelog?: string }): Promise<IMResult<any>> {
     return this._r('POST', `/api/im/evolution/genes/${geneId}/export-skill`, options);

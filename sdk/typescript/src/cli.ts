@@ -13,6 +13,7 @@ import { Command } from 'commander';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+// @ts-ignore — no type declarations for @iarna/toml
 import * as TOML from '@iarna/toml';
 import { PrismerClient } from './index';
 
@@ -77,6 +78,131 @@ function setNestedValue(obj: Record<string, any>, dotPath: string, value: string
     current = current[key] as Record<string, any>;
   }
   current[parts[parts.length - 1]] = value;
+}
+
+// ============================================================================
+// Skill local filesystem helpers
+// ============================================================================
+
+type SkillPlatform = 'claude-code' | 'openclaw' | 'opencode' | 'plugin' | 'all';
+
+function getPluginSkillsDir(): string {
+  const pluginDir = process.env.PRISMER_PLUGIN_DIR;
+  if (pluginDir) return path.join(pluginDir, 'skills');
+  return path.join(os.homedir(), '.claude', 'plugins', 'prismer', 'skills');
+}
+
+const PLATFORM_DIRS: Record<Exclude<SkillPlatform, 'all'>, { global: string; project: string }> = {
+  'claude-code': {
+    global: path.join(os.homedir(), '.claude', 'skills'),
+    project: path.join('.claude', 'skills'),
+  },
+  'openclaw': {
+    global: path.join(os.homedir(), '.openclaw', 'skills'),
+    project: 'skills',
+  },
+  'opencode': {
+    global: path.join(os.homedir(), '.config', 'opencode', 'skills'),
+    project: path.join('.opencode', 'skills'),
+  },
+  'plugin': {
+    global: getPluginSkillsDir(),
+    project: path.join('.claude', 'plugins', 'prismer', 'skills'),
+  },
+};
+
+function resolvePlatforms(platform: SkillPlatform): Array<Exclude<SkillPlatform, 'all'>> {
+  if (platform === 'all') {
+    const list: Array<Exclude<SkillPlatform, 'all'>> = ['claude-code', 'openclaw', 'opencode'];
+    // Only include plugin if the plugin dir exists
+    if (fs.existsSync(path.dirname(PLATFORM_DIRS['plugin'].global))) {
+      list.push('plugin');
+    }
+    return list;
+  }
+  return [platform];
+}
+
+/** Sanitize a slug to prevent directory traversal attacks. */
+function safeSlug(s: string): string {
+  return s.replace(/[\/\\]/g, '').replace(/\.\./g, '');
+}
+
+function writeSkillToLocal(
+  slug: string,
+  content: string,
+  platform: SkillPlatform,
+  useProject: boolean,
+): { written: string[]; errors: Array<{ path: string; error: string }> } {
+  const written: string[] = [];
+  const errors: Array<{ path: string; error: string }> = [];
+
+  const safe = safeSlug(slug);
+  if (!safe) return { written, errors };
+
+  for (const p of resolvePlatforms(platform)) {
+    const baseDir = useProject ? PLATFORM_DIRS[p].project : PLATFORM_DIRS[p].global;
+    const filePath = path.join(baseDir, safe, 'SKILL.md');
+    try {
+      fs.mkdirSync(path.dirname(filePath), { recursive: true });
+      fs.writeFileSync(filePath, content, 'utf-8');
+      written.push(filePath);
+    } catch (err) {
+      errors.push({ path: filePath, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+  return { written, errors };
+}
+
+function removeSkillFromLocal(
+  slug: string,
+  platform: SkillPlatform,
+  useProject: boolean,
+): { removed: string[]; errors: Array<{ path: string; error: string }> } {
+  const removed: string[] = [];
+  const errors: Array<{ path: string; error: string }> = [];
+
+  const safe = safeSlug(slug);
+  if (!safe) return { removed, errors };
+
+  for (const p of resolvePlatforms(platform)) {
+    const baseDir = useProject ? PLATFORM_DIRS[p].project : PLATFORM_DIRS[p].global;
+    const dirPath = path.join(baseDir, safe);
+    const filePath = path.join(dirPath, 'SKILL.md');
+    try {
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+        // Remove directory if empty
+        try { fs.rmdirSync(dirPath); } catch {}
+        removed.push(filePath);
+      }
+    } catch (err) {
+      errors.push({ path: filePath, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+  return { removed, errors };
+}
+
+function printLocalWriteResults(
+  results: { written: string[]; errors: Array<{ path: string; error: string }> },
+): void {
+  for (const p of results.written) {
+    console.log(`  Written: ${p}`);
+  }
+  for (const e of results.errors) {
+    console.error(`  Failed:  ${e.path} (${e.error})`);
+  }
+}
+
+function printLocalRemoveResults(
+  results: { removed: string[]; errors: Array<{ path: string; error: string }> },
+): void {
+  for (const p of results.removed) {
+    console.log(`  Removed: ${p}`);
+  }
+  for (const e of results.errors) {
+    console.error(`  Failed:  ${e.path} (${e.error})`);
+  }
 }
 
 // ============================================================================
@@ -655,10 +781,10 @@ evolve.command('analyze').description('Analyze signals and get gene recommendati
       process.exit(1);
     }
 
-    const res = await client.evolution.analyze(analyzeOpts as any);
+    const res = await client.im.evolution.analyze(analyzeOpts as any);
     if (opts.json) { console.log(JSON.stringify(res, null, 2)); return; }
     if (!res.ok) { console.error('Error:', res.error); process.exit(1); }
-    const d = res.data as Record<string, unknown>;
+    const d = res.data as unknown as Record<string, unknown>;
     console.log(`Action:     ${d.action}`);
     console.log(`Confidence: ${d.confidence}`);
     if (d.signals) console.log(`Signals:    ${JSON.stringify(d.signals)}`);
@@ -682,7 +808,7 @@ evolve.command('record').description('Record gene execution outcome')
     const client = getIMClient();
     let signals: unknown[];
     try { signals = JSON.parse(opts.signals || '[]'); } catch { signals = (opts.signals || '').split(','); }
-    const res = await client.evolution.record(opts.gene, signals as string[], opts.outcome, opts.summary || '', { score: opts.score ? parseFloat(opts.score) : undefined });
+    const res = await client.im.evolution.record({ geneId: opts.gene, signals: signals as string[], outcome: opts.outcome, summary: opts.summary || '', score: opts.score ? parseFloat(opts.score) : undefined } as any);
     if (opts.json) { console.log(JSON.stringify(res, null, 2)); return; }
     if (!res.ok) { console.error('Error:', res.error); process.exit(1); }
     console.log('Recorded:', JSON.stringify(res.data));
@@ -698,10 +824,10 @@ evolve.command('create').description('Create a new gene')
     const client = getIMClient();
     let signals: unknown[];
     try { signals = JSON.parse(opts.signals); } catch { signals = [{ type: opts.signals }]; }
-    const res = await client.evolution.createGene({ category: opts.category, signals_match: signals as string[], strategy: opts.strategy, title: opts.name });
+    const res = await client.im.evolution.createGene({ category: opts.category, signals_match: signals as string[], strategy: opts.strategy, title: opts.name });
     if (opts.json) { console.log(JSON.stringify(res, null, 2)); return; }
     if (!res.ok) { console.error('Error:', res.error); process.exit(1); }
-    console.log(`Gene created: ${(res.data as Record<string, unknown>)?.id}`);
+    console.log(`Gene created: ${(res.data as unknown as Record<string, unknown>)?.id}`);
   });
 
 evolve.command('report').description('Submit task context for async LLM signal extraction + gene matching')
@@ -802,29 +928,29 @@ evolve.command('report-status').description('Check report processing status')
 
 evolve.command('genes').description('List your genes').option('--json', 'JSON output').action(async (opts) => {
   const client = getIMClient();
-  const res = await client.evolution.listGenes();
+  const res = await client.im.evolution.listGenes();
   if (opts.json) { console.log(JSON.stringify(res, null, 2)); return; }
   if (!res.ok) { console.error('Error:', res.error); process.exit(1); }
-  const genes = (res.data || []) as Array<Record<string, unknown>>;
+  const genes = (res.data || []) as unknown as Array<Record<string, unknown>>;
   for (const g of genes) console.log(`  ${g.id}  ${g.category}  ${g.title || '(untitled)'}  ${g.visibility}`);
   console.log(`\n${genes.length} genes`);
 });
 
 evolve.command('stats').description('Show evolution statistics').option('--json', 'JSON output').action(async (opts) => {
   const client = getIMClient();
-  const res = await client.evolution.getStats();
+  const res = await client.im.evolution.getStats();
   if (opts.json) { console.log(JSON.stringify(res, null, 2)); return; }
   if (!res.ok) { console.error('Error:', res.error); process.exit(1); }
-  const d = res.data as Record<string, unknown>;
+  const d = res.data as unknown as Record<string, unknown>;
   console.log(`Executions:  ${d.totalExecutions}\nSuccess:     ${((d.systemSuccessRate as number || 0) * 100).toFixed(1)}%\nGenes:       ${d.activeGenes}\nAgents:      ${d.activeAgents}`);
 });
 
 evolve.command('metrics').description('Show A/B experiment metrics').option('--json', 'JSON output').action(async (opts) => {
   const client = getIMClient();
-  const res = await client.evolution.getMetrics();
+  const res = await client.im.evolution.getMetrics();
   if (opts.json) { console.log(JSON.stringify(res, null, 2)); return; }
   if (!res.ok) { console.error('Error:', res.error); process.exit(1); }
-  const d = res.data as Record<string, unknown>;
+  const d = res.data as unknown as Record<string, unknown>;
   console.log(`Verdict: ${d.verdict}`);
   if (d.standard) { const s = d.standard as Record<string, unknown>; console.log(`Standard:   SSR=${s.ssr} capsules=${s.totalCapsules}`); }
   if (d.hypergraph) { const h = d.hypergraph as Record<string, unknown>; console.log(`Hypergraph: SSR=${h.ssr} capsules=${h.totalCapsules}`); }
@@ -857,15 +983,50 @@ skill.command('search').description('Search skill catalog')
     console.log(`\n${skills.length} skills`);
   });
 
-skill.command('install').description('Install a skill')
+skill.command('install').description('Install a skill and write SKILL.md to local filesystem')
   .argument('<slug>', 'Skill slug or ID')
+  .option('--platform <platform>', 'Target platform: claude-code, openclaw, opencode, plugin, all', 'all')
+  .option('--project', 'Write to project-level path instead of global')
+  .option('--no-local', 'Skip local filesystem write (cloud install only)')
   .option('--json', 'JSON output')
   .action(async (slug: string, opts: any) => {
     const client = getIMClient();
+
+    // 1. Cloud install
     const res = await client.im.evolution.installSkill(slug);
-    if (opts.json) { console.log(JSON.stringify(res, null, 2)); return; }
-    if (!res.ok) { console.error('Error:', res.error); process.exit(1); }
+    if (!res.ok) {
+      if (opts.json) { console.log(JSON.stringify(res, null, 2)); return; }
+      console.error('Error:', res.error);
+      process.exit(1);
+    }
     const d = res.data;
+
+    // 2. Get skill content
+    let content = (d?.skill as any)?.content || '';
+    if (!content) {
+      try {
+        const contentRes = await client.im.evolution.getSkillContent(slug);
+        if (contentRes.ok && contentRes.data?.content) {
+          content = contentRes.data.content;
+        }
+      } catch {}
+    }
+
+    // 3. Write to local filesystem
+    let localResults: { written: string[]; errors: Array<{ path: string; error: string }> } | null = null;
+    if (opts.local !== false && content) {
+      localResults = writeSkillToLocal(slug, content, opts.platform as SkillPlatform, !!opts.project);
+    }
+
+    // 4. Output
+    if (opts.json) {
+      console.log(JSON.stringify({
+        ...res,
+        local: localResults ? { written: localResults.written, errors: localResults.errors } : null,
+      }, null, 2));
+      return;
+    }
+
     console.log(`Installed: ${d?.skill?.name || slug}`);
     console.log(`  Skill ID:  ${d?.agentSkill?.id || '-'}`);
     console.log(`  Version:   ${d?.agentSkill?.version || '-'}`);
@@ -879,6 +1040,15 @@ skill.command('install').description('Install a skill')
         else if (v.auto) console.log(`  ${key}: ${v.auto}`);
         else if (v.manual) console.log(`  ${key}: ${v.manual}`);
       }
+    }
+
+    if (localResults) {
+      console.log('\nLocal SKILL.md:');
+      printLocalWriteResults(localResults);
+    } else if (opts.local === false) {
+      console.log('\nLocal write skipped (--no-local).');
+    } else if (!content) {
+      console.log('\nNo SKILL.md content available for local write.');
     }
   });
 
@@ -921,15 +1091,132 @@ skill.command('show').description('Show skill content')
     if (d?.checksum) console.log(`Checksum: ${d.checksum}`);
   });
 
-skill.command('uninstall').description('Uninstall a skill')
+skill.command('uninstall').description('Uninstall a skill and remove local SKILL.md')
   .argument('<slug>', 'Skill slug or ID')
+  .option('--platform <platform>', 'Target platform: claude-code, openclaw, opencode, plugin, all', 'all')
+  .option('--project', 'Remove from project-level path instead of global')
+  .option('--no-local', 'Skip local filesystem removal')
   .option('--json', 'JSON output')
   .action(async (slug: string, opts: any) => {
     const client = getIMClient();
+
+    // 1. Cloud uninstall
     const res = await client.im.evolution.uninstallSkill(slug);
-    if (opts.json) { console.log(JSON.stringify(res, null, 2)); return; }
-    if (!res.ok) { console.error('Error:', res.error); process.exit(1); }
+    if (!res.ok) {
+      if (opts.json) { console.log(JSON.stringify(res, null, 2)); return; }
+      console.error('Error:', res.error);
+      process.exit(1);
+    }
+
+    // 2. Remove local SKILL.md files
+    let localResults: { removed: string[]; errors: Array<{ path: string; error: string }> } | null = null;
+    if (opts.local !== false) {
+      localResults = removeSkillFromLocal(slug, opts.platform as SkillPlatform, !!opts.project);
+    }
+
+    // 3. Output
+    if (opts.json) {
+      console.log(JSON.stringify({
+        ...res,
+        local: localResults ? { removed: localResults.removed, errors: localResults.errors } : null,
+      }, null, 2));
+      return;
+    }
+
     console.log(`Uninstalled: ${slug}`);
+    if (localResults) {
+      if (localResults.removed.length > 0 || localResults.errors.length > 0) {
+        console.log('\nLocal SKILL.md:');
+        printLocalRemoveResults(localResults);
+      }
+    } else if (opts.local === false) {
+      console.log('Local removal skipped (--no-local).');
+    }
+  });
+
+skill.command('sync').description('Re-sync all installed skills to local filesystem')
+  .option('--platform <platform>', 'Target platform: claude-code, openclaw, opencode, plugin, all', 'all')
+  .option('--project', 'Write to project-level path instead of global')
+  .option('--json', 'JSON output')
+  .action(async (opts: any) => {
+    const client = getIMClient();
+
+    // 1. Get all installed skills
+    const listRes = await client.im.evolution.installedSkills();
+    if (!listRes.ok) {
+      if (opts.json) { console.log(JSON.stringify(listRes, null, 2)); return; }
+      console.error('Error:', listRes.error);
+      process.exit(1);
+    }
+
+    const skills = listRes.data || [];
+    if (skills.length === 0) {
+      if (opts.json) { console.log(JSON.stringify({ synced: 0, results: [] }, null, 2)); return; }
+      console.log('No skills installed.');
+      return;
+    }
+
+    const syncResults: Array<{
+      slug: string;
+      name: string;
+      written: string[];
+      errors: Array<{ path: string; error: string }>;
+      skipped?: boolean;
+    }> = [];
+
+    // 2. For each skill, get content and write
+    for (const s of skills) {
+      const sk = s.skill;
+      const slug = sk?.slug || sk?.id || '';
+      const name = sk?.name || '(unnamed)';
+      if (!slug) continue;
+
+      let content = (sk as any)?.content || '';
+      if (!content) {
+        try {
+          const contentRes = await client.im.evolution.getSkillContent(slug);
+          if (contentRes.ok && contentRes.data?.content) {
+            content = contentRes.data.content;
+          }
+        } catch {}
+      }
+
+      if (!content) {
+        syncResults.push({ slug, name, written: [], errors: [], skipped: true });
+        continue;
+      }
+
+      const result = writeSkillToLocal(slug, content, opts.platform as SkillPlatform, !!opts.project);
+      syncResults.push({ slug, name, ...result });
+    }
+
+    // 3. Output
+    if (opts.json) {
+      console.log(JSON.stringify({
+        synced: syncResults.filter(r => r.written.length > 0).length,
+        total: skills.length,
+        results: syncResults,
+      }, null, 2));
+      return;
+    }
+
+    console.log(`Syncing ${skills.length} installed skills...\n`);
+    for (const r of syncResults) {
+      if (r.skipped) {
+        console.log(`  ${r.slug} (${r.name}) — no content, skipped`);
+      } else if (r.written.length > 0) {
+        console.log(`  ${r.slug} (${r.name})`);
+        printLocalWriteResults(r);
+      } else if (r.errors.length > 0) {
+        console.log(`  ${r.slug} (${r.name})`);
+        printLocalWriteResults(r);
+      }
+    }
+
+    const synced = syncResults.filter(r => r.written.length > 0).length;
+    const skipped = syncResults.filter(r => r.skipped).length;
+    const failed = syncResults.filter(r => r.errors.length > 0 && r.written.length === 0).length;
+    console.log(`\nDone: ${synced} synced, ${skipped} skipped, ${failed} failed`);
   });
 
 // --- parse & run ------------------------------------------------------------

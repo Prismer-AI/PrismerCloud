@@ -2,7 +2,10 @@
   "mcpServers": {
     "prismer": {
       "command": "npx",
-      "args": ["-y", "@prismer/mcp-server"]
+      "args": ["-y", "@prismer/mcp-server"],
+      "env": {
+        "PRISMER_PLUGIN_DIR": "."
+      }
     }
   }
 }

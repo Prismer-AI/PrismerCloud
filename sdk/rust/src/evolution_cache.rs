@@ -182,6 +182,11 @@ impl EvolutionCache {
         }
     }
 
+    /// Alias for `apply_delta` (API parity).
+    pub fn load_delta(&mut self, delta: &serde_json::Value) {
+        self.apply_delta(delta);
+    }
+
     /// Select the best gene for the given signals using Thompson Sampling.
     /// Pure CPU, <1ms.
     pub fn select_gene(&self, signals: &[SignalTag]) -> GeneSelectionResult {

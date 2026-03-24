@@ -1342,6 +1342,290 @@ func (e *EvolutionClient) SearchSkills(ctx context.Context, query, category stri
 	return e.im.do(ctx, "GET", "/api/im/skills/search", nil, q)
 }
 
+// InstallSkill installs a skill — creates cloud record + Gene, returns content for local install.
+func (e *EvolutionClient) InstallSkill(ctx context.Context, slugOrID string) (*IMResult, error) {
+	return e.im.do(ctx, "POST", "/api/im/skills/"+url.PathEscape(slugOrID)+"/install", nil, nil)
+}
+
+// UninstallSkill uninstalls a skill.
+func (e *EvolutionClient) UninstallSkill(ctx context.Context, slugOrID string) (*IMResult, error) {
+	return e.im.do(ctx, "DELETE", "/api/im/skills/"+url.PathEscape(slugOrID)+"/install", nil, nil)
+}
+
+// InstalledSkills lists installed skills for this agent.
+func (e *EvolutionClient) InstalledSkills(ctx context.Context) (*IMResult, error) {
+	return e.im.do(ctx, "GET", "/api/im/skills/installed", nil, nil)
+}
+
+// GetSkillContent gets full skill content (SKILL.md + package info).
+func (e *EvolutionClient) GetSkillContent(ctx context.Context, slugOrID string) (*IMResult, error) {
+	return e.im.do(ctx, "GET", "/api/im/skills/"+url.PathEscape(slugOrID)+"/content", nil, nil)
+}
+
+// ── Local Skill Sync ────────────────────────────────────
+
+// SkillLocalResult holds the result of a local skill install/uninstall.
+type SkillLocalResult struct {
+	CloudResult *IMResult
+	LocalPaths  []string
+	Errors      []string
+}
+
+// safeSlug sanitizes a slug to prevent directory traversal attacks.
+func safeSlug(s string) string {
+	s = strings.ReplaceAll(s, "..", "")
+	s = strings.ReplaceAll(s, "/", "")
+	s = strings.ReplaceAll(s, "\\", "")
+	s = strings.ReplaceAll(s, "\x00", "")
+	return filepath.Base(s)
+}
+
+// InstallSkillLocal installs a skill on cloud and writes SKILL.md to local filesystem
+// for Claude Code, OpenClaw, and OpenCode.
+// platforms: "claude-code", "openclaw", "opencode", or empty for all.
+// project: if true, writes to project-level paths (e.g. .claude/skills/) instead of global (~/).
+// projectRoot: project root directory for project-level installs (defaults to ".").
+func (e *EvolutionClient) InstallSkillLocal(ctx context.Context, slugOrID string, platforms []string, project bool, projectRoot string) (*SkillLocalResult, error) {
+	// 1. Cloud install
+	cloudRes, err := e.InstallSkill(ctx, slugOrID)
+	if err != nil {
+		return nil, err
+	}
+	result := &SkillLocalResult{CloudResult: cloudRes}
+
+	if cloudRes.Data == nil {
+		return result, nil
+	}
+
+	// 2. Extract content and slug from response
+	data := asMap(cloudRes.Data)
+	skillData := asMap(data["skill"])
+	content, _ := skillData["content"].(string)
+	slug, _ := skillData["slug"].(string)
+	if slug == "" {
+		slug = slugOrID
+	}
+	slug = safeSlug(slug)
+	if slug == "" || slug == "." {
+		return result, nil
+	}
+
+	// 3. If no content in install response, fetch it
+	if content == "" {
+		contentRes, err := e.GetSkillContent(ctx, slugOrID)
+		if err == nil && contentRes.Data != nil {
+			cd := asMap(contentRes.Data)
+			content, _ = cd["content"].(string)
+		}
+	}
+	if content == "" {
+		return result, nil
+	}
+
+	// 4. Determine target paths
+	home, err := os.UserHomeDir()
+	if err != nil {
+		result.Errors = append(result.Errors, "cannot determine home dir: "+err.Error())
+		return result, nil
+	}
+
+	if projectRoot == "" {
+		projectRoot = "."
+	}
+
+	type platformPath struct {
+		name string
+		dir  string
+	}
+
+	pluginDir := os.Getenv("PRISMER_PLUGIN_DIR")
+	if pluginDir == "" {
+		pluginDir = filepath.Join(home, ".claude", "plugins", "prismer")
+	}
+
+	var allPaths []platformPath
+	if project {
+		allPaths = []platformPath{
+			{"claude-code", filepath.Join(projectRoot, ".claude", "skills", slug)},
+			{"openclaw", filepath.Join(projectRoot, "skills", slug)},
+			{"opencode", filepath.Join(projectRoot, ".opencode", "skills", slug)},
+			{"plugin", filepath.Join(projectRoot, ".claude", "plugins", "prismer", "skills", slug)},
+		}
+	} else {
+		allPaths = []platformPath{
+			{"claude-code", filepath.Join(home, ".claude", "skills", slug)},
+			{"openclaw", filepath.Join(home, ".openclaw", "skills", slug)},
+			{"opencode", filepath.Join(home, ".config", "opencode", "skills", slug)},
+			{"plugin", filepath.Join(pluginDir, "skills", slug)},
+		}
+	}
+
+	// Filter by requested platforms
+	targets := allPaths
+	if len(platforms) > 0 {
+		targets = nil
+		platformSet := map[string]bool{}
+		for _, p := range platforms {
+			platformSet[p] = true
+		}
+		for _, p := range allPaths {
+			if platformSet[p.name] {
+				targets = append(targets, p)
+			}
+		}
+	}
+
+	// 5. Write SKILL.md to each target
+	for _, t := range targets {
+		if err := os.MkdirAll(t.dir, 0o755); err != nil {
+			result.Errors = append(result.Errors, t.name+": "+err.Error())
+			continue
+		}
+		fp := filepath.Join(t.dir, "SKILL.md")
+		if err := os.WriteFile(fp, []byte(content), 0o644); err != nil {
+			result.Errors = append(result.Errors, t.name+": "+err.Error())
+			continue
+		}
+		result.LocalPaths = append(result.LocalPaths, fp)
+	}
+
+	return result, nil
+}
+
+// UninstallSkillLocal uninstalls a skill from cloud and removes local SKILL.md files.
+func (e *EvolutionClient) UninstallSkillLocal(ctx context.Context, slugOrID string) (*SkillLocalResult, error) {
+	cloudRes, err := e.UninstallSkill(ctx, slugOrID)
+	if err != nil {
+		return nil, err
+	}
+	result := &SkillLocalResult{CloudResult: cloudRes}
+
+	safe := safeSlug(slugOrID)
+	if safe == "" || safe == "." {
+		return result, nil
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return result, nil
+	}
+
+	pluginDir := os.Getenv("PRISMER_PLUGIN_DIR")
+	if pluginDir == "" {
+		pluginDir = filepath.Join(home, ".claude", "plugins", "prismer")
+	}
+
+	dirs := []string{
+		filepath.Join(home, ".claude", "skills", safe),
+		filepath.Join(home, ".openclaw", "skills", safe),
+		filepath.Join(home, ".config", "opencode", "skills", safe),
+		filepath.Join(pluginDir, "skills", safe),
+	}
+
+	for _, dir := range dirs {
+		if _, err := os.Stat(dir); err == nil {
+			if err := os.RemoveAll(dir); err != nil {
+				result.Errors = append(result.Errors, err.Error())
+			} else {
+				result.LocalPaths = append(result.LocalPaths, dir)
+			}
+		}
+	}
+
+	return result, nil
+}
+
+// SyncSkillsLocalResult holds the result of a bulk local sync.
+type SyncSkillsLocalResult struct {
+	Synced int
+	Failed int
+	Paths  []string
+}
+
+// SyncSkillsLocal syncs all installed skills to local filesystem.
+func (e *EvolutionClient) SyncSkillsLocal(ctx context.Context, platforms []string) (*SyncSkillsLocalResult, error) {
+	result := &SyncSkillsLocalResult{}
+
+	installed, err := e.InstalledSkills(ctx)
+	if err != nil {
+		return result, err
+	}
+	if installed.Data == nil {
+		return result, nil
+	}
+
+	records := asList(installed.Data)
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return result, err
+	}
+
+	for _, rec := range records {
+		r := asMap(rec)
+		skillData := asMap(r["skill"])
+		rawSlug, _ := skillData["slug"].(string)
+		if rawSlug == "" {
+			result.Failed++
+			continue
+		}
+		slug := safeSlug(rawSlug)
+		if slug == "" || slug == "." {
+			result.Failed++
+			continue
+		}
+
+		contentRes, err := e.GetSkillContent(ctx, slug)
+		if err != nil || contentRes.Data == nil {
+			result.Failed++
+			continue
+		}
+		cd := asMap(contentRes.Data)
+		content, _ := cd["content"].(string)
+		if content == "" {
+			result.Failed++
+			continue
+		}
+
+		pluginDir := os.Getenv("PRISMER_PLUGIN_DIR")
+		if pluginDir == "" {
+			pluginDir = filepath.Join(home, ".claude", "plugins", "prismer")
+		}
+
+		type pp struct{ name, dir string }
+		allPaths := []pp{
+			{"claude-code", filepath.Join(home, ".claude", "skills", slug)},
+			{"openclaw", filepath.Join(home, ".openclaw", "skills", slug)},
+			{"opencode", filepath.Join(home, ".config", "opencode", "skills", slug)},
+			{"plugin", filepath.Join(pluginDir, "skills", slug)},
+		}
+
+		targets := allPaths
+		if len(platforms) > 0 {
+			targets = nil
+			ps := map[string]bool{}
+			for _, p := range platforms {
+				ps[p] = true
+			}
+			for _, p := range allPaths {
+				if ps[p.name] {
+					targets = append(targets, p)
+				}
+			}
+		}
+
+		for _, t := range targets {
+			os.MkdirAll(t.dir, 0o755)
+			fp := filepath.Join(t.dir, "SKILL.md")
+			if err := os.WriteFile(fp, []byte(content), 0o644); err == nil {
+				result.Paths = append(result.Paths, fp)
+			}
+		}
+		result.Synced++
+	}
+
+	return result, nil
+}
+
 // ── P0: Report, Achievements, Sync ─────────────────────
 
 // SubmitReport submits a raw-context evolution report (auto-creates signals + gene match).
@@ -1473,4 +1757,22 @@ func (r *IMRealtimeClient) ConnectSSE(config *RealtimeConfig) *RealtimeSSEClient
 		dispatcher: newEventDispatcher(),
 		recon:      newReconnector(&cfg),
 	}
+}
+
+// ============================================================================
+// Internal helpers
+// ============================================================================
+
+func asMap(v interface{}) map[string]interface{} {
+	if m, ok := v.(map[string]interface{}); ok {
+		return m
+	}
+	return map[string]interface{}{}
+}
+
+func asList(v interface{}) []interface{} {
+	if l, ok := v.([]interface{}); ok {
+		return l
+	}
+	return nil
 }

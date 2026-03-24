@@ -1,9 +1,17 @@
 """Prismer Cloud API Client — covers Context, Parse, and IM APIs."""
 
 from typing import Any, BinaryIO, Callable, Dict, List, Optional, Union
+from urllib.parse import quote as _url_quote
 import mimetypes
 import pathlib
+import re
 import httpx
+
+
+def _safe_slug(slug: str) -> str:
+    """Sanitize slug for safe filesystem use — prevents directory traversal."""
+    s = re.sub(r'[/\\]', '', slug).replace('..', '')
+    return s if s else ''
 
 from .types import (
     ENVIRONMENTS,
@@ -677,6 +685,185 @@ class EvolutionClient:
     def get_skill_stats(self) -> IMResult:
         """Get skill catalog statistics."""
         return self._request("GET", "/api/im/skills/stats")
+
+    def install_skill(self, slug_or_id: str) -> IMResult:
+        """Install a skill — creates cloud record + Gene, returns content for local install."""
+        return self._request("POST", f"/api/im/skills/{_url_quote(slug_or_id, safe='')}/install")
+
+    def uninstall_skill(self, slug_or_id: str) -> IMResult:
+        """Uninstall a skill."""
+        return self._request("DELETE", f"/api/im/skills/{_url_quote(slug_or_id, safe='')}/install")
+
+    def installed_skills(self) -> IMResult:
+        """List installed skills for this agent."""
+        return self._request("GET", "/api/im/skills/installed")
+
+    def get_skill_content(self, slug_or_id: str) -> IMResult:
+        """Get full skill content (SKILL.md + package info)."""
+        return self._request("GET", f"/api/im/skills/{_url_quote(slug_or_id, safe='')}/content")
+
+    def install_skill_local(self, slug_or_id: str, platforms: Optional[List[str]] = None, project: bool = False, project_root: Optional[str] = None) -> IMResult:
+        """Install a skill and write SKILL.md to local filesystem.
+
+        Combines cloud install + local file sync for Claude Code / OpenClaw / OpenCode / Plugin.
+
+        Args:
+            slug_or_id: Skill slug or ID
+            platforms: Target platforms (default: all). Options: 'claude-code', 'openclaw', 'opencode', 'plugin'
+            project: Write to project-level paths instead of global
+            project_root: Project root directory (for project-level installs)
+        """
+        import os as _os
+        from pathlib import Path
+
+        result = self.install_skill(slug_or_id)
+        result.local_paths = []
+
+        if not result.ok or not result.data:
+            return result
+
+        skill = result.data.get("skill", {})
+        content = skill.get("content", "")
+        slug = _safe_slug(skill.get("slug", slug_or_id))
+        if not slug:
+            return result
+
+        if not content:
+            content_result = self.get_skill_content(slug_or_id)
+            if content_result.ok and content_result.data:
+                content = content_result.data.get("content", "")
+
+        if not content:
+            return result
+
+        home = Path.home()
+        plugin_dir = Path(_os.environ.get("PRISMER_PLUGIN_DIR", str(home / ".claude" / "plugins" / "prismer")))
+        if project:
+            root = Path(project_root) if project_root else Path.cwd()
+            platform_paths = {
+                "claude-code": root / ".claude" / "skills" / slug,
+                "openclaw": root / "skills" / slug,
+                "opencode": root / ".opencode" / "skills" / slug,
+                "plugin": root / ".claude" / "plugins" / "prismer" / "skills" / slug,
+            }
+        else:
+            platform_paths = {
+                "claude-code": home / ".claude" / "skills" / slug,
+                "openclaw": home / ".openclaw" / "skills" / slug,
+                "opencode": home / ".config" / "opencode" / "skills" / slug,
+                "plugin": plugin_dir / "skills" / slug,
+            }
+
+        targets = platforms or list(platform_paths.keys())
+        local_paths = []
+
+        for platform in targets:
+            skill_dir = platform_paths.get(platform)
+            if not skill_dir:
+                continue
+            try:
+                skill_dir.mkdir(parents=True, exist_ok=True)
+                file_path = skill_dir / "SKILL.md"
+                file_path.write_text(content, encoding="utf-8")
+                local_paths.append(str(file_path))
+            except OSError:
+                pass
+
+        result.local_paths = local_paths
+        return result
+
+    def uninstall_skill_local(self, slug_or_id: str) -> IMResult:
+        """Uninstall a skill and remove local SKILL.md files."""
+        import os as _os
+        import shutil
+        from pathlib import Path
+
+        result = self.uninstall_skill(slug_or_id)
+        removed = []
+
+        safe = _safe_slug(slug_or_id)
+        if not safe:
+            result.removed_paths = removed
+            return result
+
+        home = Path.home()
+        plugin_dir = Path(_os.environ.get("PRISMER_PLUGIN_DIR", str(home / ".claude" / "plugins" / "prismer")))
+        dirs = [
+            home / ".claude" / "skills" / safe,
+            home / ".openclaw" / "skills" / safe,
+            home / ".config" / "opencode" / "skills" / safe,
+            plugin_dir / "skills" / safe,
+        ]
+
+        for d in dirs:
+            try:
+                if d.exists():
+                    shutil.rmtree(d)
+                    removed.append(str(d))
+            except OSError:
+                pass
+
+        result.removed_paths = removed
+        return result
+
+    def sync_skills_local(self, platforms: Optional[List[str]] = None) -> dict:
+        """Sync all installed skills to local filesystem."""
+        import os as _os
+        from pathlib import Path
+
+        installed = self.installed_skills()
+        if not installed.ok or not installed.data:
+            return {"synced": 0, "failed": 0, "paths": []}
+
+        synced = 0
+        failed = 0
+        paths = []
+
+        home = Path.home()
+        plugin_dir = Path(_os.environ.get("PRISMER_PLUGIN_DIR", str(home / ".claude" / "plugins" / "prismer")))
+
+        for record in installed.data:
+            skill = record.get("skill", {})
+            raw_slug = skill.get("slug") if skill else None
+            if not raw_slug:
+                failed += 1
+                continue
+            slug = _safe_slug(raw_slug)
+            if not slug:
+                failed += 1
+                continue
+
+            try:
+                content_result = self.get_skill_content(slug)
+                content = content_result.data.get("content", "") if content_result.ok and content_result.data else ""
+                if not content:
+                    failed += 1
+                    continue
+
+                platform_paths = {
+                    "claude-code": home / ".claude" / "skills" / slug,
+                    "openclaw": home / ".openclaw" / "skills" / slug,
+                    "opencode": home / ".config" / "opencode" / "skills" / slug,
+                    "plugin": plugin_dir / "skills" / slug,
+                }
+
+                targets = platforms or list(platform_paths.keys())
+                for platform in targets:
+                    skill_dir = platform_paths.get(platform)
+                    if not skill_dir:
+                        continue
+                    try:
+                        skill_dir.mkdir(parents=True, exist_ok=True)
+                        file_path = skill_dir / "SKILL.md"
+                        file_path.write_text(content, encoding="utf-8")
+                        paths.append(str(file_path))
+                    except OSError:
+                        pass
+                synced += 1
+            except Exception:
+                failed += 1
+
+        return {"synced": synced, "failed": failed, "paths": paths}
 
     # ─── P0: Report, Achievements, Sync ──────────────
 
@@ -1637,6 +1824,185 @@ class AsyncEvolutionClient:
 
     async def get_skill_stats(self) -> IMResult:
         return await self._request("GET", "/api/im/skills/stats")
+
+    async def install_skill(self, slug_or_id: str) -> IMResult:
+        """Install a skill — creates cloud record + Gene, returns content for local install."""
+        return await self._request("POST", f"/api/im/skills/{_url_quote(slug_or_id, safe='')}/install")
+
+    async def uninstall_skill(self, slug_or_id: str) -> IMResult:
+        """Uninstall a skill."""
+        return await self._request("DELETE", f"/api/im/skills/{_url_quote(slug_or_id, safe='')}/install")
+
+    async def installed_skills(self) -> IMResult:
+        """List installed skills for this agent."""
+        return await self._request("GET", "/api/im/skills/installed")
+
+    async def get_skill_content(self, slug_or_id: str) -> IMResult:
+        """Get full skill content (SKILL.md + package info)."""
+        return await self._request("GET", f"/api/im/skills/{_url_quote(slug_or_id, safe='')}/content")
+
+    async def install_skill_local(self, slug_or_id: str, platforms: Optional[List[str]] = None, project: bool = False, project_root: Optional[str] = None) -> IMResult:
+        """Install a skill and write SKILL.md to local filesystem.
+
+        Combines cloud install + local file sync for Claude Code / OpenClaw / OpenCode / Plugin.
+
+        Args:
+            slug_or_id: Skill slug or ID
+            platforms: Target platforms (default: all). Options: 'claude-code', 'openclaw', 'opencode', 'plugin'
+            project: Write to project-level paths instead of global
+            project_root: Project root directory (for project-level installs)
+        """
+        import os as _os
+        from pathlib import Path
+
+        result = await self.install_skill(slug_or_id)
+        result.local_paths = []
+
+        if not result.ok or not result.data:
+            return result
+
+        skill = result.data.get("skill", {})
+        content = skill.get("content", "")
+        slug = _safe_slug(skill.get("slug", slug_or_id))
+        if not slug:
+            return result
+
+        if not content:
+            content_result = await self.get_skill_content(slug_or_id)
+            if content_result.ok and content_result.data:
+                content = content_result.data.get("content", "")
+
+        if not content:
+            return result
+
+        home = Path.home()
+        plugin_dir = Path(_os.environ.get("PRISMER_PLUGIN_DIR", str(home / ".claude" / "plugins" / "prismer")))
+        if project:
+            root = Path(project_root) if project_root else Path.cwd()
+            platform_paths = {
+                "claude-code": root / ".claude" / "skills" / slug,
+                "openclaw": root / "skills" / slug,
+                "opencode": root / ".opencode" / "skills" / slug,
+                "plugin": root / ".claude" / "plugins" / "prismer" / "skills" / slug,
+            }
+        else:
+            platform_paths = {
+                "claude-code": home / ".claude" / "skills" / slug,
+                "openclaw": home / ".openclaw" / "skills" / slug,
+                "opencode": home / ".config" / "opencode" / "skills" / slug,
+                "plugin": plugin_dir / "skills" / slug,
+            }
+
+        targets = platforms or list(platform_paths.keys())
+        local_paths = []
+
+        for platform in targets:
+            skill_dir = platform_paths.get(platform)
+            if not skill_dir:
+                continue
+            try:
+                skill_dir.mkdir(parents=True, exist_ok=True)
+                file_path = skill_dir / "SKILL.md"
+                file_path.write_text(content, encoding="utf-8")
+                local_paths.append(str(file_path))
+            except OSError:
+                pass
+
+        result.local_paths = local_paths
+        return result
+
+    async def uninstall_skill_local(self, slug_or_id: str) -> IMResult:
+        """Uninstall a skill and remove local SKILL.md files."""
+        import os as _os
+        import shutil
+        from pathlib import Path
+
+        result = await self.uninstall_skill(slug_or_id)
+        removed = []
+
+        safe = _safe_slug(slug_or_id)
+        if not safe:
+            result.removed_paths = removed
+            return result
+
+        home = Path.home()
+        plugin_dir = Path(_os.environ.get("PRISMER_PLUGIN_DIR", str(home / ".claude" / "plugins" / "prismer")))
+        dirs = [
+            home / ".claude" / "skills" / safe,
+            home / ".openclaw" / "skills" / safe,
+            home / ".config" / "opencode" / "skills" / safe,
+            plugin_dir / "skills" / safe,
+        ]
+
+        for d in dirs:
+            try:
+                if d.exists():
+                    shutil.rmtree(d)
+                    removed.append(str(d))
+            except OSError:
+                pass
+
+        result.removed_paths = removed
+        return result
+
+    async def sync_skills_local(self, platforms: Optional[List[str]] = None) -> dict:
+        """Sync all installed skills to local filesystem."""
+        import os as _os
+        from pathlib import Path
+
+        installed = await self.installed_skills()
+        if not installed.ok or not installed.data:
+            return {"synced": 0, "failed": 0, "paths": []}
+
+        synced = 0
+        failed = 0
+        paths = []
+
+        home = Path.home()
+        plugin_dir = Path(_os.environ.get("PRISMER_PLUGIN_DIR", str(home / ".claude" / "plugins" / "prismer")))
+
+        for record in installed.data:
+            skill = record.get("skill", {})
+            raw_slug = skill.get("slug") if skill else None
+            if not raw_slug:
+                failed += 1
+                continue
+            slug = _safe_slug(raw_slug)
+            if not slug:
+                failed += 1
+                continue
+
+            try:
+                content_result = await self.get_skill_content(slug)
+                content = content_result.data.get("content", "") if content_result.ok and content_result.data else ""
+                if not content:
+                    failed += 1
+                    continue
+
+                platform_paths = {
+                    "claude-code": home / ".claude" / "skills" / slug,
+                    "openclaw": home / ".openclaw" / "skills" / slug,
+                    "opencode": home / ".config" / "opencode" / "skills" / slug,
+                    "plugin": plugin_dir / "skills" / slug,
+                }
+
+                targets = platforms or list(platform_paths.keys())
+                for platform in targets:
+                    skill_dir = platform_paths.get(platform)
+                    if not skill_dir:
+                        continue
+                    try:
+                        skill_dir.mkdir(parents=True, exist_ok=True)
+                        file_path = skill_dir / "SKILL.md"
+                        file_path.write_text(content, encoding="utf-8")
+                        paths.append(str(file_path))
+                    except OSError:
+                        pass
+                synced += 1
+            except Exception:
+                failed += 1
+
+        return {"synced": synced, "failed": failed, "paths": paths}
 
     # ─── P0: Report, Achievements, Sync ──────────────
 

@@ -14,7 +14,7 @@
   "homepage": "https://github.com/prismer-io/prismercloud/tree/main/sdk/claude-code-plugin",
   "repository": {
     "type": "git",
-    "url": "https://github.com/prismer-io/prismercloud.git",
+    "url": "https://github.com/Prismer-AI/PrismerCloud.git",
     "directory": "sdk/claude-code-plugin"
   },
   "license": "MIT",
@@ -26,5 +26,8 @@
     "skills/",
     ".mcp.json",
     "README.md"
-  ]
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
 }

@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	prismer "github.com/Prismer-AI/Prismer/sdk/golang"
+	prismer "github.com/Prismer-AI/PrismerCloud/sdk/golang"
 )
 
 // imMessageLoose works around a SDK bug where IMMessage.Metadata is typed as
@@ -692,18 +692,19 @@ func TestIntegration_IM_FullLifecycle(t *testing.T) {
 		t.Logf("Send_Image — ok=%v", result.OK)
 	})
 
-	t.Run("Send_File_Message", func(t *testing.T) {
-		result, err := imClientA.IM().Direct.Send(ctx, targetId, "https://example.com/document.pdf", &prismer.IMSendOptions{
-			Type:     "file",
+	// NOTE: file-type messages require full upload flow (presign→upload→confirm).
+	// See file_upload_test.go for comprehensive file send tests.
+	t.Run("Send_Message_With_File_Metadata", func(t *testing.T) {
+		result, err := imClientA.IM().Direct.Send(ctx, targetId, "Shared a document: document.pdf", &prismer.IMSendOptions{
 			Metadata: map[string]any{"filename": "document.pdf", "mimeType": "application/pdf", "size": 1024},
 		})
 		if err != nil {
-			t.Fatalf("File send error: %v", err)
+			t.Fatalf("Message with file metadata error: %v", err)
 		}
 		if !result.OK {
-			t.Fatalf("File send not OK: %+v", result.Error)
+			t.Fatalf("Message with file metadata not OK: %+v", result.Error)
 		}
-		t.Logf("Send_File — ok=%v", result.OK)
+		t.Logf("Send_Message_With_File_Metadata — ok=%v", result.OK)
 	})
 
 	// ---------------------------------------------------------------

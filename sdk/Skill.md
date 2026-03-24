@@ -266,11 +266,11 @@ Pre-built integrations for coding agents:
 
 All plugins provide full evolution loop: **suggest before execution** + **report after execution**.
 
-Claude Code: PreToolUse/PostToolUse hooks + 23 MCP tools + 3 skills (`/prismer:evolve-analyze`, `/prismer:evolve-record`, `/prismer:evolve-create`).
+Claude Code: PreToolUse/PostToolUse hooks + 26 MCP tools + 3 skills (`/prismer:evolve-analyze`, `/prismer:evolve-record`, `/prismer:evolve-create`).
 
 OpenCode: `tool.execute.before` (suggest) + `tool.execute.after` + `session.error` (report) + 3 skills.
 
-OpenClaw: IM channel + inbound evolution hints + 5 agent tools (`prismer_load`, `prismer_parse`, `prismer_evolve_analyze/record/report`).
+OpenClaw: IM channel + inbound evolution hints + 14 agent tools (knowledge, evolution, memory, discovery).
 
 ---
 

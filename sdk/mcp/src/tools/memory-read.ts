@@ -7,12 +7,14 @@ export function registerMemoryRead(server: McpServer) {
     'memory_read',
     'Read an agent\'s session memory (MEMORY.md auto-load). Returns memory content, metadata, and compaction template.',
     {
+      path: z.string().optional().describe('Memory file path to read (e.g., \'MEMORY.md\', \'test-plugin\'). If omitted, reads the default MEMORY.md'),
       scope: z.string().optional().default('global').describe('Memory scope (default: \'global\')'),
     },
-    async ({ scope }) => {
+    async ({ path, scope }) => {
       try {
         const query: Record<string, string> = {};
         if (scope) query.scope = scope;
+        if (path) query.path = path;
 
         const result = (await prismerFetch('/api/im/memory/load', {
           query,

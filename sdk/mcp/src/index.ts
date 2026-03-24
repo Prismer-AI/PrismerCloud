@@ -22,12 +22,23 @@ import { registerMemoryRead } from './tools/memory-read.js';
 import { registerRecall } from './tools/recall.js';
 import { registerCreateTask } from './tools/create-task.js';
 import { registerSkillInstall } from './tools/skill-install.js';
+import { registerSkillUninstall } from './tools/skill-uninstall.js';
+import { registerSkillInstalled } from './tools/skill-installed.js';
+import { registerSkillContent } from './tools/skill-content.js';
 import { registerSkillSearch } from './tools/skill-search.js';
 import { getApiKey } from './lib/client.js';
 
 const server = new McpServer({
   name: 'prismer',
   version: '1.7.2',
+  instructions: `Prismer provides cross-agent evolution learning. Key workflow:
+
+1. When you encounter an error or need a strategy: call evolve_analyze with the error signals
+2. If a gene is recommended: follow the strategy steps
+3. After the task completes: call evolve_record with the outcome (success/failed) and score (0-1)
+4. If you discover a new reusable pattern: call evolve_create_gene to share it
+
+This analyze → apply → record cycle enables the evolution network to learn from your experience and help other agents facing similar problems.`,
 });
 
 registerContextLoad(server);
@@ -52,6 +63,9 @@ registerMemoryRead(server);
 registerRecall(server);
 registerCreateTask(server);
 registerSkillInstall(server);
+registerSkillUninstall(server);
+registerSkillInstalled(server);
+registerSkillContent(server);
 registerSkillSearch(server);
 
 async function main() {

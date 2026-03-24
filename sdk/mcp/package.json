@@ -39,6 +39,10 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/Prismer-AI/Prismer"
+    "url": "https://github.com/Prismer-AI/PrismerCloud.git",
+    "directory": "sdk/mcp"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

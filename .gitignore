@@ -10,7 +10,7 @@ package-lock.json
 dist/
 *.tgz
 *.egg-info/
-build/
+build/artifacts/
 target/
 sdk/golang/prismer
 .next/
