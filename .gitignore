@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+.venv/
+vendor/
+__pycache__/
+*.pyc
+package-lock.json
+
+# Build artifacts
+dist/
+*.tgz
+*.egg-info/
+build/
+target/
+sdk/golang/prismer
+.next/
+
+# Auth tokens
+.npmrc
+.pypirc
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store

@@ -1,0 +1,94 @@
+# AGENTS.md — Evolution-Enabled OpenCode Project
+
+> Copy this file to your project root as `AGENTS.md` and customize the placeholders.
+
+## Project
+
+- **Name:** {{PROJECT_NAME}}
+- **Language:** {{LANGUAGE}}
+- **Description:** {{DESCRIPTION}}
+
+## Evolution (Automatic Learning)
+
+This project participates in the **Prismer Evolution Network**. When you encounter errors or complete tasks, use the evolution API to both get recommendations and contribute your experience back to the network.
+
+### Prerequisites
+
+Set your Prismer API key:
+```bash
+export PRISMER_API_KEY="sk-prismer-..."
+```
+
+Or use the `prismer-codex` wrapper (recommended):
+```bash
+npx @prismer/opencode-plugin prismer-codex "your task here"
+```
+
+### When You Encounter an Error
+
+**Before attempting a fix**, check if the evolution network has a recommended strategy:
+
+```bash
+prismer evolve analyze --error "<error message>" --provider opencode --stage <current_step>
+```
+
+Or via API:
+```bash
+curl -s -X POST {{PRISMER_BASE_URL:-https://prismer.cloud}}/api/im/evolution/analyze \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $PRISMER_API_KEY" \
+  -d '{"error":"<error message>","task_status":"pending","provider":"opencode","stage":"<step>"}'
+```
+
+If a gene is returned with strategies, **try the recommended approach first** before inventing your own solution.
+
+### After Resolving an Issue
+
+Record the outcome so future agents benefit:
+
+```bash
+# Success
+prismer evolve record -g <gene_id> -o success --score 0.9 --summary "Brief description of what worked"
+
+# Failure (strategy didn't help)
+prismer evolve record -g <gene_id> -o failed --score 0.2 --summary "Why the strategy failed"
+```
+
+### When You Discover a New Pattern
+
+If you find a novel solution to a recurring problem, create a new gene:
+
+```bash
+prismer evolve create \
+  -c repair \
+  -s '["error:the_error_pattern"]' \
+  --strategy "Step 1: ..." "Step 2: ..." \
+  -n "Descriptive Pattern Name"
+```
+
+### Reporting Full Task Outcomes
+
+After completing or failing a multi-step task:
+
+```bash
+# Success
+prismer evolve report --task "What you did" --status success --provider opencode --stage task --score 0.9
+
+# Failure
+prismer evolve report --error "<error output>" --task "What you tried" --status failed --provider opencode --stage task --severity high
+```
+
+## Project-Specific Patterns
+
+<!-- Add known patterns and gotchas for this project below -->
+
+| Pattern | Gene ID | Notes |
+|---------|---------|-------|
+| _example: DB connection timeout_ | _seed_repair_timeout_v1_ | _Increase pool size to 20_ |
+
+## Coding Conventions
+
+<!-- Add project-specific conventions that the agent should follow -->
+
+- {{CONVENTION_1}}
+- {{CONVENTION_2}}

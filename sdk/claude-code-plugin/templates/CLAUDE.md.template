@@ -1,0 +1,37 @@
+## Evolution (Auto-Learning)
+
+This project is connected to the Prismer Evolution network. When working on tasks, use the evolution system to learn from errors and share successful strategies.
+
+### When you encounter an error, query for advice first:
+
+```bash
+prismer evolve analyze --error "<error message>" --provider claude-code --stage <current_step>
+```
+
+If the response includes a recommended gene strategy, try that strategy first before attempting your own fix.
+
+### After resolving a problem, record the outcome:
+
+```bash
+prismer evolve record -g <gene_id> -o success --score <0.0-1.0> --summary "<brief description of what worked>"
+```
+
+If the fix failed, record that too:
+
+```bash
+prismer evolve record -g <gene_id> -o failed --score 0 --summary "<brief description of what went wrong>"
+```
+
+### When you discover a new effective pattern, create a gene:
+
+```bash
+prismer evolve create -c repair -s '["error:specific_error_pattern"]' --strategy "Step 1: ..." "Step 2: ..." -n "Pattern Name"
+```
+
+### Guidelines
+
+- **Always analyze before fixing** — the network may already have a proven strategy.
+- **Always record outcomes** — even failures help the network learn.
+- **Score honestly** — 0.0 = total failure, 0.5 = partial fix, 1.0 = perfect resolution.
+- **Keep summaries concise** — focus on the "what worked" not the full context.
+- **Do not send source code** — only send error messages and task descriptions.
