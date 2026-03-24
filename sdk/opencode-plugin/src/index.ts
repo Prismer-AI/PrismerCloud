@@ -43,8 +43,11 @@ export const PrismerEvolution: Plugin = async (ctx) => {
 
   const client = new EvolutionClient({ apiKey, baseUrl, provider: 'opencode' });
 
-  // Track last analysis result for correlation
-  let lastAdvice: any = null;
+  // Track analysis results per tool invocation for correlation.
+  // Single-slot is safe here because OpenCode serializes tool executions (before→run→after).
+  // TTL prevents stale attribution if an after-hook never fires.
+  const ADVICE_TTL_MS = 3 * 60 * 1000; // 3 minutes
+  let lastAdvice: (any & { suggestedAt: number }) | null = null;
 
   return {
     // Inject Prismer env vars into shell sessions
@@ -75,7 +78,7 @@ export const PrismerEvolution: Plugin = async (ctx) => {
 
         const result = await client.analyze(signals.join(','), toolName || 'tool');
         if (result?.geneId && result.confidence > 0.4) {
-          lastAdvice = result;
+          lastAdvice = { ...result, signals, suggestedAt: Date.now() };
           const strategy = result.strategies || [];
           ctx.client?.app?.log?.('info',
             `[prismer] Evolution suggests "${result.geneTitle}" (${Math.round(result.confidence * 100)}%): ${strategy[0] || ''}`
@@ -106,24 +109,47 @@ export const PrismerEvolution: Plugin = async (ctx) => {
       }
     },
 
-    // After tool execution, check for errors and report
+    // After tool execution: report errors + close evolution feedback loop
     'tool.execute.after': async (event: any) => {
       try {
         const result = event?.result;
         const toolName = event?.tool?.name || '';
 
-        // Only report if tool execution had an error
-        if (!result?.error && !result?.stderr) return;
+        // Expire stale advice
+        if (lastAdvice && (Date.now() - lastAdvice.suggestedAt > ADVICE_TTL_MS)) {
+          lastAdvice = null;
+        }
 
-        await client.report({
-          rawContext: String(result?.error || result?.stderr || '').slice(-2000),
-          outcome: 'failed',
-          task: `${toolName}: ${String(event?.input?.command || event?.input?.description || '').slice(0, 500)}`,
-          stage: toolName || 'tool',
-          severity: 'medium',
-        });
+        if (result?.error || result?.stderr) {
+          // Failure path: report error
+          await client.report({
+            rawContext: String(result?.error || result?.stderr || '').slice(-2000),
+            outcome: 'failed',
+            task: `${toolName}: ${String(event?.input?.command || event?.input?.description || '').slice(0, 500)}`,
+            stage: toolName || 'tool',
+            severity: 'medium',
+          });
+
+          // If a gene was suggested, record its failure
+          if (lastAdvice?.geneId) {
+            try {
+              await client.record(lastAdvice.geneId, 'failed', `Tool failed despite suggestion "${lastAdvice.geneTitle}"`);
+            } catch (err: any) {
+              ctx.client?.app?.log?.('warn', `[prismer] evolution record-failure error: ${err?.message || err}`);
+            }
+            lastAdvice = null;
+          }
+        } else if (lastAdvice?.geneId) {
+          // Success path: gene was suggested and tool now succeeded → record success
+          try {
+            await client.record(lastAdvice.geneId, 'success', `Tool succeeded after suggestion "${lastAdvice.geneTitle}"`);
+          } catch (err: any) {
+            ctx.client?.app?.log?.('warn', `[prismer] evolution record-success error: ${err?.message || err}`);
+          }
+          lastAdvice = null;
+        }
       } catch {
-        // Best-effort
+        // Best-effort — outer catch for unexpected errors
       }
     },
 

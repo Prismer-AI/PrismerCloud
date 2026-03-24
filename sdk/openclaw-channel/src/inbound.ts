@@ -2,6 +2,30 @@ import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel";
 import { prismerFetch } from "./api-client.js";
 import type { CoreConfig, ResolvedPrismerAccount } from "./types.js";
 
+// Per-conversation pending suggestion tracker for evolution feedback loop.
+// Module-scoped is safe: conversation IDs are globally unique in Prismer IM.
+const pendingSuggestions = new Map<string, {
+  geneId: string;
+  geneTitle: string;
+  signals: Array<{ type: string }>;
+  suggestedAt: number;
+}>();
+
+// Suggestion TTL: tight window to reduce false positives
+const SUGGESTION_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+// Positive confirmation keywords for success heuristic
+const RESOLVED_RE = /fix|fixed|solved|resolved|working|success|done|thank/i;
+
+// Periodic cleanup to prevent memory leaks
+const _cleanupTimer = setInterval(() => {
+  const now = Date.now();
+  pendingSuggestions.forEach((val, key) => {
+    if (now - val.suggestedAt > SUGGESTION_TTL_MS) pendingSuggestions.delete(key);
+  });
+}, 60 * 1000);
+_cleanupTimer.unref(); // Don't prevent process exit
+
 /**
  * Register the agent on Prismer IM and start a WebSocket connection
  * for inbound messages.
@@ -170,10 +194,41 @@ async function handleInboundMessage(
   const senderName = (msg.senderName as string) || senderId;
   const conversationId = msg.conversationId as string;
 
+  // Evolution feedback loop: if previous suggestion exists, check for resolution.
+  // Require BOTH: (1) no error keywords AND (2) positive confirmation keywords.
+  // This tight heuristic avoids false positives from unrelated messages.
+  const ERROR_RE = /error|fail|timeout|crash|exception|denied|refused|oom|panic/i;
+  const prevSuggestion = pendingSuggestions.get(conversationId);
+  if (prevSuggestion) {
+    const age = Date.now() - prevSuggestion.suggestedAt;
+    if (age > SUGGESTION_TTL_MS) {
+      // Expired — discard without recording
+      pendingSuggestions.delete(conversationId);
+    } else if (!ERROR_RE.test(content) && RESOLVED_RE.test(content)) {
+      // Positive signal: no error + confirmation keyword → record success
+      try {
+        await prismerFetch(account.apiKey, '/api/im/evolution/record', {
+          method: 'POST',
+          body: {
+            gene_id: prevSuggestion.geneId,
+            signals: prevSuggestion.signals,
+            outcome: 'success',
+            score: 0.7,
+            summary: `Issue resolved after suggestion "${prevSuggestion.geneTitle}"`,
+          },
+          baseUrl: account.baseUrl,
+        });
+      } catch (err) {
+        ctx.log?.warn(`[prismer] evolution record error: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      pendingSuggestions.delete(conversationId);
+    }
+    // If message still has errors → keep pending, don't record yet
+  }
+
   // Evolution suggest: check if message contains error signals → inject recommendation
   let evolutionHint = '';
   try {
-    const ERROR_RE = /error|fail|timeout|crash|exception|denied|refused|oom|panic/i;
     if (ERROR_RE.test(content)) {
       const signals = [];
       if (/timeout/i.test(content)) signals.push({ type: 'error:timeout' });
@@ -192,6 +247,14 @@ async function handleInboundMessage(
         const strategy = gene?.strategy || [];
         evolutionHint = `\n\n---\n[Prismer Evolution] Known fix (${Math.round(result.data.confidence * 100)}% confidence): "${gene?.title}"\n` +
           strategy.map((s: string, i: number) => `${i + 1}. ${s}`).join('\n');
+
+        // Save pending suggestion for feedback loop
+        pendingSuggestions.set(conversationId, {
+          geneId: result.data.gene_id || gene?.id,
+          geneTitle: gene?.title || '',
+          signals,
+          suggestedAt: Date.now(),
+        });
       }
     }
   } catch {

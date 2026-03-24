@@ -1,6 +1,16 @@
 use crate::{PrismerClient, types::*};
 use serde_json::json;
 
+/// Sanitize a slug to prevent directory traversal attacks.
+/// Strips `..`, `/`, `\`, null bytes, and takes only the basename component.
+fn safe_slug(s: &str) -> String {
+    let s = s.replace("..", "").replace('/', "").replace('\\', "").replace('\0', "");
+    std::path::Path::new(&s)
+        .file_name()
+        .map(|f| f.to_string_lossy().to_string())
+        .unwrap_or_default()
+}
+
 pub struct EvolutionClient<'a> {
     pub(crate) client: &'a PrismerClient,
 }
@@ -240,6 +250,270 @@ impl<'a> EvolutionClient<'a> {
         if let Some(l) = limit { params.push(format!("limit={}", l)); }
         let qs = if params.is_empty() { String::new() } else { format!("?{}", params.join("&")) };
         self.client.request(reqwest::Method::GET, &format!("/api/im/skills/search{}", qs), None).await
+    }
+
+    /// Install a skill — creates cloud record + Gene, returns content for local install.
+    pub async fn install_skill(&self, slug_or_id: &str) -> Result<ApiResponse<serde_json::Value>, PrismerError> {
+        self.client.request(
+            reqwest::Method::POST,
+            &format!("/api/im/skills/{}/install", urlencoding::encode(slug_or_id)),
+            None,
+        ).await
+    }
+
+    /// Uninstall a skill.
+    pub async fn uninstall_skill(&self, slug_or_id: &str) -> Result<ApiResponse<serde_json::Value>, PrismerError> {
+        self.client.request(
+            reqwest::Method::DELETE,
+            &format!("/api/im/skills/{}/install", urlencoding::encode(slug_or_id)),
+            None,
+        ).await
+    }
+
+    /// List installed skills for this agent.
+    pub async fn installed_skills(&self) -> Result<ApiResponse<Vec<serde_json::Value>>, PrismerError> {
+        self.client.request(reqwest::Method::GET, "/api/im/skills/installed", None).await
+    }
+
+    /// Get full skill content (SKILL.md + package info).
+    pub async fn get_skill_content(&self, slug_or_id: &str) -> Result<ApiResponse<serde_json::Value>, PrismerError> {
+        self.client.request(
+            reqwest::Method::GET,
+            &format!("/api/im/skills/{}/content", urlencoding::encode(slug_or_id)),
+            None,
+        ).await
+    }
+
+    // ─── Local file sync ────────────────────────────
+
+    /// Install a skill and write SKILL.md to local filesystem.
+    /// Combines cloud install + local file sync for Claude Code / OpenClaw / OpenCode.
+    pub async fn install_skill_local(
+        &self,
+        slug_or_id: &str,
+        platforms: Option<&[&str]>,
+        project: bool,
+        project_root: Option<&str>,
+    ) -> Result<(ApiResponse<serde_json::Value>, Vec<String>), PrismerError> {
+        // 1. Cloud install
+        let cloud_res = self.install_skill(slug_or_id).await?;
+
+        let mut local_paths = Vec::new();
+
+        // 2. Extract content and slug from response
+        let (content, slug) = if let Some(ref data) = cloud_res.data {
+            let skill = data.get("skill").and_then(|s| s.as_object());
+            let content = skill
+                .and_then(|s| s.get("content"))
+                .and_then(|c| c.as_str())
+                .unwrap_or("")
+                .to_string();
+            let raw_slug = skill
+                .and_then(|s| s.get("slug"))
+                .and_then(|s| s.as_str())
+                .unwrap_or(slug_or_id);
+            let slug = safe_slug(raw_slug);
+            if slug.is_empty() {
+                return Ok((cloud_res, local_paths));
+            }
+            (content, slug)
+        } else {
+            return Ok((cloud_res, local_paths));
+        };
+
+        // 3. If no content, fetch it
+        let content = if content.is_empty() {
+            match self.get_skill_content(slug_or_id).await {
+                Ok(res) => res
+                    .data
+                    .as_ref()
+                    .and_then(|d| d.get("content"))
+                    .and_then(|c| c.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                Err(_) => String::new(),
+            }
+        } else {
+            content
+        };
+
+        if content.is_empty() {
+            return Ok((cloud_res, local_paths));
+        }
+
+        // 4. Determine target paths
+        let home = dirs::home_dir().unwrap_or_default();
+        let root = project_root
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::PathBuf::from("."));
+
+        let plugin_dir = std::env::var("PRISMER_PLUGIN_DIR")
+            .unwrap_or_else(|_| home.join(".claude").join("plugins").join("prismer").to_string_lossy().to_string());
+        let plugin_base = std::path::PathBuf::from(&plugin_dir);
+
+        let all_platforms: Vec<(&str, std::path::PathBuf)> = if project {
+            vec![
+                ("claude-code", root.join(".claude").join("skills").join(&slug)),
+                ("openclaw", root.join("skills").join(&slug)),
+                ("opencode", root.join(".opencode").join("skills").join(&slug)),
+                ("plugin", root.join(".claude").join("plugins").join("prismer").join("skills").join(&slug)),
+            ]
+        } else {
+            vec![
+                ("claude-code", home.join(".claude").join("skills").join(&slug)),
+                ("openclaw", home.join(".openclaw").join("skills").join(&slug)),
+                ("opencode", home.join(".config").join("opencode").join("skills").join(&slug)),
+                ("plugin", plugin_base.join("skills").join(&slug)),
+            ]
+        };
+
+        // Filter by requested platforms
+        let targets: Vec<_> = match platforms {
+            Some(ps) => all_platforms
+                .into_iter()
+                .filter(|(name, _)| ps.contains(name))
+                .collect(),
+            None => all_platforms,
+        };
+
+        // 5. Write SKILL.md
+        for (_, dir) in &targets {
+            if let Err(_) = std::fs::create_dir_all(dir) {
+                continue;
+            }
+            let file_path = dir.join("SKILL.md");
+            if std::fs::write(&file_path, &content).is_ok() {
+                local_paths.push(file_path.to_string_lossy().to_string());
+            }
+        }
+
+        Ok((cloud_res, local_paths))
+    }
+
+    /// Uninstall a skill and remove local SKILL.md files.
+    pub async fn uninstall_skill_local(
+        &self,
+        slug_or_id: &str,
+    ) -> Result<(ApiResponse<serde_json::Value>, Vec<String>), PrismerError> {
+        let cloud_res = self.uninstall_skill(slug_or_id).await?;
+        let mut removed = Vec::new();
+
+        let safe = safe_slug(slug_or_id);
+        if safe.is_empty() {
+            return Ok((cloud_res, removed));
+        }
+
+        if let Some(home) = dirs::home_dir() {
+            let plugin_dir = std::env::var("PRISMER_PLUGIN_DIR")
+                .unwrap_or_else(|_| home.join(".claude").join("plugins").join("prismer").to_string_lossy().to_string());
+            let plugin_base = std::path::PathBuf::from(&plugin_dir);
+
+            let dirs = [
+                home.join(".claude").join("skills").join(&safe),
+                home.join(".openclaw").join("skills").join(&safe),
+                home.join(".config").join("opencode").join("skills").join(&safe),
+                plugin_base.join("skills").join(&safe),
+            ];
+
+            for dir in &dirs {
+                if dir.exists() {
+                    if std::fs::remove_dir_all(dir).is_ok() {
+                        removed.push(dir.to_string_lossy().to_string());
+                    }
+                }
+            }
+        }
+
+        Ok((cloud_res, removed))
+    }
+
+    /// Sync all installed skills to local filesystem.
+    pub async fn sync_skills_local(
+        &self,
+        platforms: Option<&[&str]>,
+    ) -> Result<(usize, usize, Vec<String>), PrismerError> {
+        let installed = self.installed_skills().await?;
+        let mut synced = 0usize;
+        let mut failed = 0usize;
+        let mut paths = Vec::new();
+
+        let records = match &installed.data {
+            Some(data) => data.clone(),
+            None => return Ok((0, 0, paths)),
+        };
+
+        let home = dirs::home_dir().unwrap_or_default();
+
+        for record in records {
+            let slug = record
+                .get("skill")
+                .and_then(|s| s.get("slug"))
+                .and_then(|s| s.as_str());
+
+            let slug = match slug {
+                Some(s) => {
+                    let safe = safe_slug(s);
+                    if safe.is_empty() {
+                        failed += 1;
+                        continue;
+                    }
+                    safe
+                }
+                None => {
+                    failed += 1;
+                    continue;
+                }
+            };
+
+            let content = match self.get_skill_content(&slug).await {
+                Ok(res) => res
+                    .data
+                    .as_ref()
+                    .and_then(|d| d.get("content"))
+                    .and_then(|c| c.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                Err(_) => {
+                    failed += 1;
+                    continue;
+                }
+            };
+
+            if content.is_empty() {
+                failed += 1;
+                continue;
+            }
+
+            let plugin_dir = std::env::var("PRISMER_PLUGIN_DIR")
+                .unwrap_or_else(|_| home.join(".claude").join("plugins").join("prismer").to_string_lossy().to_string());
+            let plugin_base = std::path::PathBuf::from(&plugin_dir);
+
+            let all_paths: Vec<(&str, std::path::PathBuf)> = vec![
+                ("claude-code", home.join(".claude").join("skills").join(&slug)),
+                ("openclaw", home.join(".openclaw").join("skills").join(&slug)),
+                ("opencode", home.join(".config").join("opencode").join("skills").join(&slug)),
+                ("plugin", plugin_base.join("skills").join(&slug)),
+            ];
+
+            let targets: Vec<_> = match platforms {
+                Some(ps) => all_paths
+                    .into_iter()
+                    .filter(|(name, _)| ps.contains(name))
+                    .collect(),
+                None => all_paths,
+            };
+
+            for (_, dir) in &targets {
+                let _ = std::fs::create_dir_all(dir);
+                let fp = dir.join("SKILL.md");
+                if std::fs::write(&fp, &content).is_ok() {
+                    paths.push(fp.to_string_lossy().to_string());
+                }
+            }
+            synced += 1;
+        }
+
+        Ok((synced, failed, paths))
     }
 
     // ─── P0: Report, Achievements, Sync ──────────────

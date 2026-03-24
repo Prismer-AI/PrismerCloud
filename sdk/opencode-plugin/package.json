@@ -14,7 +14,7 @@
   "author": "Prismer <dev@prismer.cloud>",
   "repository": {
     "type": "git",
-    "url": "https://github.com/prismer-io/prismer-sdk",
+    "url": "https://github.com/Prismer-AI/PrismerCloud.git",
     "directory": "sdk/opencode-plugin"
   },
   "homepage": "https://prismer.cloud",
@@ -48,5 +48,8 @@
   },
   "engines": {
     "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

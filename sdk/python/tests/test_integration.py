@@ -647,8 +647,8 @@ class TestIMLifecycle:
         finally:
             agent_client.close()
 
-    def test_30_send_file_message(self, base_url: str):
-        """Send a file-type message."""
+    def test_30_send_message_with_file_metadata(self, base_url: str):
+        """Send a message with file metadata (file-type messages require full upload flow, see test_file_upload.py)."""
         agent_client = PrismerClient(
             api_key=self.__class__._agent_a_token,
             base_url=base_url,
@@ -657,12 +657,11 @@ class TestIMLifecycle:
         try:
             res = agent_client.im.direct.send(
                 self.__class__._agent_b_id,
-                "https://example.com/document.pdf",
-                type="file",
+                "Shared a document: document.pdf",
                 metadata={"filename": "document.pdf", "mimeType": "application/pdf", "size": 1024},
             )
-            assert res.get("ok") is True, f"file send failed: {res}"
-            assert res["data"]["message"]["type"] == "file"
+            assert res.get("ok") is True, f"message with file metadata failed: {res}"
+            assert res["data"]["message"]["metadata"] is not None
         finally:
             agent_client.close()
 

@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	prismer "github.com/Prismer-AI/Prismer/sdk/golang"
+	prismer "github.com/Prismer-AI/PrismerCloud/sdk/golang"
 	"github.com/spf13/cobra"
 )
 

@@ -13,12 +13,17 @@
  * Stdout: suggestion text (or empty for no suggestion)
  */
 
-import { readFileSync } from 'fs';
+import { readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const CACHE_DIR = join(__dirname, '..', '.cache');
+const LAST_ERROR_FILE = join(CACHE_DIR, 'last-error.json');
+const PENDING_FILE = join(CACHE_DIR, 'pending-suggestion.json');
 
 const API_KEY = process.env.PRISMER_API_KEY;
 const BASE_URL = (process.env.PRISMER_BASE_URL || 'https://prismer.cloud').replace(/\/$/, '');
-
-if (!API_KEY) process.exit(0);
 
 let input;
 try {
@@ -33,45 +38,73 @@ const command = input?.tool_input?.command || '';
 const SKIP_RE = /^\s*(ls|pwd|echo|cat|head|tail|wc|which|whoami|date|env|printenv|git\s+(status|log|diff|branch|show|remote|tag)|cd\s)/;
 if (SKIP_RE.test(command)) process.exit(0);
 
-// Extract potential error signals from command context
-// Look for patterns that suggest the user is dealing with an error
-const ERROR_CONTEXT_RE = [
-  /fix|debug|troubleshoot|resolve|repair/i,
-  /error|fail|broken|crash|timeout/i,
-  /retry|again|attempt/i,
-];
+// --- Two signal sources: command text AND last error memory ---
 
-const isErrorContext = ERROR_CONTEXT_RE.some(re => re.test(command));
-if (!isErrorContext) process.exit(0);
-
-// Extract signal tags from command
+// Source 1: Extract signals from current command text
 const SIGNAL_PATTERNS = [
   { pattern: /timeout|timed?\s*out/i, type: 'error:timeout' },
   { pattern: /oom|out\s*of\s*memory|kill/i, type: 'error:oom' },
   { pattern: /permission|denied|403|forbidden/i, type: 'error:permission_error' },
-  { pattern: /not\s*found|404|missing/i, type: 'error:not_found' },
+  { pattern: /not[\s-]*found|404|missing|can'?t\s*resolve/i, type: 'error:not_found' },
   { pattern: /connect|refused|econnrefused/i, type: 'error:connection_refused' },
+  { pattern: /port.*in\s*use|EADDRINUSE|address already in use/i, type: 'error:port_in_use' },
   { pattern: /build|compile|tsc|webpack/i, type: 'task:build' },
   { pattern: /deploy|k8s|kubectl|docker/i, type: 'task:deploy' },
   { pattern: /test|jest|pytest|mocha/i, type: 'task:test' },
   { pattern: /migrate|migration|schema/i, type: 'task:migrate' },
 ];
 
+const ERROR_CONTEXT_RE = [
+  /fix|debug|troubleshoot|resolve|repair/i,
+  /error|fail|broken|crash|timeout/i,
+  /retry|again|attempt/i,
+];
+
 const signals = [];
-for (const { pattern, type } of SIGNAL_PATTERNS) {
-  if (pattern.test(command)) {
-    signals.push({ type });
+const isErrorContext = ERROR_CONTEXT_RE.some(re => re.test(command));
+
+if (isErrorContext) {
+  for (const { pattern, type } of SIGNAL_PATTERNS) {
+    if (pattern.test(command)) {
+      signals.push({ type });
+    }
   }
 }
 
-if (signals.length === 0) {
-  signals.push({ type: 'error:generic' });
+// Source 2: Read last error from PostToolUse memory (within 5 minutes)
+let lastError = null;
+try {
+  const raw = readFileSync(LAST_ERROR_FILE, 'utf8');
+  if (raw) {
+    lastError = JSON.parse(raw);
+    const age = Date.now() - (lastError.ts || 0);
+    if (age > 5 * 60 * 1000) lastError = null; // expired
+  }
+} catch {}
+
+if (lastError?.signals) {
+  for (const sig of lastError.signals) {
+    if (!signals.find(s => s.type === sig.type)) {
+      signals.push(sig);
+    }
+  }
+}
+
+// Nothing to query
+if (signals.length === 0) process.exit(0);
+
+// No API key → can't query remote, but signals were still collected for context
+if (!API_KEY) {
+  const hint = `[Prismer Evolution] Detected signals from recent error: ${signals.map(s => s.type).join(', ')}`;
+  process.stdout.write(hint);
+  process.exit(0);
 }
 
 // Query evolution network (3s timeout — PreToolUse should be fast)
 try {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 3000);
+  timer.unref(); // Don't prevent process exit on timeout
 
   const res = await fetch(`${BASE_URL}/api/im/evolution/analyze`, {
     method: 'POST',
@@ -90,7 +123,7 @@ try {
   const data = await res.json();
   const advice = data?.data;
 
-  if (advice?.action === 'apply_gene' && advice?.confidence > 0.4) {
+  if (advice?.action === 'apply_gene' && advice?.confidence >= 0.3) {
     const gene = advice.gene;
     const strategy = gene?.strategy || [];
 
@@ -103,6 +136,17 @@ try {
     ].join('\n');
 
     process.stdout.write(suggestion);
+
+    // Save pending suggestion for PostToolUse to close the feedback loop
+    try {
+      mkdirSync(CACHE_DIR, { recursive: true });
+      writeFileSync(PENDING_FILE, JSON.stringify({
+        geneId: advice.gene_id || gene?.id,
+        geneTitle: gene?.title,
+        signals,
+        suggestedAt: Date.now(),
+      }));
+    } catch {}
   }
 } catch {
   // Timeout or error — don't block

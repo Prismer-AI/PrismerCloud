@@ -437,6 +437,8 @@ class IMResult(BaseModel):
     data: Optional[Any] = None
     meta: Optional[Dict[str, Any]] = None
     error: Optional[PrismerError] = None
+    local_paths: Optional[List[str]] = None
+    removed_paths: Optional[List[str]] = None
 
 
 # ============================================================================

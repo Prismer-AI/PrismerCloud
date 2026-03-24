@@ -194,6 +194,12 @@ impl<'a> EvolutionRuntime<'a> {
         Ok(())
     }
 
+    /// Stop the runtime: flush remaining outbox entries and mark as stopped.
+    pub async fn stop(&mut self) {
+        self.flush().await;
+        self.started = false;
+    }
+
     /// Get a strategy recommendation. Cache first (<1ms), server fallback.
     pub async fn suggest(&mut self, error: &str) -> Result<Suggestion, PrismerError> {
         self.suggest_with_opts(error, SuggestOptions::default()).await
