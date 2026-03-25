@@ -1,30 +1,10 @@
-import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel";
+import type { ChannelGatewayContext } from "openclaw/plugin-sdk";
 import { prismerFetch } from "./api-client.js";
 import type { CoreConfig, ResolvedPrismerAccount } from "./types.js";
 
-// Per-conversation pending suggestion tracker for evolution feedback loop.
-// Module-scoped is safe: conversation IDs are globally unique in Prismer IM.
-const pendingSuggestions = new Map<string, {
-  geneId: string;
-  geneTitle: string;
-  signals: Array<{ type: string }>;
-  suggestedAt: number;
-}>();
-
-// Suggestion TTL: tight window to reduce false positives
-const SUGGESTION_TTL_MS = 5 * 60 * 1000; // 5 minutes
-
-// Positive confirmation keywords for success heuristic
-const RESOLVED_RE = /fix|fixed|solved|resolved|working|success|done|thank/i;
-
-// Periodic cleanup to prevent memory leaks
-const _cleanupTimer = setInterval(() => {
-  const now = Date.now();
-  pendingSuggestions.forEach((val, key) => {
-    if (now - val.suggestedAt > SUGGESTION_TTL_MS) pendingSuggestions.delete(key);
-  });
-}, 60 * 1000);
-_cleanupTimer.unref(); // Don't prevent process exit
+// WebSocket reconnect config: exponential backoff with jitter
+const WS_RECONNECT_BASE_MS = 1000;
+const WS_RECONNECT_MAX_MS = 30000;
 
 /**
  * Register the agent on Prismer IM and start a WebSocket connection
@@ -45,30 +25,34 @@ export async function startPrismerGateway(
     `[${account.accountId}] registering agent on Prismer IM (${account.baseUrl})`,
   );
 
-  // Self-register the agent
-  let userId: string | undefined;
-  let token: string | undefined;
+  // Self-register the agent — must succeed for gateway to work
+  let userId: string;
+  let token: string;
   try {
     const regResult = (await prismerFetch(account.apiKey, "/api/im/register", {
       method: "POST",
       body: {
         username: account.agentName,
         displayName: account.agentName,
-        isAgent: true,
+        type: "agent",
       },
       baseUrl: account.baseUrl,
     })) as Record<string, unknown>;
 
-    if (regResult.ok) {
-      const data = regResult.data as Record<string, unknown> | undefined;
-      userId = data?.userId as string | undefined;
-      token = data?.token as string | undefined;
-      ctx.log?.info(`[${account.accountId}] registered as user ${userId}`);
+    if (!regResult.ok) {
+      throw new Error(`Registration failed: ${JSON.stringify(regResult.error || regResult)}`);
     }
+    const data = regResult.data as Record<string, unknown>;
+    userId = (data.imUserId ?? data.userId) as string;
+    token = data.token as string;
+    if (!userId || !token) {
+      throw new Error(`Registration returned incomplete data (userId=${userId}, token=${!!token})`);
+    }
+    ctx.log?.info(`[${account.accountId}] registered as user ${userId}`);
   } catch (err) {
-    ctx.log?.warn(
-      `[${account.accountId}] registration warning: ${err instanceof Error ? err.message : String(err)}`,
-    );
+    const msg = err instanceof Error ? err.message : String(err);
+    ctx.log?.error(`[${account.accountId}] registration failed: ${msg}`);
+    throw new Error(`Prismer gateway cannot start: agent registration failed — ${msg}`);
   }
 
   // Register agent capabilities
@@ -97,10 +81,18 @@ export async function startPrismerGateway(
   let ws: WebSocket | null = null;
   let aborted = false;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  let reconnectAttempt = 0;
 
   if (token) {
     const wsUrl = account.baseUrl.replace(/^http/, "ws").replace(/\/$/, "");
     const wsEndpoint = `${wsUrl}/api/im/ws?token=${token}`;
+
+    /** Compute delay with exponential backoff + jitter */
+    const getReconnectDelay = () => {
+      const exp = Math.min(WS_RECONNECT_BASE_MS * 2 ** reconnectAttempt, WS_RECONNECT_MAX_MS);
+      const jitter = Math.random() * exp * 0.3; // ±30% jitter
+      return Math.floor(exp + jitter);
+    };
 
     const connect = () => {
       if (aborted) return;
@@ -109,6 +101,7 @@ export async function startPrismerGateway(
         ws = new WebSocket(wsEndpoint);
 
         ws.onopen = () => {
+          reconnectAttempt = 0; // Reset backoff on successful connect
           ctx.log?.info(`[${account.accountId}] WebSocket connected`);
           ctx.setStatus({
             accountId: account.accountId,
@@ -122,7 +115,7 @@ export async function startPrismerGateway(
           try {
             const data = JSON.parse(String(event.data));
             if (data.type === "message" && data.payload) {
-              handleInboundMessage(ctx, account, userId!, data.payload);
+              handleInboundMessage(ctx, account, userId, data.payload);
             }
           } catch (err) {
             ctx.log?.error(
@@ -140,7 +133,10 @@ export async function startPrismerGateway(
             lastStopAt: Date.now(),
           });
           if (!aborted) {
-            reconnectTimer = setTimeout(connect, 5000);
+            const delay = getReconnectDelay();
+            reconnectAttempt++;
+            ctx.log?.info(`[${account.accountId}] reconnecting in ${delay}ms (attempt ${reconnectAttempt})`);
+            reconnectTimer = setTimeout(connect, delay);
           }
         };
 
@@ -152,7 +148,9 @@ export async function startPrismerGateway(
           `[${account.accountId}] WebSocket connect error: ${err instanceof Error ? err.message : String(err)}`,
         );
         if (!aborted) {
-          reconnectTimer = setTimeout(connect, 5000);
+          const delay = getReconnectDelay();
+          reconnectAttempt++;
+          reconnectTimer = setTimeout(connect, delay);
         }
       }
     };
@@ -194,39 +192,11 @@ async function handleInboundMessage(
   const senderName = (msg.senderName as string) || senderId;
   const conversationId = msg.conversationId as string;
 
-  // Evolution feedback loop: if previous suggestion exists, check for resolution.
-  // Require BOTH: (1) no error keywords AND (2) positive confirmation keywords.
-  // This tight heuristic avoids false positives from unrelated messages.
+  // Evolution suggest: check if message contains error signals → inject recommendation.
+  // NOTE: Outcome recording (success/failure) is handled by the agent via the
+  // prismer_evolve_record tool, which has full conversation context and avoids
+  // false positives from regex-based heuristics on chat messages.
   const ERROR_RE = /error|fail|timeout|crash|exception|denied|refused|oom|panic/i;
-  const prevSuggestion = pendingSuggestions.get(conversationId);
-  if (prevSuggestion) {
-    const age = Date.now() - prevSuggestion.suggestedAt;
-    if (age > SUGGESTION_TTL_MS) {
-      // Expired — discard without recording
-      pendingSuggestions.delete(conversationId);
-    } else if (!ERROR_RE.test(content) && RESOLVED_RE.test(content)) {
-      // Positive signal: no error + confirmation keyword → record success
-      try {
-        await prismerFetch(account.apiKey, '/api/im/evolution/record', {
-          method: 'POST',
-          body: {
-            gene_id: prevSuggestion.geneId,
-            signals: prevSuggestion.signals,
-            outcome: 'success',
-            score: 0.7,
-            summary: `Issue resolved after suggestion "${prevSuggestion.geneTitle}"`,
-          },
-          baseUrl: account.baseUrl,
-        });
-      } catch (err) {
-        ctx.log?.warn(`[prismer] evolution record error: ${err instanceof Error ? err.message : String(err)}`);
-      }
-      pendingSuggestions.delete(conversationId);
-    }
-    // If message still has errors → keep pending, don't record yet
-  }
-
-  // Evolution suggest: check if message contains error signals → inject recommendation
   let evolutionHint = '';
   try {
     if (ERROR_RE.test(content)) {
@@ -247,14 +217,6 @@ async function handleInboundMessage(
         const strategy = gene?.strategy || [];
         evolutionHint = `\n\n---\n[Prismer Evolution] Known fix (${Math.round(result.data.confidence * 100)}% confidence): "${gene?.title}"\n` +
           strategy.map((s: string, i: number) => `${i + 1}. ${s}`).join('\n');
-
-        // Save pending suggestion for feedback loop
-        pendingSuggestions.set(conversationId, {
-          geneId: result.data.gene_id || gene?.id,
-          geneTitle: gene?.title || '',
-          signals,
-          suggestedAt: Date.now(),
-        });
       }
     }
   } catch {

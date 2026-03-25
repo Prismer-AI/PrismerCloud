@@ -5,7 +5,7 @@ import {
   deleteAccountFromConfigSection,
   setAccountEnabledInConfigSection,
   type ChannelPlugin,
-} from "openclaw/plugin-sdk/channel";
+} from "openclaw/plugin-sdk";
 import {
   listPrismerAccountIds,
   resolveDefaultPrismerAccountId,

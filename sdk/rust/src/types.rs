@@ -42,14 +42,14 @@ impl std::fmt::Display for PrismerError {
 impl std::error::Error for PrismerError {}
 
 /// Context Load result.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ContextLoadResult {
     pub results: Option<Vec<ContextItem>>,
     #[serde(rename = "processingTime")]
     pub processing_time: Option<u64>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ContextItem {
     pub title: Option<String>,
     pub url: Option<String>,
@@ -58,7 +58,7 @@ pub struct ContextItem {
 }
 
 /// Parse result.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ParseResult {
     #[serde(rename = "taskId")]
     pub task_id: Option<String>,
@@ -76,7 +76,7 @@ pub struct SignalTag {
     pub severity: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Gene {
     pub id: String,
     pub category: Option<String>,
@@ -88,7 +88,7 @@ pub struct Gene {
     pub failure_count: Option<i64>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct EvolutionAdvice {
     pub action: String,
     pub gene: Option<Gene>,
@@ -96,7 +96,7 @@ pub struct EvolutionAdvice {
     pub signals: Option<Vec<serde_json::Value>>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct EvolutionMetrics {
     pub standard: Option<serde_json::Value>,
     pub hypergraph: Option<serde_json::Value>,

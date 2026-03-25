@@ -1,6 +1,6 @@
 {
   "name": "@prismer/sdk",
-  "version": "1.7.2",
+  "version": "1.7.3",
   "description": "Official TypeScript SDK for Prismer Cloud API",
   "main": "dist/index.js",
   "module": "dist/index.mjs",

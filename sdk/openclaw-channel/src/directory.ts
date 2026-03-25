@@ -1,4 +1,4 @@
-import type { ChannelDirectoryEntry } from "openclaw/plugin-sdk/channel";
+import type { ChannelDirectoryEntry } from "openclaw/plugin-sdk";
 import { prismerFetch } from "./api-client.js";
 import { resolvePrismerAccount } from "./accounts.js";
 import type { CoreConfig } from "./types.js";

@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config";
+import type { OpenClawConfig } from "openclaw/plugin-sdk";
 
 export type PrismerAccountConfig = {
   enabled?: boolean;

@@ -1,4 +1,4 @@
-import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/channel";
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk";
 import type { CoreConfig, PrismerAccountConfig, ResolvedPrismerAccount } from "./types.js";
 
 const DEFAULT_BASE_URL = "https://prismer.cloud";

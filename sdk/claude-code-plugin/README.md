@@ -1,103 +1,187 @@
 # @prismer/claude-code-plugin
 
-Prismer Evolution plugin for Claude Code. Turns every coding session into evolution data points — errors become learning opportunities, successful fixes become shared strategies.
+Prismer Evolution plugin for Claude Code (v2). Implements a **three-stage evolution model** that turns coding sessions into transferable knowledge — errors become learning opportunities, successful fixes become shared strategies that persist locally and propagate across agents.
 
-## How It Works
+## How It Works (v2 Three-Stage Model)
 
 ```
-Claude Code session:
-  Bash command about to run
-       |
-  [PreToolUse] pre-bash-suggest.mjs
-       → Calls evolve_analyze → injects recommended strategy
-       |
-  Command executes
-       |
-  [PostToolUse] post-bash-report.mjs
-       → Detects errors → calls evolve_report
-       → Records outcome for cross-agent learning
-       |
-  Next similar error → instant best strategy
+┌─ SessionStart ─────────────────────────────────────────┐
+│  session-start.mjs                                     │
+│  1. Rotate session journal (clear previous)            │
+│  2. Sync pull: trending genes + hot strategies         │
+│  3. Inject passive context (proven patterns)           │
+│  4. Pre-warm MCP server                                │
+└────────────────────────────────────────────────────────┘
+                         │
+┌─ Mid-Session ──────────┼───────────────────────────────┐
+│                        ▼                               │
+│  PreToolUse: pre-bash-suggest.mjs                      │
+│  - Stuck detection: same error signal >= 2x in journal │
+│  - Only queries /analyze when stuck (not every command) │
+│                                                        │
+│  PostToolUse: post-bash-journal.mjs                    │
+│  - Writes to LOCAL session-journal.md only             │
+│  - Does NOT write to evolution network (reduces noise) │
+│  - Tracks signal counts for stuck detection            │
+└────────────────────────────────────────────────────────┘
+                         │
+┌─ Session End ──────────┼───────────────────────────────┐
+│                        ▼                               │
+│  Stop: session-stop.mjs (< 200ms, non-blocking)       │
+│  1. Read session journal                               │
+│  2. Check: has evolution value?                        │
+│  3. Spawn async subagent (detached, fire-and-forget)   │
+│                                                        │
+│  Async: session-evolve.mjs (30s timeout)               │
+│  - Extract repeated signals → create gene proposal     │
+│  - POST /genes (rule-based abstraction)                │
+│  - POST /record (feedback for suggested genes)         │
+│  - POST /sync (batch push + pull cursor update)        │
+│  - Write local suggestions (memory + CLAUDE.md hints)  │
+└────────────────────────────────────────────────────────┘
 ```
 
-The plugin hooks into Claude Code's event system with a **full evolution loop**: suggest before execution, report after execution.
+### Key Changes from v1
+
+| Aspect | v1 | v2 |
+|--------|----|----|
+| /analyze queries | Every bash command | Only when stuck (same error >= 2x) |
+| Error reporting | Every failure → remote /report | Local journal only; batch at session end |
+| Gene creation | Never (server-side /distill only) | Agent-side at session end via /genes |
+| Local persistence | None | Suggestions for memory + CLAUDE.md |
+| Session context | Lost after each command | Accumulated in session-journal.md |
 
 ## Quick Start
 
-### As a Claude Code Plugin (Recommended)
+### Install from Marketplace (Recommended)
 
 ```bash
-# Install from the plugin directory
-claude plugin add /path/to/sdk/claude-code-plugin
+/plugin marketplace add Prismer-AI/PrismerCloud
+/plugin install prismer@prismer
 ```
 
-Or manually: copy the plugin directory to your Claude Code plugins location.
+### Install from Local Directory (Development)
+
+```bash
+claude --plugin-dir /path/to/sdk/claude-code-plugin
+```
 
 ### Environment Variables
 
 | Variable | Required | Default |
 |----------|----------|---------|
-| `PRISMER_API_KEY` | Yes | — |
+| `PRISMER_API_KEY` | Yes | -- |
 | `PRISMER_BASE_URL` | No | `https://prismer.cloud` |
+| `PRISMER_SCOPE` | No | Auto-detected from package.json or git remote |
+
+```bash
+export PRISMER_API_KEY="sk-prismer-..."
+```
 
 ## Components
 
-### 1. Hooks (Automatic)
+### 1. Hooks (4 Lifecycle Events)
 
-The plugin registers two hooks via `hooks/hooks.json`:
+Registered via `hooks/hooks.json`:
 
-- **PreToolUse** (Bash): Before any Bash command, `pre-bash-suggest.mjs` calls the evolution network to check for recommended strategies. If a high-confidence gene exists, the suggestion is injected as context for Claude Code.
+| Event | Script | Purpose |
+|-------|--------|---------|
+| **SessionStart** | `session-start.mjs` | Sync pull + passive context inject + scope detection + MCP pre-warm |
+| **PreToolUse** (Bash) | `pre-bash-suggest.mjs` | Stuck detection → conditional /analyze query |
+| **PostToolUse** (Bash) | `post-bash-journal.mjs` | Local session journal (no remote writes) |
+| **Stop** | `session-stop.mjs` | Collect context → spawn async `session-evolve.mjs` |
 
-- **PostToolUse** (Bash): After any Bash command, `post-bash-report.mjs` analyzes the output for errors (exit code != 0, stderr patterns) and reports them to the evolution network.
+### 2. Async Subagent: session-evolve.mjs
 
-### 2. MCP Server (23 Tools)
+Spawned as a detached process at session end. Runs independently after Claude Code exits:
 
-The plugin includes `.mcp.json` which configures the `@prismer/mcp-server` with 23 tools including `evolve_analyze`, `evolve_record`, `evolve_create_gene`, `memory_write`, `recall`, `skill_search`, and more.
+- Extracts repeated error signals from journal
+- Creates gene proposals via `POST /genes` (rule-based; LLM version planned)
+- Records outcomes for any genes suggested during the session
+- Pushes batch sync to evolution network
+- Writes local evolution suggestions for next session
 
-### 3. Skills (3 Slash Commands)
+### 3. MCP Server (26 Tools)
+
+Configured via `.mcp.json` — `@prismer/mcp-server` provides tools including `evolve_analyze`, `evolve_record`, `evolve_create_gene`, `memory_write`, `recall`, `skill_search`, and more.
+
+### 4. Skills (3 Slash Commands)
 
 | Skill | Description |
 |-------|-------------|
-| `/evolve-analyze` | Manually analyze an error and get gene recommendations with scope support |
-| `/evolve-create` | Create a new gene from a pattern you've discovered |
-| `/evolve-record` | Record an outcome after applying a strategy |
+| `/prismer:evolve-analyze` | Query the evolution network for known fix strategies |
+| `/prismer:evolve-create` | Create a new gene from a discovered pattern |
+| `/prismer:evolve-record` | Record an outcome after applying a strategy |
 
 ## File Structure
 
 ```
 sdk/claude-code-plugin/
 ├── .claude-plugin/
-│   └── plugin.json              # Plugin manifest (name, version, description)
+│   ├── plugin.json              # Plugin manifest
+│   └── marketplace.json         # Marketplace catalog
 ├── hooks/
-│   └── hooks.json               # PreToolUse + PostToolUse hook config
+│   └── hooks.json               # 4 events: SessionStart, PreToolUse, PostToolUse, Stop
 ├── scripts/
-│   ├── pre-bash-suggest.mjs     # PreToolUse: query evolution before Bash
-│   └── post-bash-report.mjs     # PostToolUse: report errors after Bash
+│   ├── session-start.mjs        # SessionStart: sync pull + context inject
+│   ├── pre-bash-suggest.mjs     # PreToolUse: stuck detection + conditional /analyze
+│   ├── post-bash-journal.mjs    # PostToolUse: local journal writer
+│   ├── session-stop.mjs         # Stop: collect context + spawn subagent
+│   ├── session-evolve.mjs       # Async: gene creation + feedback + sync + local persistence
+│   └── deprecated/
+│       └── post-bash-report.mjs # v1 PostToolUse (kept for reference)
 ├── skills/
-│   ├── evolve-analyze/SKILL.md  # /evolve-analyze slash command
-│   ├── evolve-create/SKILL.md   # /evolve-create slash command
-│   └── evolve-record/SKILL.md   # /evolve-record slash command
-├── .mcp.json                    # MCP server configuration (23 tools)
-├── DESIGN.md                    # Design document
+│   ├── evolve-analyze/SKILL.md
+│   ├── evolve-create/SKILL.md
+│   └── evolve-record/SKILL.md
+├── .mcp.json                    # MCP server configuration (26 tools)
+├── DESIGN-V2.md                 # v2 architecture design document
+├── DESIGN.md                    # v1 design (historical)
+├── CHANGELOG.md
+├── LICENSE                      # MIT
 ├── README.md                    # This file
-└── package.json                 # npm package metadata
+└── package.json
 ```
 
-## What Gets Sent
+## Session Journal Format
 
-- Error messages and exit codes
-- Task descriptions and provider/stage metadata
-- Outcome (success/failure) and confidence scores
+During a session, `post-bash-journal.mjs` writes a local markdown journal:
+
+```markdown
+# Session Journal
+
+Started: 2026-03-26T10:00:00Z
+
+- bash: `npm run build` (10:01)
+  - signal:error:typescript (count: 1, at: 10:01)
+- bash: `vim src/fix.ts` (10:02)
+- bash: `npm run build` (10:03)
+  - signal:error:typescript (count: 2, at: 10:03)
+- bash: `npx prisma generate` (10:04)
+- bash: `npm run build` (10:05)
+  - gene_feedback: "Prisma Generate Before Build" outcome=success
+```
+
+## Privacy & Security
+
+**What is sent (at session end only):**
+- Aggregated error signals (types + counts, not raw stderr)
+- Gene proposals (abstracted strategies, no project-specific paths)
+- Outcome feedback (success/failure + score)
 
 **What is NOT sent:**
-
 - Source code or file contents
 - Environment variables or secrets
+- Raw error output (kept in local journal only)
+- Mid-session command-by-command data
+
+All data is scoped to your API key. Evolution data propagates to other agents in the same scope.
 
 ## Related
 
 - [@prismer/sdk](https://www.npmjs.com/package/@prismer/sdk) — Prismer SDK with CLI
-- [@prismer/mcp-server](https://www.npmjs.com/package/@prismer/mcp-server) — MCP Server (23 tools)
+- [@prismer/mcp-server](https://www.npmjs.com/package/@prismer/mcp-server) — MCP Server (26 tools)
+- [@prismer/opencode-plugin](https://www.npmjs.com/package/@prismer/opencode-plugin) — OpenCode equivalent
 - [Prismer Cloud](https://prismer.cloud) — Knowledge Drive for AI Agents
 
 ## License
