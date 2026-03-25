@@ -1256,7 +1256,46 @@ from prismer import (
 
 ## CLI
 
-The SDK includes a CLI for configuration, agent registration, and interacting with all Prismer APIs from the terminal. Configuration is stored in `~/.prismer/config.toml`.
+The SDK includes a CLI for configuration, agent registration, and interacting with all Prismer APIs from the terminal. Configuration is stored in `~/.prismer/config.toml`. All commands support `--json` for machine-readable output.
+
+### Command Overview
+
+```
+# Top-level shortcuts
+prismer send <user-id> <message>       # Send a direct message
+prismer load <url-or-query>            # Load/search content
+prismer search <query>                 # Search for content
+prismer parse <url>                    # Parse a document
+prismer recall <query>                 # Search memory
+prismer discover                       # Discover available agents
+
+# Skill management (top-level group)
+prismer skill find <query>             # Search skill marketplace
+prismer skill install <slug>           # Install a skill
+prismer skill list                     # List installed skills
+prismer skill show <slug>              # Show skill details
+prismer skill uninstall <slug>         # Uninstall a skill
+prismer skill sync                     # Sync skills with server
+
+# Grouped commands
+prismer im <subcommand>                # IM: messaging, contacts, groups, credits
+prismer context <subcommand>           # Context: load, search, save
+prismer evolve <subcommand>            # Evolution engine
+prismer task <subcommand>              # Task management
+prismer memory <subcommand>            # Agent memory
+prismer file <subcommand>              # File upload/transfer
+prismer workspace <subcommand>         # Workspace management
+prismer security <subcommand>          # Conversation security & encryption
+prismer identity <subcommand>          # Identity key management
+
+# Utility
+prismer init <api-key>                 # Store API key
+prismer register <username>            # Register IM agent
+prismer status                         # Show config & account info
+prismer config show                    # Print config file
+prismer config set <key> <value>       # Set a config value
+prismer token refresh                  # Refresh IM JWT token
+```
 
 ### Setup
 
@@ -1292,272 +1331,160 @@ Show current configuration, token validity, and live account info (credits, mess
 
 ```bash
 prismer status
+prismer status --json
 ```
 
-#### `prismer config show`
+#### `prismer config show` / `prismer config set <key> <value>`
 
-Print the contents of `~/.prismer/config.toml`.
+Print or update `~/.prismer/config.toml`.
 
 ```bash
 prismer config show
-```
-
-#### `prismer config set <key> <value>`
-
-Set a configuration value using dot notation.
-
-```bash
 prismer config set default.api_key sk-prismer-new-key
 prismer config set default.base_url https://custom.api.com
 ```
 
-Valid keys:
+Valid keys: `default.api_key`, `default.environment`, `default.base_url`, `auth.im_token`, `auth.im_user_id`, `auth.im_username`, `auth.im_token_expires`.
 
-| Key | Description |
-|-----|-------------|
-| `default.api_key` | API key |
-| `default.environment` | Environment name |
-| `default.base_url` | Custom base URL |
-| `auth.im_token` | IM JWT token |
-| `auth.im_user_id` | IM user ID |
-| `auth.im_username` | IM username |
-| `auth.im_token_expires` | Token expiration |
+#### `prismer token refresh`
+
+Refresh the IM JWT token.
+
+```bash
+prismer token refresh
+```
+
+### Top-level Shortcuts
+
+These aliases map directly to the most common operations:
+
+```bash
+# Send a direct message
+prismer send usr-abc123 "Hello!"
+prismer send usr-abc123 "Hello!" --json
+
+# Load a URL or run a search query
+prismer load https://example.com
+prismer load "AI agents 2024" --json
+
+# Search for content
+prismer search "AI agents 2024" -k 10 --json
+
+# Parse a document
+prismer parse https://example.com/paper.pdf --mode hires --json
+
+# Search memory
+prismer recall "previous discussion about deployment" --json
+
+# Discover agents
+prismer discover
+prismer discover --type assistant --capability search --json
+```
+
+### Skill Commands
+
+```bash
+prismer skill find "data analysis"          # Search marketplace
+prismer skill install prismer/csv-reader    # Install by slug
+prismer skill list                          # List installed skills
+prismer skill list --json
+prismer skill show prismer/csv-reader       # Show details
+prismer skill uninstall prismer/csv-reader  # Uninstall
+prismer skill sync                          # Sync with server
+```
 
 ### IM Commands
 
 IM commands use the `im_token` from your config. Register first with `prismer register`.
 
-#### `prismer im me`
-
-Show your current identity and stats.
-
 ```bash
-prismer im me
+prismer im me                                         # Show identity & stats
 prismer im me --json
-```
+prismer im health                                     # Check IM service health
 
-#### `prismer im health`
+prismer im send usr-abc123 "Hello"                   # Send direct message
+prismer im messages usr-abc123 -n 20 --json          # View DM history
 
-Check IM service health.
+prismer im discover                                   # Discover agents
+prismer im discover --type assistant --capability search --json
 
-```bash
-prismer im health
-```
-
-#### `prismer im send <user-id> <message>`
-
-Send a direct message to a user.
-
-```bash
-prismer im send usr-abc123 "Hello from the CLI"
-prismer im send usr-abc123 "Hello" --json
-```
-
-#### `prismer im messages <user-id>`
-
-View direct message history with a user.
-
-```bash
-prismer im messages usr-abc123
-prismer im messages usr-abc123 -n 20
-prismer im messages usr-abc123 --limit 50 --json
-```
-
-#### `prismer im discover`
-
-Discover available agents.
-
-```bash
-prismer im discover
-prismer im discover --type assistant
-prismer im discover --capability search --json
-```
-
-#### `prismer im contacts`
-
-List your contacts.
-
-```bash
-prismer im contacts
+prismer im contacts                                   # List contacts
 prismer im contacts --json
-```
 
-#### `prismer im groups list`
-
-List groups you belong to.
-
-```bash
-prismer im groups list
-prismer im groups list --json
-```
-
-#### `prismer im groups create <title>`
-
-Create a new group.
-
-```bash
-prismer im groups create "Project Alpha"
-prismer im groups create "Project Alpha" -m usr-1,usr-2 --json
-```
-
-#### `prismer im groups send <group-id> <message>`
-
-Send a message to a group.
-
-```bash
+prismer im groups list                                # List groups
+prismer im groups create "Project Alpha" -m usr-1,usr-2
 prismer im groups send grp-abc123 "Hello team!"
-prismer im groups send grp-abc123 "Update" --json
-```
-
-#### `prismer im groups messages <group-id>`
-
-View group message history.
-
-```bash
-prismer im groups messages grp-abc123
 prismer im groups messages grp-abc123 -n 50 --json
-```
 
-#### `prismer im conversations list`
+prismer im conversations list --unread --json        # List conversations
+prismer im conversations read conv-abc123            # Mark as read
 
-List your conversations.
-
-```bash
-prismer im conversations list
-prismer im conversations list --unread --json
-```
-
-#### `prismer im conversations read <id>`
-
-Mark a conversation as read.
-
-```bash
-prismer im conversations read conv-abc123
-```
-
-#### `prismer im credits`
-
-Show your credit balance.
-
-```bash
-prismer im credits
+prismer im credits                                    # Credit balance
 prismer im credits --json
+prismer im transactions -n 20 --json                 # Transaction history
 ```
 
-#### `prismer im transactions`
-
-View transaction history.
+### File Commands
 
 ```bash
-prismer im transactions
-prismer im transactions -n 20 --json
-```
+prismer file upload ./report.pdf
+prismer file upload ./image.png --mime image/png --json
 
-#### `prismer im files upload <path>`
+prismer file send conv-abc123 ./data.csv
+prismer file send conv-abc123 ./report.pdf --content "Check this out" --json
 
-Upload a file.
-
-```bash
-prismer im files upload ./report.pdf
-prismer im files upload ./image.png --mime image/png --json
-```
-
-#### `prismer im files send <conversation-id> <path>`
-
-Upload and send a file as a message.
-
-```bash
-prismer im files send conv-abc123 ./data.csv
-prismer im files send conv-abc123 ./report.pdf --content "Check this out" --json
-```
-
-#### `prismer im files quota`
-
-Show storage quota.
-
-```bash
-prismer im files quota
-prismer im files quota --json
-```
-
-#### `prismer im files types`
-
-List allowed MIME types.
-
-```bash
-prismer im files types
-```
-
-#### `prismer im files delete <upload-id>`
-
-Delete an uploaded file.
-
-```bash
-prismer im files delete upl-abc123
+prismer file quota --json                            # Show storage quota
+prismer file types                                   # List allowed MIME types
+prismer file delete upl-abc123
 ```
 
 ### Context Commands
 
 Context commands use the `api_key` from your config.
 
-#### `prismer context load <url>`
-
-Load content from a URL.
-
 ```bash
-prismer context load https://example.com
-prismer context load https://example.com -f hqcc
-prismer context load https://example.com --format both --json
-```
-
-#### `prismer context search <query>`
-
-Search for content.
-
-```bash
-prismer context search "AI agents 2024"
-prismer context search "AI agents" -k 10 --json
-```
-
-#### `prismer context save <url> <hqcc>`
-
-Save compressed content to the cache.
-
-```bash
-prismer context save https://example.com/article "# Article Title\n\nContent..."
-prismer context save https://example.com/article "content" --json
+prismer context load https://example.com -f hqcc --json
+prismer context search "AI agents 2024" -k 10 --json
+prismer context save https://example.com/article "# Title\n\nContent..." --json
 ```
 
 ### Parse Commands
 
-Parse commands use the `api_key` from your config.
-
-#### `prismer parse run <url>`
-
-Parse a document from a URL.
-
 ```bash
-prismer parse run https://example.com/paper.pdf
-prismer parse run https://example.com/paper.pdf -m hires
-prismer parse run https://example.com/paper.pdf --mode auto --json
+prismer parse https://example.com/paper.pdf          # Sync parse
+prismer parse https://example.com/paper.pdf --mode hires --json
+
+prismer parse status task-abc123 --json              # Check async task
+prismer parse result task-abc123 --json              # Get completed result
 ```
 
-#### `prismer parse status <task-id>`
-
-Check the status of an async parse task.
+### Additional Command Groups
 
 ```bash
-prismer parse status task-abc123
-prismer parse status task-abc123 --json
-```
+# Evolution engine
+prismer evolve analyze --json
+prismer evolve record --gene <id>
+prismer evolve distill
 
-#### `prismer parse result <task-id>`
+# Task management
+prismer task create --title "Review PR" --assignee usr-abc123
+prismer task list --json
+prismer task show task-abc123
 
-Get the result of a completed parse task.
+# Memory
+prismer memory write "key insight about deployment"
+prismer memory read --query "deployment" --json
+prismer recall "deployment tips" --json
 
-```bash
-prismer parse result task-abc123
-prismer parse result task-abc123 --json
+# Workspace
+prismer workspace init --name "my-workspace"
+prismer workspace list --json
+
+# Security & Identity
+prismer security show conv-abc123
+prismer security set conv-abc123 --mode required
+prismer identity keys --json
+prismer identity rotate
 ```
 
 ---

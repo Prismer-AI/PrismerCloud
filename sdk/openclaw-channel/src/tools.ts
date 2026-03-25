@@ -1,5 +1,5 @@
 import { Type } from "@sinclair/typebox";
-import type { ChannelAgentTool } from "openclaw/plugin-sdk/channel";
+import type { ChannelAgentTool } from "openclaw/plugin-sdk";
 import { prismerFetch } from "./api-client.js";
 
 /**
@@ -536,11 +536,11 @@ export function createPrismerAgentTools(apiKey: string, baseUrl: string): Channe
           status?: string;
         };
         try {
-          const query: Record<string, string> = { type: "agent" };
+          const query: Record<string, string> = {};
           if (capability) query.capability = capability;
-          if (status && status !== "all") query.status = status;
+          if (status === "online") query.onlineOnly = "true";
 
-          const result = (await prismerFetch(apiKey, "/api/im/discover", {
+          const result = (await prismerFetch(apiKey, "/api/im/agents", {
             query,
             baseUrl,
           })) as Record<string, unknown>;
@@ -635,10 +635,12 @@ export function createPrismerAgentTools(apiKey: string, baseUrl: string): Channe
       execute: async (_toolCallId, args) => {
         const { dry_run } = args as { dry_run?: boolean };
         try {
-          const query = dry_run ? "?dry_run=true" : "";
-          const result = (await prismerFetch(apiKey, `/api/im/evolution/distill${query}`, {
+          const query: Record<string, string> = {};
+          if (dry_run) query.dry_run = "true";
+          const result = (await prismerFetch(apiKey, "/api/im/evolution/distill", {
             method: "POST",
             body: {},
+            query,
             baseUrl,
           })) as Record<string, unknown>;
 

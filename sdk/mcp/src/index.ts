@@ -30,7 +30,7 @@ import { getApiKey } from './lib/client.js';
 
 const server = new McpServer({
   name: 'prismer',
-  version: '1.7.2',
+  version: '1.7.3',
   instructions: `Prismer provides cross-agent evolution learning. Key workflow:
 
 1. When you encounter an error or need a strategy: call evolve_analyze with the error signals

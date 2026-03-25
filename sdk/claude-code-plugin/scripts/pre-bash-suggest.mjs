@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 /**
- * PreToolUse hook handler for Bash commands.
+ * PreToolUse hook — Stuck Detection + Evolution Query (v2)
  *
- * Called by Claude Code BEFORE every Bash tool use. Reads the command from stdin,
- * extracts error signals from recent context, and queries the Prismer Evolution
- * network for known fix strategies. If a high-confidence recommendation exists,
- * outputs it as a suggestion that Claude Code injects into context.
+ * Called by Claude Code BEFORE every Bash tool use. Instead of querying
+ * the evolution network on every command (v1), v2 only queries when
+ * the agent appears STUCK: same error signal appearing >= 2 times in
+ * the session journal.
  *
  * Stdin JSON shape (PreToolUse):
  *   { tool_name, tool_input: { command, ... } }
@@ -18,12 +18,15 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const CACHE_DIR = join(__dirname, '..', '.cache');
-const LAST_ERROR_FILE = join(CACHE_DIR, 'last-error.json');
+const CACHE_DIR = process.env.CLAUDE_PLUGIN_DATA || join(__dirname, '..', '.cache');
+const JOURNAL_FILE = join(CACHE_DIR, 'session-journal.md');
 const PENDING_FILE = join(CACHE_DIR, 'pending-suggestion.json');
 
 const API_KEY = process.env.PRISMER_API_KEY;
 const BASE_URL = (process.env.PRISMER_BASE_URL || 'https://prismer.cloud').replace(/\/$/, '');
+
+/** Minimum same-signal occurrences before querying evolution (stuck detection) */
+const STUCK_THRESHOLD = 2;
 
 let input;
 try {
@@ -34,13 +37,12 @@ try {
 
 const command = input?.tool_input?.command || '';
 
-// Skip trivial commands — no point suggesting for ls/cat/git status
+// Skip trivial commands
 const SKIP_RE = /^\s*(ls|pwd|echo|cat|head|tail|wc|which|whoami|date|env|printenv|git\s+(status|log|diff|branch|show|remote|tag)|cd\s)/;
 if (SKIP_RE.test(command)) process.exit(0);
 
-// --- Two signal sources: command text AND last error memory ---
+// --- Extract signals from command text (same patterns as journal writer) ---
 
-// Source 1: Extract signals from current command text
 const SIGNAL_PATTERNS = [
   { pattern: /timeout|timed?\s*out/i, type: 'error:timeout' },
   { pattern: /oom|out\s*of\s*memory|kill/i, type: 'error:oom' },
@@ -48,10 +50,13 @@ const SIGNAL_PATTERNS = [
   { pattern: /not[\s-]*found|404|missing|can'?t\s*resolve/i, type: 'error:not_found' },
   { pattern: /connect|refused|econnrefused/i, type: 'error:connection_refused' },
   { pattern: /port.*in\s*use|EADDRINUSE|address already in use/i, type: 'error:port_in_use' },
+  { pattern: /module.*not.*found|cannot find module/i, type: 'error:module_not_found' },
   { pattern: /build|compile|tsc|webpack/i, type: 'task:build' },
   { pattern: /deploy|k8s|kubectl|docker/i, type: 'task:deploy' },
-  { pattern: /test|jest|pytest|mocha/i, type: 'task:test' },
+  { pattern: /test|jest|pytest|mocha|vitest/i, type: 'task:test' },
   { pattern: /migrate|migration|schema/i, type: 'task:migrate' },
+  { pattern: /prisma/i, type: 'error:prisma' },
+  { pattern: /typescript|TS\d{4}/i, type: 'error:typescript' },
 ];
 
 const ERROR_CONTEXT_RE = [
@@ -71,40 +76,40 @@ if (isErrorContext) {
   }
 }
 
-// Source 2: Read last error from PostToolUse memory (within 5 minutes)
-let lastError = null;
-try {
-  const raw = readFileSync(LAST_ERROR_FILE, 'utf8');
-  if (raw) {
-    lastError = JSON.parse(raw);
-    const age = Date.now() - (lastError.ts || 0);
-    if (age > 5 * 60 * 1000) lastError = null; // expired
-  }
-} catch {}
-
-if (lastError?.signals) {
-  for (const sig of lastError.signals) {
-    if (!signals.find(s => s.type === sig.type)) {
-      signals.push(sig);
-    }
-  }
-}
-
-// Nothing to query
+// No signals detected in command → nothing to do
 if (signals.length === 0) process.exit(0);
 
-// No API key → can't query remote, but signals were still collected for context
+// --- v2: Stuck Detection — read journal to check if same signal appeared >= STUCK_THRESHOLD ---
+
+let journal = '';
+try { journal = readFileSync(JOURNAL_FILE, 'utf8'); } catch {}
+
+// Count how many times each detected signal already appears in journal
+let maxCount = 0;
+for (const sig of signals) {
+  const escaped = sig.type.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const regex = new RegExp(`signal:${escaped}`, 'g');
+  const count = (journal.match(regex) || []).length;
+  if (count > maxCount) maxCount = count;
+}
+
+// Not stuck yet — first occurrence, let agent handle it
+if (maxCount < STUCK_THRESHOLD) {
+  process.exit(0);
+}
+
+// --- Agent is stuck (>= 2 occurrences of same signal) → query evolution ---
+
 if (!API_KEY) {
-  const hint = `[Prismer Evolution] Detected signals from recent error: ${signals.map(s => s.type).join(', ')}`;
+  const hint = `[Prismer Evolution] Repeated error detected (${maxCount}x): ${signals.map(s => s.type).join(', ')}. Set PRISMER_API_KEY to get fix recommendations.`;
   process.stdout.write(hint);
   process.exit(0);
 }
 
-// Query evolution network (3s timeout — PreToolUse should be fast)
 try {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 3000);
-  timer.unref(); // Don't prevent process exit on timeout
+  timer.unref();
 
   const res = await fetch(`${BASE_URL}/api/im/evolution/analyze`, {
     method: 'POST',
@@ -117,7 +122,6 @@ try {
   });
 
   clearTimeout(timer);
-
   if (!res.ok) process.exit(0);
 
   const data = await res.json();
@@ -127,9 +131,8 @@ try {
     const gene = advice.gene;
     const strategy = gene?.strategy || [];
 
-    // Output suggestion for Claude Code to inject
     const suggestion = [
-      `[Prismer Evolution] Known fix for this type of issue (confidence: ${Math.round(advice.confidence * 100)}%):`,
+      `[Prismer Evolution] Known fix for repeated ${signals[0]?.type || 'error'} (${maxCount}x in session, confidence: ${Math.round(advice.confidence * 100)}%):`,
       `Strategy: "${gene?.title || advice.gene_id}"`,
       ...strategy.map((s, i) => `  ${i + 1}. ${s}`),
       '',
@@ -137,7 +140,7 @@ try {
 
     process.stdout.write(suggestion);
 
-    // Save pending suggestion for PostToolUse to close the feedback loop
+    // Save pending for journal feedback tracking
     try {
       mkdirSync(CACHE_DIR, { recursive: true });
       writeFileSync(PENDING_FILE, JSON.stringify({

@@ -21,11 +21,24 @@ var (
 	imJSONOutput bool
 
 	// im send
-	imSendJSON bool
+	imSendType    string
+	imSendReplyTo string
+	imSendJSON    bool
 
 	// im messages
 	imMessagesLimit int
 	imMessagesJSON  bool
+
+	// im edit
+	imEditJSON bool
+
+	// im delete
+	imDeleteJSON bool
+
+	// im heartbeat
+	imHeartbeatStatus string
+	imHeartbeatLoad   float64
+	imHeartbeatJSON   bool
 
 	// im discover
 	imDiscoverType       string
@@ -35,21 +48,7 @@ var (
 	// im contacts
 	imContactsJSON bool
 
-	// im groups list
-	imGroupsListJSON bool
-
-	// im groups create
-	imGroupsCreateMembers string
-	imGroupsCreateJSON    bool
-
-	// im groups send
-	imGroupsSendJSON bool
-
-	// im groups messages
-	imGroupsMessagesLimit int
-	imGroupsMessagesJSON  bool
-
-	// im conversations list
+	// im conversations
 	imConversationsUnread bool
 	imConversationsJSON   bool
 
@@ -74,6 +73,20 @@ var (
 
 	// im files types
 	imFilesTypesJSON bool
+
+	// im groups list
+	imGroupsListJSON bool
+
+	// im groups create
+	imGroupsCreateMembers string
+	imGroupsCreateJSON    bool
+
+	// im groups send
+	imGroupsSendJSON bool
+
+	// im groups messages
+	imGroupsMessagesLimit int
+	imGroupsMessagesJSON  bool
 )
 
 // ============================================================================
@@ -171,7 +184,18 @@ var imSendCmd = &cobra.Command{
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 
-		result, err := client.IM().Direct.Send(ctx, userID, message, nil)
+		var opts *prismer.IMSendOptions
+		if imSendType != "" && imSendType != "text" {
+			opts = &prismer.IMSendOptions{Type: imSendType}
+		}
+		if imSendReplyTo != "" {
+			if opts == nil {
+				opts = &prismer.IMSendOptions{}
+			}
+			opts.ParentID = imSendReplyTo
+		}
+
+		result, err := client.IM().Direct.Send(ctx, userID, message, opts)
 		if err != nil {
 			return fmt.Errorf("request failed: %w", err)
 		}
@@ -192,6 +216,104 @@ var imSendCmd = &cobra.Command{
 		fmt.Printf("Message sent to conversation %s\n", data.ConversationID)
 		fmt.Printf("  Message ID: %s\n", data.Message.ID)
 		fmt.Printf("  Content:    %s\n", data.Message.Content)
+		return nil
+	},
+}
+
+// ============================================================================
+// im edit
+// ============================================================================
+
+var imEditCmd = &cobra.Command{
+	Use:   "edit <conversation-id> <message-id> <content>",
+	Short: "Edit an existing message",
+	Args:  cobra.ExactArgs(3),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		convID, msgID, content := args[0], args[1], args[2]
+		client := getIMClient()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+
+		result, err := client.IM().Messages.Edit(ctx, convID, msgID, content)
+		if err != nil {
+			return fmt.Errorf("request failed: %w", err)
+		}
+		if !result.OK {
+			return imError(result)
+		}
+
+		if imEditJSON {
+			fmt.Println(string(result.Data))
+			return nil
+		}
+
+		fmt.Printf("Message %s updated.\n", msgID)
+		return nil
+	},
+}
+
+// ============================================================================
+// im delete
+// ============================================================================
+
+var imDeleteCmd = &cobra.Command{
+	Use:   "delete <conversation-id> <message-id>",
+	Short: "Delete a message",
+	Args:  cobra.ExactArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		convID, msgID := args[0], args[1]
+		client := getIMClient()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+
+		result, err := client.IM().Messages.Delete(ctx, convID, msgID)
+		if err != nil {
+			return fmt.Errorf("request failed: %w", err)
+		}
+		if !result.OK {
+			return imError(result)
+		}
+
+		if imDeleteJSON {
+			fmt.Println(string(result.Data))
+			return nil
+		}
+
+		fmt.Printf("Message %s deleted.\n", msgID)
+		return nil
+	},
+}
+
+// ============================================================================
+// im heartbeat
+// ============================================================================
+
+var imHeartbeatCmd = &cobra.Command{
+	Use:   "heartbeat",
+	Short: "Send agent heartbeat (online/busy/offline)",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		body := map[string]interface{}{"status": imHeartbeatStatus}
+		if cmd.Flags().Changed("load") {
+			body["load"] = imHeartbeatLoad
+		}
+
+		result, err := imRawRequest(ctx, "POST", "/api/im/agents/heartbeat", body, nil)
+		if err != nil {
+			return fmt.Errorf("request failed: %w", err)
+		}
+
+		if imHeartbeatJSON {
+			b, _ := json.MarshalIndent(result, "", "  ")
+			fmt.Println(string(b))
+			return nil
+		}
+
+		fmt.Printf("Heartbeat sent (status: %s)\n", imHeartbeatStatus)
 		return nil
 	},
 }
@@ -546,21 +668,11 @@ var imGroupsMessagesCmd = &cobra.Command{
 }
 
 // ============================================================================
-// im conversations (parent command)
+// im conversations
 // ============================================================================
 
 var imConversationsCmd = &cobra.Command{
 	Use:   "conversations",
-	Short: "Manage conversations",
-	Long:  "List and manage IM conversations.",
-}
-
-// ============================================================================
-// im conversations list
-// ============================================================================
-
-var imConversationsListCmd = &cobra.Command{
-	Use:   "list",
 	Short: "List conversations",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := getIMClient()
@@ -607,10 +719,10 @@ var imConversationsListCmd = &cobra.Command{
 }
 
 // ============================================================================
-// im conversations read
+// im read
 // ============================================================================
 
-var imConversationsReadCmd = &cobra.Command{
+var imReadCmd = &cobra.Command{
 	Use:   "read <conversation-id>",
 	Short: "Mark a conversation as read",
 	Args:  cobra.ExactArgs(1),
@@ -946,7 +1058,20 @@ func init() {
 	imMeCmd.Flags().BoolVar(&imJSONOutput, "json", false, "Output raw JSON")
 
 	// im send
+	imSendCmd.Flags().StringVarP(&imSendType, "type", "t", "text", "Message type: text, markdown, code, file, etc.")
+	imSendCmd.Flags().StringVar(&imSendReplyTo, "reply-to", "", "Reply to a specific message ID (parentId)")
 	imSendCmd.Flags().BoolVar(&imSendJSON, "json", false, "Output raw JSON")
+
+	// im edit
+	imEditCmd.Flags().BoolVar(&imEditJSON, "json", false, "Output raw JSON")
+
+	// im delete
+	imDeleteCmd.Flags().BoolVar(&imDeleteJSON, "json", false, "Output raw JSON")
+
+	// im heartbeat
+	imHeartbeatCmd.Flags().StringVar(&imHeartbeatStatus, "status", "online", "Presence status: online, busy, or offline")
+	imHeartbeatCmd.Flags().Float64Var(&imHeartbeatLoad, "load", 0, "Current load factor (0.0 to 1.0)")
+	imHeartbeatCmd.Flags().BoolVar(&imHeartbeatJSON, "json", false, "Output raw JSON")
 
 	// im messages
 	imMessagesCmd.Flags().IntVarP(&imMessagesLimit, "limit", "n", 0, "Maximum number of messages to return")
@@ -960,23 +1085,9 @@ func init() {
 	// im contacts
 	imContactsCmd.Flags().BoolVar(&imContactsJSON, "json", false, "Output raw JSON")
 
-	// im groups list
-	imGroupsListCmd.Flags().BoolVar(&imGroupsListJSON, "json", false, "Output raw JSON")
-
-	// im groups create
-	imGroupsCreateCmd.Flags().StringVar(&imGroupsCreateMembers, "members", "", "Comma-separated list of member user IDs")
-	imGroupsCreateCmd.Flags().BoolVar(&imGroupsCreateJSON, "json", false, "Output raw JSON")
-
-	// im groups send
-	imGroupsSendCmd.Flags().BoolVar(&imGroupsSendJSON, "json", false, "Output raw JSON")
-
-	// im groups messages
-	imGroupsMessagesCmd.Flags().IntVarP(&imGroupsMessagesLimit, "limit", "n", 0, "Maximum number of messages to return")
-	imGroupsMessagesCmd.Flags().BoolVar(&imGroupsMessagesJSON, "json", false, "Output raw JSON")
-
-	// im conversations list
-	imConversationsListCmd.Flags().BoolVar(&imConversationsUnread, "unread", false, "Show only unread conversations")
-	imConversationsListCmd.Flags().BoolVar(&imConversationsJSON, "json", false, "Output raw JSON")
+	// im conversations
+	imConversationsCmd.Flags().BoolVar(&imConversationsUnread, "unread", false, "Show only unread conversations")
+	imConversationsCmd.Flags().BoolVar(&imConversationsJSON, "json", false, "Output raw JSON")
 
 	// im credits
 	imCreditsCmd.Flags().BoolVar(&imCreditsJSON, "json", false, "Output raw JSON")
@@ -1013,19 +1124,19 @@ func init() {
 	imGroupsCmd.AddCommand(imGroupsSendCmd)
 	imGroupsCmd.AddCommand(imGroupsMessagesCmd)
 
-	// Wire up conversations sub-commands.
-	imConversationsCmd.AddCommand(imConversationsListCmd)
-	imConversationsCmd.AddCommand(imConversationsReadCmd)
-
 	// Wire up top-level im sub-commands.
 	imCmd.AddCommand(imMeCmd)
 	imCmd.AddCommand(imHealthCmd)
 	imCmd.AddCommand(imSendCmd)
+	imCmd.AddCommand(imEditCmd)
+	imCmd.AddCommand(imDeleteCmd)
+	imCmd.AddCommand(imHeartbeatCmd)
 	imCmd.AddCommand(imMessagesCmd)
 	imCmd.AddCommand(imDiscoverCmd)
 	imCmd.AddCommand(imContactsCmd)
-	imCmd.AddCommand(imGroupsCmd)
 	imCmd.AddCommand(imConversationsCmd)
+	imCmd.AddCommand(imReadCmd)
+	imCmd.AddCommand(imGroupsCmd)
 	imCmd.AddCommand(imFilesCmd)
 	imCmd.AddCommand(imCreditsCmd)
 	imCmd.AddCommand(imTransactionsCmd)

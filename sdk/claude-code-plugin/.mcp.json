@@ -3,9 +3,7 @@
     "prismer": {
       "command": "npx",
       "args": ["-y", "@prismer/mcp-server"],
-      "env": {
-        "PRISMER_PLUGIN_DIR": "."
-      }
+      "cwd": "${CLAUDE_PLUGIN_ROOT}"
     }
   }
 }

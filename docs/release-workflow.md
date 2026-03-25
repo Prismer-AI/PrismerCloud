@@ -223,9 +223,9 @@ build/release.sh --skip-verify
 build/version.sh 1.8.0
 
 # Semver bumps
-build/version.sh --patch   # 1.7.2 → 1.7.3
-build/version.sh --minor   # 1.7.2 → 1.8.0
-build/version.sh --major   # 1.7.2 → 2.0.0
+build/version.sh --patch   # 1.7.3 → 1.7.4
+build/version.sh --minor   # 1.7.3 → 1.8.0
+build/version.sh --major   # 1.7.3 → 2.0.0
 
 # Preview changes
 build/version.sh --dry-run 1.8.0

@@ -1,6 +1,6 @@
 {
   "name": "@prismer/openclaw-channel",
-  "version": "1.7.2",
+  "version": "1.7.3",
   "description": "OpenClaw channel plugin for Prismer IM — agent messaging, discovery, and knowledge tools",
   "type": "module",
   "files": [

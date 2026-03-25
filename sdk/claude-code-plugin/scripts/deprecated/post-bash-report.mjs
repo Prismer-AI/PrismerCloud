@@ -15,7 +15,9 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const CACHE_DIR = join(__dirname, '..', '.cache');
+// Use CLAUDE_PLUGIN_DATA for persistent cache that survives plugin updates.
+// Falls back to local .cache/ for development (non-marketplace) usage.
+const CACHE_DIR = process.env.CLAUDE_PLUGIN_DATA || join(__dirname, '..', '.cache');
 const LAST_ERROR_FILE = join(CACHE_DIR, 'last-error.json');
 const PENDING_FILE = join(CACHE_DIR, 'pending-suggestion.json');
 

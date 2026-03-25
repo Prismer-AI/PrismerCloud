@@ -1,11 +1,15 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
+	prismer "github.com/Prismer-AI/PrismerCloud/sdk/golang"
 	toml "github.com/pelletier/go-toml/v2"
 	"github.com/spf13/cobra"
 )
@@ -151,4 +155,308 @@ func main() {
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
 	}
+}
+
+// ============================================================================
+// Top-level shortcut commands
+// ============================================================================
+
+func init() {
+	// -- send (shortcut for: im send) --
+
+	var sendType string
+	var sendReplyTo string
+	var sendJSON bool
+
+	sendShortcutCmd := &cobra.Command{
+		Use:   "send <user-id> <message>",
+		Short: "Send a direct message (shortcut for: im send)",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			userID, message := args[0], args[1]
+			client := getIMClient()
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+
+			var opts *prismer.IMSendOptions
+			if sendType != "" && sendType != "text" {
+				opts = &prismer.IMSendOptions{Type: sendType}
+			}
+			if sendReplyTo != "" {
+				if opts == nil {
+					opts = &prismer.IMSendOptions{}
+				}
+				opts.ParentID = sendReplyTo
+			}
+
+			result, err := client.IM().Direct.Send(ctx, userID, message, opts)
+			if err != nil {
+				return fmt.Errorf("request failed: %w", err)
+			}
+			if !result.OK {
+				return imError(result)
+			}
+			if sendJSON {
+				fmt.Println(string(result.Data))
+				return nil
+			}
+			var data prismer.IMMessageData
+			if err := result.Decode(&data); err != nil {
+				return fmt.Errorf("failed to decode response: %w", err)
+			}
+			fmt.Printf("Message sent (conversation: %s)\n", data.ConversationID)
+			return nil
+		},
+	}
+	sendShortcutCmd.Flags().StringVarP(&sendType, "type", "t", "text", "Message type: text, markdown, code, etc.")
+	sendShortcutCmd.Flags().StringVar(&sendReplyTo, "reply-to", "", "Reply to a message ID")
+	sendShortcutCmd.Flags().BoolVar(&sendJSON, "json", false, "Output raw JSON")
+	rootCmd.AddCommand(sendShortcutCmd)
+
+	// -- load (shortcut for: context load) --
+
+	var loadFormat string
+	var loadJSON bool
+
+	loadShortcutCmd := &cobra.Command{
+		Use:   "load <url...>",
+		Short: "Load URL(s) into compressed HQCC (shortcut for: context load)",
+		Args:  cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client := getAPIClient()
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer cancel()
+
+			var input interface{}
+			if len(args) == 1 {
+				input = args[0]
+			} else {
+				input = args
+			}
+
+			var opts *prismer.LoadOptions
+			if loadFormat != "" {
+				opts = &prismer.LoadOptions{
+					Return: &prismer.ReturnConfig{Format: loadFormat},
+				}
+			}
+			result, err := client.Load(ctx, input, opts)
+			if err != nil {
+				return fmt.Errorf("request failed: %w", err)
+			}
+			if !result.Success {
+				if result.Error != nil {
+					return fmt.Errorf("API error: %s: %s", result.Error.Code, result.Error.Message)
+				}
+				return fmt.Errorf("API returned an error (no details)")
+			}
+			if loadJSON {
+				data, _ := json.MarshalIndent(result, "", "  ")
+				fmt.Println(string(data))
+				return nil
+			}
+			results := result.Results
+			if len(results) == 0 && result.Result != nil {
+				results = []prismer.LoadResultItem{*result.Result}
+			}
+			for _, r := range results {
+				fmt.Printf("URL:    %s\n", r.URL)
+				fmt.Printf("Status: %v\n", boolStr(r.Cached, "cached", "loaded"))
+				if r.HQCC != "" {
+					content := r.HQCC
+					if len(content) > 2000 {
+						content = content[:2000]
+					}
+					fmt.Printf("\n--- HQCC ---\n%s\n\n", content)
+				}
+			}
+			return nil
+		},
+	}
+	loadShortcutCmd.Flags().StringVarP(&loadFormat, "format", "f", "hqcc", "Return format: hqcc, raw, both")
+	loadShortcutCmd.Flags().BoolVar(&loadJSON, "json", false, "Output raw JSON")
+	rootCmd.AddCommand(loadShortcutCmd)
+
+	// -- search (shortcut for: context search) --
+
+	var searchTopK int
+	var searchJSON bool
+
+	searchShortcutCmd := &cobra.Command{
+		Use:   "search <query>",
+		Short: "Search web content (shortcut for: context search)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client := getAPIClient()
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+
+			var opts *prismer.SearchOptions
+			if searchTopK > 0 {
+				opts = &prismer.SearchOptions{TopK: searchTopK}
+			}
+			result, err := client.Search(ctx, args[0], opts)
+			if err != nil {
+				return fmt.Errorf("request failed: %w", err)
+			}
+			if !result.Success {
+				if result.Error != nil {
+					return fmt.Errorf("API error: %s: %s", result.Error.Code, result.Error.Message)
+				}
+				return fmt.Errorf("search failed")
+			}
+			if searchJSON {
+				data, _ := json.MarshalIndent(result, "", "  ")
+				fmt.Println(string(data))
+				return nil
+			}
+			if len(result.Results) == 0 {
+				fmt.Println("No results.")
+				return nil
+			}
+			for i, r := range result.Results {
+				score := ""
+				if r.Ranking != nil {
+					score = fmt.Sprintf("  score: %.3f", r.Ranking.Score)
+				}
+				fmt.Printf("%d. %s%s\n", i+1, r.URL, score)
+				if r.HQCC != "" {
+					snippet := r.HQCC
+					if len(snippet) > 200 {
+						snippet = snippet[:200]
+					}
+					fmt.Printf("   %s\n", snippet)
+				}
+			}
+			return nil
+		},
+	}
+	searchShortcutCmd.Flags().IntVarP(&searchTopK, "top-k", "k", 5, "Number of results")
+	searchShortcutCmd.Flags().BoolVar(&searchJSON, "json", false, "Output raw JSON")
+	rootCmd.AddCommand(searchShortcutCmd)
+
+	// -- recall (shortcut for: memory recall) --
+
+	var recallScope string
+	var recallLimit int
+	var recallJSON bool
+
+	recallCmd := &cobra.Command{
+		Use:   "recall <query>",
+		Short: "Search across memory, cache, and evolution (shortcut for: memory recall)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+
+			q := map[string]string{"q": args[0]}
+			if recallScope != "" {
+				q["scope"] = recallScope
+			}
+			if recallLimit > 0 {
+				q["limit"] = fmt.Sprintf("%d", recallLimit)
+			}
+
+			result, err := imRawRequest(ctx, "GET", "/api/im/recall", nil, q)
+			if err != nil {
+				return fmt.Errorf("request failed: %w", err)
+			}
+			if recallJSON {
+				b, _ := json.MarshalIndent(result, "", "  ")
+				fmt.Println(string(b))
+				return nil
+			}
+			// Extract data array from result
+			raw := result["data"]
+			items := asList(raw)
+			if len(items) == 0 {
+				fmt.Printf("No results for %q.\n", args[0])
+				return nil
+			}
+			for _, item := range items {
+				im := asMap(item)
+				source, _ := im["source"].(string)
+				title, _ := im["title"].(string)
+				score, _ := im["score"].(float64)
+				snippet, _ := im["snippet"].(string)
+				fmt.Printf("[%s] %s  (score: %.2f)\n", strings.ToUpper(source), title, score)
+				if snippet != "" {
+					if len(snippet) > 200 {
+						snippet = snippet[:200]
+					}
+					fmt.Printf("  %s\n", snippet)
+				}
+			}
+			return nil
+		},
+	}
+	recallCmd.Flags().StringVar(&recallScope, "scope", "all", "Scope: all, memory, cache, evolution")
+	recallCmd.Flags().IntVarP(&recallLimit, "limit", "n", 10, "Max results")
+	recallCmd.Flags().BoolVar(&recallJSON, "json", false, "Output raw JSON")
+	rootCmd.AddCommand(recallCmd)
+
+	// -- discover (shortcut for: im discover) --
+
+	var discoverType string
+	var discoverCapability string
+	var discoverJSON bool
+
+	discoverShortcutCmd := &cobra.Command{
+		Use:   "discover",
+		Short: "Discover available agents (shortcut for: im discover)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client := getIMClient()
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+
+			var opts *prismer.IMDiscoverOptions
+			if discoverType != "" || discoverCapability != "" {
+				opts = &prismer.IMDiscoverOptions{
+					Type:       discoverType,
+					Capability: discoverCapability,
+				}
+			}
+			result, err := client.IM().Contacts.Discover(ctx, opts)
+			if err != nil {
+				return fmt.Errorf("request failed: %w", err)
+			}
+			if !result.OK {
+				return imError(result)
+			}
+			if discoverJSON {
+				fmt.Println(string(result.Data))
+				return nil
+			}
+			var agents []prismer.IMDiscoverAgent
+			if err := result.Decode(&agents); err != nil {
+				return fmt.Errorf("failed to decode response: %w", err)
+			}
+			if len(agents) == 0 {
+				fmt.Println("No agents found.")
+				return nil
+			}
+			fmt.Printf("%-20s  %-14s  %-10s  %s\n", "Username", "Type", "Status", "Display Name")
+			for _, a := range agents {
+				caps := ""
+				if len(a.Capabilities) > 0 {
+					caps = " [" + strings.Join(a.Capabilities, ", ") + "]"
+				}
+				fmt.Printf("%-20s  %-14s  %-10s  %s%s\n",
+					a.Username, a.AgentType, a.Status, a.DisplayName, caps)
+			}
+			return nil
+		},
+	}
+	discoverShortcutCmd.Flags().StringVar(&discoverType, "type", "", "Filter by agent type")
+	discoverShortcutCmd.Flags().StringVar(&discoverCapability, "capability", "", "Filter by capability")
+	discoverShortcutCmd.Flags().BoolVar(&discoverJSON, "json", false, "Output raw JSON")
+	rootCmd.AddCommand(discoverShortcutCmd)
+}
+
+// boolStr returns trueVal if b is true, falseVal otherwise.
+func boolStr(b bool, trueVal, falseVal string) string {
+	if b {
+		return trueVal
+	}
+	return falseVal
 }

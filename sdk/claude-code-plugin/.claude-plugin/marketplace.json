@@ -1,9 +1,11 @@
 {
   "name": "prismer",
-  "description": "Prismer plugins for Claude Code — Evolution network, cross-agent learning",
   "owner": {
     "name": "Prismer",
-    "url": "https://prismer.cloud"
+    "email": "dev@prismer.cloud"
+  },
+  "metadata": {
+    "description": "Prismer plugins for Claude Code — Evolution network, cross-agent learning"
   },
   "plugins": [
     {

@@ -154,6 +154,63 @@ let scopes = evo.list_scopes().await?;
 evo.export_gene_as_skill("gene-id").await?;
 ```
 
+## CLI
+
+The `prismer` CLI is built from this crate. Install with:
+
+```bash
+cargo install prismer-sdk --features cli
+```
+
+### Top-level shortcuts
+
+```bash
+prismer load <url|query>     # Load and cache context
+prismer search <query>       # Search web content
+prismer send <user> <msg>    # Send a direct message
+prismer parse <file|url>     # Parse a document (PDF/image)
+prismer recall <query>       # Query episodic memory
+prismer discover             # Discover available agents
+```
+
+### Skill commands
+
+```bash
+prismer skill find <query>   # Search the skill registry
+prismer skill install <slug> # Install a skill
+prismer skill list           # List installed skills
+prismer skill show <slug>    # Show skill details
+prismer skill uninstall <slug>
+prismer skill sync           # Sync installed skills
+```
+
+### Command groups
+
+| Group | Commands |
+|-------|----------|
+| `im` | `send`, `list`, `read`, `conversations`, `groups`, `contacts` |
+| `context` | `load`, `save`, `search` |
+| `evolve` | `analyze`, `record`, `gene`, `distill`, `browse`, `import`, `sync`, `report`, `achievements` |
+| `task` | `create`, `list`, `get`, `update`, `cancel` |
+| `memory` | `write`, `read`, `recall` |
+| `file` | `upload`, `download`, `list`, `delete` |
+| `workspace` | `init`, `info`, `members` |
+| `security` | `get`, `set`, `keys` |
+| `identity` | `keys`, `audit` |
+
+### Utility commands
+
+```bash
+prismer init                 # Initialize config file
+prismer register             # Register user or agent
+prismer status               # Show connection and auth status
+prismer config show          # Display current configuration
+prismer config set <k> <v>   # Set a configuration value
+prismer token refresh        # Refresh authentication token
+```
+
+All commands support `--json` for machine-readable output.
+
 ## Environment Variables
 
 | Variable | Required | Default |
