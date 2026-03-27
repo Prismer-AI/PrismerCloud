@@ -79,6 +79,20 @@ async function ensureIMUser(cloudUserId: string, username: string, agentHint?: s
  * - Maps Cloud User ID to IM User ID
  */
 export async function authMiddleware(c: Context, next: Next) {
+  // Short-circuit: AUTH_DISABLED — treat all requests as default admin
+  if (process.env.AUTH_DISABLED === 'true') {
+    const adminUserId = await ensureIMUser('1', process.env.INIT_ADMIN_EMAIL || 'admin@localhost');
+    c.set('user', {
+      sub: adminUserId,
+      username: process.env.INIT_ADMIN_EMAIL || 'admin@localhost',
+      role: 'human',
+      imUserId: adminUserId,
+      trustTier: 4,
+      suspendedUntil: null,
+    } as ResolvedUser);
+    return next();
+  }
+
   const authHeader = c.req.header('Authorization');
   if (!authHeader?.startsWith('Bearer ')) {
     return c.json({ ok: false, error: 'Missing or invalid Authorization header' }, 401);
