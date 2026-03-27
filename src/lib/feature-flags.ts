@@ -111,6 +111,15 @@ export const FEATURE_FLAGS = {
   get UNLIMITED_CREDITS(): boolean {
     return process.env.UNLIMITED_CREDITS === 'true';
   },
+
+  /**
+   * Disable authentication (self-host mode)
+   * When true, all API requests are treated as the default admin user.
+   * WARNING: Only use in private/local deployments!
+   */
+  get AUTH_DISABLED(): boolean {
+    return process.env.AUTH_DISABLED === 'true';
+  },
 };
 
 /**
@@ -145,6 +154,7 @@ export function getEnabledFlags(): string[] {
   if (FEATURE_FLAGS.NOTIFICATIONS_LOCAL) flags.push('NOTIFICATIONS_LOCAL');
   if (FEATURE_FLAGS.AUTH_LOCAL) flags.push('AUTH_LOCAL');
   if (FEATURE_FLAGS.UNLIMITED_CREDITS) flags.push('UNLIMITED_CREDITS');
+  if (FEATURE_FLAGS.AUTH_DISABLED) flags.push('AUTH_DISABLED');
   return flags;
 }
 
@@ -163,6 +173,7 @@ export function logFeatureFlags(): void {
     NOTIFICATIONS_LOCAL: FEATURE_FLAGS.NOTIFICATIONS_LOCAL,
     AUTH_LOCAL: FEATURE_FLAGS.AUTH_LOCAL,
     UNLIMITED_CREDITS: FEATURE_FLAGS.UNLIMITED_CREDITS,
+    AUTH_DISABLED: FEATURE_FLAGS.AUTH_DISABLED,
   });
 }
 

@@ -314,6 +314,19 @@ export async function apiGuard(
     // Ensure Nacos config is loaded (needed for backend URL resolution)
     await ensureNacosConfig();
 
+    // Short-circuit: AUTH_DISABLED — treat all requests as default admin
+    if (FEATURE_FLAGS.AUTH_DISABLED) {
+      return {
+        ok: true,
+        auth: {
+          userId: '1',
+          email: process.env.INIT_ADMIN_EMAIL || 'admin@localhost',
+          authType: 'jwt',
+          authHeader: '',
+        },
+      };
+    }
+
     // 1. Extract Authorization header
     const authHeader = request.headers.get('authorization');
     if (!authHeader) {

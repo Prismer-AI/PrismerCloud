@@ -45,6 +45,14 @@ function decodeJwtPayload(token: string): Record<string, unknown> | null {
  * - Bearer sk-prismer-xxx (API Key)
  */
 export async function getUserFromAuth(authHeader: string | null): Promise<AuthResult> {
+  // Short-circuit: AUTH_DISABLED — return default admin user
+  if (process.env.AUTH_DISABLED === 'true') {
+    return {
+      success: true,
+      user: { id: 1, email: process.env.INIT_ADMIN_EMAIL || 'admin@localhost' },
+    };
+  }
+
   if (!authHeader) {
     return { success: false, error: 'Authorization header required' };
   }
