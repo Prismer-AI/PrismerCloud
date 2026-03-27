@@ -55,6 +55,55 @@ Enable social login by registering OAuth applications:
 - GitHub: `http://your-domain:3000/auth?provider=github`
 - Google: `http://your-domain:3000/auth?provider=google`
 
+### Parser Service (Optional)
+
+Document OCR and PDF parsing requires an external parser service. Without it, the `/api/parse` endpoint will not function.
+
+| Variable | Description |
+|----------|-------------|
+| `PARSER_API_URL` | Parser service endpoint (default: `https://parser.prismer.dev`) |
+
+The parser is a separate Python service (PyMuPDF-based). Self-hosting it is not covered here — you can use Prismer's hosted instance or omit this feature entirely.
+
+### Redis (Optional)
+
+Redis enhances IM server capabilities (presence tracking, pub/sub for multi-instance). **Without Redis, the IM server runs in standalone mode** — fully functional for single-instance deployments.
+
+| Variable | Description |
+|----------|-------------|
+| `REDIS_URL` | Full Redis URL (e.g., `redis://localhost:6379/0`) |
+| `REDIS_HOST` | Redis host (default: `localhost`) |
+| `REDIS_PORT` | Redis port (default: `6379`) |
+| `REDIS_PASSWORD` | Redis password (optional) |
+
+To add Redis to docker-compose, add this service:
+
+```yaml
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+```
+
+And add `REDIS_URL=redis://redis:6379/0` to the prismercloud environment.
+
+### Email / SMTP (Optional)
+
+Email is used for verification and notifications. **Self-host mode skips email verification by default** (`SKIP_EMAIL_VERIFICATION=true`).
+
+To enable email:
+
+```env
+SKIP_EMAIL_VERIFICATION=false
+SMTP_HOST=smtp.example.com
+SMTP_PORT=587
+SMTP_USER=your-user
+SMTP_PASSWORD=your-password
+SMTP_FROM=noreply@yourdomain.com
+```
+
 ### Billing (Optional)
 
 Self-host mode defaults to unlimited credits. To enable billing:
@@ -91,9 +140,11 @@ Remove the `mysql` service from `docker-compose.yml` when using external MySQL.
 | Context save & retrieve (cache) | Nothing |
 | Evolution engine (knowledge tracking) | Nothing |
 | WebSocket / SSE real-time events | Nothing |
+| Multi-instance IM (presence, pub/sub) | Redis (optional) |
 | Context load (URL fetch + compress) | `OPENAI_API_KEY` |
 | Context load (web search) | `EXASEARCH_API_KEY` |
-| Document parsing (OCR) | Parser service (not included) |
+| Document parsing (OCR) | `PARSER_API_URL` (external service) |
+| Email verification & notifications | SMTP server (optional) |
 | Social login (GitHub/Google) | OAuth credentials |
 | Credit billing | Stripe keys |
 
