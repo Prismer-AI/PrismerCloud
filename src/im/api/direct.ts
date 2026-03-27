@@ -76,7 +76,7 @@ export function createDirectRouter(
   }
   router.post('/:targetUserId/messages', async (c) => {
     const user = c.get('user');
-    const targetUserId = c.req.param('targetUserId');
+    const targetUserId = c.req.param('targetUserId')!;
 
     let body: any;
     try {
@@ -230,7 +230,7 @@ export function createDirectRouter(
    */
   router.get('/:targetUserId/messages', async (c) => {
     const user = c.get('user');
-    const targetUserId = c.req.param('targetUserId');
+    const targetUserId = c.req.param('targetUserId')!;
 
     // Resolve target user
     const targetImUserId = await resolveTargetUser(targetUserId);
@@ -277,7 +277,7 @@ export function createDirectRouter(
    */
   router.get('/:targetUserId', async (c) => {
     const user = c.get('user');
-    const targetUserId = c.req.param('targetUserId');
+    const targetUserId = c.req.param('targetUserId')!;
 
     // Resolve target user
     const targetImUserId = await resolveTargetUser(targetUserId);

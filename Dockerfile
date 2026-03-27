@@ -62,6 +62,9 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 
+# Install Prisma CLI for runtime db push (used by docker-entrypoint.sh)
+RUN npm install -g prisma@6
+
 # 创建非 root 用户
 RUN addgroup --system --gid 1001 nodejs
 RUN adduser --system --uid 1001 nextjs
@@ -83,6 +86,9 @@ COPY --from=builder --chown=nextjs:nodejs /app/prisma ./prisma
 # OpenAPI spec — read at runtime by /api/docs/openapi for docs page
 COPY --from=builder --chown=nextjs:nodejs /app/docs/openapi.yaml ./docs/openapi.yaml
 
+# Entrypoint script — runs Prisma db push for IM tables then starts server
+COPY --from=builder --chown=nextjs:nodejs /app/scripts/docker-entrypoint.sh ./docker-entrypoint.sh
+
 # Seed gene data — read at runtime by EvolutionService via process.cwd()/src/im/data/
 COPY --from=builder --chown=nextjs:nodejs /app/src/im/data ./src/im/data
 
@@ -98,5 +104,6 @@ ENV HOSTNAME="0.0.0.0"
 # IM_SERVER_ENABLED=true/false, REDIS_URL, JWT_SECRET
 
 # 运行自定义服务器 — HTTP + WebSocket + SSE on same port
+# Entrypoint runs Prisma db push (IM tables) then starts Node server
 # IM Server 通过 instrumentation.ts 在同一进程启动
-CMD ["node", "server.js"]
+CMD ["sh", "docker-entrypoint.sh"]

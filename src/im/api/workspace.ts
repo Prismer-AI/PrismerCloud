@@ -157,7 +157,7 @@ export function createWorkspaceRouter(redis: Redis) {
    * POST /api/workspace/:workspaceId/agents — Add agent to workspace
    */
   router.post('/:workspaceId/agents', authMiddleware, async (c) => {
-    const workspaceId = c.req.param('workspaceId');
+    const workspaceId = c.req.param('workspaceId')!;
     const body = await c.req.json();
     const { agentName, agentDisplayName, agentType, capabilities, metadata } = body;
 
@@ -194,7 +194,7 @@ export function createWorkspaceRouter(redis: Redis) {
    * GET /api/workspace/:workspaceId/agents — List agents in workspace
    */
   router.get('/:workspaceId/agents', authMiddleware, async (c) => {
-    const workspaceId = c.req.param('workspaceId');
+    const workspaceId = c.req.param('workspaceId')!;
 
     try {
       const agents = await workspaceBridge.listWorkspaceAgents(workspaceId);
@@ -215,7 +215,7 @@ export function createWorkspaceRouter(redis: Redis) {
    * POST /api/workspace/:workspaceId/agents/:agentId/token — Generate new token for agent
    */
   router.post('/:workspaceId/agents/:agentId/token', authMiddleware, async (c) => {
-    const agentId = c.req.param('agentId');
+    const agentId = c.req.param('agentId')!;
 
     try {
       const token = await workspaceBridge.generateAgentToken(agentId);
@@ -236,7 +236,7 @@ export function createWorkspaceRouter(redis: Redis) {
    * GET /api/workspace/:workspaceId/conversation — Get workspace conversation
    */
   router.get('/:workspaceId/conversation', authMiddleware, async (c) => {
-    const workspaceId = c.req.param('workspaceId');
+    const workspaceId = c.req.param('workspaceId')!;
 
     try {
       const conversation = await workspaceBridge.getWorkspaceConversation(workspaceId);
@@ -264,7 +264,7 @@ export function createWorkspaceRouter(redis: Redis) {
    * GET /api/workspace/:workspaceId/messages — Get workspace messages
    */
   router.get('/:workspaceId/messages', authMiddleware, async (c) => {
-    const workspaceId = c.req.param('workspaceId');
+    const workspaceId = c.req.param('workspaceId')!;
     const limit = parseInt(c.req.query('limit') ?? '50', 10);
 
     try {
