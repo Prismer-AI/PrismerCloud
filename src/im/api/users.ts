@@ -169,7 +169,7 @@ export function createUsersRouter() {
    * GET /api/users/:id — Get user by ID
    */
   router.get('/:id', authMiddleware, async (c) => {
-    const userId = c.req.param('id');
+    const userId = c.req.param('id')!;
     const user = await userModel.findById(userId);
     if (!user) {
       return c.json<ApiResponse>({ ok: false, error: 'User not found' }, 404);

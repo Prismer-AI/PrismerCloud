@@ -10,12 +10,13 @@
 import * as jwt from 'jsonwebtoken';
 import * as crypto from 'crypto';
 import { query, queryOne, execute } from '@/lib/db';
+import type { RowDataPacket } from 'mysql2';
 
 // ============================================================================
 // Types
 // ============================================================================
 
-export interface LocalUser {
+export interface LocalUser extends RowDataPacket {
   id: number;
   email: string;
   avatar: string;
@@ -84,7 +85,7 @@ function signToken(user: LocalUser): string {
 
 export async function registerUser(email: string, password: string): Promise<AuthResult> {
   // Check if user already exists
-  const existing = await queryOne<{ id: number }>('SELECT id FROM pc_users WHERE email = ? AND deleted_at IS NULL', [email]);
+  const existing = await queryOne<{ id: number } & RowDataPacket>('SELECT id FROM pc_users WHERE email = ? AND deleted_at IS NULL', [email]);
   if (existing) {
     throw new Error('Email already registered');
   }
@@ -208,7 +209,7 @@ async function storeCode(email: string, code: string, type: string): Promise<voi
 }
 
 async function verifyStoredCode(email: string, code: string, type: string): Promise<boolean> {
-  const row = await queryOne<{ id: number }>(
+  const row = await queryOne<{ id: number } & RowDataPacket>(
     'SELECT id FROM pc_verification_codes WHERE email = ? AND code = ? AND type = ? AND expires_at > NOW() AND used = 0 ORDER BY id DESC LIMIT 1',
     [email, code, type]
   );
@@ -226,7 +227,7 @@ export async function ensureAdminUser(): Promise<void> {
   const password = process.env.INIT_ADMIN_PASSWORD;
   if (!email || !password) return;
 
-  const existing = await queryOne<{ id: number }>('SELECT id FROM pc_users WHERE email = ?', [email]);
+  const existing = await queryOne<{ id: number } & RowDataPacket>('SELECT id FROM pc_users WHERE email = ?', [email]);
   if (existing) return;
 
   const passwordHash = hashPassword(password);

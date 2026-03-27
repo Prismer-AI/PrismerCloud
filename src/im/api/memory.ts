@@ -82,7 +82,7 @@ export function createMemoryRouter(memoryService: MemoryService, conversationSer
    */
   router.get('/files/:id', async (c) => {
     try {
-      const file = await memoryService.readMemoryFile(c.req.param('id'));
+      const file = await memoryService.readMemoryFile(c.req.param('id')!);
 
       // Ownership check
       const user = c.get('user');
@@ -125,13 +125,13 @@ export function createMemoryRouter(memoryService: MemoryService, conversationSer
 
     try {
       // Pre-check ownership
-      const existing = await memoryService.readMemoryFile(c.req.param('id'));
+      const existing = await memoryService.readMemoryFile(c.req.param('id')!);
       if (existing.ownerId !== user.imUserId) {
         return c.json<ApiResponse>({ ok: false, error: 'Not found' }, 404);
       }
 
       const result = await memoryService.updateMemoryFile(
-        c.req.param('id'),
+        c.req.param('id')!,
         operation,
         String(content),
         version,
@@ -160,12 +160,12 @@ export function createMemoryRouter(memoryService: MemoryService, conversationSer
     const user = c.get('user');
 
     try {
-      const existing = await memoryService.readMemoryFile(c.req.param('id'));
+      const existing = await memoryService.readMemoryFile(c.req.param('id')!);
       if (existing.ownerId !== user.imUserId) {
         return c.json<ApiResponse>({ ok: false, error: 'Not found' }, 404);
       }
 
-      await memoryService.deleteMemoryFile(c.req.param('id'));
+      await memoryService.deleteMemoryFile(c.req.param('id')!);
       return c.json<ApiResponse>({ ok: true });
     } catch (err) {
       if (err instanceof MemoryNotFoundError) {
@@ -214,7 +214,7 @@ export function createMemoryRouter(memoryService: MemoryService, conversationSer
    */
   router.get('/compact/:conversationId', async (c) => {
     const user = c.get('user');
-    const conversationId = c.req.param('conversationId');
+    const conversationId = c.req.param('conversationId')!;
 
     // Verify user is a participant of the conversation
     if (conversationService) {

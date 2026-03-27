@@ -85,7 +85,7 @@ export function createSkillsRouter(skillService: SkillService) {
    * NOTE: Must be registered BEFORE the catch-all /:slugOrId route
    */
   router.get('/:id/related', async (c) => {
-    const id = c.req.param('id');
+    const id = c.req.param('id')!;
     const limit = Math.min(parseInt(c.req.query('limit') || '5', 10), 20);
     const skills = await skillService.getRelated(id, limit);
     return c.json<ApiResponse>({ ok: true, data: skills });
@@ -96,7 +96,7 @@ export function createSkillsRouter(skillService: SkillService) {
    * Auth required to track access.
    */
   router.get('/:idOrSlug/content', authMiddleware, async (c) => {
-    const idOrSlug = c.req.param('idOrSlug');
+    const idOrSlug = c.req.param('idOrSlug')!;
     const data = await skillService.getSkillContent(idOrSlug);
     if (!data) {
       return c.json<ApiResponse>({ ok: false, error: 'Skill not found' }, 404);
@@ -108,7 +108,7 @@ export function createSkillsRouter(skillService: SkillService) {
    * GET /api/skills/:slugOrId — Skill detail by slug or ID
    */
   router.get('/:slugOrId', async (c) => {
-    const slugOrId = c.req.param('slugOrId');
+    const slugOrId = c.req.param('slugOrId')!;
 
     // Skip if it looks like a sub-route that should be handled elsewhere
     if (['search', 'stats', 'categories', 'trending', 'import', 'sync', 'installed'].includes(slugOrId)) {
@@ -187,7 +187,7 @@ export function createSkillsRouter(skillService: SkillService) {
    * PATCH /api/skills/:id — Update a skill
    */
   router.patch('/:id', authMiddleware, async (c) => {
-    const id = c.req.param('id');
+    const id = c.req.param('id')!;
     const body = await c.req.json();
 
     const skill = await skillService.update(id, body);
@@ -201,7 +201,7 @@ export function createSkillsRouter(skillService: SkillService) {
    * DELETE /api/skills/:id — Deprecate a skill (soft delete)
    */
   router.delete('/:id', authMiddleware, async (c) => {
-    const id = c.req.param('id');
+    const id = c.req.param('id')!;
     const result = await skillService.deprecate(id);
     if (!result) {
       return c.json<ApiResponse>({ ok: false, error: 'Skill not found' }, 404);
@@ -215,7 +215,7 @@ export function createSkillsRouter(skillService: SkillService) {
    */
   router.post('/:idOrSlug/install', authMiddleware, async (c) => {
     const user = c.get('user');
-    const idOrSlug = c.req.param('idOrSlug');
+    const idOrSlug = c.req.param('idOrSlug')!;
 
     try {
       const result = await skillService.installSkill(user.imUserId, idOrSlug);
@@ -233,7 +233,7 @@ export function createSkillsRouter(skillService: SkillService) {
    */
   router.delete('/:idOrSlug/install', authMiddleware, async (c) => {
     const user = c.get('user');
-    const idOrSlug = c.req.param('idOrSlug');
+    const idOrSlug = c.req.param('idOrSlug')!;
     const result = await skillService.uninstallSkill(user.imUserId, idOrSlug);
     return c.json<ApiResponse>({ ok: true, data: { uninstalled: result } });
   });
@@ -242,7 +242,7 @@ export function createSkillsRouter(skillService: SkillService) {
    * POST /api/skills/:id/star — Star a skill (increment stars)
    */
   router.post('/:id/star', authMiddleware, async (c) => {
-    const id = c.req.param('id');
+    const id = c.req.param('id')!;
     try {
       await skillService.recordStar(id);
       return c.json<ApiResponse>({ ok: true });

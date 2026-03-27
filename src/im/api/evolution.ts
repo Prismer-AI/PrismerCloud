@@ -139,7 +139,7 @@ export function createEvolutionRouter(
    * GET /api/evolution/public/genes/:geneId/capsules — Recent capsules for a gene (no auth)
    */
   router.get('/public/genes/:geneId/capsules', async (c) => {
-    const geneId = c.req.param('geneId');
+    const geneId = c.req.param('geneId')!;
     const limit = Math.min(parseInt(c.req.query('limit') || '10', 10), 50);
     const capsules = await evolutionService.getPublicGeneCapsules(geneId, limit);
     return c.json<ApiResponse>({ ok: true, data: capsules });
@@ -149,7 +149,7 @@ export function createEvolutionRouter(
    * GET /api/evolution/public/genes/:geneId/lineage — Gene lineage tree (no auth)
    */
   router.get('/public/genes/:geneId/lineage', async (c) => {
-    const geneId = c.req.param('geneId');
+    const geneId = c.req.param('geneId')!;
     const result = await evolutionService.getGeneLineage(geneId);
     if (!result) {
       return c.json<ApiResponse>({ ok: false, error: 'Gene not found' }, 404);
@@ -161,7 +161,7 @@ export function createEvolutionRouter(
    * GET /api/evolution/public/genes/:geneId — Public gene detail (no auth)
    */
   router.get('/public/genes/:geneId', async (c) => {
-    const geneId = c.req.param('geneId');
+    const geneId = c.req.param('geneId')!;
     const gene = await evolutionService.getPublicGeneDetail(geneId);
     if (!gene) {
       return c.json<ApiResponse>({ ok: false, error: 'Gene not found or not public' }, 404);
@@ -284,7 +284,7 @@ export function createEvolutionRouter(
    */
   router.get('/report/:traceId', authMiddleware, async (c) => {
     const user = c.get('user');
-    const traceId = c.req.param('traceId');
+    const traceId = c.req.param('traceId')!;
     const result = await evolutionService.getReportStatus(traceId, user.imUserId);
     if (!result) return c.json<ApiResponse>({ ok: false, error: 'Report not found' }, 404);
     return c.json<ApiResponse>({ ok: true, data: result });
@@ -577,7 +577,7 @@ export function createEvolutionRouter(
    */
   router.delete('/genes/:geneId', authMiddleware, async (c) => {
     const user = c.get('user');
-    const geneId = c.req.param('geneId');
+    const geneId = c.req.param('geneId')!;
 
     const deleted = await evolutionService.deleteGene(user.imUserId, geneId);
     if (!deleted) {
@@ -620,7 +620,7 @@ export function createEvolutionRouter(
    */
   router.get('/personality/:agentId', authMiddleware, async (c) => {
     const user = c.get('user');
-    const agentId = c.req.param('agentId');
+    const agentId = c.req.param('agentId')!;
 
     // Only allow querying own personality
     if (agentId !== user.imUserId) {
@@ -643,7 +643,7 @@ export function createEvolutionRouter(
    */
   router.post('/genes/:geneId/publish', authMiddleware, rl('tool_call'), async (c) => {
     const user = c.get('user');
-    const geneId = c.req.param('geneId');
+    const geneId = c.req.param('geneId')!;
     const body = await c.req.json().catch(() => ({}));
     const skipCanary = body?.skipCanary === true;
 
@@ -847,7 +847,7 @@ export function createEvolutionRouter(
    */
   router.post('/genes/:geneId/export-skill', authMiddleware, async (c) => {
     const user = c.get('user');
-    const geneId = c.req.param('geneId');
+    const geneId = c.req.param('geneId')!;
     const body = await c.req.json().catch(() => ({}));
 
     // Find the gene and verify ownership
