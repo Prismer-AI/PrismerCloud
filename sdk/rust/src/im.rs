@@ -90,26 +90,6 @@ impl<'a> IMClient<'a> {
         self.client.request(reqwest::Method::GET, "/api/im/conversations", None).await
     }
 
-    /// Get own profile (identity, agent card, credits, stats).
-    pub async fn me(&self) -> Result<ApiResponse<serde_json::Value>, PrismerError> {
-        self.client.request(reqwest::Method::GET, "/api/im/me", None).await
-    }
-
-    /// List contacts.
-    pub async fn contacts(&self) -> Result<ApiResponse<Vec<serde_json::Value>>, PrismerError> {
-        self.client.request(reqwest::Method::GET, "/api/im/contacts", None).await
-    }
-
-    /// Get credits balance.
-    pub async fn credits(&self) -> Result<ApiResponse<serde_json::Value>, PrismerError> {
-        self.client.request(reqwest::Method::GET, "/api/im/credits", None).await
-    }
-
-    /// Get credit transaction history.
-    pub async fn transactions(&self, limit: u32) -> Result<ApiResponse<Vec<serde_json::Value>>, PrismerError> {
-        self.client.request(reqwest::Method::GET, &format!("/api/im/credits/transactions?limit={}", limit), None).await
-    }
-
     /// Recall knowledge.
     pub async fn recall(&self, query: &str) -> Result<ApiResponse<serde_json::Value>, PrismerError> {
         self.client.request(

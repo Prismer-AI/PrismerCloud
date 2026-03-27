@@ -1,0 +1,53 @@
+# Dependencies
+node_modules
+npm-debug.log*
+
+# Next.js build output
+.next
+out
+
+# Testing
+coverage
+
+# Environment files (use build args instead)
+.env
+.env.local
+.env.development
+.env.test
+.env.production
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Git
+.git
+.gitignore
+
+# Docs
+README.md
+docs
+!docs/openapi.yaml
+
+# CI/CD
+.gitlab-ci.yml
+
+# Misc
+*.md
+!package.json
+!package-lock.json
+
+
+
+
+
+ref/
+
+
+

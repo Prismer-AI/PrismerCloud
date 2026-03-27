@@ -1,0 +1,764 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+/* ===== Mobile-First Breakpoint Helpers ===== */
+/* xs: 475px, sm: 640px, md: 768px, lg: 1024px, xl: 1280px, 2xl: 1536px */
+
+/* ===== Prismer Cloud Theme System ===== */
+
+:root {
+  /* ===== Light Theme Variables ===== */
+  --radius: 0.625rem;
+  
+  /* Brand Colors - Light */
+  --prismer-primary: #4830C5;
+  --prismer-primary-light: #C87CE3;
+  --prismer-primary-lighter: #E7D3F9;
+  --prismer-primary-subtle: #B4AAF0;
+  
+  /* Gradient Colors - Light */
+  --prismer-gradient-from: #4830C5;
+  --prismer-gradient-to: #C87CE3;
+  --prismer-gradient-accent: #B4AAF0;
+  
+  /* Background Colors - Light */
+  --background: #FFFFFF;
+  --background-secondary: #FAFAFF;
+  --background-tertiary: #F4FAFE;
+  --background-elevated: #FFFFFF;
+  --background-card: #FFFFFF;
+  --background-warm: #FFFBF7;
+  --background-cool: #F4FAFE;
+  --background-accent: #F3E9FF;
+  --background-subtle: #E9EBFF;
+  
+  /* Surface Colors - Light */
+  --surface-primary: #FFFFFF;
+  --surface-secondary: #FAFAFF;
+  --surface-tertiary: #F4FAFE;
+  --surface-hover: #F3E9FF;
+  --surface-active: #E2DEFF;
+  
+  /* Text Colors - Light */
+  --foreground: #1a1a2e;
+  --foreground-secondary: #4a4a6a;
+  --foreground-muted: #71717a;
+  --foreground-subtle: #a1a1aa;
+  
+  /* Border Colors - Light */
+  --border: rgba(72, 48, 197, 0.15);
+  --border-subtle: rgba(72, 48, 197, 0.08);
+  --border-accent: rgba(200, 124, 227, 0.3);
+  
+  /* Interactive Colors - Light */
+  --input: #FFFFFF;
+  --input-border: rgba(72, 48, 197, 0.2);
+  --ring: #4830C5;
+  
+  /* Status Colors */
+  --success: #10b981;
+  --warning: #f59e0b;
+  --error: #ef4444;
+  --info: #0891b2;
+  
+  /* Card Colors - Light */
+  --card: #FFFFFF;
+  --card-foreground: #1a1a2e;
+  --card-border: rgba(72, 48, 197, 0.1);
+  
+  /* Popover - Light */
+  --popover: #FFFFFF;
+  --popover-foreground: #1a1a2e;
+  
+  /* Primary Button - Light */
+  --primary: #4830C5;
+  --primary-foreground: #FFFFFF;
+  --primary-hover: #3920A5;
+  
+  /* Secondary Button - Light */
+  --secondary: #F3E9FF;
+  --secondary-foreground: #4830C5;
+  --secondary-hover: #E2DEFF;
+  
+  /* Muted - Light */
+  --muted: #FAFAFF;
+  --muted-foreground: #71717a;
+  
+  /* Accent - Light */
+  --accent: #F3E9FF;
+  --accent-foreground: #4830C5;
+  
+  /* Destructive - Light */
+  --destructive: #ef4444;
+  --destructive-foreground: #FFFFFF;
+  
+  /* Scrollbar - Light */
+  --scrollbar-track: #F4FAFE;
+  --scrollbar-thumb: #B4AAF0;
+  --scrollbar-thumb-hover: #C87CE3;
+  
+  /* Selection - Light */
+  --selection-bg: rgba(72, 48, 197, 0.2);
+  --selection-text: #4830C5;
+  
+  /* Shadows - Light */
+  --shadow-sm: 0 1px 2px rgba(72, 48, 197, 0.05);
+  --shadow-md: 0 4px 6px rgba(72, 48, 197, 0.07);
+  --shadow-lg: 0 10px 15px rgba(72, 48, 197, 0.1);
+  --shadow-glow: 0 0 20px rgba(72, 48, 197, 0.15);
+  
+  /* Mesh Gradient Colors - Light */
+  --mesh-color-1: #FFFFFF;
+  --mesh-color-2: #E7D3F9;
+  --mesh-color-3: #F4FAFE;
+  --mesh-color-4: #F3E9FF;
+  
+  /* Ambient Glow Colors - Light */
+  --glow-violet: rgba(200, 124, 227, 0.15);
+  --glow-blue: rgba(114, 133, 255, 0.12);
+  --glow-cyan: rgba(34, 211, 238, 0.1);
+  
+  /* Chart Colors - Light */
+  --chart-1: #4830C5;
+  --chart-2: #C87CE3;
+  --chart-3: #B4AAF0;
+  --chart-4: #E7D3F9;
+  --chart-5: #7285FF;
+  
+  /* Sidebar - Light */
+  --sidebar: #FAFAFF;
+  --sidebar-foreground: #1a1a2e;
+  --sidebar-primary: #4830C5;
+  --sidebar-primary-foreground: #FFFFFF;
+  --sidebar-accent: #F3E9FF;
+  --sidebar-accent-foreground: #4830C5;
+  --sidebar-border: rgba(72, 48, 197, 0.1);
+  --sidebar-ring: #4830C5;
+  
+  /* Fonts */
+  --font-sans: 'Inter', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+  --font-geist-sans: "Geist Sans", sans-serif;
+  --font-geist-mono: "Geist Mono", monospace;
+}
+
+.dark {
+  /* ===== Dark Theme Variables ===== */
+  
+  /* Brand Colors - Dark */
+  --prismer-primary: #724CFF;
+  --prismer-primary-light: #9291E5;
+  --prismer-primary-lighter: #BFB2F0;
+  --prismer-primary-subtle: #5622E5;
+  
+  /* Gradient Colors - Dark */
+  --prismer-gradient-from: #41086D;
+  --prismer-gradient-to: #5622E5;
+  --prismer-gradient-accent: #724CFF;
+  
+  /* Background Colors - Dark */
+  --background: #0a0a0a;
+  --background-secondary: #18181b;
+  --background-tertiary: #1a1a2e;
+  --background-elevated: #27272a;
+  --background-card: #18181b;
+  --background-warm: #3F0050;
+  --background-cool: #0F3E82;
+  --background-accent: #41086D;
+  --background-subtle: #123391;
+  
+  /* Surface Colors - Dark */
+  --surface-primary: #18181b;
+  --surface-secondary: #27272a;
+  --surface-tertiary: #3f3f46;
+  --surface-hover: rgba(114, 76, 255, 0.1);
+  --surface-active: rgba(114, 76, 255, 0.2);
+  
+  /* Text Colors - Dark */
+  --foreground: #F7F5FA;
+  --foreground-secondary: #d4d4d8;
+  --foreground-muted: #a1a1aa;
+  --foreground-subtle: #71717a;
+  
+  /* Border Colors - Dark */
+  --border: rgba(255, 255, 255, 0.1);
+  --border-subtle: rgba(255, 255, 255, 0.05);
+  --border-accent: rgba(114, 76, 255, 0.3);
+  
+  /* Interactive Colors - Dark */
+  --input: rgba(255, 255, 255, 0.05);
+  --input-border: rgba(255, 255, 255, 0.15);
+  --ring: #724CFF;
+  
+  /* Card Colors - Dark */
+  --card: #18181b;
+  --card-foreground: #F7F5FA;
+  --card-border: rgba(255, 255, 255, 0.1);
+  
+  /* Popover - Dark */
+  --popover: #27272a;
+  --popover-foreground: #F7F5FA;
+  
+  /* Primary Button - Dark */
+  --primary: #724CFF;
+  --primary-foreground: #FFFFFF;
+  --primary-hover: #8B5CF6;
+  
+  /* Secondary Button - Dark */
+  --secondary: #27272a;
+  --secondary-foreground: #F7F5FA;
+  --secondary-hover: #3f3f46;
+  
+  /* Muted - Dark */
+  --muted: #27272a;
+  --muted-foreground: #a1a1aa;
+  
+  /* Accent - Dark */
+  --accent: rgba(114, 76, 255, 0.2);
+  --accent-foreground: #BFB2F0;
+  
+  /* Destructive - Dark */
+  --destructive: #ef4444;
+  --destructive-foreground: #FFFFFF;
+  
+  /* Scrollbar - Dark */
+  --scrollbar-track: #09090b;
+  --scrollbar-thumb: #27272a;
+  --scrollbar-thumb-hover: #3f3f46;
+  
+  /* Selection - Dark */
+  --selection-bg: rgba(139, 92, 246, 0.3);
+  --selection-text: #c4b5fd;
+  
+  /* Shadows - Dark */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.5);
+  --shadow-glow: 0 0 30px rgba(114, 76, 255, 0.3);
+  
+  /* Mesh Gradient Colors - Dark */
+  --mesh-color-1: #0a0a0a;
+  --mesh-color-2: #41086D;
+  --mesh-color-3: #123391;
+  --mesh-color-4: #1a1a2e;
+  
+  /* Ambient Glow Colors - Dark */
+  --glow-violet: rgba(124, 58, 237, 0.1);
+  --glow-blue: rgba(59, 130, 246, 0.1);
+  --glow-cyan: rgba(6, 182, 212, 0.05);
+  
+  /* Chart Colors - Dark */
+  --chart-1: #724CFF;
+  --chart-2: #9291E5;
+  --chart-3: #6297EB;
+  --chart-4: #BFB2F0;
+  --chart-5: #7285FF;
+  
+  /* Sidebar - Dark */
+  --sidebar: #18181b;
+  --sidebar-foreground: #F7F5FA;
+  --sidebar-primary: #724CFF;
+  --sidebar-primary-foreground: #FFFFFF;
+  --sidebar-accent: rgba(114, 76, 255, 0.2);
+  --sidebar-accent-foreground: #BFB2F0;
+  --sidebar-border: rgba(255, 255, 255, 0.1);
+  --sidebar-ring: #724CFF;
+}
+
+/* ===== Theme-aware Tailwind mapping ===== */
+@theme inline {
+  /* Colors from CSS variables */
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  
+  /* Prismer Brand Colors */
+  --color-prismer-primary: var(--prismer-primary);
+  --color-prismer-primary-light: var(--prismer-primary-light);
+  --color-prismer-primary-lighter: var(--prismer-primary-lighter);
+  --color-prismer-primary-subtle: var(--prismer-primary-subtle);
+  
+  /* Extended Zinc Scale */
+  --color-zinc-950: #09090b;
+  --color-zinc-900: #18181b;
+  --color-zinc-800: #27272a;
+  --color-zinc-700: #3f3f46;
+  --color-zinc-600: #52525b;
+  --color-zinc-500: #71717a;
+  --color-zinc-400: #a1a1aa;
+  --color-zinc-300: #d4d4d8;
+  --color-zinc-200: #e4e4e7;
+  --color-zinc-100: #f4f4f5;
+  --color-zinc-50: #fafafa;
+
+  --color-violet-600: #7c3aed;
+  --color-violet-500: #8b5cf6;
+  --color-violet-400: #a78bfa;
+  --color-cyan-600: #0891b2;
+  --color-cyan-500: #06b6d4;
+  --color-cyan-400: #22d3ee;
+  --color-emerald-500: #10b981;
+  --color-emerald-400: #34d399;
+  --color-amber-400: #fbbf24;
+  --color-red-400: #f87171;
+  --color-red-500: #ef4444;
+
+  /* Fonts */
+  --font-sans: 'Inter', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+
+  /* Radius */
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 8px);
+  --radius-3xl: calc(var(--radius) + 12px);
+  --radius-4xl: calc(var(--radius) + 16px);
+
+  /* Chart Colors */
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+
+  /* Sidebar */
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  /* Animations */
+  --animate-pulse-slow: pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  
+  @keyframes morph-0 {
+    0%, 100% {
+      transform: translate(0, 0) scale(1);
+      border-radius: 0%;
+    }
+    25% {
+      transform: translate(20px, -20px) scale(1.2);
+      border-radius: 50%;
+    }
+    50% {
+      transform: translate(40px, 0) scale(0.8);
+      border-radius: 25%;
+    }
+    75% {
+      transform: translate(20px, 20px) scale(1.1);
+      border-radius: 75%;
+    }
+  }
+  
+  @keyframes morph-1 {
+    0%, 100% {
+      transform: translate(0, 0) scale(1) rotate(0deg);
+      border-radius: 0%;
+    }
+    25% {
+      transform: translate(-20px, -20px) scale(1.3) rotate(90deg);
+      border-radius: 50%;
+    }
+    50% {
+      transform: translate(-40px, 0) scale(0.7) rotate(180deg);
+      border-radius: 25%;
+    }
+    75% {
+      transform: translate(-20px, 20px) scale(1.2) rotate(270deg);
+      border-radius: 75%;
+    }
+  }
+  
+  @keyframes morph-2 {
+    0%, 100% {
+      transform: translate(0, 0) scale(1);
+      border-radius: 0%;
+    }
+    25% {
+      transform: translate(-20px, 20px) scale(0.9);
+      border-radius: 100%;
+    }
+    50% {
+      transform: translate(0, 40px) scale(1.4);
+      border-radius: 0%;
+    }
+    75% {
+      transform: translate(20px, 20px) scale(0.8);
+      border-radius: 50%;
+    }
+  }
+  
+  @keyframes morph-3 {
+    0%, 100% {
+      transform: translate(0, 0) scale(1) rotate(0deg);
+      border-radius: 0%;
+    }
+    25% {
+      transform: translate(20px, 20px) scale(1.1) rotate(-90deg);
+      border-radius: 25%;
+    }
+    50% {
+      transform: translate(0, -40px) scale(1.3) rotate(-180deg);
+      border-radius: 100%;
+    }
+    75% {
+      transform: translate(-20px, -20px) scale(0.9) rotate(-270deg);
+      border-radius: 75%;
+    }
+  }
+}
+
+/* ===== Base Styles ===== */
+
+html {
+  color-scheme: dark;
+}
+
+html.light {
+  color-scheme: light;
+}
+
+body {
+  background-color: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+/* ===== Subtle Grid Background ===== */
+.bg-grid {
+  background-size: 40px 40px;
+  background-image: 
+    linear-gradient(to right, var(--border-subtle) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--border-subtle) 1px, transparent 1px);
+}
+
+/* ===== Custom Scrollbar ===== */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+}
+
+/* ===== Selection ===== */
+::selection {
+  background-color: var(--selection-bg);
+  color: var(--selection-text);
+}
+
+/* ===== Custom Scrollbar for nested elements ===== */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 3px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+}
+
+/* ===== Prose Overrides for Markdown ===== */
+.prose-invert {
+  --tw-prose-body: var(--foreground-secondary);
+  --tw-prose-headings: var(--foreground);
+  --tw-prose-lead: var(--foreground-muted);
+  --tw-prose-links: var(--prismer-primary);
+  --tw-prose-bold: var(--foreground);
+  --tw-prose-counters: var(--foreground-subtle);
+  --tw-prose-bullets: var(--foreground-subtle);
+  --tw-prose-hr: var(--border);
+  --tw-prose-quotes: var(--foreground);
+  --tw-prose-quote-borders: var(--border);
+  --tw-prose-captions: var(--foreground-subtle);
+  --tw-prose-code: var(--foreground);
+  --tw-prose-pre-code: var(--foreground-secondary);
+  --tw-prose-pre-bg: var(--surface-primary);
+  --tw-prose-th-borders: var(--border);
+  --tw-prose-td-borders: var(--border-subtle);
+}
+
+/* ===== Animation Utilities ===== */
+@keyframes pulse-slow {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.7;
+  }
+}
+
+.animate-pulse-slow {
+  animation: pulse-slow 3s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* Shimmer animation for loading states */
+@keyframes shimmer {
+  0% {
+    transform: translateX(-100%);
+    opacity: 0.5;
+  }
+  50% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateX(100%);
+    opacity: 0.5;
+  }
+}
+
+.animate-shimmer {
+  animation: shimmer 1.5s ease-in-out infinite;
+}
+
+/* Gradient flow animation */
+@keyframes gradient-flow {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
+.animate-gradient {
+  background-size: 200% 200%;
+  animation: gradient-flow 3s ease infinite;
+}
+
+/* Theme transition */
+.theme-transition,
+.theme-transition * {
+  transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease !important;
+}
+
+/* ===== Mobile Optimizations ===== */
+
+/* Hide scrollbar for mobile horizontal scrolling */
+.scrollbar-none {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+
+/* Touch-friendly tap targets */
+@media (max-width: 640px) {
+  button, a, input, select, textarea {
+    min-height: 44px;
+  }
+
+  /* Improve text readability on mobile */
+  body {
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
+}
+
+/* Prevent horizontal overflow on mobile */
+html, body {
+  overflow-x: hidden;
+  max-width: 100vw;
+}
+
+/* Smooth scrolling */
+html {
+  scroll-behavior: smooth;
+}
+
+/* Better touch scrolling */
+.overflow-auto, .overflow-y-auto, .overflow-x-auto {
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Custom xs breakpoint utilities */
+@media (min-width: 475px) {
+  .xs\:inline { display: inline; }
+  .xs\:hidden { display: none; }
+  .xs\:flex { display: flex; }
+  .xs\:block { display: block; }
+}
+
+/* Safe area insets for notched devices */
+@supports (padding: max(0px)) {
+  .safe-area-inset-bottom {
+    padding-bottom: max(16px, env(safe-area-inset-bottom));
+  }
+  .safe-area-inset-top {
+    padding-top: max(16px, env(safe-area-inset-top));
+  }
+}
+
+/* ===== Base Layer ===== */
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+/* ===== Theme-aware utility classes ===== */
+
+/* Glass effect that works in both themes */
+.glass {
+  background: var(--surface-primary);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--border);
+}
+
+.dark .glass {
+  background: rgba(24, 24, 27, 0.8);
+}
+
+:root:not(.dark) .glass {
+  background: rgba(255, 255, 255, 0.8);
+}
+
+/* Glow effects */
+.glow-primary {
+  box-shadow: 0 0 20px var(--glow-violet);
+}
+
+.glow-accent {
+  box-shadow: 0 0 30px var(--shadow-glow);
+}
+
+/* Gradient text that works in both themes */
+.gradient-text {
+  background: linear-gradient(135deg, var(--prismer-primary), var(--prismer-primary-light));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Card hover effect */
+.card-hover {
+  transition: all 0.3s ease;
+}
+
+.card-hover:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-lg);
+  border-color: var(--border-accent);
+}
+
+/* ===== Range Slider Thumb (Credit Purchase Slider) ===== */
+input[type="range"].credit-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #8b5cf6, #a78bfa);
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(139, 92, 246, 0.4);
+  border: 3px solid white;
+}
+input[type="range"].credit-slider::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+}
+input[type="range"].credit-slider::-moz-range-thumb {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #8b5cf6, #a78bfa);
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(139, 92, 246, 0.4);
+  border: 3px solid white;
+}
+
+/* ===== Evolution Glass & Spring Animations ===== */
+
+/* Spring-damped cubic-bezier overshoot */
+.spring-hover {
+  transition: transform 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275),
+              box-shadow 0.4s ease,
+              border-color 0.3s ease;
+}
+
+.spring-hover:hover {
+  transform: translateY(-4px) scale(1.015);
+}
+
+/* Spring entrance animation */
+@keyframes spring-in {
+  0% { opacity: 0; transform: translateY(20px) scale(0.95); }
+  60% { opacity: 1; transform: translateY(-4px) scale(1.02); }
+  80% { transform: translateY(1px) scale(0.995); }
+  100% { transform: translateY(0) scale(1); }
+}
+
+.animate-spring-in {
+  animation: spring-in 0.6s cubic-bezier(0.175, 0.885, 0.32, 1.275) both;
+}
+
+/* Staggered children animation */
+.stagger-children > * {
+  animation: spring-in 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275) both;
+}
+.stagger-children > *:nth-child(1) { animation-delay: 0ms; }
+.stagger-children > *:nth-child(2) { animation-delay: 60ms; }
+.stagger-children > *:nth-child(3) { animation-delay: 120ms; }
+.stagger-children > *:nth-child(4) { animation-delay: 180ms; }
+.stagger-children > *:nth-child(5) { animation-delay: 240ms; }
+.stagger-children > *:nth-child(6) { animation-delay: 300ms; }
+.stagger-children > *:nth-child(7) { animation-delay: 360ms; }
+.stagger-children > *:nth-child(8) { animation-delay: 420ms; }
+.stagger-children > *:nth-child(9) { animation-delay: 480ms; }
+
+/* Glass card shimmer effect on hover */
+@keyframes glass-shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}

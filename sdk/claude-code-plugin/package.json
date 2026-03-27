@@ -1,6 +1,6 @@
 {
   "name": "@prismer/claude-code-plugin",
-  "version": "1.7.3",
+  "version": "1.7.2",
   "description": "Prismer Evolution plugin for Claude Code — auto-learning from every coding session",
   "keywords": [
     "prismer",
@@ -14,7 +14,7 @@
   "homepage": "https://github.com/prismer-io/prismercloud/tree/main/sdk/claude-code-plugin",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Prismer-AI/PrismerCloud.git",
+    "url": "https://github.com/prismer-io/prismercloud.git",
     "directory": "sdk/claude-code-plugin"
   },
   "license": "MIT",
@@ -24,13 +24,7 @@
     "hooks/",
     "scripts/",
     "skills/",
-    "templates/",
     ".mcp.json",
-    "LICENSE",
-    "CHANGELOG.md",
     "README.md"
-  ],
-  "publishConfig": {
-    "access": "public"
-  }
+  ]
 }

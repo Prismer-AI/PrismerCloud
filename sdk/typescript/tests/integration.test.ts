@@ -578,19 +578,18 @@ describe('IM API', () => {
       expect(result.data!.message.type).toBe('image');
     });
 
-    // NOTE: file-type messages require full upload flow (presign→upload→confirm).
-    // See file-upload.test.ts for comprehensive file send tests.
-    it('send message with file metadata', async () => {
+    it('send file message', async () => {
       const result = await clientA.im.direct.send(
         agentBId,
-        'Shared a document: document.pdf',
+        'https://example.com/document.pdf',
         {
+          type: 'file',
           metadata: { filename: 'document.pdf', mimeType: 'application/pdf', size: 1024 },
         },
       );
       expect(result.ok).toBe(true);
       expect(result.data!.message).toBeDefined();
-      expect(result.data!.message.metadata).toBeDefined();
+      expect(result.data!.message.type).toBe('file');
     });
   });
 
