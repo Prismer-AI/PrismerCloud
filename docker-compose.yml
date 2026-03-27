@@ -35,6 +35,8 @@ services:
       - REMOTE_MYSQL_USER=prismer
       - REMOTE_MYSQL_PASSWORD=prismer
       - REMOTE_MYSQL_DATABASE=prismer_cloud
+      # --- App URL ---
+      - NEXT_PUBLIC_BASE_URL=${NEXT_PUBLIC_BASE_URL:-http://localhost:3000}
       # --- External APIs (optional) ---
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - OPENAI_API_BASE_URL=${OPENAI_API_BASE_URL:-https://api.openai.com/v1}

@@ -9,15 +9,21 @@ Prismer Cloud is a Next.js 16 SaaS application — a "Knowledge Drive for AI Age
 ## Commands
 
 ```bash
-# Next.js
-npm run dev        # Start dev server (port 3000, uses Turbopack)
+# Development
+npm run dev        # Custom server (HTTP + WebSocket + SSE on port 3000) via npx tsx server.ts
+npm run dev:next   # Plain Next.js dev server (no WS/SSE support)
 npm run build      # Production build (standalone output for Docker)
-npm run start      # Start production server
-npm run lint       # ESLint (Next.js + TypeScript config)
+npm run start      # Production custom server (node custom-server.js)
 
-# IM Server
-npm run im:start   # Start IM server (port 3200, standalone Hono)
-npm run im:dev     # Start IM server with file watch (dev)
+# Quality
+npm run lint       # ESLint
+npm run check      # ESLint + tsc --noEmit (combined)
+npm run format     # Prettier --write on src/**/*.{ts,tsx}
+npm run circular   # madge circular dependency check
+
+# IM Server (standalone, for testing without Next.js)
+npm run im:start   # Start IM server standalone (Hono on port 3200)
+npm run im:dev     # Same with file watch
 
 # Prisma
 npm run prisma:generate        # Generate SQLite client (dev)
@@ -30,7 +36,7 @@ npm run test:all:test    # Multi-env test script against cloud.prismer.dev
 npm run test:all:prod    # Multi-env test script against prismer.cloud
 ```
 
-No automated test framework. IM server has custom test runners in `src/im/tests/`.
+No automated test framework (no vitest/jest). IM server has custom test runners in `src/im/tests/`.
 
 ## Architecture
 
@@ -67,6 +73,15 @@ User/Agent Request
 ```
 
 The Next.js layer is **not** a thin proxy — it contains significant orchestration logic (the Load API), direct external API integrations, and (via feature flags) direct database access that can bypass the backend entirely.
+
+### Custom Server (WebSocket + SSE)
+
+The app uses a custom HTTP server that shares port 3000 for Next.js, WebSocket, and SSE:
+
+- **Dev:** `server.ts` — creates `http.createServer`, attaches `WebSocketServer` on `/ws`, SSE handler on `/sse`, then passes everything else to Next.js
+- **Prod:** `server.prod.js` — monkey-patches `http.createServer` before loading Next.js standalone `_next_server.js`, intercepting the server Next.js creates internally to add WS/SSE support
+
+Both read IM handlers from `globalThis` (populated by `instrumentation.ts` → `bootstrap.ts`). The custom server files must NOT import `src/im/*` directly.
 
 ### IM Server (Agent Messaging)
 
@@ -213,7 +228,11 @@ URL rewrite in `next.config.ts` maps `/api/v1/*` to `/api/*` for backwards compa
 
 ### Configuration Resolution
 
-Runtime configuration loads from **Nacos configuration center** via HTTP API (not the npm package, which is incompatible with Nacos 2.x). Priority: **Environment Variables > Nacos > Defaults**. The `ensureNacosConfig()` call in API routes triggers lazy initialization.
+Two modes depending on deployment:
+
+**Self-host mode** (`NACOS_DISABLED=true`): All config via environment variables directly. No external config service needed.
+
+**Cloud mode** (default): Runtime configuration loads from **Nacos configuration center** via HTTP API (not the npm package, which is incompatible with Nacos 2.x). Priority: **Environment Variables > Nacos > Defaults**. The `ensureNacosConfig()` call in API routes triggers lazy initialization.
 
 - `APP_ENV` determines the Nacos namespace (`prod`/`test`/`dev`)
 - All environments use dataId `PrismerCloud`
@@ -235,11 +254,17 @@ When a flag is `true`, the Next.js route directly queries `pc_*` tables via `src
 
 | Flag                       | Local path                                        | Backend proxy path           |
 | -------------------------- | ------------------------------------------------- | ---------------------------- |
+| `FF_AUTH_LOCAL`            | Local JWT + `pc_users`/`pc_api_keys`              | Backend `/auth/*`            |
 | `FF_USAGE_RECORD_LOCAL`    | Write to `pc_usage_records` + deduct `pc_credits` | POST `/cloud/usage/record`   |
 | `FF_ACTIVITIES_LOCAL`      | Query `pc_usage_records`                          | GET `/cloud/activities`      |
 | `FF_DASHBOARD_STATS_LOCAL` | Aggregate `pc_usage_records` + `pc_credits`       | GET `/cloud/dashboard/stats` |
 | `FF_USER_CREDITS_LOCAL`    | Query `pc_credits`                                | GET `/cloud/credits/balance` |
+| `FF_API_KEYS_LOCAL`        | Local `pc_api_keys` CRUD                          | Backend `/cloud/keys`        |
+| `FF_CONTEXT_CACHE_LOCAL`   | Local `pc_context_cache`                          | Backend `/cloud/context/*`   |
 | `FF_BILLING_LOCAL`         | Stripe SDK + `pc_payments`/`pc_payment_methods`   | POST `/payment/topup/create` |
+| `FF_NOTIFICATIONS_LOCAL`   | Local notification storage                        | Backend notifications        |
+
+In self-host mode, all flags are `true` — the app is fully standalone with no backend dependency. `UNLIMITED_CREDITS=true` bypasses credit checks.
 
 ### Database
 
@@ -257,7 +282,11 @@ Key helpers: `query<T>()`, `execute()`, `queryOne<T>()`, `withTransaction()`.
 
 ### Authentication
 
-Dual auth: JWT tokens (session-based, stored in `prismer_auth` localStorage) and API keys (`sk-prismer-*`, stored in `prismer_active_api_key`). OAuth supported via GitHub and Google. Auth state managed in `AppContext`. All auth verification happens on the backend — Next.js passes the token/key through.
+Dual auth: JWT tokens (session-based, stored in `prismer_auth` localStorage) and API keys (`sk-prismer-*`, stored in `prismer_active_api_key`). OAuth supported via GitHub and Google. Auth state managed in `AppContext`.
+
+**Two auth paths** (feature-flag controlled):
+- `FF_AUTH_LOCAL=true` (self-host): Auth handled locally — JWT signed with `JWT_SECRET`, users stored in `pc_users` table, API keys in `pc_api_keys`
+- `FF_AUTH_LOCAL=false` (cloud): Auth proxied to Go backend at `prismer.app` — Next.js passes Authorization header through
 
 ### Content Processing Pipeline (Load API)
 
@@ -386,11 +415,17 @@ cd sdk/mcp && npm install && npm run build  # tsup build (ESM + shebang)
 
 Consolidated engineering docs live in `docs/` at project root:
 
-- `docs/ROADMAP.md` — Project roadmap with version plan and phase status
+- `docs/SELF-HOST.md` — Self-host deployment guide (prerequisites, config, troubleshooting)
 - `docs/API.md` — External API reference (Context, Parse, IM, WebSocket/SSE)
+- `docs/openapi.yaml` — OpenAPI spec (served at runtime by `/api/docs/openapi`)
+- `docs/ROADMAP.md` — Project roadmap with version plan and phase status
+- `docs/ARCHITECTURE.md` — System architecture overview
 - `docs/BACKEND-REQUIREMENTS.md` — Backend API spec (DB schema, access control, content URI)
-- `docs/TODO.md` — Project TODO with next-phase implementation design (IM file transfer)
-- `docs/TODO_CN.md` — Chinese version of TODO for quick review
+- `docs/TODO.md` — Project TODO with next-phase implementation design
+- `docs/PRD.md` — Product requirements document
+- `docs/SDK.md` — SDK design and API surface
+- `docs/im/` — IM subsystem design docs
+- `docs/evolution/` — Evolution engine design docs
 
 ## Path Alias
 
@@ -398,19 +433,30 @@ Consolidated engineering docs live in `docs/` at project root:
 
 ## Deployment
 
-**Self-host (recommended):**
+### Self-Host (docker compose)
 
 ```bash
-cp .env.example .env   # Configure your API keys
-docker compose up -d   # Start MySQL + Next.js
+cp .env.example .env   # Configure JWT_SECRET + optional API keys
+docker compose up -d   # Starts MySQL 8.0 + Next.js app
 ```
 
-**`APP_ENV`** controls environment-specific behavior:
-- Determines Nacos namespace (if Nacos is configured)
-- `NODE_ENV=production` is set for all Docker builds
-- IM server's `start.ts` uses `NODE_ENV !== 'production'` to decide "local dev SQLite" vs "remote MySQL"
+`docker-compose.yml` provisions:
+- **mysql** service — MySQL 8.0 with health check, auto-runs SQL migrations from `scripts/sql/` (pc_* tables) and `src/im/sql/` (im_* tables) via `/docker-entrypoint-initdb.d/`
+- **prismercloud** service — Next.js app with all `FF_*_LOCAL=true` flags enabled, `NACOS_DISABLED=true`, local auth (`FF_AUTH_LOCAL=true`, `SKIP_EMAIL_VERIFICATION=true`)
 
-Docker build: multi-stage Node 20 Alpine, standalone Next.js output, port 3000. Both Prisma clients (SQLite + MySQL) are generated in the build stage. IM server starts automatically via `instrumentation.ts` in the same process (in-process, no separate port).
+Default admin: `admin@localhost` / `admin123` (configurable via `INIT_ADMIN_EMAIL` / `INIT_ADMIN_PASSWORD`). `UNLIMITED_CREDITS=true` in self-host mode.
+
+See `docs/SELF-HOST.md` for full configuration reference and `.env.example` for all variables.
+
+### Docker Build
+
+Multi-stage Node 20 Alpine, standalone Next.js output, port 3000. Both Prisma clients (SQLite + MySQL) are generated in the build stage. The custom production server (`server.prod.js`) replaces the default Next.js `server.js` to add WebSocket/SSE support. IM server starts automatically via `instrumentation.ts` in the same process.
+
+### Environment Modes
+
+- **Self-host:** `NACOS_DISABLED=true` + all `FF_*_LOCAL=true` — fully standalone, no external backend needed
+- **Cloud:** Nacos config center + backend proxy — `APP_ENV` determines namespace (`prod`/`test`/`dev`)
+- IM server's `start.ts` uses `NODE_ENV !== 'production'` to decide SQLite (dev) vs MySQL (prod)
 
 ## API Testing
 
@@ -498,4 +544,3 @@ console.error('[ModuleName] ❌ Error message');
 - Pending: deploy to test/prod, docs/API.md update, npm/PyPI/Go publish
 
 **v1.7.3 规划:** Agent Park + OpenClaw tools (discover/send/schedule/memory) + Event subscriptions
-
