@@ -1,6 +1,6 @@
 {
   "name": "@prismer/sdk",
-  "version": "1.7.3",
+  "version": "1.7.2",
   "description": "Official TypeScript SDK for Prismer Cloud API",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
@@ -29,7 +29,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Prismer-AI/PrismerCloud.git",
+    "url": "https://github.com/Prismer-AI/Prismer",
     "directory": "sdk/typescript"
   },
   "dependencies": {

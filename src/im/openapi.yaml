@@ -1,0 +1,2057 @@
+openapi: 3.1.0
+info:
+  title: Prismer IM Server API
+  description: |
+    Prismer IM (Instant Messaging) Server API 提供人机、机机通信的完整解决方案。
+
+    ## 核心功能
+    - **用户管理**: 支持 Human 和 Agent 两种用户类型
+    - **对话管理**: 支持 1:1 (direct) 和群组 (group) 对话
+    - **消息系统**: 支持多种消息类型 (text, markdown, code, tool_call 等)
+    - **Agent 协议**: 支持 Agent 注册、发现、心跳
+    - **实时通信**: WebSocket 支持消息推送、流式输出、typing 指示器
+
+    ## 认证方式
+    所有 API (除注册和登录外) 都需要在 Header 中携带 JWT Token:
+    ```
+    Authorization: Bearer <token>
+    ```
+
+    ## WebSocket 连接
+    WebSocket 端点: `ws://<host>:3200/ws`
+
+    连接方式:
+    1. Query 参数: `ws://<host>:3200/ws?token=<jwt_token>`
+    2. 连接后发送 authenticate 事件
+
+  version: 1.7.0
+  contact:
+    name: Prismer Cloud Team
+  license:
+    name: Proprietary
+
+servers:
+  - url: http://localhost:3200/api
+    description: Local development
+  - url: https://im.prismer.dev/api
+    description: Test environment
+
+tags:
+  - name: Health
+    description: 服务健康检查
+  - name: Users
+    description: 用户注册、登录、个人信息管理
+  - name: Conversations
+    description: 对话的创建、查询、更新
+  - name: Messages
+    description: 消息的发送、查询、编辑 (含 @提及解析)
+  - name: Agents
+    description: Agent 注册、发现、心跳
+  - name: Workspace
+    description: Workspace-IM 集成 (初始化、Agent 管理、Token 生成)
+  - name: Sync
+    description: 离线优先 SDK 的增量同步 API（游标分页 + SSE 实时推送）
+  - name: WebSocket
+    description: WebSocket 实时通信协议
+
+paths:
+  /health:
+    get:
+      tags: [Health]
+      summary: 健康检查
+      description: 返回服务状态和统计信息
+      operationId: healthCheck
+      responses:
+        '200':
+          description: 服务正常
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    example: true
+                  service:
+                    type: string
+                    example: prismer-im-server
+                  version:
+                    type: string
+                    example: "0.1.0"
+                  timestamp:
+                    type: string
+                    format: date-time
+                  stats:
+                    type: object
+                    properties:
+                      totalConnections:
+                        type: integer
+                      rooms:
+                        type: integer
+
+  # ─── Users API ─────────────────────────────────────────────────
+
+  /users/register:
+    post:
+      tags: [Users]
+      summary: 注册用户
+      description: |
+        注册新的 IM 用户。支持两种角色:
+        - `human`: 人类用户
+        - `agent`: AI Agent 用户 (需指定 agentType)
+      operationId: registerUser
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserRegisterRequest'
+            examples:
+              humanUser:
+                summary: 注册人类用户
+                value:
+                  username: john_doe
+                  displayName: John Doe
+                  password: secure123
+                  role: human
+              agentUser:
+                summary: 注册 Agent 用户
+                value:
+                  username: code-assistant
+                  displayName: Code Assistant
+                  role: agent
+                  agentType: assistant
+                  metadata:
+                    model: gpt-4
+      responses:
+        '201':
+          description: 注册成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          description: 用户名已存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /users/login:
+    post:
+      tags: [Users]
+      summary: 用户登录
+      description: 使用用户名和密码登录，获取 JWT Token
+      operationId: loginUser
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username]
+              properties:
+                username:
+                  type: string
+                  description: 用户名
+                password:
+                  type: string
+                  description: 密码 (如果设置了的话)
+      responses:
+        '200':
+          description: 登录成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '401':
+          description: 认证失败
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /users/me:
+    get:
+      tags: [Users]
+      summary: 获取当前用户信息
+      operationId: getCurrentUser
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProfileResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    patch:
+      tags: [Users]
+      summary: 更新当前用户信息
+      operationId: updateCurrentUser
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                displayName:
+                  type: string
+                avatarUrl:
+                  type: string
+                  format: uri
+                metadata:
+                  type: object
+      responses:
+        '200':
+          description: 更新成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /users/{id}:
+    get:
+      tags: [Users]
+      summary: 获取指定用户信息
+      operationId: getUserById
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: 用户 ID
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProfileResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ─── Conversations API ─────────────────────────────────────────
+
+  /conversations:
+    get:
+      tags: [Conversations]
+      summary: 获取当前用户的对话列表
+      operationId: listConversations
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [active, archived, deleted]
+            default: active
+          description: 过滤对话状态
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /conversations/direct:
+    post:
+      tags: [Conversations]
+      summary: 创建 1:1 对话
+      description: 与另一个用户创建直接对话
+      operationId: createDirectConversation
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [otherUserId]
+              properties:
+                otherUserId:
+                  type: string
+                  description: 对方用户 ID
+                metadata:
+                  type: object
+                  description: 自定义元数据
+      responses:
+        '201':
+          description: 创建成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /conversations/group:
+    post:
+      tags: [Conversations]
+      summary: 创建群组对话
+      operationId: createGroupConversation
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title]
+              properties:
+                title:
+                  type: string
+                  description: 群组名称
+                description:
+                  type: string
+                  description: 群组描述
+                memberIds:
+                  type: array
+                  items:
+                    type: string
+                  description: 初始成员 ID 列表
+                metadata:
+                  type: object
+      responses:
+        '201':
+          description: 创建成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /conversations/{id}:
+    get:
+      tags: [Conversations]
+      summary: 获取对话详情
+      operationId: getConversation
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationDetailResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    patch:
+      tags: [Conversations]
+      summary: 更新对话
+      operationId: updateConversation
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title:
+                  type: string
+                description:
+                  type: string
+                metadata:
+                  type: object
+      responses:
+        '200':
+          description: 更新成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /conversations/{id}/archive:
+    post:
+      tags: [Conversations]
+      summary: 归档对话
+      operationId: archiveConversation
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 归档成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /conversations/{id}/participants:
+    post:
+      tags: [Conversations]
+      summary: 添加参与者
+      operationId: addParticipant
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [userId]
+              properties:
+                userId:
+                  type: string
+                  description: 要添加的用户 ID
+                role:
+                  type: string
+                  enum: [owner, admin, member, observer]
+                  default: member
+      responses:
+        '201':
+          description: 添加成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /conversations/{id}/participants/{userId}:
+    delete:
+      tags: [Conversations]
+      summary: 移除参与者
+      operationId: removeParticipant
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 移除成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  # ─── Messages API ──────────────────────────────────────────────
+
+  /messages/{conversationId}:
+    get:
+      tags: [Messages]
+      summary: 获取消息历史
+      description: 使用游标分页获取对话中的消息
+      operationId: getMessages
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: conversationId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: before
+          in: query
+          schema:
+            type: string
+          description: 获取此消息 ID 之前的消息
+        - name: after
+          in: query
+          schema:
+            type: string
+          description: 获取此消息 ID 之后的消息
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+            maximum: 100
+          description: 每页数量
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+    post:
+      tags: [Messages]
+      summary: 发送消息
+      description: |
+        通过 REST API 发送消息。支持多种消息类型:
+        - `text`: 纯文本
+        - `markdown`: Markdown 格式
+        - `code`: 代码块 (需指定 metadata.language)
+        - `image/file`: 文件 (需指定 metadata.fileUrl 等)
+        - `tool_call`: Agent 工具调用
+        - `tool_result`: 工具调用结果
+        - `thinking`: Agent 思考过程
+      operationId: sendMessage
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: conversationId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SendMessageRequest'
+            examples:
+              textMessage:
+                summary: 发送文本消息
+                value:
+                  type: text
+                  content: Hello, world!
+              codeMessage:
+                summary: 发送代码
+                value:
+                  type: code
+                  content: |
+                    function hello() {
+                      console.log("Hello!");
+                    }
+                  metadata:
+                    language: javascript
+              toolCall:
+                summary: Agent 工具调用
+                value:
+                  type: tool_call
+                  content: ""
+                  metadata:
+                    toolCall:
+                      callId: call_abc123
+                      toolName: search_web
+                      arguments:
+                        query: "weather in Beijing"
+      responses:
+        '201':
+          description: 发送成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /messages/{conversationId}/{messageId}:
+    patch:
+      tags: [Messages]
+      summary: 编辑消息
+      description: 只能编辑自己发送的消息
+      operationId: updateMessage
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: conversationId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: messageId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                content:
+                  type: string
+                metadata:
+                  type: object
+      responses:
+        '200':
+          description: 更新成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    delete:
+      tags: [Messages]
+      summary: 删除消息
+      description: 只能删除自己发送的消息
+      operationId: deleteMessage
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: conversationId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: messageId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 删除成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ─── Agents API ────────────────────────────────────────────────
+
+  /agents:
+    get:
+      tags: [Agents]
+      summary: 发现 Agents
+      description: 根据条件查询可用的 Agents
+      operationId: discoverAgents
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: agentType
+          in: query
+          schema:
+            $ref: '#/components/schemas/AgentType'
+          description: 按 Agent 类型过滤
+        - name: capability
+          in: query
+          schema:
+            type: string
+          description: 按能力名称过滤
+        - name: onlineOnly
+          in: query
+          schema:
+            type: boolean
+            default: false
+          description: 只返回在线的 Agents
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /agents/register:
+    post:
+      tags: [Agents]
+      summary: 注册 Agent
+      description: |
+        注册 Agent 能力卡片。需要先以 agent 角色注册用户，然后使用该用户的 Token 调用此接口。
+
+        注册后 Agent 可以:
+        - 被其他用户/Agent 发现
+        - 接收工具调用请求
+        - 参与对话
+      operationId: registerAgent
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentRegisterRequest'
+            example:
+              name: Code Assistant
+              description: A helpful coding assistant powered by GPT-4
+              agentType: assistant
+              capabilities:
+                - name: code_review
+                  description: Review code for bugs and improvements
+                  inputSchema:
+                    type: object
+                    properties:
+                      code:
+                        type: string
+                      language:
+                        type: string
+                - name: code_generation
+                  description: Generate code from natural language
+              endpoint: https://my-agent.example.com/api/invoke
+              metadata:
+                model: gpt-4
+                version: "1.0"
+      responses:
+        '201':
+          description: 注册成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentRegisterResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: 只有 agent 角色的用户可以注册
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /agents/{userId}:
+    get:
+      tags: [Agents]
+      summary: 获取 Agent 详情
+      operationId: getAgent
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Agent 的用户 ID
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentDetailResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    delete:
+      tags: [Agents]
+      summary: 注销 Agent
+      description: 只能注销自己的 Agent (admin 可以注销任何)
+      operationId: unregisterAgent
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 注销成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /agents/{userId}/heartbeat:
+    post:
+      tags: [Agents]
+      summary: Agent 心跳
+      description: |
+        Agent 定期发送心跳以报告状态。建议每 30 秒发送一次。
+
+        超过 5 分钟未发送心跳的 Agent 会被标记为 offline。
+      operationId: agentHeartbeat
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status:
+                  $ref: '#/components/schemas/AgentStatus'
+                load:
+                  type: number
+                  minimum: 0
+                  maximum: 1
+                  description: 当前负载 (0-1)
+                activeConversations:
+                  type: integer
+                  description: 当前活跃对话数
+            example:
+              status: online
+              load: 0.3
+              activeConversations: 2
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: 只能发送自己的心跳
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /agents/discover/{capability}:
+    get:
+      tags: [Agents]
+      summary: 按能力发现最佳 Agent
+      description: 根据能力名称找到最合适的 Agent (考虑在线状态和负载)
+      operationId: findBestAgent
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: capability
+          in: path
+          required: true
+          schema:
+            type: string
+          description: 能力名称
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentDetailResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: 没有找到具有该能力的 Agent
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # ─── Workspace API ─────────────────────────────────────────────
+
+  /workspace/init:
+    post:
+      tags: [Workspace]
+      summary: 初始化 Workspace
+      description: |
+        为 Workspace 创建 IM 会话，并可选地创建关联的 Agent。
+        返回用户和 Agent 的 JWT Token，用于后续通信。
+      operationId: initWorkspace
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [workspaceId, userId, userDisplayName]
+              properties:
+                workspaceId:
+                  type: string
+                  description: Workspace 唯一标识
+                userId:
+                  type: string
+                  description: 主应用 User ID
+                userDisplayName:
+                  type: string
+                  description: 用户显示名称
+                agentName:
+                  type: string
+                  description: Agent 用户名 (可选)
+                agentDisplayName:
+                  type: string
+                  description: Agent 显示名称
+                agentType:
+                  $ref: '#/components/schemas/AgentType'
+                agentCapabilities:
+                  type: array
+                  items:
+                    type: string
+                  description: Agent 能力列表
+            example:
+              workspaceId: ws-001
+              userId: user-123
+              userDisplayName: Alice
+              agentName: research-agent
+              agentDisplayName: Research Agent
+              agentType: assistant
+              agentCapabilities: [paper_search, code_review]
+      responses:
+        '201':
+          description: 初始化成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceInitResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /workspace/{workspaceId}/agents:
+    get:
+      tags: [Workspace]
+      summary: 列出 Workspace 中的 Agents
+      operationId: listWorkspaceAgents
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: workspaceId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceAgentListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+    post:
+      tags: [Workspace]
+      summary: 添加 Agent 到 Workspace
+      description: 创建新 Agent 并添加到 Workspace 会话
+      operationId: addAgentToWorkspace
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: workspaceId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [agentName, agentDisplayName]
+              properties:
+                agentName:
+                  type: string
+                agentDisplayName:
+                  type: string
+                agentType:
+                  $ref: '#/components/schemas/AgentType'
+                capabilities:
+                  type: array
+                  items:
+                    type: string
+                metadata:
+                  type: object
+      responses:
+        '201':
+          description: 添加成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentTokenResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /workspace/{workspaceId}/agents/{agentId}/token:
+    post:
+      tags: [Workspace]
+      summary: 生成 Agent Token
+      description: 为 Agent 生成新的 JWT Token
+      operationId: generateAgentToken
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: workspaceId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: agentId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentTokenResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /workspace/{workspaceId}/conversation:
+    get:
+      tags: [Workspace]
+      summary: 获取 Workspace 会话
+      operationId: getWorkspaceConversation
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: workspaceId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationDetailResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /workspace/{workspaceId}/messages:
+    get:
+      tags: [Workspace]
+      summary: 获取 Workspace 消息
+      operationId: getWorkspaceMessages
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: workspaceId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /workspace/mentions/autocomplete:
+    get:
+      tags: [Workspace]
+      summary: "@提及自动补全"
+      description: 获取 @mention 的自动补全建议
+      operationId: getMentionAutocomplete
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: conversationId
+          in: query
+          required: true
+          schema:
+            type: string
+          description: 会话 ID
+        - name: query
+          in: query
+          schema:
+            type: string
+          description: 搜索关键词
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 5
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        userId:
+                          type: string
+                        username:
+                          type: string
+                        displayName:
+                          type: string
+                        role:
+                          type: string
+                        agentType:
+                          type: string
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  # ─── Sync API (Offline-First SDK) ──────────────────────────────
+
+  /sync:
+    get:
+      tags: [Sync]
+      summary: 增量同步（轮询）
+      description: |
+        游标分页增量同步端点。返回指定游标之后的同步事件。
+        仅返回当前用户参与的对话相关事件。
+
+        **同步事件类型：**
+        - `message.new` — 新消息
+        - `message.edit` — 消息编辑
+        - `message.delete` — 消息删除
+        - `conversation.create` — 创建对话
+        - `conversation.update` — 更新对话
+        - `conversation.archive` — 归档对话
+        - `participant.add` — 添加参与者
+        - `participant.remove` — 移除参与者（移除前写入，被移除用户也能看到）
+
+        **同步流程：**
+        1. 首次连接，使用 `since=0`
+        2. 本地保存返回的 `cursor`
+        3. 下次同步使用 `since={cursor}`
+        4. 如果 `hasMore=true`，继续获取
+      operationId: sync
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: since
+          in: query
+          description: 游标（上次同步的 seq 号，默认 0）
+          schema:
+            type: integer
+            default: 0
+        - name: limit
+          in: query
+          description: 最大返回事件数（1-500）
+          schema:
+            type: integer
+            default: 100
+            minimum: 1
+            maximum: 500
+      responses:
+        '200':
+          description: 同步事件
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      events:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/SyncEvent'
+                      cursor:
+                        type: integer
+                        description: 下次同步使用此值作为 since
+                      hasMore:
+                        type: boolean
+                        description: 是否还有更多事件
+              example:
+                ok: true
+                data:
+                  events:
+                    - seq: 42
+                      type: "message.new"
+                      data:
+                        id: "msg_abc"
+                        content: "Hello!"
+                        senderId: "u_xyz"
+                        type: "text"
+                      conversationId: "conv_123"
+                      at: "2026-02-19T08:00:00.000Z"
+                    - seq: 43
+                      type: "conversation.create"
+                      data:
+                        id: "conv_456"
+                        type: "group"
+                        title: "Team"
+                        members: ["u_a", "u_b"]
+                      conversationId: "conv_456"
+                      at: "2026-02-19T08:01:00.000Z"
+                  cursor: 43
+                  hasMore: false
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /sync/stream:
+    get:
+      tags: [Sync]
+      summary: SSE 实时同步流
+      description: |
+        Server-Sent Events 端点，用于持续实时同步。
+
+        **协议流程：**
+        1. 客户端连接：`GET /api/sync/stream?token={jwt}&since={cursor}`
+        2. 服务端追赶：发送游标之后的所有事件（`event: sync`）
+        3. 服务端发送 `event: caught_up` 标记追赶完成
+        4. 实时推送：新事件通过 Redis pub/sub 推送（`event: sync`）
+        5. 心跳：每 25 秒发送 `event: heartbeat`
+
+        **SSE 事件类型：**
+        - `sync` — 同步事件数据
+        - `caught_up` — 追赶完成，进入实时模式
+        - `heartbeat` — 保活信号
+
+        认证通过 `?token=` 查询参数传递（不使用 Authorization header）。
+      operationId: syncStream
+      parameters:
+        - name: token
+          in: query
+          required: true
+          schema:
+            type: string
+          description: JWT 认证 token
+        - name: since
+          in: query
+          schema:
+            type: string
+            default: "0"
+          description: 游标（同步事件 ID），从此处恢复
+      responses:
+        '200':
+          description: SSE 事件流
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: |
+                  SSE 格式：
+                  ```
+                  event: sync
+                  id: 42
+                  data: {"seq":42,"type":"message.new","data":{...}}
+
+                  event: caught_up
+                  data: {"cursor":42}
+
+                  event: heartbeat
+                  data:
+                  ```
+        '401':
+          description: 未认证或 token 无效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+# ═══════════════════════════════════════════════════════════════════
+# Components
+# ═══════════════════════════════════════════════════════════════════
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT Token，有效期 7 天
+
+  # ─── Schemas ─────────────────────────────────────────────────────
+
+  schemas:
+    # Enums
+    UserRole:
+      type: string
+      enum: [human, agent, admin]
+      description: 用户角色
+
+    AgentType:
+      type: string
+      enum: [assistant, specialist, orchestrator, tool, bot]
+      description: |
+        Agent 类型:
+        - `assistant`: 通用 LLM Agent
+        - `specialist`: 领域专家 (代码、数学等)
+        - `orchestrator`: 编排其他 Agent 的元 Agent
+        - `tool`: 提供工具的 Agent
+        - `bot`: 简单机器人 (非 LLM)
+
+    AgentStatus:
+      type: string
+      enum: [online, busy, idle, offline]
+      description: Agent 状态
+
+    ConversationType:
+      type: string
+      enum: [direct, group, channel]
+      description: 对话类型
+
+    ConversationStatus:
+      type: string
+      enum: [active, archived, deleted]
+      description: 对话状态
+
+    ParticipantRole:
+      type: string
+      enum: [owner, admin, member, observer]
+      description: 参与者角色
+
+    MessageType:
+      type: string
+      enum: [text, markdown, code, image, file, tool_call, tool_result, system_event, thinking]
+      description: |
+        消息类型:
+        - `text`: 纯文本
+        - `markdown`: Markdown 格式
+        - `code`: 代码块
+        - `image`: 图片
+        - `file`: 文件
+        - `tool_call`: 工具调用
+        - `tool_result`: 工具结果
+        - `system_event`: 系统事件
+        - `thinking`: Agent 思考过程
+
+    MessageStatus:
+      type: string
+      enum: [sending, sent, delivered, read, failed]
+      description: 消息状态
+
+    PresenceStatus:
+      type: string
+      enum: [online, away, busy, offline]
+      description: 在线状态
+
+    # Request schemas
+    UserRegisterRequest:
+      type: object
+      required: [username, displayName]
+      properties:
+        username:
+          type: string
+          minLength: 3
+          maxLength: 100
+          pattern: ^[a-zA-Z0-9_-]+$
+          description: 用户名 (唯一)
+        displayName:
+          type: string
+          maxLength: 200
+          description: 显示名称
+        password:
+          type: string
+          minLength: 6
+          description: 密码 (可选)
+        role:
+          $ref: '#/components/schemas/UserRole'
+        agentType:
+          $ref: '#/components/schemas/AgentType'
+        avatarUrl:
+          type: string
+          format: uri
+        metadata:
+          type: object
+          description: 自定义元数据
+        userId:
+          type: string
+          description: 关联主应用 User ID
+
+    SendMessageRequest:
+      type: object
+      properties:
+        type:
+          $ref: '#/components/schemas/MessageType'
+        content:
+          type: string
+          description: 消息内容
+        metadata:
+          $ref: '#/components/schemas/MessageMetadata'
+        parentId:
+          type: string
+          description: 父消息 ID (用于回复/线程)
+
+    AgentRegisterRequest:
+      type: object
+      required: [name, description]
+      properties:
+        name:
+          type: string
+          maxLength: 200
+          description: Agent 名称
+        description:
+          type: string
+          description: Agent 描述
+        agentType:
+          $ref: '#/components/schemas/AgentType'
+        capabilities:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentCapability'
+          description: Agent 能力列表
+        endpoint:
+          type: string
+          format: uri
+          description: Agent HTTP 端点 (用于直接调用)
+        metadata:
+          type: object
+
+    # Data schemas
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+        username:
+          type: string
+        displayName:
+          type: string
+        role:
+          $ref: '#/components/schemas/UserRole'
+        agentType:
+          $ref: '#/components/schemas/AgentType'
+        avatarUrl:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+
+    Conversation:
+      type: object
+      properties:
+        id:
+          type: string
+        type:
+          $ref: '#/components/schemas/ConversationType'
+        title:
+          type: string
+        description:
+          type: string
+        status:
+          $ref: '#/components/schemas/ConversationStatus'
+        metadata:
+          type: object
+        createdById:
+          type: string
+        workspaceId:
+          type: string
+        lastMessageAt:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    Participant:
+      type: object
+      properties:
+        id:
+          type: string
+        role:
+          $ref: '#/components/schemas/ParticipantRole'
+        joinedAt:
+          type: string
+          format: date-time
+        user:
+          $ref: '#/components/schemas/User'
+
+    Message:
+      type: object
+      properties:
+        id:
+          type: string
+        conversationId:
+          type: string
+        senderId:
+          type: string
+        type:
+          $ref: '#/components/schemas/MessageType'
+        content:
+          type: string
+        metadata:
+          $ref: '#/components/schemas/MessageMetadata'
+        parentId:
+          type: string
+        status:
+          $ref: '#/components/schemas/MessageStatus'
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    MessageMetadata:
+      type: object
+      description: 消息元数据 (根据消息类型不同)
+      properties:
+        language:
+          type: string
+          description: 代码语言 (type=code 时)
+        fileName:
+          type: string
+        fileSize:
+          type: integer
+        mimeType:
+          type: string
+        fileUrl:
+          type: string
+          format: uri
+        toolCall:
+          $ref: '#/components/schemas/ToolCallPayload'
+        toolResult:
+          $ref: '#/components/schemas/ToolResultPayload'
+        systemEvent:
+          type: object
+          properties:
+            event:
+              type: string
+            data:
+              type: object
+        isStreaming:
+          type: boolean
+        streamId:
+          type: string
+        thinkingStep:
+          type: integer
+
+    ToolCallPayload:
+      type: object
+      description: 工具调用载荷
+      properties:
+        callId:
+          type: string
+          description: 调用 ID (用于关联结果)
+        toolName:
+          type: string
+          description: 工具名称
+        arguments:
+          type: object
+          description: 调用参数
+
+    ToolResultPayload:
+      type: object
+      description: 工具调用结果
+      properties:
+        callId:
+          type: string
+          description: 关联的调用 ID
+        toolName:
+          type: string
+        result:
+          description: 调用结果
+        isError:
+          type: boolean
+          description: 是否为错误
+
+    AgentCapability:
+      type: object
+      description: Agent 能力声明
+      required: [name, description]
+      properties:
+        name:
+          type: string
+          description: 能力名称
+        description:
+          type: string
+          description: 能力描述
+        version:
+          type: string
+        inputSchema:
+          type: object
+          description: 输入参数 JSON Schema
+        outputSchema:
+          type: object
+          description: 输出结果 JSON Schema
+
+    AgentCard:
+      type: object
+      description: Agent 能力卡片
+      properties:
+        id:
+          type: string
+        imUserId:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        agentType:
+          $ref: '#/components/schemas/AgentType'
+        capabilities:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentCapability'
+        protocolVersion:
+          type: string
+        endpoint:
+          type: string
+        metadata:
+          type: object
+        status:
+          $ref: '#/components/schemas/AgentStatus'
+        load:
+          type: number
+        lastHeartbeat:
+          type: string
+          format: date-time
+
+    PresenceInfo:
+      type: object
+      properties:
+        userId:
+          type: string
+        status:
+          $ref: '#/components/schemas/PresenceStatus'
+        lastSeen:
+          type: integer
+          description: Unix timestamp (ms)
+        device:
+          type: string
+
+    # Response schemas
+    SuccessResponse:
+      type: object
+      properties:
+        ok:
+          type: boolean
+          example: true
+        data:
+          type: object
+
+    ErrorResponse:
+      type: object
+      properties:
+        ok:
+          type: boolean
+          example: false
+        error:
+          type: string
+          description: 错误信息
+
+    AuthResponse:
+      type: object
+      properties:
+        ok:
+          type: boolean
+          example: true
+        data:
+          type: object
+          properties:
+            user:
+              $ref: '#/components/schemas/User'
+            token:
+              type: string
+              description: JWT Token
+
+    UserProfileResponse:
+      type: object
+      properties:
+        ok:
+          type: boolean
+          example: true
+        data:
+          allOf:
+            - $ref: '#/components/schemas/User'
+            - type: object
+              properties:
+                metadata:
+                  type: object
+
+    ConversationListResponse:
+      type: object
+      properties:
+        ok:
+          type: boolean
+          example: true
+        data:
+          type: array
+          items:
+            allOf:
+              - $ref: '#/components/schemas/Conversation'
+              - type: object
+                properties:
+                  myRole:
+                    $ref: '#/components/schemas/ParticipantRole'
+
+    ConversationResponse:
+      type: object
+      properties:
+        ok:
+          type: boolean
+          example: true
+        data:
+          $ref: '#/components/schemas/Conversation'
+
+    ConversationDetailResponse:
+      type: object
+      properties:
+        ok:
+          type: boolean
+          example: true
+        data:
+          allOf:
+            - $ref: '#/components/schemas/Conversation'
+            - type: object
+              properties:
+                participants:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/Participant'
+
+    MessageListResponse:
+      type: object
+      properties:
+        ok:
+          type: boolean
+          example: true
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Message'
+        meta:
+          type: object
+          properties:
+            total:
+              type: integer
+            pageSize:
+              type: integer
+
+    MessageResponse:
+      type: object
+      properties:
+        ok:
+          type: boolean
+          example: true
+        data:
+          $ref: '#/components/schemas/Message'
+
+    AgentListResponse:
+      type: object
+      properties:
+        ok:
+          type: boolean
+          example: true
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentCard'
+
+    AgentRegisterResponse:
+      type: object
+      properties:
+        ok:
+          type: boolean
+          example: true
+        data:
+          type: object
+          properties:
+            agentId:
+              type: string
+            userId:
+              type: string
+            protocolVersion:
+              type: string
+            card:
+              $ref: '#/components/schemas/AgentCard'
+
+    AgentDetailResponse:
+      type: object
+      properties:
+        ok:
+          type: boolean
+          example: true
+        data:
+          allOf:
+            - $ref: '#/components/schemas/AgentCard'
+            - type: object
+              properties:
+                presence:
+                  $ref: '#/components/schemas/PresenceInfo'
+
+    # Workspace responses
+    WorkspaceInitResponse:
+      type: object
+      properties:
+        ok:
+          type: boolean
+          example: true
+        data:
+          type: object
+          properties:
+            conversationId:
+              type: string
+              description: IM 会话 ID
+            user:
+              type: object
+              properties:
+                imUserId:
+                  type: string
+                  description: IM 用户 ID
+                token:
+                  type: string
+                  description: 用户 JWT Token
+            agent:
+              type: object
+              nullable: true
+              properties:
+                token:
+                  type: string
+                  description: Agent JWT Token
+                agentUserId:
+                  type: string
+                  description: Agent 用户 ID
+                conversationId:
+                  type: string
+                expiresIn:
+                  type: string
+                  example: "7d"
+
+    WorkspaceAgentListResponse:
+      type: object
+      properties:
+        ok:
+          type: boolean
+          example: true
+        data:
+          type: array
+          items:
+            type: object
+            properties:
+              userId:
+                type: string
+              username:
+                type: string
+              displayName:
+                type: string
+              agentType:
+                type: string
+              capabilities:
+                type: array
+                items:
+                  type: string
+              status:
+                $ref: '#/components/schemas/AgentStatus'
+
+    AgentTokenResponse:
+      type: object
+      properties:
+        ok:
+          type: boolean
+          example: true
+        data:
+          type: object
+          properties:
+            token:
+              type: string
+              description: JWT Token
+            agentUserId:
+              type: string
+              description: Agent 用户 ID
+            conversationId:
+              type: string
+              description: 绑定的会话 ID
+            expiresIn:
+              type: string
+              example: "7d"
+
+    SyncEvent:
+      type: object
+      description: 增量同步事件
+      properties:
+        seq:
+          type: integer
+          description: 事件序列号（全局递增，用作游标）
+        type:
+          type: string
+          enum:
+            - message.new
+            - message.edit
+            - message.delete
+            - conversation.create
+            - conversation.update
+            - conversation.archive
+            - participant.add
+            - participant.remove
+          description: 事件类型
+        data:
+          type: object
+          description: 事件数据（内容因类型而异）
+        conversationId:
+          type: string
+          description: 关联的对话 ID
+        at:
+          type: string
+          format: date-time
+          description: 事件时间
+
+    # Message routing info (enhanced)
+    MessageRoutingInfo:
+      type: object
+      description: 消息路由信息 (@提及解析结果)
+      properties:
+        mode:
+          type: string
+          enum: [explicit, capability, broadcast]
+          description: |
+            路由模式:
+            - explicit: 显式 @提及
+            - capability: 基于能力匹配
+            - broadcast: 广播
+        targets:
+          type: array
+          items:
+            type: object
+            properties:
+              userId:
+                type: string
+              username:
+                type: string
+              displayName:
+                type: string
+
+  # ─── Responses ───────────────────────────────────────────────────
+
+  responses:
+    BadRequest:
+      description: 请求参数错误
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            ok: false
+            error: "Missing required field: username"
+
+    Unauthorized:
+      description: 未认证或 Token 无效
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            ok: false
+            error: "Invalid or expired token"
+
+    Forbidden:
+      description: 无权限
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            ok: false
+            error: "Not a participant"
+
+    NotFound:
+      description: 资源不存在
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            ok: false
+            error: "User not found"

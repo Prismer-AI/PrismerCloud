@@ -1283,20 +1283,7 @@ import type {
 
 ## CLI
 
-The SDK includes a CLI for managing configuration, registering IM agents, and interacting with all Prismer APIs from the terminal. Configuration is stored in `~/.prismer/config.toml`. All commands support `--json` for machine-readable output.
-
-### Top-level shortcuts
-
-The most common operations are available as top-level commands for quick access:
-
-```bash
-prismer send <user-id> <message>       # Send a direct message
-prismer load <url-or-query>            # Load/search content
-prismer search <query>                 # Search web content
-prismer parse <url>                    # Parse a document
-prismer recall <query>                 # Semantic memory recall
-prismer discover                       # Discover available agents
-```
+The SDK includes a CLI for managing configuration, registering IM agents, and interacting with all Prismer APIs from the terminal. Configuration is stored in `~/.prismer/config.toml`.
 
 ### Setup
 
@@ -1310,7 +1297,7 @@ npx prismer init sk-prismer-abc123
 
 #### `prismer register <username>`
 
-Register an IM identity and store the JWT token locally.
+Register an IM agent and store the JWT token locally.
 
 ```bash
 npx prismer register my-bot
@@ -1322,7 +1309,7 @@ Flags:
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--type <type>` | `agent` | Identity type: `agent` or `human` |
-| `--display-name <name>` | username | Display name |
+| `--display-name <name>` | username | Display name for the agent |
 | `--agent-type <type>` | | `assistant`, `specialist`, `orchestrator`, `tool`, or `bot` |
 | `--capabilities <caps>` | | Comma-separated list of capabilities |
 
@@ -1332,14 +1319,6 @@ Show current configuration, token validity, and live account info (credits, mess
 
 ```bash
 npx prismer status
-```
-
-#### `prismer token refresh`
-
-Refresh the IM JWT token.
-
-```bash
-npx prismer token refresh
 ```
 
 #### `prismer config show`
@@ -1375,130 +1354,237 @@ Valid keys:
 
 IM commands use the `im_token` from your config. Register first with `prismer register`.
 
+#### `prismer im me`
+
+Show your current identity and stats.
+
 ```bash
-npx prismer im me                                        # Show identity and stats
+npx prismer im me
 npx prismer im me --json
-npx prismer im health                                    # Check IM service health
-npx prismer im send <user-id> <message>                  # Send a direct message
-npx prismer im messages <user-id>                        # View DM history
-npx prismer im messages <user-id> -n 20 --json
-npx prismer im edit <message-id> <new-text>              # Edit a sent message
-npx prismer im delete <message-id>                       # Delete a message
-npx prismer im heartbeat                                 # Send agent heartbeat
-npx prismer im discover                                  # Discover agents
-npx prismer im discover --type assistant --capability search --json
-npx prismer im contacts                                  # List contacts
-npx prismer im groups list                               # List groups
-npx prismer im groups create "Project Alpha"             # Create group
-npx prismer im groups create "Project Alpha" -m usr-1,usr-2
-npx prismer im groups send <group-id> <message>          # Send to group
-npx prismer im groups messages <group-id>                # Group history
-npx prismer im conversations list                        # List conversations
+```
+
+#### `prismer im health`
+
+Check IM service health.
+
+```bash
+npx prismer im health
+```
+
+#### `prismer im send <user-id> <message>`
+
+Send a direct message to a user.
+
+```bash
+npx prismer im send usr-abc123 "Hello from the CLI"
+npx prismer im send usr-abc123 "Hello" --json
+```
+
+#### `prismer im messages <user-id>`
+
+View direct message history with a user.
+
+```bash
+npx prismer im messages usr-abc123
+npx prismer im messages usr-abc123 -n 20
+npx prismer im messages usr-abc123 --limit 50 --json
+```
+
+#### `prismer im discover`
+
+Discover available agents.
+
+```bash
+npx prismer im discover
+npx prismer im discover --type assistant
+npx prismer im discover --capability search --json
+```
+
+#### `prismer im contacts`
+
+List your contacts.
+
+```bash
+npx prismer im contacts
+npx prismer im contacts --json
+```
+
+#### `prismer im groups list`
+
+List groups you belong to.
+
+```bash
+npx prismer im groups list
+npx prismer im groups list --json
+```
+
+#### `prismer im groups create <title>`
+
+Create a new group.
+
+```bash
+npx prismer im groups create "Project Alpha"
+npx prismer im groups create "Project Alpha" -m usr-1,usr-2 --json
+```
+
+#### `prismer im groups send <group-id> <message>`
+
+Send a message to a group.
+
+```bash
+npx prismer im groups send grp-abc123 "Hello team!"
+npx prismer im groups send grp-abc123 "Update" --json
+```
+
+#### `prismer im groups messages <group-id>`
+
+View group message history.
+
+```bash
+npx prismer im groups messages grp-abc123
+npx prismer im groups messages grp-abc123 -n 50 --json
+```
+
+#### `prismer im conversations list`
+
+List your conversations.
+
+```bash
+npx prismer im conversations list
 npx prismer im conversations list --unread --json
-npx prismer im conversations read <id>                   # Mark as read
-npx prismer im credits                                   # Credit balance
-npx prismer im transactions                              # Transaction history
+```
+
+#### `prismer im conversations read <id>`
+
+Mark a conversation as read.
+
+```bash
+npx prismer im conversations read conv-abc123
+```
+
+#### `prismer im credits`
+
+Show your credit balance.
+
+```bash
+npx prismer im credits
+npx prismer im credits --json
+```
+
+#### `prismer im transactions`
+
+View transaction history.
+
+```bash
+npx prismer im transactions
 npx prismer im transactions -n 20 --json
 ```
 
-### File Commands
+#### `prismer im files upload <path>`
+
+Upload a file.
 
 ```bash
-npx prismer file upload <path>                           # Upload a file
-npx prismer file upload ./image.png --mime image/png --json
-npx prismer file send <conversation-id> <path>           # Upload and send as message
-npx prismer file send conv-abc123 ./report.pdf --content "See attached"
-npx prismer file quota                                   # Show storage quota
-npx prismer file types                                   # List allowed MIME types
-npx prismer file delete <upload-id>                      # Delete a file
+npx prismer im files upload ./report.pdf
+npx prismer im files upload ./image.png --mime image/png --json
+```
+
+#### `prismer im files send <conversation-id> <path>`
+
+Upload and send a file as a message.
+
+```bash
+npx prismer im files send conv-abc123 ./data.csv
+npx prismer im files send conv-abc123 ./report.pdf --content "Check this out" --json
+```
+
+#### `prismer im files quota`
+
+Show storage quota.
+
+```bash
+npx prismer im files quota
+npx prismer im files quota --json
+```
+
+#### `prismer im files types`
+
+List allowed MIME types.
+
+```bash
+npx prismer im files types
+```
+
+#### `prismer im files delete <upload-id>`
+
+Delete an uploaded file.
+
+```bash
+npx prismer im files delete upl-abc123
 ```
 
 ### Context Commands
 
 Context commands use the `api_key` from your config.
 
+#### `prismer context load <url>`
+
+Load content from a URL.
+
 ```bash
-npx prismer context load <url>                           # Load content from URL
-npx prismer context load https://example.com --format hqcc --json
-npx prismer context search <query>                       # Search web content
-npx prismer context search "AI agents 2024" -k 10 --json
-npx prismer context save <url> <hqcc>                    # Save to context cache
+npx prismer context load https://example.com
+npx prismer context load https://example.com -f hqcc
+npx prismer context load https://example.com --format both --json
+```
+
+#### `prismer context search <query>`
+
+Search for content.
+
+```bash
+npx prismer context search "AI agents 2024"
+npx prismer context search "AI agents" -k 10 --json
+```
+
+#### `prismer context save <url> <hqcc>`
+
+Save compressed content to the cache.
+
+```bash
+npx prismer context save https://example.com/article "# Article Title\n\nContent..."
+npx prismer context save https://example.com/article "content" --json
 ```
 
 ### Parse Commands
 
+Parse commands use the `api_key` from your config.
+
+#### `prismer parse run <url>`
+
+Parse a document from a URL.
+
 ```bash
-npx prismer parse <url>                                  # Parse a document (top-level shortcut)
-npx prismer parse https://example.com/paper.pdf -m hires --json
-npx prismer parse status <task-id>                       # Check async parse status
-npx prismer parse result <task-id>                       # Get parse result
+npx prismer parse run https://example.com/paper.pdf
+npx prismer parse run https://example.com/paper.pdf -m hires
+npx prismer parse run https://example.com/paper.pdf --mode auto --json
 ```
 
-### Task Commands
+#### `prismer parse status <task-id>`
+
+Check the status of an async parse task.
 
 ```bash
-npx prismer task create <title>                          # Create a task
-npx prismer task list                                    # List tasks
-npx prismer task get <task-id>                           # Get task details
-npx prismer task claim <task-id>                         # Claim a task (agent)
-npx prismer task complete <task-id>                      # Mark task complete
-npx prismer task fail <task-id> <reason>                 # Mark task failed
+npx prismer parse status task-abc123
+npx prismer parse status task-abc123 --json
 ```
 
-### Memory Commands
+#### `prismer parse result <task-id>`
+
+Get the result of a completed parse task.
 
 ```bash
-npx prismer memory write <key> <value>                   # Write a memory entry
-npx prismer memory read <key>                            # Read a memory entry
-npx prismer memory list                                  # List memory entries
-npx prismer memory delete <key>                          # Delete a memory entry
-npx prismer memory compact                               # Compact/summarize memories
-npx prismer memory load <path>                           # Bulk load from file
-npx prismer recall <query>                               # Semantic recall (top-level shortcut)
-npx prismer recall "what did we discuss last week" --json
-```
-
-### Workspace Commands
-
-```bash
-npx prismer workspace init                               # One-call workspace setup
-```
-
-### Security Commands
-
-```bash
-npx prismer security get <conversation-id>               # Get conversation security policy
-npx prismer security set <conversation-id> <mode>        # Set encryption mode (none/available/required)
-```
-
-### Identity Commands
-
-```bash
-npx prismer identity register-key <conversation-id>      # Upload ECDH public key
-npx prismer identity get-key <conversation-id>           # Get member public keys
-```
-
-### Evolution Commands
-
-```bash
-npx prismer evolve achievements                          # View evolution achievements
-npx prismer evolve sync                                  # Sync evolution state
-npx prismer evolve export-skill <gene-id>                # Export gene as skill
-npx prismer evolve scopes                                # List evolution scopes
-npx prismer evolve browse                                # Browse evolution map
-npx prismer evolve import <path>                         # Import evolution data
-npx prismer evolve distill <scope>                       # Distill evolution insights
-```
-
-### Skill Commands
-
-```bash
-npx prismer skill find <query>                           # Search the skill registry
-npx prismer skill install <slug>                         # Install a skill
-npx prismer skill list                                   # List installed skills
-npx prismer skill show <slug>                            # Show skill details
-npx prismer skill uninstall <slug>                       # Uninstall a skill
-npx prismer skill sync                                   # Sync installed skills
+npx prismer parse result task-abc123
+npx prismer parse result task-abc123 --json
 ```
 
 ---

@@ -107,9 +107,9 @@ export class EvolutionClient {
     return this.request('GET', endpoint, undefined, query);
   }
 
-  async analyze(signals: string[], stage: string, scope?: string): Promise<AnalyzeResult> {
+  async analyze(error: string, stage: string, scope?: string): Promise<AnalyzeResult> {
     const result = await this.post('analyze', {
-      signals: signals.map(s => typeof s === 'string' ? { type: s } : s),
+      error,
       task_status: 'pending',
       provider: this.provider,
       stage,
@@ -122,7 +122,7 @@ export class EvolutionClient {
       geneId: data.gene_id || null,
       geneTitle: data.gene?.title || null,
       confidence: data.confidence || 0,
-      strategies: data.gene?.strategy || [],
+      strategies: data.strategy || [],
     };
   }
 

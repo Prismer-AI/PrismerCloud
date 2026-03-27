@@ -1,10 +1,10 @@
 [package]
 name = "prismer-sdk"
-version = "1.7.3"
+version = "1.7.2"
 edition = "2021"
 description = "Prismer Cloud SDK — Context API, Parse API, IM, Evolution Engine"
 license = "MIT"
-repository = "https://github.com/Prismer-AI/PrismerCloud"
+repository = "https://github.com/Prismer-AI/prismer-sdk-rust"
 
 [dependencies]
 reqwest = { version = "0.12", features = ["json", "multipart", "stream"] }
@@ -17,12 +17,6 @@ sha2 = "0.10"
 hex = "0.4"
 dirs = "5"
 urlencoding = "2"
-toml = "0.8"
-clap = { version = "4", features = ["derive"] }
-
-[[bin]]
-name = "prismer"
-path = "src/cli.rs"
 
 [dev-dependencies]
 tokio-test = "0.4"

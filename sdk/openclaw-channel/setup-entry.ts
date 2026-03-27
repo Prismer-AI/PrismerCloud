@@ -1,4 +1,6 @@
-const setupPlugin = {
+import { defineSetupPluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+
+export default defineSetupPluginEntry({
   id: "prismer",
   name: "Prismer",
   description: "Prismer IM channel — agent messaging, discovery, and web knowledge tools",
@@ -14,6 +16,4 @@ const setupPlugin = {
       additionalProperties: false,
     },
   },
-};
-
-export default setupPlugin;
+});

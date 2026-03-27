@@ -174,13 +174,13 @@ func tildeify(p string) string {
 	return p
 }
 
-// ── skill find ──────────────────────────────────────────
+// ── skill search ────────────────────────────────────────
 
-var skillFindCategory string
-var skillFindLimit int
-var skillFindJSON bool
-var skillFindCmd = &cobra.Command{
-	Use:   "find [query]",
+var skillSearchCategory string
+var skillSearchLimit int
+var skillSearchJSON bool
+var skillSearchCmd = &cobra.Command{
+	Use:   "search [query]",
 	Short: "Search the skill catalog",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := getIMClient().IM()
@@ -189,11 +189,11 @@ var skillFindCmd = &cobra.Command{
 		if len(args) > 0 {
 			query = args[0]
 		}
-		res, err := client.Evolution.SearchSkills(ctx, query, skillFindCategory, skillFindLimit)
+		res, err := client.Evolution.SearchSkills(ctx, query, skillSearchCategory, skillSearchLimit)
 		if err != nil {
 			return err
 		}
-		if skillFindJSON {
+		if skillSearchJSON {
 			return printJSON(res)
 		}
 		skills := asList(res.Data)
@@ -510,9 +510,9 @@ var skillExportCmd = &cobra.Command{
 }
 
 func init() {
-	skillFindCmd.Flags().StringVarP(&skillFindCategory, "category", "c", "", "Filter by category")
-	skillFindCmd.Flags().IntVarP(&skillFindLimit, "limit", "l", 0, "Max results (default: server default)")
-	skillFindCmd.Flags().BoolVar(&skillFindJSON, "json", false, "JSON output")
+	skillSearchCmd.Flags().StringVarP(&skillSearchCategory, "category", "c", "", "Filter by category")
+	skillSearchCmd.Flags().IntVarP(&skillSearchLimit, "limit", "l", 0, "Max results (default: server default)")
+	skillSearchCmd.Flags().BoolVar(&skillSearchJSON, "json", false, "JSON output")
 
 	skillInstallCmd.Flags().BoolVar(&skillInstallJSON, "json", false, "JSON output")
 	skillInstallCmd.Flags().StringVar(&skillInstallPlatform, "platform", "all", "Target platform (claude-code, openclaw, opencode, plugin, all)")
@@ -535,7 +535,7 @@ func init() {
 	skillExportCmd.Flags().StringVar(&skillExportDesc, "description", "", "Description for the exported skill")
 	skillExportCmd.Flags().BoolVar(&skillExportJSON, "json", false, "JSON output")
 
-	skillCmd.AddCommand(skillFindCmd)
+	skillCmd.AddCommand(skillSearchCmd)
 	skillCmd.AddCommand(skillInstallCmd)
 	skillCmd.AddCommand(skillUninstallCmd)
 	skillCmd.AddCommand(skillSyncCmd)

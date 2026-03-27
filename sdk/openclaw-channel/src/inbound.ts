@@ -1,10 +1,6 @@
-import type { ChannelGatewayContext } from "openclaw/plugin-sdk";
+import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel";
 import { prismerFetch } from "./api-client.js";
 import type { CoreConfig, ResolvedPrismerAccount } from "./types.js";
-
-// WebSocket reconnect config: exponential backoff with jitter
-const WS_RECONNECT_BASE_MS = 1000;
-const WS_RECONNECT_MAX_MS = 30000;
 
 /**
  * Register the agent on Prismer IM and start a WebSocket connection
@@ -25,34 +21,30 @@ export async function startPrismerGateway(
     `[${account.accountId}] registering agent on Prismer IM (${account.baseUrl})`,
   );
 
-  // Self-register the agent — must succeed for gateway to work
-  let userId: string;
-  let token: string;
+  // Self-register the agent
+  let userId: string | undefined;
+  let token: string | undefined;
   try {
     const regResult = (await prismerFetch(account.apiKey, "/api/im/register", {
       method: "POST",
       body: {
         username: account.agentName,
         displayName: account.agentName,
-        type: "agent",
+        isAgent: true,
       },
       baseUrl: account.baseUrl,
     })) as Record<string, unknown>;
 
-    if (!regResult.ok) {
-      throw new Error(`Registration failed: ${JSON.stringify(regResult.error || regResult)}`);
+    if (regResult.ok) {
+      const data = regResult.data as Record<string, unknown> | undefined;
+      userId = data?.userId as string | undefined;
+      token = data?.token as string | undefined;
+      ctx.log?.info(`[${account.accountId}] registered as user ${userId}`);
     }
-    const data = regResult.data as Record<string, unknown>;
-    userId = (data.imUserId ?? data.userId) as string;
-    token = data.token as string;
-    if (!userId || !token) {
-      throw new Error(`Registration returned incomplete data (userId=${userId}, token=${!!token})`);
-    }
-    ctx.log?.info(`[${account.accountId}] registered as user ${userId}`);
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    ctx.log?.error(`[${account.accountId}] registration failed: ${msg}`);
-    throw new Error(`Prismer gateway cannot start: agent registration failed — ${msg}`);
+    ctx.log?.warn(
+      `[${account.accountId}] registration warning: ${err instanceof Error ? err.message : String(err)}`,
+    );
   }
 
   // Register agent capabilities
@@ -81,18 +73,10 @@ export async function startPrismerGateway(
   let ws: WebSocket | null = null;
   let aborted = false;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  let reconnectAttempt = 0;
 
   if (token) {
     const wsUrl = account.baseUrl.replace(/^http/, "ws").replace(/\/$/, "");
     const wsEndpoint = `${wsUrl}/api/im/ws?token=${token}`;
-
-    /** Compute delay with exponential backoff + jitter */
-    const getReconnectDelay = () => {
-      const exp = Math.min(WS_RECONNECT_BASE_MS * 2 ** reconnectAttempt, WS_RECONNECT_MAX_MS);
-      const jitter = Math.random() * exp * 0.3; // ±30% jitter
-      return Math.floor(exp + jitter);
-    };
 
     const connect = () => {
       if (aborted) return;
@@ -101,7 +85,6 @@ export async function startPrismerGateway(
         ws = new WebSocket(wsEndpoint);
 
         ws.onopen = () => {
-          reconnectAttempt = 0; // Reset backoff on successful connect
           ctx.log?.info(`[${account.accountId}] WebSocket connected`);
           ctx.setStatus({
             accountId: account.accountId,
@@ -115,7 +98,7 @@ export async function startPrismerGateway(
           try {
             const data = JSON.parse(String(event.data));
             if (data.type === "message" && data.payload) {
-              handleInboundMessage(ctx, account, userId, data.payload);
+              handleInboundMessage(ctx, account, userId!, data.payload);
             }
           } catch (err) {
             ctx.log?.error(
@@ -133,10 +116,7 @@ export async function startPrismerGateway(
             lastStopAt: Date.now(),
           });
           if (!aborted) {
-            const delay = getReconnectDelay();
-            reconnectAttempt++;
-            ctx.log?.info(`[${account.accountId}] reconnecting in ${delay}ms (attempt ${reconnectAttempt})`);
-            reconnectTimer = setTimeout(connect, delay);
+            reconnectTimer = setTimeout(connect, 5000);
           }
         };
 
@@ -148,9 +128,7 @@ export async function startPrismerGateway(
           `[${account.accountId}] WebSocket connect error: ${err instanceof Error ? err.message : String(err)}`,
         );
         if (!aborted) {
-          const delay = getReconnectDelay();
-          reconnectAttempt++;
-          reconnectTimer = setTimeout(connect, delay);
+          reconnectTimer = setTimeout(connect, 5000);
         }
       }
     };
@@ -192,13 +170,10 @@ async function handleInboundMessage(
   const senderName = (msg.senderName as string) || senderId;
   const conversationId = msg.conversationId as string;
 
-  // Evolution suggest: check if message contains error signals → inject recommendation.
-  // NOTE: Outcome recording (success/failure) is handled by the agent via the
-  // prismer_evolve_record tool, which has full conversation context and avoids
-  // false positives from regex-based heuristics on chat messages.
-  const ERROR_RE = /error|fail|timeout|crash|exception|denied|refused|oom|panic/i;
+  // Evolution suggest: check if message contains error signals → inject recommendation
   let evolutionHint = '';
   try {
+    const ERROR_RE = /error|fail|timeout|crash|exception|denied|refused|oom|panic/i;
     if (ERROR_RE.test(content)) {
       const signals = [];
       if (/timeout/i.test(content)) signals.push({ type: 'error:timeout' });

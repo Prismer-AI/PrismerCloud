@@ -1,0 +1,73 @@
+services:
+  prismercloud:
+    build: .
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      - NODE_ENV=production
+      # --- Self-host mode ---
+      - NACOS_DISABLED=true
+      - JWT_SECRET=${JWT_SECRET:-change-me-in-production}
+      # --- Auth ---
+      - FF_AUTH_LOCAL=true
+      - SKIP_EMAIL_VERIFICATION=true
+      - INIT_ADMIN_EMAIL=${INIT_ADMIN_EMAIL:-admin@localhost}
+      - INIT_ADMIN_PASSWORD=${INIT_ADMIN_PASSWORD:-admin123}
+      # --- Feature Flags (all local) ---
+      - FF_USAGE_RECORD_LOCAL=true
+      - FF_ACTIVITIES_LOCAL=true
+      - FF_DASHBOARD_STATS_LOCAL=true
+      - FF_USER_CREDITS_LOCAL=true
+      - FF_API_KEYS_LOCAL=true
+      - FF_CONTEXT_CACHE_LOCAL=true
+      - FF_NOTIFICATIONS_LOCAL=true
+      - UNLIMITED_CREDITS=true
+      # --- Billing (optional, requires Stripe) ---
+      - FF_BILLING_LOCAL=${FF_BILLING_LOCAL:-false}
+      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY:-}
+      - STRIPE_PUBLISHABLE_KEY=${STRIPE_PUBLISHABLE_KEY:-}
+      # --- IM Server ---
+      - IM_SERVER_ENABLED=true
+      - DATABASE_URL=mysql://prismer:prismer@mysql:3306/prismer_cloud
+      # --- MySQL (for db.ts connection pool) ---
+      - REMOTE_MYSQL_HOST=mysql
+      - REMOTE_MYSQL_PORT=3306
+      - REMOTE_MYSQL_USER=prismer
+      - REMOTE_MYSQL_PASSWORD=prismer
+      - REMOTE_MYSQL_DATABASE=prismer_cloud
+      # --- External APIs (optional) ---
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_API_BASE_URL=${OPENAI_API_BASE_URL:-https://api.openai.com/v1}
+      - DEFAULT_MODEL=${DEFAULT_MODEL:-gpt-4o-mini}
+      - EXASEARCH_API_KEY=${EXASEARCH_API_KEY:-}
+      # --- OAuth (optional) ---
+      - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID:-}
+      - GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET:-}
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
+    depends_on:
+      mysql:
+        condition: service_healthy
+    restart: unless-stopped
+
+  mysql:
+    image: mysql:8.0
+    environment:
+      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD:-rootpass}
+      - MYSQL_DATABASE=prismer_cloud
+      - MYSQL_USER=prismer
+      - MYSQL_PASSWORD=prismer
+    ports:
+      - "${MYSQL_PORT:-3306}:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./scripts/sql:/docker-entrypoint-initdb.d/pc
+      - ./src/im/sql:/docker-entrypoint-initdb.d/im
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  mysql_data:

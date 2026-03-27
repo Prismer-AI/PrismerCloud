@@ -1,37 +1,21 @@
 {
   "hooks": {
-    "PostToolUseFailure": [
+    "on_tool_error": [
       {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "prismer evolve report --error \"$ARGUMENTS\" --status failed --provider claude-code --stage bash --severity high 2>/dev/null || true",
-            "timeout": 5000
-          }
-        ]
+        "command": "prismer evolve report --error \"$ERROR\" --task \"$TASK\" --status failed --provider claude-code --stage \"$TOOL\" --severity high 2>/dev/null || true",
+        "timeout": 5000
       }
     ],
-    "Stop": [
+    "on_task_complete": [
       {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "prismer evolve report --status success --provider claude-code --stage task --score 0.9 2>/dev/null || true",
-            "timeout": 5000
-          }
-        ]
+        "command": "prismer evolve report --task \"$TASK\" --status success --provider claude-code --stage task --score 0.9 2>/dev/null || true",
+        "timeout": 5000
       }
     ],
-    "SubagentStop": [
+    "on_subagent_error": [
       {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "prismer evolve report --status success --provider claude-code --stage subagent 2>/dev/null || true",
-            "timeout": 5000
-          }
-        ]
+        "command": "prismer evolve report --error \"$ERROR\" --task \"$TASK\" --status failed --provider claude-code --stage subagent --severity medium 2>/dev/null || true",
+        "timeout": 5000
       }
     ]
   }

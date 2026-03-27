@@ -107,10 +107,6 @@ class EvolutionCache:
 
         self._cursor = pulled.get("cursor", self._cursor)
 
-    def load_delta(self, delta: Dict[str, Any]) -> None:
-        """Alias for apply_delta (API parity)."""
-        self.apply_delta(delta)
-
     def select_gene(self, signals: List[SignalTag]) -> GeneSelectionResult:
         """Select best gene locally using Thompson Sampling — pure CPU, <1ms."""
         if not self._genes:

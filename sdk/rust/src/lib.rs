@@ -22,10 +22,6 @@ pub mod evolution_cache;
 pub mod evolution_runtime;
 pub mod signal_rules;
 pub mod webhook;
-pub mod memory;
-pub mod tasks;
-pub mod identity;
-pub mod files;
 
 use reqwest::Client as HttpClient;
 
@@ -66,28 +62,8 @@ impl PrismerClient {
         evolution::EvolutionClient { client: self }
     }
 
-    /// Get Memory API client.
-    pub fn memory(&self) -> memory::MemoryClient<'_> {
-        memory::MemoryClient { client: self }
-    }
-
-    /// Get Tasks API client.
-    pub fn tasks(&self) -> tasks::TasksClient<'_> {
-        tasks::TasksClient { client: self }
-    }
-
-    /// Get Identity API client.
-    pub fn identity(&self) -> identity::IdentityClient<'_> {
-        identity::IdentityClient { client: self }
-    }
-
-    /// Get Files API client.
-    pub fn files(&self) -> files::FilesClient<'_> {
-        files::FilesClient { client: self }
-    }
-
-    /// Make an authenticated request. Exposed for CLI and advanced usage.
-    pub async fn request<T: serde::de::DeserializeOwned>(
+    /// Internal: make authenticated request.
+    pub(crate) async fn request<T: serde::de::DeserializeOwned>(
         &self,
         method: reqwest::Method,
         path: &str,
