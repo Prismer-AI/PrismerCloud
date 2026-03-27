@@ -20,6 +20,8 @@
     "test:all:local": "TEST_ENV=local npx tsx scripts/test-all-apis.ts",
     "test:all:test": "TEST_ENV=test npx tsx scripts/test-all-apis.ts",
     "test:all:prod": "TEST_ENV=prod npx tsx scripts/test-all-apis.ts",
+    "test:e2e": "npx tsx scripts/e2e-self-host.ts",
+    "test:e2e:no-docker": "npx tsx scripts/e2e-self-host.ts --no-docker",
     "format": "prettier --write \"src/**/*.{ts,tsx}\"",
     "check": "eslint && tsc --noEmit",
     "circular": "madge --circular --extensions ts,tsx src/",
