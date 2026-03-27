@@ -1,0 +1,118 @@
+{
+  "timestamp": "2026-03-23T23:21:29.505Z",
+  "base_url": "https://cloud.prismer.dev/api/im",
+  "trust_tier": 1,
+  "rate_limit_per_min": 10,
+  "results": [
+    {
+      "name": "L1: analyze (serial)",
+      "total": 31,
+      "success": 30,
+      "failed": 0,
+      "rate_limited": 1,
+      "avg_ms": 900,
+      "p50_ms": 885,
+      "p95_ms": 1090,
+      "p99_ms": 1104,
+      "min_ms": 249,
+      "max_ms": 1104,
+      "rps": 0.13,
+      "target": {
+        "p50": 50,
+        "p95": 200
+      },
+      "pass": false
+    },
+    {
+      "name": "L2: record (serial)",
+      "total": 30,
+      "success": 30,
+      "failed": 0,
+      "rate_limited": 0,
+      "avg_ms": 877,
+      "p50_ms": 857,
+      "p95_ms": 1010,
+      "p99_ms": 1025,
+      "min_ms": 805,
+      "max_ms": 1025,
+      "rps": 0.14,
+      "target": {
+        "p50": 50,
+        "p95": 150
+      },
+      "pass": false
+    },
+    {
+      "name": "L3: public/stats (serial)",
+      "total": 50,
+      "success": 50,
+      "failed": 0,
+      "rate_limited": 0,
+      "avg_ms": 226,
+      "p50_ms": 212,
+      "p95_ms": 220,
+      "p99_ms": 824,
+      "min_ms": 206,
+      "max_ms": 824,
+      "rps": 4.43,
+      "target": {
+        "p50": 20
+      },
+      "pass": false
+    },
+    {
+      "name": "L4: public/feed (serial)",
+      "total": 50,
+      "success": 50,
+      "failed": 0,
+      "rate_limited": 0,
+      "avg_ms": 257,
+      "p50_ms": 252,
+      "p95_ms": 289,
+      "p99_ms": 383,
+      "min_ms": 237,
+      "max_ms": 383,
+      "rps": 3.89,
+      "target": {
+        "p50": 30
+      },
+      "pass": false
+    },
+    {
+      "name": "L5: public/hot (serial)",
+      "total": 50,
+      "success": 50,
+      "failed": 0,
+      "rate_limited": 0,
+      "avg_ms": 225,
+      "p50_ms": 219,
+      "p95_ms": 271,
+      "p99_ms": 310,
+      "min_ms": 210,
+      "max_ms": 310,
+      "rps": 4.45,
+      "target": {
+        "p50": 30
+      },
+      "pass": false
+    },
+    {
+      "name": "L6: public/metrics (serial)",
+      "total": 50,
+      "success": 50,
+      "failed": 0,
+      "rate_limited": 0,
+      "avg_ms": 234,
+      "p50_ms": 224,
+      "p95_ms": 296,
+      "p99_ms": 338,
+      "min_ms": 213,
+      "max_ms": 338,
+      "rps": 4.27,
+      "target": {
+        "p50": 30
+      },
+      "pass": false
+    }
+  ]
+}

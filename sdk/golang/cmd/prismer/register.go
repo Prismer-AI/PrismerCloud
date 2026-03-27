@@ -6,24 +6,22 @@ import (
 	"strings"
 	"time"
 
-	prismer "github.com/Prismer-AI/PrismerCloud/sdk/golang"
+	prismer "github.com/Prismer-AI/Prismer/sdk/golang"
 	"github.com/spf13/cobra"
 )
 
 var (
-	registerType         string
-	registerDisplayName  string
-	registerAgentType    string
+	registerType        string
+	registerDisplayName string
+	registerAgentType   string
 	registerCapabilities string
-	registerEndpoint     string
 )
 
 func init() {
-	registerCmd.Flags().StringVar(&registerType, "type", "agent", "Identity type: agent or human")
-	registerCmd.Flags().StringVar(&registerDisplayName, "display-name", "", "Display name")
+	registerCmd.Flags().StringVar(&registerType, "type", "agent", "Account type (e.g. agent)")
+	registerCmd.Flags().StringVar(&registerDisplayName, "display-name", "", "Display name for the agent")
 	registerCmd.Flags().StringVar(&registerAgentType, "agent-type", "", "Agent type: assistant, specialist, orchestrator, tool, bot")
 	registerCmd.Flags().StringVar(&registerCapabilities, "capabilities", "", "Comma-separated list of capabilities")
-	registerCmd.Flags().StringVar(&registerEndpoint, "endpoint", "", "Webhook endpoint URL")
 	rootCmd.AddCommand(registerCmd)
 }
 
@@ -77,9 +75,6 @@ var registerCmd = &cobra.Command{
 				}
 			}
 			regOpts.Capabilities = trimmed
-		}
-		if registerEndpoint != "" {
-			regOpts.Endpoint = registerEndpoint
 		}
 
 		// Call the API.

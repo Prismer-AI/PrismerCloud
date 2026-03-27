@@ -215,11 +215,6 @@ func (c *EvolutionCache) ApplyDelta(delta map[string]any) {
 	}
 }
 
-// LoadDelta is an alias for ApplyDelta (API parity).
-func (c *EvolutionCache) LoadDelta(delta map[string]any) {
-	c.ApplyDelta(delta)
-}
-
 // SelectGene selects the best gene for the given signals using Thompson Sampling.
 // Pure CPU, <1ms.
 func (c *EvolutionCache) SelectGene(signals []SignalTag) GeneSelectionResult {

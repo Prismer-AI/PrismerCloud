@@ -1,0 +1,181 @@
+{
+  "benchmark": "evolution-cold-start",
+  "version": "1.2",
+  "date": "2026-03-23T16:30:00Z",
+  "environment": "test (cloud.prismer.dev)",
+  "import_results": {
+    "gstack_import": {
+      "source": "/Users/prismer/workspace/gstack",
+      "skills_found": 27,
+      "genes_created": 27,
+      "genes_published": 27,
+      "failed": 0,
+      "new_signal_types_added": 37,
+      "duration_minutes": 29
+    }
+  },
+  "state_after_import": {
+    "total_genes": 81,
+    "seed_genes": 45,
+    "user_genes": 4,
+    "imported_genes": 32,
+    "total_capsules": 104,
+    "active_agents": 244,
+    "unique_signal_types": 170,
+    "new_signal_categories": ["task:*(17)", "quality:*(14)", "capability:*(3)", "security:*(3)"]
+  },
+  "state_before_import": {
+    "total_genes": 49,
+    "seed_genes": 45,
+    "user_genes": 4,
+    "total_capsules": 23,
+    "active_agents": 166,
+    "unused_genes_pct": 91.8,
+    "unique_signal_types": 132,
+    "gene_diversity_index": 0.902,
+    "exploration_rate": 100,
+    "category_distribution": {
+      "repair": 25,
+      "optimize": 14,
+      "innovate": 10
+    },
+    "signal_category_distribution": {
+      "error": 69,
+      "perf": 20,
+      "capability": 15,
+      "task": 5,
+      "quality": 5,
+      "security": 4,
+      "cost": 2,
+      "other": 12
+    }
+  },
+  "selectGene_tests": {
+    "summary": {
+      "total_tests": 6,
+      "apply_gene_exact": 1,
+      "apply_gene_prefix_good": 0,
+      "apply_gene_prefix_bad": 3,
+      "create_suggested": 2,
+      "effective_hit_rate": 0.167,
+      "note": "effective_hit_rate counts only exact matches that recommend a relevant gene"
+    },
+    "results": [
+      {
+        "signal": "error:timeout",
+        "action": "apply_gene",
+        "gene_id": "seed_innovate_task_decompose_v1",
+        "match_layer": "exact",
+        "confidence": 0.3,
+        "coverage_score": 1.0,
+        "quality": "good",
+        "alternatives_count": 3,
+        "note": "Correct — gene has error:timeout in signals_match"
+      },
+      {
+        "signal": "error:429",
+        "action": "apply_gene",
+        "gene_id": "seed_innovate_task_decompose_v1_abuf7i",
+        "match_layer": "prefix",
+        "confidence": 1.0,
+        "coverage_score": 0.4,
+        "quality": "bad",
+        "bug": "BUG-1: exact match gene (Rate Limit Backoff, rankScore=0.475) ranked below prefix match (Task Decomposition, rankScore=0.507) due to confidence=0 vs 1.0"
+      },
+      {
+        "signal": "error:memory_leak",
+        "action": "apply_gene",
+        "gene_id": "seed_innovate_task_decompose_v1",
+        "match_layer": "prefix",
+        "confidence": 0.3,
+        "coverage_score": 0.4,
+        "quality": "bad",
+        "note": "Prefix match only — Task Decomposition is irrelevant to memory leaks"
+      },
+      {
+        "signal": "error:graphql_schema_drift",
+        "action": "apply_gene",
+        "gene_id": "seed_innovate_task_decompose_v1_tvrwee",
+        "match_layer": "prefix",
+        "confidence": 1.0,
+        "coverage_score": 0.4,
+        "quality": "bad",
+        "note": "Prefix match only — Task Decomposition is irrelevant to schema drift"
+      },
+      {
+        "signal": "workflow:approval_stuck",
+        "action": "create_suggested",
+        "gene_id": null,
+        "match_layer": "none",
+        "confidence": 0,
+        "coverage_score": 0,
+        "quality": "n/a",
+        "suggestion_title": "Approval Stuck Strategy"
+      },
+      {
+        "signal": "infra:dns_propagation_delay",
+        "action": "create_suggested",
+        "gene_id": null,
+        "match_layer": "none",
+        "confidence": 0,
+        "coverage_score": 0,
+        "quality": "n/a",
+        "suggestion_title": "Dns Propagation Delay Strategy"
+      }
+    ]
+  },
+  "endpoint_health": {
+    "evolution_public_stats": "ok",
+    "evolution_public_hot": "ok",
+    "evolution_public_feed": "ok",
+    "evolution_public_genes": "ok",
+    "evolution_public_unmatched": "ok",
+    "evolution_public_metrics": "ok",
+    "evolution_metrics": "ok",
+    "evolution_stories": "empty",
+    "evolution_map": "500_error",
+    "evolution_analyze": "ok_rate_limited_2_per_min"
+  },
+  "ab_experiment": {
+    "standard": {
+      "ssr": 1.0,
+      "rp": 0,
+      "gd": 0,
+      "er": 1.0,
+      "total_capsules": 2
+    },
+    "hypergraph": {
+      "ssr": null,
+      "rp": null,
+      "gd": null,
+      "er": null,
+      "total_capsules": 0
+    },
+    "verdict": "insufficient_data"
+  },
+  "bugs_found": [
+    {
+      "id": "BUG-1",
+      "severity": "P0",
+      "title": "selectGene rankScore 排序让 prefix match 击败 exact match",
+      "root_cause": "rankScore formula: confidence weight (0.15) amplifies genes with prior data, cold-start genes with confidence=0 always lose to generic genes",
+      "fix": "Add matchLayer bonus to rankScore, or set confidence floor=0.3 for exact matches"
+    },
+    {
+      "id": "BUG-2",
+      "severity": "P2",
+      "title": "/evolution/map endpoint 500 Internal Server Error",
+      "root_cause": "Unknown — likely Prisma query failure in getMapData()",
+      "fix": "Check server logs, add error handling to map route"
+    }
+  ],
+  "unmatched_signals": [
+    { "key": "error:unknown_integration_test_signal", "count": 5, "agents": 5 },
+    { "key": "error:nonexistent_xyz_12345", "count": 5, "agents": 5 },
+    { "key": "error:timeout|tag:api_call", "count": 4, "agents": 4 },
+    { "key": "error:totally_unknown_mvp_xyz_12345", "count": 2, "agents": 2 },
+    { "key": "test:ratelimit", "count": 1, "agents": 1 },
+    { "key": "test:probe", "count": 1, "agents": 1 },
+    { "key": "error:connection_timed_out", "count": 1, "agents": 1 }
+  ]
+}

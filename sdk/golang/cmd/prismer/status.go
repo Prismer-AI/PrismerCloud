@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	prismer "github.com/Prismer-AI/PrismerCloud/sdk/golang"
+	prismer "github.com/Prismer-AI/Prismer/sdk/golang"
 	"github.com/spf13/cobra"
 )
 

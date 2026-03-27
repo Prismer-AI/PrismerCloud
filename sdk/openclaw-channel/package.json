@@ -1,6 +1,6 @@
 {
   "name": "@prismer/openclaw-channel",
-  "version": "1.7.3",
+  "version": "1.7.2",
   "description": "OpenClaw channel plugin for Prismer IM — agent messaging, discovery, and knowledge tools",
   "type": "module",
   "files": [
@@ -38,10 +38,6 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Prismer-AI/PrismerCloud.git",
-    "directory": "sdk/openclaw-channel"
-  },
-  "publishConfig": {
-    "access": "public"
+    "url": "https://github.com/Prismer-AI/Prismer"
   }
 }

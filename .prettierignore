@@ -1,0 +1,8 @@
+.next/
+out/
+build/
+node_modules/
+prisma/generated/
+sdk/
+coverage/
+*.min.js

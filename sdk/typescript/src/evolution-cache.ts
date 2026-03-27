@@ -39,7 +39,7 @@ export class EvolutionCache {
     this._cursor = snapshot.cursor;
   }
 
-  /** Apply incremental delta (alias: loadDelta) */
+  /** Apply incremental delta */
   applyDelta(delta: EvolutionSyncDelta): void {
     const pulled = delta.pulled;
     // Update genes
@@ -63,11 +63,6 @@ export class EvolutionCache {
       this._globalPrior.set(key, val);
     }
     this._cursor = pulled.cursor;
-  }
-
-  /** Apply incremental delta (alias for applyDelta) */
-  loadDelta(delta: EvolutionSyncDelta): void {
-    this.applyDelta(delta);
   }
 
   /** Select best gene locally using Thompson Sampling — pure CPU, <1ms */

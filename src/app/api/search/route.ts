@@ -1,0 +1,112 @@
+import { NextRequest, NextResponse } from 'next/server';
+import Exa from 'exa-js';
+import { ensureNacosConfig } from '@/lib/nacos-config';
+import { metrics } from '@/lib/metrics';
+
+// Initialize Nacos config on module load (singleton pattern)
+let nacosInitialized = false;
+const initNacos = async () => {
+  if (!nacosInitialized) {
+    await ensureNacosConfig();
+    nacosInitialized = true;
+  }
+};
+
+// Get API key with Nacos support
+function getSearchApiKey(): string | undefined {
+  return process.env.EXASEARCH_API_KEY;
+}
+
+/**
+ * POST /api/search
+ * 
+ * Search using internal search engine with strict configuration.
+ * Implementation details are abstracted away from the client.
+ * 
+ * Request body:
+ * - query: string - The search query
+ * 
+ * Response:
+ * - results: Array of search results with text, links, and imageLinks
+ */
+export async function POST(request: NextRequest) {
+  const reqStart = Date.now();
+  try {
+    // Ensure Nacos config is loaded before accessing env vars
+    await initNacos();
+    
+    const SEARCH_API_KEY = getSearchApiKey();
+    
+    if (!SEARCH_API_KEY) {
+      return NextResponse.json(
+        { error: 'Search API key not configured' },
+        { status: 500 }
+      );
+    }
+
+    const body = await request.json();
+    const { query } = body;
+
+    if (!query) {
+      return NextResponse.json(
+        { error: 'Query is required' },
+        { status: 400 }
+      );
+    }
+
+    const searchClient = new Exa(SEARCH_API_KEY);
+
+    // Strict configuration as specified
+    // Request 15 results to have buffer after filtering low-quality ones
+    const exaStart = Date.now();
+    const result = await searchClient.searchAndContents(query, {
+      numResults: 15,
+      extras: {
+        links: 1,
+        imageLinks: 10
+      },
+      livecrawl: "fallback",  // fallback to live crawl if content is short/missing
+      text: true,
+      type: "auto",
+      userLocation: "US"
+    });
+    metrics.recordExternalApi('exa', Date.now() - exaStart, true);
+
+    // Transform results to a cleaner format
+    // Note: API may return null for title, so we handle it
+    const transformedResults = result.results.map((item) => ({
+      id: item.id,
+      title: item.title || item.url || 'Untitled', // Handle null title
+      url: item.url,
+      text: item.text || '',
+      publishedDate: item.publishedDate || undefined,
+      author: item.author || undefined,
+      links: item.extras?.links || [],
+      imageLinks: item.extras?.imageLinks || []
+    }));
+
+    metrics.recordRequest('/api/search', Date.now() - reqStart, 200);
+    return NextResponse.json({
+      requestId: result.requestId || '',
+      resolvedSearchType: (result as any).resolvedSearchType || 'auto',
+      results: transformedResults,
+      totalResults: transformedResults.length
+    });
+
+  } catch (error) {
+    metrics.recordExternalApi('exa', 0, false);
+    metrics.recordRequest('/api/search', Date.now() - reqStart, 500);
+    console.error('Search error:', error);
+    return NextResponse.json(
+      { error: 'Failed to perform search', details: error instanceof Error ? error.message : 'Unknown error' },
+      { status: 500 }
+    );
+  }
+}
+
+
+
+
+
+
+
