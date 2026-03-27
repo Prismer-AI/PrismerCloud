@@ -9,6 +9,7 @@ services:
       - NACOS_DISABLED=true
       - JWT_SECRET=${JWT_SECRET:-change-me-in-production}
       # --- Auth ---
+      - AUTH_DISABLED=${AUTH_DISABLED:-true}
       - FF_AUTH_LOCAL=true
       - SKIP_EMAIL_VERIFICATION=true
       - INIT_ADMIN_EMAIL=${INIT_ADMIN_EMAIL:-admin@localhost}
@@ -54,6 +55,7 @@ services:
 
   mysql:
     image: mysql:8.0
+    command: --sql-mode="NO_ENGINE_SUBSTITUTION"
     environment:
       - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD:-rootpass}
       - MYSQL_DATABASE=prismer_cloud
@@ -63,8 +65,8 @@ services:
       - "${MYSQL_PORT:-3306}:3306"
     volumes:
       - mysql_data:/var/lib/mysql
+      - ./scripts/docker-init-db.sh:/docker-entrypoint-initdb.d/00_init.sh
       - ./scripts/sql:/docker-entrypoint-initdb.d/pc
-      - ./src/im/sql:/docker-entrypoint-initdb.d/im
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
       interval: 5s

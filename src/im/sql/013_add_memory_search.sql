@@ -12,7 +12,7 @@
 ALTER TABLE im_memory_files ADD FULLTEXT INDEX ft_memory_content (content);
 
 -- ─── Context Cache Tags ─────────────────────────────────
-ALTER TABLE im_context_cache ADD COLUMN tags TEXT NOT NULL DEFAULT '[]' AFTER meta;
+ALTER TABLE im_context_cache ADD COLUMN tags TEXT NULL AFTER meta;
 
 -- ─── Verify ─────────────────────────────────────────────
 SELECT 'im_memory_files FULLTEXT' AS `index`, COUNT(*) AS `rows` FROM im_memory_files

@@ -67,12 +67,12 @@ model IMAgentCard {
   id              String    @id @default(cuid()) @db.VarChar(30)
   imUserId        String    @unique @db.VarChar(30)
   name            String    @db.VarChar(200)
-  description     String    @default("") @db.Text
+  description     String    @db.Text
   agentType       String    @default("assistant") @db.VarChar(30)
-  capabilities    String    @default("[]") @db.Text
+  capabilities    String    @db.Text
   protocolVersion String    @default("1.0") @db.VarChar(20)
   endpoint        String?   @db.VarChar(500)
-  metadata        String    @default("{}") @db.Text
+  metadata        String    @db.Text
   lastHeartbeat   DateTime? @db.DateTime(3)
   status          String    @default("offline") @db.VarChar(20)
   load            Float     @default(0) @db.Double
@@ -95,7 +95,7 @@ model IMConversation {
   title         String?   @db.VarChar(255)
   description   String?   @db.Text
   status        String    @default("active") @db.VarChar(20)
-  metadata      String    @default("{}") @db.Text
+  metadata      String    @db.Text
   createdById   String    @db.VarChar(30)
   workspaceId   String?   @unique @db.VarChar(50)
   lastMessageAt DateTime? @db.DateTime(3)
@@ -143,7 +143,7 @@ model IMMessage {
   senderId        String    @db.VarChar(30)
   type            String    @default("text") @db.VarChar(30)
   content         String    @default("") @db.LongText
-  metadata        String    @default("{}") @db.Text
+  metadata        String    @db.Text
   parentId        String?   @db.VarChar(30)
   status          String    @default("sent") @db.VarChar(20)
   createdAt       DateTime  @default(now()) @db.DateTime(3)
@@ -196,7 +196,7 @@ model IMReadCursor {
 model IMWebhook {
   id            String    @id @default(cuid()) @db.VarChar(30)
   url           String    @db.VarChar(500)
-  events        String    @default("[]") @db.Text
+  events        String    @db.Text
   secret        String?   @db.VarChar(100)
   active        Boolean   @default(true)
   createdById   String    @db.VarChar(30)
@@ -229,8 +229,8 @@ model IMBinding {
   verificationCode String?  @db.VarChar(10)
   verifiedAt      DateTime? @db.DateTime(3)
 
-  capabilities    String    @default("[]") @db.Text
-  config          String    @default("{}") @db.Text
+  capabilities    String    @db.Text
+  config          String    @db.Text
 
   createdAt       DateTime  @default(now()) @db.DateTime(3)
   updatedAt       DateTime  @updatedAt @db.DateTime(3)
@@ -282,8 +282,8 @@ model ContextCache {
   hqccContent   String    @default("") @db.LongText  // Up to ~4GB (100MB gate at service layer)
   intrContent   String?   @db.LongText               // Up to ~4GB
   visibility    String    @default("private") @db.VarChar(20)
-  meta          String    @default("{}") @db.Text
-  tags          String    @default("[]") @db.Text   // JSON: string[] — search tags
+  meta          String    @db.Text
+  tags          String    @db.Text   // JSON: string[] — search tags
   sizeBytes     Int       @default(0)
   expiresAt     DateTime? @db.DateTime(3)
   createdAt     DateTime  @default(now()) @db.DateTime(3)
@@ -328,7 +328,7 @@ model IMFileUpload {
 model IMSyncEvent {
   id              Int      @id @default(autoincrement())
   type            String   @db.VarChar(50)
-  data            String   @default("{}") @db.Text
+  data            String   @db.Text
   conversationId  String?  @db.VarChar(30)
   imUserId        String   @db.VarChar(30)
   createdAt       DateTime @default(now()) @db.DateTime(3)
@@ -349,7 +349,7 @@ model IMTask {
   title         String    @db.VarChar(255)
   description   String?   @db.Text
   capability    String?   @db.VarChar(100)
-  input         String    @default("{}") @db.Text
+  input         String    @db.Text
   contextUri    String?   @db.VarChar(500)
 
   // Participants
@@ -386,7 +386,7 @@ model IMTask {
   retryCount    Int       @default(0)
 
   // Metadata
-  metadata      String    @default("{}") @db.Text
+  metadata      String    @db.Text
   createdAt     DateTime  @default(now()) @db.DateTime(3)
   updatedAt     DateTime  @updatedAt @db.DateTime(3)
 
@@ -406,7 +406,7 @@ model IMTaskLog {
   actorId       String?   @db.VarChar(36)
   action        String    @db.VarChar(50)
   message       String?   @db.Text
-  metadata      String    @default("{}") @db.Text
+  metadata      String    @db.Text
   createdAt     DateTime  @default(now()) @db.DateTime(3)
 
   task          IMTask    @relation(fields: [taskId], references: [id], onDelete: Cascade)
@@ -460,7 +460,7 @@ model IMGene {
   id               String    @id @db.VarChar(100)
   category         String    @db.VarChar(20)
   title            String    @default("") @db.VarChar(200)
-  description      String    @default("") @db.Text
+  description      String    @db.Text
   strategySteps    String    @db.Text
   preconditions    String    @db.Text
   constraints      String    @db.Text
@@ -548,12 +548,12 @@ model IMEvolutionCapsule {
   ownerAgentId    String    @db.VarChar(30)
   geneId          String    @db.VarChar(100)
   signalKey       String    @db.VarChar(500)
-  triggerSignals  String    @default("[]") @db.Text
+  triggerSignals  String    @db.Text
   outcome         String    @default("pending") @db.VarChar(20)
   score           Float?    @db.Double
-  summary         String    @default("") @db.Text
+  summary         String    @db.Text
   costCredits     Float     @default(0) @db.Double
-  metadata        String    @default("{}") @db.Text
+  metadata        String    @db.Text
   provider        String?   @db.VarChar(50)        // Provider tag for provider-scoped freeze
   mode            String    @default("standard") @db.VarChar(20)
   scope           String    @default("global") @db.VarChar(60)
@@ -681,7 +681,7 @@ model IMConversationSecurity {
   signingPolicy   String    @default("optional") @db.VarChar(20)
   encryptionMode  String    @default("none") @db.VarChar(20)
   ephemeralKeys   String?   @db.Text
-  lastSequences   String    @default("{}") @db.Text
+  lastSequences   String    @db.Text
   createdAt       DateTime  @default(now()) @db.DateTime(3)
   updatedAt       DateTime  @updatedAt @db.DateTime(3)
 
@@ -696,9 +696,9 @@ model IMSkill {
   id            String    @id @default(cuid()) @db.VarChar(30)
   slug          String    @unique @db.VarChar(200)
   name          String    @db.VarChar(256)
-  description   String    @default("") @db.Text
+  description   String    @db.Text
   category      String    @default("general") @db.VarChar(50)
-  tags          String    @default("[]") @db.Text            // JSON: string[]
+  tags          String    @db.Text            // JSON: string[]
   author        String    @default("") @db.VarChar(128)
   source        String    @default("community") @db.VarChar(30)
   sourceUrl     String    @default("") @db.VarChar(512)
@@ -708,7 +708,7 @@ model IMSkill {
   stars         Int       @default(0)
   status        String    @default("active") @db.VarChar(20)
   geneId        String?   @db.VarChar(128)
-  metadata      String    @default("{}") @db.Text
+  metadata      String    @db.Text
   createdAt     DateTime  @default(now()) @db.DateTime(3)
   updatedAt     DateTime  @updatedAt @db.DateTime(3)
 
@@ -717,16 +717,16 @@ model IMSkill {
   packageHash   String?   @db.VarChar(64)
   packageSize   Int?
   fileCount     Int       @default(1)
-  compatibility String    @default("[]") @db.Text            // JSON: platform[]
-  signals       String    @default("[]") @db.Text            // JSON: SignalTag[]
-  requires      String    @default("{}") @db.Text            // JSON: { env, bins, capabilities }
+  compatibility String    @db.Text            // JSON: platform[]
+  signals       String    @db.Text            // JSON: SignalTag[]
+  requires      String    @db.Text            // JSON: { env, bins, capabilities }
   version       String    @default("1.0.0") @db.VarChar(20)
   ownerAgentId  String?   @db.VarChar(30)
   forkedFrom    String?   @db.VarChar(30)
   forkCount     Int       @default(0)
   license       String    @default("MIT") @db.VarChar(30)
   securityStatus String   @default("pending") @db.VarChar(20)
-  changelog     String    @default("") @db.Text
+  changelog     String    @db.Text
 
   @@index([category])
   @@index([source])
@@ -745,7 +745,7 @@ model IMUnmatchedSignal {
   signals     String   @db.Text            // JSON: string[] (compat)
   signalTags  String?  @db.Text            // v0.3.0: JSON-encoded SignalTag[]
   agentId     String   @db.VarChar(30)
-  context     String   @default("{}") @db.Text
+  context     String   @db.Text
   count       Int      @default(1)
   resolvedBy  String?  @db.VarChar(100)
   scope       String   @default("global") @db.VarChar(60)
@@ -765,7 +765,7 @@ model IMEvolutionAchievement {
   agentId    String   @db.VarChar(30)
   badgeKey   String   @db.VarChar(100)
   unlockedAt DateTime @default(now()) @db.DateTime(3)
-  metadata   String   @default("{}") @db.Text
+  metadata   String   @db.Text
   scope      String   @default("global") @db.VarChar(60)
 
   @@unique([agentId, badgeKey, scope])
@@ -797,7 +797,7 @@ model IMEvolutionACL {
 model IMSignalCluster {
   id            String    @id @default(cuid()) @db.VarChar(30)
   clusterKey    String    @unique @db.VarChar(200)
-  memberSignals String    @default("[]") @db.Text
+  memberSignals String    @db.Text
   frequency     Int       @default(0)
   agentCount    Int       @default(0)
   topGeneId     String?   @db.VarChar(100)
@@ -829,7 +829,7 @@ model IMViolation {
   id         String   @id @default(cuid()) @db.VarChar(30)
   imUserId   String   @db.VarChar(30)
   type       String   @db.VarChar(50)          // spam | abuse | impersonation | policy_violation | tier_demotion
-  evidence   String   @default("{}") @db.Text  // JSON
+  evidence   String   @db.Text  // JSON
   action     String   @db.VarChar(20)          // warn | throttle | suspend | ban | demote
   createdAt  DateTime @default(now()) @db.DateTime(3)
 
@@ -856,8 +856,8 @@ model IMConversationPolicy {
 model IMSubscription {
   id              String    @id @default(cuid()) @db.VarChar(30)
   subscriberId    String    @db.VarChar(36)
-  events          String    @default("[]") @db.Text
-  filter          String    @default("{}") @db.Text
+  events          String    @db.Text
+  filter          String    @db.Text
   delivery        String    @default("message") @db.VarChar(20)
   webhookUrl      String?   @db.VarChar(500)
   webhookSecret   String?   @db.VarChar(500)
@@ -867,7 +867,7 @@ model IMSubscription {
   failureCount    Int       @default(0)
   lastTriggeredAt DateTime? @db.DateTime(3)
   expiresAt       DateTime? @db.DateTime(3)
-  metadata        String    @default("{}") @db.Text
+  metadata        String    @db.Text
   createdAt       DateTime  @default(now()) @db.DateTime(3)
   updatedAt       DateTime  @updatedAt @db.DateTime(3)
 

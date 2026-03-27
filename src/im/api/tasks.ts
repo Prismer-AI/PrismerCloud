@@ -180,7 +180,7 @@ export function createTasksRouter(taskService: TaskService, rateLimiter?: RateLi
   router.get('/:id', async (c) => {
     const user = c.get('user');
     try {
-      const result = await taskService.getTaskWithLogs(c.req.param('id'), user.imUserId);
+      const result = await taskService.getTaskWithLogs(c.req.param('id')!, user.imUserId);
       return c.json<ApiResponse>({ ok: true, data: result });
     } catch (err) {
       if (err instanceof TaskNotFoundError) {
@@ -201,7 +201,7 @@ export function createTasksRouter(taskService: TaskService, rateLimiter?: RateLi
     const body = await c.req.json();
 
     try {
-      const task = await taskService.updateTask(c.req.param('id'), user.imUserId, {
+      const task = await taskService.updateTask(c.req.param('id')!, user.imUserId, {
         assigneeId: body.assigneeId ?? body.assignee_id,
         status: body.status,
         metadata: body.metadata,
@@ -228,7 +228,7 @@ export function createTasksRouter(taskService: TaskService, rateLimiter?: RateLi
   router.post('/:id/claim', async (c) => {
     const user = c.get('user');
     try {
-      const task = await taskService.claimTask(c.req.param('id'), user.imUserId);
+      const task = await taskService.claimTask(c.req.param('id')!, user.imUserId);
       return c.json<ApiResponse>({ ok: true, data: task });
     } catch (err) {
       if (err instanceof TaskNotFoundError) {
@@ -249,7 +249,7 @@ export function createTasksRouter(taskService: TaskService, rateLimiter?: RateLi
     const body = await c.req.json();
 
     try {
-      await taskService.reportProgress(c.req.param('id'), user.imUserId, {
+      await taskService.reportProgress(c.req.param('id')!, user.imUserId, {
         message: body.message,
         metadata: body.metadata,
       });
@@ -276,7 +276,7 @@ export function createTasksRouter(taskService: TaskService, rateLimiter?: RateLi
     const body = await c.req.json().catch(() => ({}));
 
     try {
-      const task = await taskService.completeTask(c.req.param('id'), user.imUserId, {
+      const task = await taskService.completeTask(c.req.param('id')!, user.imUserId, {
         result: body.result,
         resultUri: body.resultUri ?? body.result_uri,
         cost: body.cost,
@@ -308,7 +308,7 @@ export function createTasksRouter(taskService: TaskService, rateLimiter?: RateLi
     }
 
     try {
-      const task = await taskService.failTask(c.req.param('id'), user.imUserId, {
+      const task = await taskService.failTask(c.req.param('id')!, user.imUserId, {
         error: body.error,
         metadata: body.metadata,
       });
