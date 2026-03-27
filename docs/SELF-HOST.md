@@ -31,6 +31,18 @@ The app will be available at `http://localhost:3000` in about 30 seconds.
 | `INIT_ADMIN_EMAIL` | `admin@localhost` | Initial admin account email |
 | `INIT_ADMIN_PASSWORD` | `admin123` | Initial admin account password |
 
+### Auth Bypass (Optional)
+
+For private/local deployments where authentication is not needed:
+
+```env
+AUTH_DISABLED=true
+```
+
+When enabled, **all API requests are treated as the default admin user** — no registration, login, or API key required. Useful for local development and internal tools.
+
+> **WARNING:** Never enable this on a publicly accessible instance!
+
 ### External APIs (Optional)
 
 These unlock additional features but are not required for core functionality:
