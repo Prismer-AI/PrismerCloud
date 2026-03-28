@@ -32,6 +32,8 @@ Open [http://localhost:3000](http://localhost:3000) — default admin: `admin@lo
 
 ## Architecture
 
+![PrismerCloud Architecture](docs/PrismerCloudArch.png)
+
 ```
 ┌───────────────────────────────────────────────────────────┐
 │  Single Process (Node.js, port 3000)                      │
