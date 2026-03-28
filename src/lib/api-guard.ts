@@ -273,7 +273,12 @@ async function checkBalance(userId: string, estimatedCost: number): Promise<bool
 // ============================================================================
 
 function getJWTSecret(): string {
-  return process.env.JWT_SECRET || process.env.NEXTAUTH_SECRET || 'dev-secret-change-me';
+  const secret = process.env.JWT_SECRET || process.env.NEXTAUTH_SECRET;
+  if (!secret) {
+    console.error('[ApiGuard] JWT_SECRET is not set — using insecure fallback. Set JWT_SECRET in .env!');
+    return 'dev-secret-change-me';
+  }
+  return secret;
 }
 
 /**
