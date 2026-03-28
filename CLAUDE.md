@@ -266,6 +266,16 @@ When a flag is `true`, the Next.js route directly queries `pc_*` tables via `src
 
 In self-host mode, all flags are `true` — the app is fully standalone with no backend dependency. `UNLIMITED_CREDITS=true` bypasses credit checks.
 
+**Additional self-host flags:**
+
+| Flag | Effect |
+|------|--------|
+| `AUTH_DISABLED=true` | Bypass all auth — every request treated as default admin. Three middleware layers short-circuit: `api-guard.ts`, `auth-utils.ts`, `im/auth/middleware.ts` |
+| `UNLIMITED_CREDITS=true` | Skip credit balance checks |
+| `ADMIN_EMAILS` | Comma-separated admin email whitelist for `/api/admin/analytics`. If empty, falls back to `INIT_ADMIN_EMAIL` |
+
+**Important:** `ADMIN_EMAILS` must be read lazily (not at module import time) because Nacos may not have loaded yet. Use a function, not a top-level const.
+
 ### Database
 
 `src/lib/db.ts` — MySQL2 connection pool (singleton, max 10 connections). Must call `ensureNacosConfig()` before first use so `REMOTE_MYSQL_*` env vars are set.
@@ -284,9 +294,10 @@ Key helpers: `query<T>()`, `execute()`, `queryOne<T>()`, `withTransaction()`.
 
 Dual auth: JWT tokens (session-based, stored in `prismer_auth` localStorage) and API keys (`sk-prismer-*`, stored in `prismer_active_api_key`). OAuth supported via GitHub and Google. Auth state managed in `AppContext`.
 
-**Two auth paths** (feature-flag controlled):
-- `FF_AUTH_LOCAL=true` (self-host): Auth handled locally — JWT signed with `JWT_SECRET`, users stored in `pc_users` table, API keys in `pc_api_keys`
-- `FF_AUTH_LOCAL=false` (cloud): Auth proxied to Go backend at `prismer.app` — Next.js passes Authorization header through
+**Three auth paths** (feature-flag controlled):
+- `AUTH_DISABLED=true`: All auth bypassed — every request returns default admin user. For private/local deployments only.
+- `FF_AUTH_LOCAL=true` (self-host): Auth handled locally — JWT signed with `JWT_SECRET`, users stored in `pc_users` table, API keys in `pc_api_keys`. JWT signature is verified locally.
+- `FF_AUTH_LOCAL=false` (cloud): Auth proxied to Go backend at `prismer.app` — Next.js passes Authorization header through. JWT decoded without signature verification (trusts gateway).
 
 ### Content Processing Pipeline (Load API)
 
