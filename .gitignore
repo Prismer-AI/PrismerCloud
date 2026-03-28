@@ -58,6 +58,7 @@ ref/
 *.png
 *.jpeg
 *.jpg
+!docs/*.png
 
 # local tool state
 .playwright-mcp/

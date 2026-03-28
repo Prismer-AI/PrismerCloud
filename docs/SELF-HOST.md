@@ -162,6 +162,8 @@ Remove the `mysql` service from `docker-compose.yml` when using external MySQL.
 
 ## Architecture
 
+![PrismerCloud Architecture](./PrismerCloudArch.png)
+
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │  Docker Compose                                             │
@@ -277,6 +279,130 @@ mkdir -p prisma/data
 DATABASE_URL="file:$(pwd)/prisma/data/dev.db" npx prisma db push
 npm run dev
 ```
+
+## Connect with SDKs
+
+After deployment, connect any official SDK to your self-hosted instance by setting the base URL.
+
+### Environment Variable (All SDKs)
+
+```bash
+export PRISMER_BASE_URL=http://localhost:3000   # or https://prismer.yourdomain.com
+export PRISMER_API_KEY=sk-prismer-xxx           # create via Dashboard → API Keys
+```
+
+> **With `AUTH_DISABLED=true`:** API key is not required — all requests are treated as admin. You can still set one for SDK compatibility, but it will be ignored.
+
+### TypeScript
+
+```bash
+npm install @prismer/sdk
+```
+
+```typescript
+import { PrismerClient } from '@prismer/sdk';
+
+const client = new PrismerClient({
+  apiKey: process.env.PRISMER_API_KEY || '',
+  baseUrl: 'http://localhost:3000',
+});
+
+// Context load
+const result = await client.context.load({ input: 'https://example.com' });
+
+// IM: register agent & send message
+await client.im.register({ name: 'my-agent', type: 'agent' });
+const agents = await client.im.discover();
+```
+
+### Python
+
+```bash
+pip install prismer
+```
+
+```python
+from prismer import PrismerClient
+
+client = PrismerClient(
+    api_key="sk-prismer-xxx",
+    base_url="http://localhost:3000",
+)
+
+result = client.context.load(input="https://example.com")
+```
+
+### Go
+
+```bash
+go get github.com/prismer-io/prismer-sdk-go
+```
+
+```go
+client := prismer.NewClient("sk-prismer-xxx",
+    prismer.WithBaseURL("http://localhost:3000"),
+)
+
+result, _ := client.Context.Load(ctx, &prismer.LoadInput{Input: "https://example.com"})
+```
+
+### Rust
+
+```bash
+cargo add prismer-sdk
+```
+
+```rust
+let client = PrismerClient::new("sk-prismer-xxx", Some("http://localhost:3000"));
+let result = client.context_load("https://example.com").await?;
+```
+
+### CLI (Any SDK)
+
+```bash
+# TypeScript
+npx prismer config set default.base_url http://localhost:3000
+npx prismer load "https://example.com"
+
+# Python
+prismer config set default.base_url http://localhost:3000
+prismer load "https://example.com"
+
+# Go
+prismer config set default.base_url http://localhost:3000
+prismer load "https://example.com"
+```
+
+### MCP Server (Claude Code / Cursor / Windsurf)
+
+Add to your MCP configuration:
+
+```json
+{
+  "mcpServers": {
+    "prismer": {
+      "command": "npx",
+      "args": ["-y", "@prismer/mcp-server"],
+      "env": {
+        "PRISMER_API_KEY": "sk-prismer-xxx",
+        "PRISMER_BASE_URL": "http://localhost:3000"
+      }
+    }
+  }
+}
+```
+
+### WebSocket / SSE (Real-time)
+
+```bash
+# WebSocket
+wscat -c "ws://localhost:3000/ws?token=YOUR_JWT_TOKEN"
+
+# SSE
+curl -N "http://localhost:3000/sse?token=YOUR_JWT_TOKEN"
+```
+
+For SDK real-time clients, the WebSocket/SSE URL is derived from `baseUrl` automatically.
 
 ## Reverse Proxy (Production)
 
