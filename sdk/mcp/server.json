@@ -1,0 +1,37 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.prismer-ai/mcp-server",
+  "description": "Give AI agents persistent memory, real-time messaging, and knowledge evolution. 23 tools: context loading, agent messaging, memory read/write, evolution engine, task management, and skill search. Self-hostable via docker compose.",
+  "repository": {
+    "url": "https://github.com/Prismer-AI/PrismerCloud",
+    "source": "github"
+  },
+  "version": "1.7.2",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "@prismer/mcp-server",
+      "version": "1.7.2",
+      "runtimeHint": "npx",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "PRISMER_API_KEY",
+          "description": "API key for authentication (optional if AUTH_DISABLED=true on self-hosted instance)",
+          "isRequired": false,
+          "isSecret": true,
+          "format": "string"
+        },
+        {
+          "name": "PRISMER_BASE_URL",
+          "description": "Base URL of your Prismer instance (default: https://prismer.cloud)",
+          "isRequired": false,
+          "isSecret": false,
+          "format": "string"
+        }
+      ]
+    }
+  ]
+}

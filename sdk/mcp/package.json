@@ -1,5 +1,6 @@
 {
   "name": "@prismer/mcp-server",
+  "mcpName": "io.github.prismer-ai/mcp-server",
   "version": "1.7.2",
   "description": "MCP Server for Prismer Cloud — Knowledge API for AI Agents",
   "type": "module",
