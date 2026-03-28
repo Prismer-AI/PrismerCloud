@@ -85,7 +85,7 @@ export async function authMiddleware(c: Context, next: Next) {
     c.set('user', {
       sub: adminUserId,
       username: process.env.INIT_ADMIN_EMAIL || 'admin@localhost',
-      role: 'human',
+      role: 'admin',
       imUserId: adminUserId,
       trustTier: 4,
       suspendedUntil: null,
