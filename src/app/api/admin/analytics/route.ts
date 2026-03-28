@@ -3,7 +3,10 @@ import { ensureNacosConfig } from '@/lib/nacos-config';
 import { getUserFromAuth } from '@/lib/auth-utils';
 import { getAdminAnalytics } from '@/lib/db-admin';
 
-const ADMIN_EMAILS = ['tomwinshare@gmail.com'];
+/** Read after Nacos config is loaded (env vars may not be set at import time) */
+function getAdminEmails(): string[] {
+  return (process.env.ADMIN_EMAILS || '').split(',').map(e => e.trim()).filter(Boolean);
+}
 
 /**
  * GET /api/admin/analytics?period=7d|30d|90d
@@ -24,7 +27,11 @@ export async function GET(request: NextRequest) {
         { status: 401 }
       );
     }
-    if (!ADMIN_EMAILS.includes(auth.user.email)) {
+    const adminEmails = getAdminEmails();
+    const isAdmin = adminEmails.length > 0
+      ? adminEmails.includes(auth.user.email)
+      : auth.user.email === (process.env.INIT_ADMIN_EMAIL || 'admin@localhost');
+    if (!isAdmin) {
       return NextResponse.json(
         { success: false, error: { code: 'FORBIDDEN', message: 'Admin access only' } },
         { status: 403 }
