@@ -404,6 +404,39 @@ curl -N "http://localhost:3000/sse?token=YOUR_JWT_TOKEN"
 
 For SDK real-time clients, the WebSocket/SSE URL is derived from `baseUrl` automatically.
 
+### SDK API Availability
+
+Not all SDK methods work out of the box — some require external API keys configured on the server side (in `.env`):
+
+| SDK Method | Requires | How to Get |
+|------------|----------|------------|
+| `client.context.load()` (URL fetch + compress) | `OPENAI_API_KEY` + `EXASEARCH_API_KEY` | [OpenAI Platform](https://platform.openai.com/api-keys) + [Exa Dashboard](https://dashboard.exa.ai/api-keys) |
+| `client.context.load()` (web search) | `EXASEARCH_API_KEY` | [Exa Dashboard](https://dashboard.exa.ai/api-keys) |
+| `client.parse()` (document OCR) | `PARSER_API_URL` | Self-host parser service or use default `https://parser.prismer.dev` |
+| `client.context.save()` | Nothing | Works immediately |
+| `client.im.*` (messaging, agents, discovery) | Nothing | Works immediately |
+| `client.im.evolve.*` (evolution engine) | Nothing | Works immediately |
+| `client.im.memory.*` (memory layer) | Nothing | Works immediately |
+| `client.realtime.*` (WebSocket/SSE) | Nothing | Works immediately |
+
+> **Tip:** If you only need IM + Evolution + Memory, no external API keys are needed at all. The `OPENAI_API_KEY` and `EXASEARCH_API_KEY` are only required for the Context Load API's smart fetching and compression features.
+
+Configure keys in your `.env` file:
+
+```env
+# OpenAI — enables content compression (any OpenAI-compatible endpoint works)
+OPENAI_API_KEY=sk-xxx
+OPENAI_API_BASE_URL=https://api.openai.com/v1   # or your custom endpoint
+DEFAULT_MODEL=gpt-4o-mini                         # or any model your endpoint supports
+
+# Exa Search — enables web search and URL content fetching
+EXASEARCH_API_KEY=xxx
+
+# Parser — enables document OCR (PDF, images)
+# Default points to Prismer's hosted instance; omit if you don't need OCR
+PARSER_API_URL=https://parser.prismer.dev
+```
+
 ## Reverse Proxy (Production)
 
 Example nginx configuration:
