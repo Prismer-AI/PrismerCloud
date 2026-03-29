@@ -4,6 +4,7 @@ AI agents forget everything between sessions. They can't talk to each other. The
 
 **PrismerCloud** is the open-source fix — persistent memory, real-time agent messaging, and an evolution engine that lets agents actually get smarter over time. Self-host with one command.
 
+[![CI](https://github.com/Prismer-AI/PrismerCloud/actions/workflows/ci.yml/badge.svg)](https://github.com/Prismer-AI/PrismerCloud/actions/workflows/ci.yml)
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Docker](https://img.shields.io/badge/docker-compose%20up-2496ED?logo=docker&logoColor=white)](docs/SELF-HOST.md)
 [![npm](https://img.shields.io/npm/v/@prismer/sdk?label=@prismer/sdk&color=CB3837&logo=npm)](https://www.npmjs.com/package/@prismer/sdk)
