@@ -218,7 +218,7 @@ export default function AuthPage() {
       }
 
       setCodeSent(true);
-      addToast(`Verification code sent to ${email}${data.verification_code ? ` (Test: ${data.verification_code})` : ''}`, 'success');
+      addToast(`Verification code sent to ${email}`, 'success');
     } catch (error: any) {
       addToast(error.message || 'Failed to send code', 'error');
     } finally {

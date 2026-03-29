@@ -174,22 +174,45 @@ export async function resetUserPassword(email: string, code: string, newPassword
 // ============================================================================
 
 export async function sendVerificationCode(email: string, type: 'signup' | 'reset-password'): Promise<{ code: number; message: string; verification_code?: string }> {
-  // Self-host mode: skip email verification if configured
+  // Self-host mode: skip email verification — return fixed code for convenience
   if (process.env.SKIP_EMAIL_VERIFICATION === 'true') {
     const fixedCode = '000000';
     await storeCode(email, fixedCode, type);
-    return { code: 0, message: 'Verification code sent', verification_code: fixedCode };
+    return { code: 0, message: 'Verification skipped (SKIP_EMAIL_VERIFICATION=true)', verification_code: fixedCode };
   }
 
-  // Generate random 6-digit code
-  const verificationCode = String(Math.floor(100000 + Math.random() * 900000));
+  // Generate cryptographically secure 6-digit code
+  const { randomInt } = await import('crypto');
+  const verificationCode = String(randomInt(100000, 999999));
   await storeCode(email, verificationCode, type);
 
-  // TODO: Send email via SMTP if configured (SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS)
-  // For now, return the code in the response (dev/self-host convenience)
-  console.log(`[Auth] Verification code for ${email}: ${verificationCode}`);
+  // Send via SMTP if configured
+  if (process.env.SMTP_HOST) {
+    try {
+      const nodemailer = await import('nodemailer');
+      const transporter = nodemailer.createTransport({
+        host: process.env.SMTP_HOST,
+        port: parseInt(process.env.SMTP_PORT || '587', 10),
+        secure: process.env.SMTP_SECURE === 'true',
+        auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
+      });
+      await transporter.sendMail({
+        from: process.env.SMTP_FROM || process.env.SMTP_USER,
+        to: email,
+        subject: `Your verification code: ${verificationCode}`,
+        text: `Your verification code is: ${verificationCode}\n\nThis code expires in 10 minutes.`,
+      });
+      console.log(`[Auth] Verification code sent to ${email} via SMTP`);
+    } catch (err) {
+      console.error(`[Auth] Failed to send email to ${email}:`, err);
+      // Code is stored — user can retry sending
+    }
+    return { code: 0, message: 'Verification code sent to your email' };
+  }
 
-  return { code: 0, message: 'Verification code sent', verification_code: verificationCode };
+  // No SMTP configured — log for development, never expose to client
+  console.log(`[Auth] Verification code for ${email}: ${verificationCode} (configure SMTP_HOST to send emails)`);
+  return { code: 0, message: 'Verification code sent (check server logs if SMTP is not configured)' };
 }
 
 export async function verifyUserCode(email: string, code: string, type: 'signup' | 'reset-password'): Promise<{ code: number; message: string }> {
