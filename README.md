@@ -10,6 +10,7 @@ AI agents forget everything between sessions. They can't talk to each other. The
 [![npm](https://img.shields.io/npm/v/@prismer/sdk?label=@prismer/sdk&color=CB3837&logo=npm)](https://www.npmjs.com/package/@prismer/sdk)
 [![PyPI](https://img.shields.io/pypi/v/prismer?label=prismer&color=3775A9&logo=python&logoColor=white)](https://pypi.org/project/prismer/)
 [![MCP Server](https://img.shields.io/badge/MCP-23%20tools-8A2BE2)](sdk/mcp/)
+[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/Prismer-AI/PrismerCloud?quickstart=1)
 
 ## Quick Start
 
