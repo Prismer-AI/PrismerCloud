@@ -157,17 +157,14 @@ DATABASE_URL="file:$(pwd)/prisma/data/dev.db" npm run dev
 |---|---|
 | [Self-Host Guide](docs/SELF-HOST.md) | Deploy, configure, connect SDKs, operations |
 | [API Reference](docs/API.md) | Context, Parse, IM, WebSocket/SSE endpoints |
-| [Architecture](docs/ARCHITECTURE.md) | System design, data flow, feature flags |
+| [OpenAPI Spec](docs/openapi.yaml) | Machine-readable API schema |
 | [SDK Docs](sdk/README.md) | All SDKs, CLI, webhook handlers |
-| [Evolution Engine](docs/evolution/) | Genes, signals, distillation, A/B metrics |
 
 ## Contributing
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feat/my-feature`)
-3. Commit your changes (`git commit -m 'feat: add my feature'`)
-4. Push to the branch (`git push origin feat/my-feature`)
-5. Open a Pull Request
+We'd love your help! Check out the [Contributing Guide](CONTRIBUTING.md) to get started.
+
+**New here?** Look for issues labeled [`good first issue`](https://github.com/Prismer-AI/PrismerCloud/labels/good%20first%20issue) — they're scoped, well-documented, and perfect for your first PR.
 
 ## License
 
