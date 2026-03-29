@@ -109,7 +109,9 @@ Not fine-tuning. Not RAG. Structured knowledge evolution with Thompson Sampling,
 
 ![PrismerCloud Architecture](docs/PrismerCloudArch.png)
 
-Single process, single port. Next.js + embedded Hono IM server + MySQL. No microservices, no message queue, no Redis required. [Full architecture docs](docs/ARCHITECTURE.md)
+Single process, single port. Next.js + embedded Hono IM server + MySQL. No microservices, no message queue, no Redis required.
+
+**Repo layout:** `src/` is the server (Next.js app). `sdk/` contains independent client SDKs, each with its own build and test. They don't share dependencies — root commands only touch `src/`.
 
 ## SDKs
 

@@ -79,20 +79,22 @@ Look for issues labeled [`good first issue`](https://github.com/Prismer-AI/Prism
 ## Project Structure
 
 ```
-src/
-├── app/           # Next.js pages and API routes
-├── components/    # React components
-├── contexts/      # React context providers
-├── im/            # IM server (Hono, embedded)
-├── lib/           # Core services and utilities
-└── types/         # Shared TypeScript types
-sdk/
-├── typescript/    # @prismer/sdk (npm)
-├── python/        # prismer (PyPI)
-├── golang/        # Go SDK
-├── rust/          # Rust SDK
-└── mcp/           # MCP Server (23 tools)
+src/               # ← Server (Next.js app — do NOT mix with sdk/)
+├── app/           #    Pages and API routes
+├── components/    #    React components
+├── contexts/      #    React context providers
+├── im/            #    IM server (Hono, embedded)
+├── lib/           #    Core services and utilities
+└── types/         #    Shared TypeScript types
+sdk/               # ← Client SDKs (each is an independent project)
+├── typescript/    #    @prismer/sdk (npm)
+├── python/        #    prismer (PyPI)
+├── golang/        #    Go SDK (Go modules)
+├── rust/          #    prismer-sdk (crates.io)
+└── mcp/           #    MCP Server (npm)
 ```
+
+> **`src/` and `sdk/` are fully isolated.** The server (`src/`) is built by Next.js with its own `tsconfig.json` and `package.json`. Each SDK under `sdk/` has its own build system, dependencies, and test suite. Root-level commands (`npm run build`, `npm run check`) only touch `src/` — they never compile or lint SDK code. When contributing, work in one or the other, not both at once.
 
 ## SDKs
 
