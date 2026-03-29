@@ -17,8 +17,8 @@
 /.next/
 /out/
 
-# production
-/build
+# production (Next.js build output, not build/ scripts)
+/.next/standalone/build
 
 # misc
 .DS_Store
