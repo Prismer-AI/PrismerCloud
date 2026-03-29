@@ -8,6 +8,11 @@ import { extractMeta } from '@/lib/context-meta';
 import { apiGuard } from '@/lib/api-guard';
 import { metrics } from '@/lib/metrics';
 
+/** Internal base URL for service-to-service calls. Never derived from request headers. */
+function getInternalBaseUrl(): string {
+  return process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000';
+}
+
 /**
  * POST /api/context/load
  * POST /api/context/load?stream=true
@@ -134,9 +139,7 @@ async function handleSingleUrl(
 ): Promise<NextResponse> {
   const startTime = Date.now();
   const authHeader = request.headers.get('authorization');
-  const host = request.headers.get('host') || new URL(request.url).host;
-  const protocol = request.headers.get('x-forwarded-proto') || 'https';
-  const baseUrl = `${protocol}://${host}`;
+  const baseUrl = getInternalBaseUrl();
   const strategy = processing?.strategy || 'auto';
   const taskId = generateTaskId('load_url');
 
@@ -392,9 +395,7 @@ async function handleBatchUrls(
 ): Promise<NextResponse> {
   const startTime = Date.now();
   const authHeader = request.headers.get('authorization');
-  const host = request.headers.get('host') || new URL(request.url).host;
-  const protocol = request.headers.get('x-forwarded-proto') || 'https';
-  const baseUrl = `${protocol}://${host}`;
+  const baseUrl = getInternalBaseUrl();
   const maxConcurrent = processing?.maxConcurrent || 3;
   const strategy = processing?.strategy || 'auto';
   const taskId = generateTaskId('load_batch');
@@ -610,9 +611,7 @@ async function handleQuery(
   try {
     // Step 0: 本地缓存搜索 (fast, ~10ms)
     const searchTopK = search?.topK || 15;
-    const host = request.headers.get('host') || new URL(request.url).host;
-    const protocol = request.headers.get('x-forwarded-proto') || 'https';
-    const baseUrl = `${protocol}://${host}`;
+    const baseUrl = getInternalBaseUrl();
 
     let localResults: Array<{ url: string; title: string; hqcc: string; cached: true; score: number; meta: any }> = [];
     if (userId) {
