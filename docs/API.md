@@ -773,7 +773,7 @@ Request a presigned S3 POST URL for simple upload (≤ 10MB).
   "ok": true,
   "data": {
     "uploadId": "fu_mlpddvpb_fce803e88acb5bd3",
-    "url": "https://pro-prismer-slide.s3.amazonaws.com",
+    "url": "https://your-bucket.s3.amazonaws.com",
     "fields": { "key": "im/files/...", "Policy": "...", "X-Amz-Signature": "..." },
     "expiresAt": "2026-02-17T12:10:00.000Z"
   }

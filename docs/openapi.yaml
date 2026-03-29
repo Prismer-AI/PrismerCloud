@@ -3518,7 +3518,7 @@ paths:
                 ok: true
                 data:
                   uploadId: 'fu_mlpddvpb_fce803e88acb5bd3'
-                  url: 'https://pro-prismer-slide.s3.amazonaws.com'
+                  url: 'https://your-bucket.s3.amazonaws.com'
                   fields:
                     key: 'im/files/...'
                     Policy: '...'
