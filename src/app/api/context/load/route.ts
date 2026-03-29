@@ -206,19 +206,22 @@ async function handleSingleUrl(
     if (!contentRes.ok) {
       const errorData = await contentRes.json().catch(() => ({}));
       console.error('[handleSingleUrl] Content fetch failed:', errorData);
+      const reason = contentRes.status === 503
+        ? (errorData.error || 'Content fetching service not configured')
+        : 'Failed to fetch URL content';
       return NextResponse.json({
-        success: true,
-        requestId: `load_${Date.now().toString(36)}`,
+        success: false,
+        requestId: taskId,
         mode: 'single_url',
         result: {
           url,
           cached: false,
           hqcc: null,
-          error: 'Failed to fetch URL content',
+          error: reason,
         },
         cost: { credits: 0, cached: false },
         processingTime: Date.now() - startTime,
-      });
+      }, { status: contentRes.status === 503 ? 503 : 200 });
     }
 
     const contentData = await contentRes.json();

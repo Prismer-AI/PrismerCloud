@@ -39,8 +39,8 @@ export async function POST(request: NextRequest) {
     
     if (!SEARCH_API_KEY) {
       return NextResponse.json(
-        { error: 'Search API key not configured' },
-        { status: 500 }
+        { error: 'Web search not available. Set EXASEARCH_API_KEY in your .env file. Get one at https://dashboard.exa.ai/api-keys' },
+        { status: 503 }
       );
     }
 

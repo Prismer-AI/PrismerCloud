@@ -136,7 +136,11 @@ export interface TaskResult extends ParseResult {
  */
 async function getParserBaseUrl(): Promise<string> {
   await ensureNacosConfig();
-  return process.env.PARSER_API_URL || '';
+  const url = process.env.PARSER_API_URL;
+  if (!url) {
+    throw new Error('Parse service not configured. Set PARSER_API_URL in your .env file.');
+  }
+  return url;
 }
 
 /**

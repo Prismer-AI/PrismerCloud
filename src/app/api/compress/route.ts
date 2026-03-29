@@ -105,8 +105,8 @@ export async function POST(request: NextRequest) {
     
     if (!config.apiKey) {
       return NextResponse.json(
-        { error: 'OpenAI API key not configured' },
-        { status: 500 }
+        { error: 'Content compression not available. Set OPENAI_API_KEY in your .env file. Get one at https://platform.openai.com/api-keys' },
+        { status: 503 }
       );
     }
 
