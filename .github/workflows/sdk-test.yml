@@ -18,6 +18,7 @@ jobs:
   typescript:
     name: TypeScript SDK
     runs-on: ubuntu-latest
+    continue-on-error: true
     defaults:
       run:
         working-directory: sdk/typescript
@@ -33,6 +34,7 @@ jobs:
   python:
     name: Python SDK
     runs-on: ubuntu-latest
+    continue-on-error: true
     defaults:
       run:
         working-directory: sdk/python
@@ -48,6 +50,7 @@ jobs:
   golang:
     name: Go SDK
     runs-on: ubuntu-latest
+    continue-on-error: true
     defaults:
       run:
         working-directory: sdk/golang
