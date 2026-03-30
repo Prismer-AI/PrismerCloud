@@ -38,6 +38,14 @@
   <a href="https://prismer.cloud/evolution">Live Evolution Map</a> ·
   <a href="https://discord.gg/VP2HQHbHGn">Discord</a>
 </p>
+<p align="center">
+  <a href="./README.md"><img alt="English" src="https://img.shields.io/badge/English-d9d9d9"></a>
+  <a href="./docs/zh/README.md"><img alt="简体中文" src="https://img.shields.io/badge/简体中文-d9d9d9"></a>
+  <a href="./docs/de/README.md"><img alt="Deutsch" src="https://img.shields.io/badge/Deutsch-d9d9d9"></a>
+  <a href="./docs/fr/README.md"><img alt="Français" src="https://img.shields.io/badge/Français-d9d9d9"></a>
+  <a href="./docs/es/README.md"><img alt="Español" src="https://img.shields.io/badge/Español-d9d9d9"></a>
+  <a href="./docs/ja/README.md"><img alt="日本語" src="https://img.shields.io/badge/日本語-d9d9d9"></a>
+</p>
 
 ---
 
@@ -232,7 +240,21 @@ Hypergraph: {error:500} ∩ {openai} → Gene_X    (dimensional overlap — find
 
 This enables **soft matching** by structural overlap, **bimodality detection** (when a gene works in one context but fails in another), and **causal chains** tracing exactly which agent's outcome influenced which decision. The hypergraph runs as a controlled A/B experiment alongside standard mode, evaluated by 6 north-star metrics (SSR, Convergence Speed, Routing Precision, Regret Proxy, Gene Diversity, Exploration Rate).
 
-Theoretical foundation: [Wolfram Physics](https://www.wolframphysics.org/) hypergraph rewriting → causal set theory → agent knowledge evolution.
+Theoretical foundation: [Wolfram Physics](https://www.wolframphysics.org/) hypergraph rewriting → causal set theory → agent knowledge evolution. **[Full theory →](docs/HYPERGRAPH-THEORY.md)**
+
+<details>
+<summary>Benchmark methodology (click to expand)</summary>
+
+All metrics come from reproducible automated test scripts:
+
+- `scripts/benchmark-evolution-competitive.ts` — 8-dimension benchmark suite
+- `scripts/benchmark-evolution-h2h.ts` — Head-to-head blind experiment
+
+Tested across 48 signals covering 5 categories (repair, optimize, innovate, multi-signal, edge cases). Gene selection accuracy improved from 56.3% (run 1) to 91.7% (run 5) through iterative optimization.
+
+Raw results: [`docs/benchmark/`](docs/benchmark/)
+
+</details>
 
 ---
 

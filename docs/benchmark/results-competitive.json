@@ -1,0 +1,305 @@
+{
+  "target": "https://cloud.prismer.dev",
+  "env": "test",
+  "timestamp": "2026-03-23T23:13:06.538Z",
+  "version": "1.7.2",
+  "results": [
+    {
+      "dimension": "D1",
+      "name": "Gene Selection 准确率",
+      "metrics": {
+        "total": 48,
+        "hit1": 44,
+        "hit3": 44,
+        "hit1_rate": 91.7,
+        "hit3_rate": 91.7,
+        "mrr": 0.917,
+        "create_suggested": 2,
+        "explore": 1,
+        "latency": {
+          "count": 48,
+          "avg": 1012,
+          "p50": 676,
+          "p95": 1779,
+          "p99": 1837,
+          "min": 375,
+          "max": 1837
+        },
+        "misses": [
+          "rate limit: miss (top1=ext_innovate_browser_fallback_v1_yhb3z6)",
+          "multi: 429+latency: miss (top1=seed_optimize_concurrency_limit_v1)",
+          "SignalTag: ratelimit rich: miss (top1=gene_repair_mmyj894w)",
+          "completed+search → cache: explore (no match)"
+        ]
+      },
+      "verdict": "PASS",
+      "notes": "hit@1=91.7%, hit@3=91.7%, MRR=0.917"
+    },
+    {
+      "dimension": "D2",
+      "name": "进化收敛速度",
+      "metrics": {
+        "patterns": [
+          {
+            "label": "timeout",
+            "capsules": 10,
+            "final_ssr": 0.7,
+            "ssr_trajectory": [0.6, 0.7],
+            "converged": true
+          },
+          {
+            "label": "OOM",
+            "capsules": 10,
+            "final_ssr": 0.6,
+            "ssr_trajectory": [0.4, 0.6],
+            "converged": true
+          },
+          {
+            "label": "auth",
+            "capsules": 10,
+            "final_ssr": 0.4,
+            "ssr_trajectory": [0.6, 0.4],
+            "converged": false
+          }
+        ],
+        "converged_count": 2,
+        "total_patterns": 3
+      },
+      "verdict": "PASS",
+      "notes": "2/3 converged (SSR≥0.6 within 10 capsules)"
+    },
+    {
+      "dimension": "D3",
+      "name": "跨 Agent 传递效率",
+      "metrics": {
+        "transfer_latency_ms": 267,
+        "hit_in_top3": true,
+        "hit_rank": 1,
+        "gene_id": "gene_repair_mn3sx90e"
+      },
+      "verdict": "PASS",
+      "notes": "transfer=267ms, hit@3=true, rank=1"
+    },
+    {
+      "dimension": "D4",
+      "name": "冷启动性能",
+      "metrics": {
+        "recommendations": 5,
+        "total": 5,
+        "avg_latency_ms": 284,
+        "results": [
+          {
+            "signal": "error:timeout",
+            "action": "apply_gene",
+            "latency": 310,
+            "gene_id": "seed_repair_timeout_v1_n4d8pb",
+            "confidence": 0.7
+          },
+          {
+            "signal": "error:500",
+            "action": "apply_gene",
+            "latency": 292,
+            "gene_id": "seed_repair_500_retry_v1_n4d8pb",
+            "confidence": 0
+          },
+          {
+            "signal": "error:oom",
+            "action": "apply_gene",
+            "latency": 292,
+            "gene_id": "seed_repair_oom_reduce_v1_n4d8pb",
+            "confidence": 0.8
+          },
+          {
+            "signal": "perf:high_latency",
+            "action": "apply_gene",
+            "latency": 279,
+            "gene_id": "seed_optimize_cache_first_v1_n4d8pb",
+            "confidence": 0
+          },
+          {
+            "signal": "error:context_length",
+            "action": "apply_gene",
+            "latency": 248,
+            "gene_id": "seed_innovate_context_compression_v1",
+            "confidence": 0
+          }
+        ],
+        "seed_gene_count": 45
+      },
+      "verdict": "PASS",
+      "notes": "5/5 immediate recs from seeds, avg=284ms"
+    },
+    {
+      "dimension": "D5",
+      "name": "支持规模",
+      "metrics": {
+        "total_genes": 83,
+        "total_capsules": 313,
+        "active_agents": 325,
+        "avg_success_rate": 65.5,
+        "map_nodes": 0,
+        "map_edges": 137,
+        "stats_latency_ms": 906,
+        "map_latency_ms": 1139
+      },
+      "verdict": "INFO",
+      "notes": "genes=83, capsules=313, agents=325"
+    },
+    {
+      "dimension": "D6",
+      "name": "安全性",
+      "metrics": {
+        "tests": [
+          {
+            "name": "Private gene isolation",
+            "pass": true,
+            "detail": "isolated"
+          },
+          {
+            "name": "Auth required",
+            "pass": true,
+            "detail": "status=401"
+          },
+          {
+            "name": "Cross-agent edit blocked",
+            "pass": true,
+            "detail": "status=404"
+          },
+          {
+            "name": "Invalid scope rejected",
+            "pass": true,
+            "detail": "status=400"
+          }
+        ],
+        "passed": 4,
+        "total": 4
+      },
+      "verdict": "PASS",
+      "notes": "4/4 security tests passed"
+    },
+    {
+      "dimension": "D7",
+      "name": "生态集成",
+      "metrics": {
+        "sdk_count": 7,
+        "sdks": ["TypeScript SDK", "Python SDK", "Go SDK", "Rust SDK", "MCP Server", "OpenClaw Channel", "REST API"],
+        "endpoints": [
+          {
+            "path": "/evolution/public/stats",
+            "ok": true,
+            "latency": 214
+          },
+          {
+            "path": "/evolution/public/hot",
+            "ok": true,
+            "latency": 214
+          },
+          {
+            "path": "/evolution/public/feed",
+            "ok": true,
+            "latency": 863
+          },
+          {
+            "path": "/evolution/public/genes?limit=3",
+            "ok": true,
+            "latency": 806
+          },
+          {
+            "path": "/evolution/public/metrics",
+            "ok": true,
+            "latency": 858
+          },
+          {
+            "path": "/evolution/stories",
+            "ok": true,
+            "latency": 833
+          },
+          {
+            "path": "/evolution/metrics",
+            "ok": true,
+            "latency": 808
+          },
+          {
+            "path": "/evolution/map",
+            "ok": true,
+            "latency": 1155
+          }
+        ],
+        "available": 8,
+        "total": 8
+      },
+      "verdict": "PASS",
+      "notes": "7 SDKs, 8/8 endpoints live"
+    },
+    {
+      "dimension": "D8",
+      "name": "可观测性",
+      "metrics": {
+        "checks": [
+          {
+            "name": "Public Stats",
+            "ok": true,
+            "latency": 243
+          },
+          {
+            "name": "Advanced Metrics",
+            "ok": true,
+            "latency": 242
+          },
+          {
+            "name": "A/B Metrics",
+            "ok": true,
+            "latency": 307
+          },
+          {
+            "name": "Stories",
+            "ok": true,
+            "latency": 219
+          },
+          {
+            "name": "Leaderboard",
+            "ok": true,
+            "latency": 328
+          },
+          {
+            "name": "Badges",
+            "ok": true,
+            "latency": 233
+          },
+          {
+            "name": "Unmatched Signals",
+            "ok": true,
+            "latency": 242
+          },
+          {
+            "name": "Feed",
+            "ok": true,
+            "latency": 351
+          }
+        ],
+        "available": 8,
+        "total": 8,
+        "north_star_metrics": [
+          "total_genes",
+          "total_capsules",
+          "avg_success_rate",
+          "active_agents",
+          "evolution_velocity_24h",
+          "evolution_velocity_7d",
+          "gene_diversity_index",
+          "exploration_rate",
+          "information_gain",
+          "surprise_score"
+        ]
+      },
+      "verdict": "PASS",
+      "notes": "8/8 endpoints, 10 north-star metrics"
+    }
+  ],
+  "summary": {
+    "pass": 7,
+    "warn": 0,
+    "fail": 0,
+    "info": 1
+  }
+}

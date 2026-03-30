@@ -1,0 +1,375 @@
+{
+  "timestamp": "2026-03-23T23:37:26.267Z",
+  "base_url": "https://cloud.prismer.dev/api/im",
+  "rate_limit_per_min": 10,
+  "capsules_per_scenario": 15,
+  "convergence": [
+    {
+      "label": "S1: Timeout repair (simple)",
+      "difficulty": "simple",
+      "final_ssr": 0.8666666666666667,
+      "selection_accuracy": 0.9333333333333333,
+      "convergence_at": 3,
+      "trajectory": [
+        {
+          "capsule": 1,
+          "ssr": 1,
+          "selectedCorrect": true,
+          "confidence": 1
+        },
+        {
+          "capsule": 2,
+          "ssr": 1,
+          "selectedCorrect": true,
+          "confidence": 0.2
+        },
+        {
+          "capsule": 3,
+          "ssr": 1,
+          "selectedCorrect": true,
+          "confidence": 0.4
+        },
+        {
+          "capsule": 4,
+          "ssr": 1,
+          "selectedCorrect": true,
+          "confidence": 0.4
+        },
+        {
+          "capsule": 5,
+          "ssr": 1,
+          "selectedCorrect": true,
+          "confidence": 0.4
+        },
+        {
+          "capsule": 6,
+          "ssr": 1,
+          "selectedCorrect": true,
+          "confidence": 0.4
+        },
+        {
+          "capsule": 7,
+          "ssr": 1,
+          "selectedCorrect": true,
+          "confidence": 0.4
+        },
+        {
+          "capsule": 8,
+          "ssr": 1,
+          "selectedCorrect": true,
+          "confidence": 0.4
+        },
+        {
+          "capsule": 9,
+          "ssr": 1,
+          "selectedCorrect": true,
+          "confidence": 0.4
+        },
+        {
+          "capsule": 10,
+          "ssr": 0.9,
+          "selectedCorrect": true,
+          "confidence": 0.4
+        },
+        {
+          "capsule": 11,
+          "ssr": 0.9090909090909091,
+          "selectedCorrect": true,
+          "confidence": 0.4
+        },
+        {
+          "capsule": 12,
+          "ssr": 0.9166666666666666,
+          "selectedCorrect": true,
+          "confidence": 0.4
+        },
+        {
+          "capsule": 13,
+          "ssr": 0.9230769230769231,
+          "selectedCorrect": true,
+          "confidence": 0.4
+        },
+        {
+          "capsule": 14,
+          "ssr": 0.8571428571428571,
+          "selectedCorrect": false,
+          "confidence": 0.3
+        },
+        {
+          "capsule": 15,
+          "ssr": 0.8666666666666667,
+          "selectedCorrect": true,
+          "confidence": 0.4
+        }
+      ]
+    },
+    {
+      "label": "S2: Code optimization (medium)",
+      "difficulty": "medium",
+      "final_ssr": 0.7333333333333333,
+      "selection_accuracy": 0.9333333333333333,
+      "convergence_at": 3,
+      "trajectory": [
+        {
+          "capsule": 1,
+          "ssr": 1,
+          "selectedCorrect": true,
+          "confidence": 1
+        },
+        {
+          "capsule": 2,
+          "ssr": 1,
+          "selectedCorrect": true,
+          "confidence": 0.2
+        },
+        {
+          "capsule": 3,
+          "ssr": 1,
+          "selectedCorrect": true,
+          "confidence": 0.4
+        },
+        {
+          "capsule": 4,
+          "ssr": 1,
+          "selectedCorrect": true,
+          "confidence": 0.4
+        },
+        {
+          "capsule": 5,
+          "ssr": 0.8,
+          "selectedCorrect": false,
+          "confidence": 0
+        },
+        {
+          "capsule": 6,
+          "ssr": 0.8333333333333334,
+          "selectedCorrect": true,
+          "confidence": 0.4
+        },
+        {
+          "capsule": 7,
+          "ssr": 0.8571428571428571,
+          "selectedCorrect": true,
+          "confidence": 0.4
+        },
+        {
+          "capsule": 8,
+          "ssr": 0.875,
+          "selectedCorrect": true,
+          "confidence": 0.4
+        },
+        {
+          "capsule": 9,
+          "ssr": 0.7777777777777778,
+          "selectedCorrect": true,
+          "confidence": 0.4
+        },
+        {
+          "capsule": 10,
+          "ssr": 0.7,
+          "selectedCorrect": true,
+          "confidence": 0.4
+        },
+        {
+          "capsule": 11,
+          "ssr": 0.7272727272727273,
+          "selectedCorrect": true,
+          "confidence": 0.4
+        },
+        {
+          "capsule": 12,
+          "ssr": 0.75,
+          "selectedCorrect": true,
+          "confidence": 0.4
+        },
+        {
+          "capsule": 13,
+          "ssr": 0.7692307692307693,
+          "selectedCorrect": true,
+          "confidence": 0.4
+        },
+        {
+          "capsule": 14,
+          "ssr": 0.7142857142857143,
+          "selectedCorrect": true,
+          "confidence": 0.4
+        },
+        {
+          "capsule": 15,
+          "ssr": 0.7333333333333333,
+          "selectedCorrect": true,
+          "confidence": 0.4
+        }
+      ]
+    },
+    {
+      "label": "S3: Multi-signal debugging (complex)",
+      "difficulty": "complex",
+      "final_ssr": 0.5333333333333333,
+      "selection_accuracy": 0.6,
+      "convergence_at": null,
+      "trajectory": [
+        {
+          "capsule": 1,
+          "ssr": 0,
+          "selectedCorrect": true,
+          "confidence": 0.8
+        },
+        {
+          "capsule": 2,
+          "ssr": 0,
+          "selectedCorrect": true,
+          "confidence": 0.2
+        },
+        {
+          "capsule": 3,
+          "ssr": 0,
+          "selectedCorrect": false,
+          "confidence": 1
+        },
+        {
+          "capsule": 4,
+          "ssr": 0.25,
+          "selectedCorrect": false,
+          "confidence": 1
+        },
+        {
+          "capsule": 5,
+          "ssr": 0.2,
+          "selectedCorrect": true,
+          "confidence": 0.4
+        },
+        {
+          "capsule": 6,
+          "ssr": 0.3333333333333333,
+          "selectedCorrect": false,
+          "confidence": 0.4
+        },
+        {
+          "capsule": 7,
+          "ssr": 0.42857142857142855,
+          "selectedCorrect": true,
+          "confidence": 0.4
+        },
+        {
+          "capsule": 8,
+          "ssr": 0.5,
+          "selectedCorrect": false,
+          "confidence": 0.4
+        },
+        {
+          "capsule": 9,
+          "ssr": 0.4444444444444444,
+          "selectedCorrect": false,
+          "confidence": 0.4
+        },
+        {
+          "capsule": 10,
+          "ssr": 0.5,
+          "selectedCorrect": true,
+          "confidence": 0.4
+        },
+        {
+          "capsule": 11,
+          "ssr": 0.5454545454545454,
+          "selectedCorrect": true,
+          "confidence": 0.4
+        },
+        {
+          "capsule": 12,
+          "ssr": 0.5833333333333334,
+          "selectedCorrect": true,
+          "confidence": 0.4
+        },
+        {
+          "capsule": 13,
+          "ssr": 0.5384615384615384,
+          "selectedCorrect": true,
+          "confidence": 0.4
+        },
+        {
+          "capsule": 14,
+          "ssr": 0.5,
+          "selectedCorrect": false,
+          "confidence": 0.4
+        },
+        {
+          "capsule": 15,
+          "ssr": 0.5333333333333333,
+          "selectedCorrect": true,
+          "confidence": 0.4
+        }
+      ]
+    }
+  ],
+  "ranking_stability": {
+    "avg_kendall_tau": 0.9166666666666666
+  },
+  "bimodality": {
+    "total_edges": 8,
+    "high": 3,
+    "medium": 0,
+    "low": 5,
+    "edges": [
+      {
+        "signalKey": "capability:debug|error:connection_refused|error:timeout|stage:api_call",
+        "geneId": "gene_diagnostic_mn3tl5k0",
+        "bimodality": 0,
+        "success": 0,
+        "failure": 2
+      },
+      {
+        "signalKey": "capability:debug|error:connection_refused|error:timeout|stage:api_call",
+        "geneId": "gene_repair_mn3tlbnl",
+        "bimodality": 0,
+        "success": 0,
+        "failure": 2
+      },
+      {
+        "signalKey": "capability:debug|error:connection_refused|error:timeout|stage:api_call",
+        "geneId": "gene_diagnostic_mn3tln3f",
+        "bimodality": 1,
+        "success": 0,
+        "failure": 1
+      },
+      {
+        "signalKey": "capability:debug|error:connection_refused|error:timeout|stage:api_call",
+        "geneId": "gene_repair_mn3tlhej",
+        "bimodality": 0,
+        "success": 2,
+        "failure": 0
+      },
+      {
+        "signalKey": "capability:code|tag:slow|task:completed",
+        "geneId": "gene_optimize_mn3tf7rq",
+        "bimodality": 0,
+        "success": 2,
+        "failure": 0
+      },
+      {
+        "signalKey": "capability:code|tag:slow|task:completed",
+        "geneId": "gene_optimize_mn3tfj7x",
+        "bimodality": 1,
+        "success": 0,
+        "failure": 1
+      },
+      {
+        "signalKey": "capability:search|error:timeout",
+        "geneId": "gene_repair_mn3t9ze2",
+        "bimodality": 0,
+        "success": 2,
+        "failure": 0
+      },
+      {
+        "signalKey": "capability:search|error:timeout",
+        "geneId": "gene_optimize_mn3taapj",
+        "bimodality": 1,
+        "success": 0,
+        "failure": 1
+      }
+    ]
+  },
+  "cross_agent_transfer": {
+    "attempts": 1
+  }
+}
