@@ -1,0 +1,149 @@
+{
+  "timestamp": "2026-03-24T00:42:28.723Z",
+  "prismer": "https://cloud.prismer.dev",
+  "evomap": "https://evomap.ai",
+  "phaseA": {
+    "prismerHits": 10,
+    "evoHits": 0,
+    "total": 10,
+    "details": [
+      {
+        "signal": "error:timeout",
+        "prismer": {
+          "hit": true,
+          "action": "apply_gene",
+          "gene_id": "ir_timeout_v1_niwspm"
+        },
+        "evomap": {
+          "hit": false
+        }
+      },
+      {
+        "signal": "error:429",
+        "prismer": {
+          "hit": true,
+          "action": "apply_gene",
+          "gene_id": "_ratelimit_v1_2j22c0"
+        },
+        "evomap": {
+          "hit": false
+        }
+      },
+      {
+        "signal": "error:401",
+        "prismer": {
+          "hit": true,
+          "action": "apply_gene",
+          "gene_id": "th_refresh_v1_ubncck"
+        },
+        "evomap": {
+          "hit": false
+        }
+      },
+      {
+        "signal": "error:500",
+        "prismer": {
+          "hit": true,
+          "action": "apply_gene",
+          "gene_id": "_500_retry_v1_vxrppg"
+        },
+        "evomap": {
+          "hit": false
+        }
+      },
+      {
+        "signal": "error:oom",
+        "prismer": {
+          "hit": true,
+          "action": "apply_gene",
+          "gene_id": "oom_reduce_v1_icjnka"
+        },
+        "evomap": {
+          "hit": false
+        }
+      },
+      {
+        "signal": "error:dns_resolution",
+        "prismer": {
+          "hit": true,
+          "action": "apply_gene",
+          "gene_id": "s_fallback_v1_niwspm"
+        },
+        "evomap": {
+          "hit": false
+        }
+      },
+      {
+        "signal": "error:json_parse",
+        "prismer": {
+          "hit": true,
+          "action": "apply_gene",
+          "gene_id": "json_parse_v1_2j22c0"
+        },
+        "evomap": {
+          "hit": false
+        }
+      },
+      {
+        "signal": "perf:high_latency",
+        "prismer": {
+          "hit": true,
+          "action": "apply_gene",
+          "gene_id": "ache_first_v1_ubncck"
+        },
+        "evomap": {
+          "hit": false
+        }
+      },
+      {
+        "signal": "error:context_length",
+        "prismer": {
+          "hit": true,
+          "action": "apply_gene",
+          "gene_id": "ompression_v1_vxrppg"
+        },
+        "evomap": {
+          "hit": false
+        }
+      },
+      {
+        "signal": "error:token_limit",
+        "prismer": {
+          "hit": true,
+          "action": "apply_gene",
+          "gene_id": "ompression_v1_icjnka"
+        },
+        "evomap": {
+          "hit": false
+        }
+      }
+    ],
+    "evoPool": 50
+  },
+  "phaseB": {
+    "error:timeout": {
+      "prismer": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+      "evomap": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    },
+    "error:429": {
+      "prismer": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+      "evomap": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    },
+    "error:oom": {
+      "prismer": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+      "evomap": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    }
+  },
+  "phaseC": {
+    "prismer": {
+      "latency": 268,
+      "hit": true
+    },
+    "evomap": {
+      "publishOk": false,
+      "promoted": false,
+      "latency": 11118,
+      "hit": false
+    }
+  }
+}

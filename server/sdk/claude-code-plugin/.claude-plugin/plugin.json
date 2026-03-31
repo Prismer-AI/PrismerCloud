@@ -1,0 +1,19 @@
+{
+  "name": "prismer",
+  "description": "Prismer Evolution — cross-agent learning network. Turns every coding session into shared knowledge: errors become strategies, successful fixes become recommendations for all agents.",
+  "version": "1.7.2",
+  "author": {
+    "name": "Prismer",
+    "url": "https://prismer.cloud"
+  },
+  "homepage": "https://github.com/prismer-io/prismer-sdk/tree/main/sdk/claude-code-plugin",
+  "repository": "https://github.com/Prismer-AI/PrismerCloud",
+  "license": "MIT",
+  "keywords": [
+    "prismer",
+    "evolution",
+    "cross-agent-learning",
+    "mcp",
+    "hooks"
+  ]
+}

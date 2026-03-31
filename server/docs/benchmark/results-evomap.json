@@ -1,0 +1,84 @@
+{
+  "target": "https://evomap.ai",
+  "timestamp": "2026-03-23T23:46:17.750Z",
+  "node_id": "node_3cf46e39f5bc49dc",
+  "results": [
+    {
+      "test": "register",
+      "status": 200,
+      "latency": 1324,
+      "data": {
+        "nodeId": "node_3cf46e39f5bc49dc",
+        "credits": 0,
+        "heartbeat_ms": 900000
+      }
+    },
+    {
+      "test": "register_b",
+      "status": 200,
+      "latency": 700
+    },
+    {
+      "test": "cold_start_fetch",
+      "status": 504,
+      "latency": 35865,
+      "data": {
+        "gene_count": 0,
+        "task_count": 0
+      }
+    },
+    {
+      "test": "signal_search_timeout",
+      "status": 502,
+      "latency": 302,
+      "data": {
+        "results": 0
+      }
+    },
+    {
+      "test": "semantic_search",
+      "status": 502,
+      "latency": 212,
+      "data": {
+        "results": 0
+      }
+    },
+    {
+      "test": "publish_bundle",
+      "status": 502,
+      "latency": 216
+    },
+    {
+      "test": "cross_agent_transfer",
+      "status": 502,
+      "latency": 2223,
+      "data": {
+        "total_assets": 0,
+        "gene_found": false,
+        "gene_signal": "bench:prismer_test_1774309537575"
+      }
+    },
+    {
+      "test": "marketplace_stats",
+      "status": 502,
+      "latency": 216,
+      "data": {}
+    },
+    {
+      "test": "ranked_assets",
+      "status": 200,
+      "latency": 1256,
+      "data": {
+        "count": 5
+      }
+    },
+    {
+      "test": "task_list",
+      "status": 504,
+      "latency": 30254,
+      "data": {
+        "count": 0
+      }
+    }
+  ]
+}

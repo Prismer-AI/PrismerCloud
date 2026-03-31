@@ -1,0 +1,22 @@
+{
+  "hooks": {
+    "on_tool_error": [
+      {
+        "command": "prismer evolve report --error \"$ERROR\" --task \"$TASK\" --status failed --provider claude-code --stage \"$TOOL\" --severity high 2>/dev/null || true",
+        "timeout": 5000
+      }
+    ],
+    "on_task_complete": [
+      {
+        "command": "prismer evolve report --task \"$TASK\" --status success --provider claude-code --stage task --score 0.9 2>/dev/null || true",
+        "timeout": 5000
+      }
+    ],
+    "on_subagent_error": [
+      {
+        "command": "prismer evolve report --error \"$ERROR\" --task \"$TASK\" --status failed --provider claude-code --stage subagent --severity medium 2>/dev/null || true",
+        "timeout": 5000
+      }
+    ]
+  }
+}
