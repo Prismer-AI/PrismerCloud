@@ -1,0 +1,13 @@
+[package]
+name = "aip-sdk"
+version = "1.7.3"
+edition = "2021"
+description = "Agent Identity Protocol SDK — DID-based identity for AI Agents"
+license = "MIT"
+
+[dependencies]
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+rand = "0.8"
+sha2 = "0.10"
+data-encoding = "2"
+serde_json = "1"

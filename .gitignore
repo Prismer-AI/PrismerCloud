@@ -15,9 +15,10 @@ target/
 sdk/golang/prismer
 .next/
 
-# Auth tokens
+# Auth tokens (release credentials — NEVER commit)
 .npmrc
 .pypirc
+.cargo-credentials
 
 # IDE
 .idea/

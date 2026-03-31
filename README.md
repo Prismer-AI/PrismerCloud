@@ -7,8 +7,8 @@
 <h1 align="center">Prismer Cloud</h1>
 
 <p align="center">
-  <strong>Open-Source Harness for Long-Running AI Agents</strong><br/>
-  <sub>Context, memory, evolution, orchestration, and communication — so your agent never starts from zero.</sub>
+  <strong>The Harness for AI Agent Evolution</strong><br/>
+  <sub>Your agent learns from every session. Errors become strategies, fixes become recommendations — shared across all agents.</sub>
 </p>
 
 <p align="center">
@@ -36,7 +36,7 @@
 
 <p align="center">
   <a href="https://prismer.cloud">Get API Key</a> ·
-  <a href="https://docs.prismer.ai">Docs</a> ·
+  <a href="https://prismer.cloud/docs">Docs</a> ·
   <a href="https://prismer.cloud/evolution">Live Evolution Map</a> ·
   <a href="https://discord.gg/VP2HQHbHGn">Discord</a>
 </p>
@@ -54,24 +54,9 @@
 <!-- TODO: Replace with 15-second demo GIF showing: MCP tool call → evolve_analyze → recommendation → evolve_record → Evolution Map update -->
 <!-- <p align="center"><img src="docs/demo.gif" width="720" /></p> -->
 
-## Try It Now — Zero Setup
-
-**Full API & CLI reference → [Skill.md](https://prismer.cloud/docs/Skill.md)**
-
-```bash
-# Install the SDK + CLI
-npm i @prismer/sdk
-prismer context load "https://example.com"
-prismer evolve analyze "error:timeout" # agent infra info
-```
-
-MCP Server needs no API key to explore. SDK & CLI require a key from [prismer.cloud](https://prismer.cloud).
-
----
-
 ## Why an Agent Harness?
 
-Long-running agents fail without infrastructure. [Anthropic's research](https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents) identifies the core requirements: reliable context, error recovery, persistent memory, and cross-session learning. 
+Long-running agents fail without infrastructure. [Anthropic's research](https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents) identifies the core requirements: reliable context, error recovery, persistent memory, and cross-session learning.
 
 Most teams build these ad hoc. Prismer provides them as a single, integrated layer.
 
@@ -79,20 +64,20 @@ Most teams build these ad hoc. Prismer provides them as a single, integrated lay
 <tr>
 <td width="16%" align="center">
 
+**Evolution**<br/>
+<sub>Agents learn from each other's outcomes</sub>
+
+</td>
+<td width="16%" align="center">
+
 **Context**<br/>
-<sub>Web content compressed for LLM windows</sub>
+<sub>Web content compressed & cached for LLM windows</sub>
 
 </td>
 <td width="16%" align="center">
 
 **Memory**<br/>
 <sub>Working + episodic, persists across sessions</sub>
-
-</td>
-<td width="16%" align="center">
-
-**Evolution**<br/>
-<sub>Agents learn from each other's outcomes</sub>
 
 </td>
 <td width="16%" align="center">
@@ -116,44 +101,79 @@ Most teams build these ad hoc. Prismer provides them as a single, integrated lay
 </tr>
 </table>
 
-**Without a harness**, your agent:
-- Fetches the same URL twice (no context cache)
-- Forgets what it learned last session (no memory)
-- Hits the same error 50 other agents already solved (no evolution)
-- Can't coordinate with other agents (no messaging)
-- Retries failed tasks blindly (no orchestration)
+> The future agent & model should be plugin , agent workspace info & data should follow human not agent.
 
-**With Prismer**, add 2 lines and all of this is handled.
 
----
+## Quick Start
 
-## 30-Second Quick Start
+### For AI Agents (Copy & Paste)
 
-### SDK
+> **Read & reference: [https://prismer.cloud/docs/Skill.md]([sdk/skill/SKILL.md](https://prismer.cloud/docs/Skill.md))** — install it as a skill for your.
+
+### Step 1: Setup (one-time, all platforms)
+
+```bash
+# Install CLI
+
+npm i -g @prismer/sdk                
+
+# recommended
+prismer setup                        
+# Browser sign-in → key auto-saved with 1000 free credits
+
+prismer setup --agent                
+# No browser, agent auto-register it'self with 100 free credits
+
+prismer setup <your-api-key>         
+# Or provide a key directly
+
+prismer status                       # Verify: shows key, credits, connection
+```
+
+This saves your key to `~/.prismer/config.toml` — all plugins and SDKs read from it automatically.
+
+### Step 2: Choose your integration
+
+#### Claude Code Plugin (zero-code, recommended)
+
+```bash
+# claude code console
+/plugin marketplace add Prismer-AI/PrismerCloud    # add plugin source
+/plugin install prismer@prismer                     # install the plugin
+```
+
+Evolution runs automatically from the first session — errors detected, strategies matched, outcomes recorded, web content cached. No code changes needed.
+
+#### MCP Server (Cursor / Windsurf / any MCP client)
+
+```bash
+npx -y @prismer/mcp-server          # 33 tools, reads key from ~/.prismer/config.toml
+```
+
+#### SDK (custom integration)
 
 ```typescript
 import { EvolutionRuntime } from '@prismer/sdk';
 const runtime = new EvolutionRuntime({ apiKey: 'sk-prismer-...' });
 
-// Agent hits an error → get a battle-tested fix from the network
 const fix = await runtime.suggest('ETIMEDOUT: connection timed out');
-// → { strategy: 'exponential_backoff_with_jitter', confidence: 0.95 }
+// → { strategy: 'exponential_backoff_with_jitter', confidence: 0.85 }
 
-// Report what worked → every agent gets smarter
 runtime.learned('ETIMEDOUT', 'success', 'Fixed by backoff');
 ```
 
-### Plugin: Claude Code Plugin (automatic)
-
-```bash
-claude plugin add prismer
-```
-
-Evolution hooks run automatically — errors trigger `suggest()`, outcomes trigger `learned()`. No code changes to your workflow.
-
 ---
 
+
 ## Works Everywhere
+
+<table>
+<tr><td><strong>Agent Integrations</strong></td><td><strong>Install</strong></td><td><strong>What it does</strong></td></tr>
+<tr><td>Claude Code Plugin</td><td><code>/plugin marketplace add Prismer-AI/PrismerCloud</code></td><td>8-hook auto-evolution, context cache, skill sync</td></tr>
+<tr><td>MCP Server</td><td><code>npx -y @prismer/mcp-server</code></td><td>33 tools for Claude Code / Cursor / Windsurf</td></tr>
+<tr><td>OpenCode Plugin</td><td><code>opencode plugins install @prismer/opencode-plugin</code></td><td>Evolution hooks for OpenCode</td></tr>
+<tr><td>OpenClaw Channel</td><td><code>openclaw plugins install @prismer/openclaw-channel</code></td><td>IM channel + 14 agent tools</td></tr>
+</table>
 
 <table>
 <tr><td><strong>SDKs</strong></td><td><strong>Install</strong></td></tr>
@@ -163,56 +183,36 @@ Evolution hooks run automatically — errors trigger `suggest()`, outcomes trigg
 <tr><td>Rust</td><td><code>cargo add prismer-sdk</code></td></tr>
 </table>
 
-<table>
-<tr><td><strong>Agent Integrations</strong></td><td><strong>Install</strong></td></tr>
-<tr><td>🔌 MCP Server (Claude Code / Cursor / Windsurf)</td><td><code>npx -y @prismer/mcp-server</code></td></tr>
-<tr><td>🤖 Claude Code Plugin</td><td><code>claude plugin add prismer</code></td></tr>
-<tr><td>⚡ OpenCode Plugin</td><td><code>opencode plugins install @prismer/opencode-plugin</code></td></tr>
-<tr><td>🦞 OpenClaw Channel</td><td><code>openclaw plugins install @prismer/openclaw-channel</code></td></tr>
-</table>
-
-**26 MCP tools** · **7 SDKs** · **159 API routes** · **534 tests passing**
-
 ---
 
 ## Evolution Engine: How Agents Learn
 
 The evolution layer uses **Thompson Sampling with Hierarchical Bayesian priors** to select the best strategy for any error signal. Each outcome feeds back into the model — the more agents use it, the smarter every recommendation becomes.
+
 ![structure](docs/structure.png)
 
+```
+Agent A hits error:timeout → Prismer suggests "exponential backoff" (confidence: 0.85)
+Agent A applies fix, succeeds → outcome recorded, gene score bumped
+Agent B hits error:timeout → same fix, now confidence: 0.91
+Network effect: every agent's success improves every other agent's accuracy
+```
+
+**How it works:**
+
+1. **Signal detection** — 13 error patterns classified from tool output (build failures, TypeScript errors, timeouts, etc.)
+2. **Gene matching** — Three-layer scoring: exact tag match → category prefix match → semantic similarity
+3. **Thompson Sampling** — Beta posterior sampling with hierarchical pooling (local agent data + global cross-agent prior)
+4. **Outcome recording** — Success/failure updates edge counts, quality-gated to prevent spam
+5. **Person-Level Sync** — All agent instances of the same user share genes (digital twin foundation)
+
 **Key properties:**
-- **91.7% accuracy** — hit@1 across 48 test signals, verified over 5 benchmark rounds
-- **267ms propagation** — one agent learns, all agents see it instantly
-- **100% cold start** — 50 seed genes cover common error patterns from day one
-- **Sub-millisecond local** — Thompson Sampling runs in-process, no network needed for cached genes
-- **Convergence guaranteed** — ranking stability (Kendall tau) reaches 0.917
+- **Sub-millisecond local** — cached genes require no network
+- **267ms propagation** — one agent learns, all agents benefit
+- **Cold-start covered** — 50 seed genes for common error patterns
+- **Convergence** — ranking stability (Kendall tau) reaches 0.917 in benchmarks
 
-### Hypergraph Layer: Beyond String Matching
 
-Standard systems store knowledge as flat `(signal, gene)` pairs — `"error:500|openai|api_call"` won't match `"error:500|openai|parsing"`. Prismer's hypergraph layer decomposes every execution into **independent atoms** (signal type, provider, stage, severity, gene, agent, outcome) and connects them as N-ary hyperedges.
-
-```
-Standard: "error:500|openai|api_call" → Gene_X  (exact string match only)
-Hypergraph: {error:500} ∩ {openai} → Gene_X    (dimensional overlap — finds it)
-```
-
-This enables **soft matching** by structural overlap, **bimodality detection** (when a gene works in one context but fails in another), and **causal chains** tracing exactly which agent's outcome influenced which decision. The hypergraph runs as a controlled A/B experiment alongside standard mode, evaluated by 6 north-star metrics (SSR, Convergence Speed, Routing Precision, Regret Proxy, Gene Diversity, Exploration Rate).
-
-Theoretical foundation: [Wolfram Physics](https://www.wolframphysics.org/) hypergraph rewriting → causal set theory → agent knowledge evolution. **[Full theory →](docs/HYPERGRAPH-THEORY.md)**
-
-<details>
-<summary>📊 Benchmark methodology (click to expand)</summary>
-
-All metrics come from reproducible automated test scripts:
-
-- `scripts/benchmark-evolution-competitive.ts` — 8-dimension benchmark suite
-- `scripts/benchmark-evolution-h2h.ts` — Head-to-head blind experiment
-
-Tested across 48 signals covering 5 categories (repair, optimize, innovate, multi-signal, edge cases). Gene selection accuracy improved from 56.3% (run 1) to 91.7% (run 5) through iterative optimization.
-
-Raw results: [`docs/benchmark/`](docs/benchmark/)
-
-</details>
 
 ---
 
@@ -220,42 +220,69 @@ Raw results: [`docs/benchmark/`](docs/benchmark/)
 
 | Capability | API | What it does |
 |-----------|-----|-------------|
+| **Evolution** | Evolution API | Gene CRUD, analyze, record, distill, cross-agent sync, skill export |
 | **Context** | Context API | Load, search, and cache web content — compressed for LLM context windows (HQCC) |
 | **Parsing** | Parse API | Extract structured markdown from PDFs and images (fast + hires OCR modes) |
 | **Messaging** | IM Server | Agent-to-agent messaging, groups, conversations, WebSocket + SSE real-time delivery |
-| **Evolution** | Evolution API | Gene CRUD, analyze, record, distill, cross-agent sync, skill export |
 | **Memory** | Memory Layer | Working memory (compaction) + episodic memory (persistent files) |
 | **Orchestration** | Task API | Cloud task store with cron/interval scheduling, retry, exponential backoff |
 | **Security** | E2E Encryption | Ed25519 identity keys, ECDH key exchange, per-conversation signing policies |
-| **Webhooks** | Webhook API | HMAC-SHA256 signature verification for incoming agent events |
+| **Skills** | Skill Catalog | Browse, install, and sync reusable agent skills from the evolution network |
 
-
-
----
-
-## Repository Structure
-
-```
-PrismerCloud/
-└── sdk/
-    ├── typescript/         # @prismer/sdk — npm
-    ├── python/             # prismer — PyPI
-    ├── golang/             # Go SDK — go get
-    ├── rust/               # prismer-sdk — crates.io
-    ├── mcp/                # @prismer/mcp-server — 26 tools
-    ├── claude-code-plugin/ # Claude Code hooks + skills
-    ├── opencode-plugin/    # OpenCode evolution hooks
-    ├── openclaw-channel/   # OpenClaw IM + discovery + 14 tools
-    └── scripts/            # Build & release automation
-```
+More in [sdk page](sdk/prismer-cloud/README.md)
 
 ---
 
-## Coming Soon: Agent Park 🏘️
+## Agent Identity Protocol (AIP)
 
-A pixel-art town where you can **watch agents collaborate in real-time**. Each building maps to a different API zone — agents move between the Tavern (messaging), Laboratory (evolution), Library (context), and more.
+Today's agents have no identity of their own — just API keys assigned by platforms. Switch platforms? Identity gone. Reputation gone.
 
-Spectator mode — no login required. [Follow the progress →](https://github.com/Prismer-AI/PrismerCloud/issues)
+AIP gives every agent a **self-sovereign cryptographic identity** based on W3C DIDs:
+
+```
+Ed25519 Private Key → Public Key → did:key:z6Mk...
+                                    ↑
+                      Globally unique, self-generated,
+                      no registration, no platform dependency
+```
+
+```typescript
+import { AIPIdentity } from '@prismer/aip-sdk';
+
+const agent = await AIPIdentity.create();     // instant, offline, no API call
+console.log(agent.did);                       // did:key:z6Mk...
+
+const sig = await agent.sign(data);           // Ed25519 signature
+await AIPIdentity.verify(data, sig, agent.did); // anyone can verify with just the DID
+```
+
+**Four layers:** Identity (DID:KEY) → DID Document → Delegation (Human→Agent→SubAgent chains) → Verifiable Credentials (portable reputation).
+
+**No blockchain. No gas fees.** Pure cryptography — Ed25519 signs at 15,000 ops/sec.
+
+**[Read the full AIP documentation →](sdk/aip/README.md)**
+
+---
+
+## Self-Host
+
+Run your own Prismer Cloud instance — fully standalone, no external backend needed:
+
+```bash
+git clone https://github.com/Prismer-AI/PrismerCloud.git
+cd PrismerCloud/server
+cp .env.example .env        # edit JWT_SECRET at minimum
+docker compose up -d         # localhost:3000, ready in ~30s
+```
+
+IM messaging, evolution engine, memory, tasks, and WebSocket/SSE all work out of the box with zero external API keys. Add `OPENAI_API_KEY` and `EXASEARCH_API_KEY` to unlock smart context loading.
+
+Full configuration, SDK connection, and operations guide: **[server/README.md](server/README.md)**
+
+---
+
+
+
 
 ---
 
@@ -263,11 +290,11 @@ Spectator mode — no login required. [Follow the progress →](https://github.c
 
 We welcome contributions! Some ideas to get started:
 
-- 🧬 **Add a seed gene** — teach agents a new error-handling strategy
-- 🔧 **Build an MCP tool** — extend the 26-tool MCP server
-- 🌐 **Add a language SDK** — Java, Swift, C#, ...
-- 📖 **Translate docs** — help agents worldwide
-- 🐛 **Report bugs** — every issue helps
+- **Add a seed gene** — teach agents a new error-handling strategy
+- **Build an MCP tool** — extend the 33-tool MCP server
+- **Add a language SDK** — Java, Swift, C#, ...
+- **Translate docs** — help agents worldwide
+- **Report bugs** — every issue helps
 
 See our [Good First Issues](https://github.com/Prismer-AI/PrismerCloud/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22) to get started.
 
@@ -277,34 +304,9 @@ See our [Good First Issues](https://github.com/Prismer-AI/PrismerCloud/issues?q=
 
 ---
 
-## Beyond Pairwise: Hypergraph Evolution
-
-Most agent learning systems store knowledge as flat `(signal, gene)` pairs. When your agent hits `error:500` from OpenAI during `parsing`, it won't find the fix that was learned during `api_call` — even though it's the same error from the same provider.
-
-Prismer's evolution engine models executions as **N-ary hyperedges** — preserving all dimensional context (signal type, provider, stage, severity, gene, agent, outcome) as independent atoms in an inverted index.
-
-```
-Standard: "error:500|openai|api_call" → Gene_X  (exact match only)
-Hypergraph: {error:500} ∩ {openai} → Gene_X    (dimensional overlap)
-```
-
-This enables:
-- **Soft matching** — find relevant genes by structural overlap, not string equality
-- **Bimodality detection** — discover when a gene works in one context but fails in another
-- **Causal chains** — trace exactly which agent's outcome influenced which decision
-- **Convergence guarantees** — Thompson Sampling with Hierarchical Bayesian priors, measured by 6 north-star metrics
-
-The hypergraph layer runs as a experimental alongside the standard mode, evaluated independently using System Success Rate, Convergence Speed, Routing Precision, Regret Proxy, Gene Diversity, and Exploration Rate.
-
-Theoretical foundation: [Wolfram Physics](https://www.wolframphysics.org/) hypergraph rewriting → causal set theory → agent knowledge evolution.
-
-**[Read the full theory →](docs/HYPERGRAPH-THEORY.md)** · [中文](docs/zh/HYPERGRAPH-THEORY.md) · [Deutsch](docs/de/HYPERGRAPH-THEORY.md) · [Français](docs/fr/HYPERGRAPH-THEORY.md) · [Español](docs/es/HYPERGRAPH-THEORY.md) · [日本語](docs/ja/HYPERGRAPH-THEORY.md)
-
----
-
 ## Star History
 
-If you find Prismer useful, please **⭐ star this repo** — it helps us reach more developers building with AI agents.
+If you find Prismer useful, please **star this repo** — it helps us reach more developers building with AI agents.
 
 [![Star History Chart](https://api.star-history.com/svg?repos=Prismer-AI/PrismerCloud&type=Date)](https://star-history.com/#Prismer-AI/PrismerCloud&Date)
 

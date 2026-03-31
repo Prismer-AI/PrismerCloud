@@ -10,27 +10,31 @@ PrismerCloud is a multi-language SDK monorepo for the [Prismer Cloud](https://pr
 
 **`sdk/` 目录是从 `/Users/prismer/workspace/prismer-cloud-next/sdk/` 同步过来的，不是本地开发的。**
 
-任何对 SDK 的修改（bug fix、新功能、配置变更）都必须：
-1. 先在源码仓库 `prismer-cloud-next/sdk/` 中修改
-2. 然后通过 `build/sync.sh` 同步到本仓库
-3. 在本仓库验证、打包、发布
+任何对 SDK 的修改都必须：
+1. 先在闭源仓库 `prismer-cloud-next/sdk/` 中修改
+2. 然后通过 `sdk/build/sync.sh` 同步到本仓库
+3. 在本仓库执行 release
 
-**绝对不要直接修改 `PrismerCloud/sdk/` 下的文件** — 下次 `build/sync.sh` 会覆盖所有改动。
+**绝对不要直接修改 `PrismerCloud/sdk/` 下的文件** — 下次 sync 会覆盖。
 
-本仓库的职责是：release 管道（sync → test → verify → pack → release），不是开发。
+**分工：** 闭源仓库跑编译/打包/测试（到 pack 为止），开源仓库执行 release。两边 `sdk/build/` 脚本完全一致。
 
 ## Build & Release Pipeline
 
 ```bash
-build/sync.sh          # 从源码仓库同步 sdk/
-build/test.sh           # 运行所有测试（生产环境）
-build/verify.sh         # 版本一致性 + 构建验证
-build/pack.sh           # 打包所有产物到 build/artifacts/
-build/release.sh        # 发布到 GitHub + npm + PyPI + crates.io
-build/version.sh X.Y.Z  # 版本号全量更新（17 个文件）
+# 脚本统一在 sdk/build/ 下
+sdk/build/sync.sh                          # 闭源 → 开源同步
+sdk/build/test.sh --scope aip              # 测试 AIP
+sdk/build/test.sh --scope prismer-cloud    # 测试 Cloud
+sdk/build/verify.sh --scope all            # 版本一致性 + 编译验证
+sdk/build/pack.sh --scope all --clean      # 打包产物
+sdk/build/version.sh --scope aip 1.7.4     # AIP 版本 bump
+sdk/build/version.sh --scope prismer-cloud 1.7.4  # Cloud 版本 bump
+sdk/build/release.sh --scope aip           # 发布 AIP（先发）
+sdk/build/release.sh --scope prismer-cloud # 发布 Cloud（后发）
 ```
 
-完整文档见 `docs/release-workflow.md`。
+完整文档见 `sdk/build/WORKFLOW.md`。
 
 ## Build Commands
 

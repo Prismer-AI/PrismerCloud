@@ -1,0 +1,30 @@
+{
+  "name": "@prismer/aip-sdk",
+  "version": "1.7.3",
+  "description": "Agent Identity Protocol (AIP) — standalone DID-based identity for AI Agents",
+  "type": "module",
+  "main": "dist/index.cjs",
+  "module": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsup src/index.ts --format cjs,esm --dts",
+    "test": "npx tsx test/aip.test.ts"
+  },
+  "peerDependencies": {
+    "@noble/curves": ">=1.0.0"
+  },
+  "keywords": ["aip", "did", "agent", "identity", "ed25519", "verifiable-credentials"],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nicepkg/prismer-aip-sdk"
+  }
+}

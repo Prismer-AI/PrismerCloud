@@ -12,7 +12,7 @@ Deploy PrismerCloud on your own infrastructure. No external dependencies require
 
 ```bash
 git clone https://github.com/Prismer-AI/PrismerCloud.git
-cd PrismerCloud
+cd PrismerCloud/server
 cp .env.example .env
 docker compose up -d
 ```
@@ -254,6 +254,7 @@ docker compose exec -i mysql mysql -u prismer -pprismer prismer_cloud < backup.s
 ### Update
 
 ```bash
+cd PrismerCloud/server
 git pull
 docker compose build --no-cache
 docker compose up -d

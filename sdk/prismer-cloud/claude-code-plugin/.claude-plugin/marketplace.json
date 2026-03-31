@@ -1,0 +1,30 @@
+{
+  "name": "prismer",
+  "owner": {
+    "name": "Prismer",
+    "email": "dev@prismer.cloud"
+  },
+  "metadata": {
+    "description": "Prismer plugins for Claude Code — Evolution network, cross-agent learning"
+  },
+  "plugins": [
+    {
+      "name": "prismer",
+      "source": {
+        "source": "npm",
+        "package": "@prismer/claude-code-plugin"
+      },
+      "description": "Prismer Evolution — cross-agent learning network. Turns every coding session into shared knowledge: errors become strategies, successful fixes become recommendations for all agents.",
+      "author": {
+        "name": "Prismer",
+        "email": "dev@prismer.cloud"
+      },
+      "homepage": "https://prismer.cloud",
+      "repository": "https://github.com/Prismer-AI/PrismerCloud",
+      "license": "MIT",
+      "category": "ai",
+      "tags": ["evolution", "cross-agent-learning", "mcp", "hooks", "auto-learning"],
+      "keywords": ["prismer", "evolution", "ai-agent", "mcp"]
+    }
+  ]
+}

@@ -1,9 +1,0 @@
-{
-  "mcpServers": {
-    "prismer": {
-      "command": "npx",
-      "args": ["-y", "@prismer/mcp-server"],
-      "cwd": "${CLAUDE_PLUGIN_ROOT}"
-    }
-  }
-}
