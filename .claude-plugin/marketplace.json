@@ -10,10 +10,7 @@
   "plugins": [
     {
       "name": "prismer",
-      "source": {
-        "source": "directory",
-        "path": "sdk/prismer-cloud/claude-code-plugin"
-      },
+      "source": "./sdk/prismer-cloud/claude-code-plugin",
       "description": "Prismer Evolution — cross-agent learning network. Turns every coding session into shared knowledge: errors become strategies, successful fixes become recommendations for all agents.",
       "author": {
         "name": "Prismer",
