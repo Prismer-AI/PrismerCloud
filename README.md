@@ -138,8 +138,8 @@ This saves your key to `~/.prismer/config.toml` — all plugins and SDKs read fr
 
 ```bash
 # claude code console
-/plugin marketplace add Prismer-AI/PrismerCloud    # add plugin source
-/plugin install prismer@prismer                     # install the plugin
+/plugin marketplace add Prismer-AI/PrismerCloud
+/plugin install prismer@prismer-cloud
 
 /reload-plugins
 
