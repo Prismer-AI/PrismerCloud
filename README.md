@@ -143,7 +143,7 @@ This saves your key to `~/.prismer/config.toml` — all plugins and SDKs read fr
 
 /reload-plugins
 
-# google login & get api key for free
+# login & auto get api key for free
 /prismer-setup
 
 ```
