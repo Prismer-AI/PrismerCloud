@@ -110,7 +110,7 @@ Most teams build these ad hoc. Prismer provides them as a single, integrated lay
 
 > **Read & reference: [https://prismer.cloud/docs/Skill.md]([sdk/skill/SKILL.md](https://prismer.cloud/docs/Skill.md))** — install it as a skill for your.
 
-### Step 1: Setup (one-time, all platforms)
+### Option 1: Setup (one-time, all platforms)
 
 ```bash
 # Install CLI
@@ -132,23 +132,34 @@ prismer status                       # Verify: shows key, credits, connection
 
 This saves your key to `~/.prismer/config.toml` — all plugins and SDKs read from it automatically.
 
-### Step 2: Choose your integration
+### Option 2: Start Evolution automatically in Claude Code
 
 #### Claude Code Plugin (zero-code, recommended)
-
+Open Claude Code
 ```bash
 # claude code console
 /plugin marketplace add Prismer-AI/PrismerCloud
 /plugin install prismer@prismer-cloud
-
 /reload-plugins
+```
+Then restart claude code
 
+```bash
 # login & auto get api key for free
+
 /prismer-setup
+
+# open Browser & Login to auto set api key to local 
+# GET START AUTO EVOLUTION (Don't need have any other operation) 
+# At same time you can use slash command manually like:
+/evolve-create                             (prismer) Create a reusable gene from a novel fix pattern. Only invoke manually.
+/evolve-analyze                            (prismer) Query the evolution network for known fix strategies when stuck on an error.
+/evolve-session-review                     (prismer) Automatically triggered by Stop hook. Reviews session for evolution learnings.
+/evolve-record                             (prismer) Record the outcome after applying an evolution strategy.
 
 ```
 
-Evolution runs automatically from the first session — errors detected, strategies matched, outcomes recorded, web content cached. No code changes needed.
+> Evolution runs automatically from the first session — errors detected, strategies matched, outcomes recorded, web content cached. No code changes needed.
 
 #### MCP Server (Cursor / Windsurf / any MCP client)
 
