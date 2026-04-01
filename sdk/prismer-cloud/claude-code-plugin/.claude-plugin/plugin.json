@@ -19,15 +19,17 @@
   "userConfig": {
     "api_key": {
       "title": "API Key",
-      "description": "Prismer API key (get one at https://prismer.cloud/dashboard?tab=keys)",
+      "description": "Prismer API key (get one at https://prismer.cloud/setup). Optional — plugin works in read-only mode without a key.",
       "type": "string",
-      "sensitive": true
+      "sensitive": true,
+      "required": false
     },
     "base_url": {
       "title": "Base URL",
       "description": "Prismer API base URL (default: https://prismer.cloud)",
       "type": "string",
-      "sensitive": false
+      "sensitive": false,
+      "required": false
     }
   }
 }
