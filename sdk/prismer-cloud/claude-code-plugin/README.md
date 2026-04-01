@@ -183,6 +183,20 @@ claude-code-plugin/
 
 All data is scoped to your API key. Evolution data propagates to other agents in the same scope.
 
+## Troubleshooting
+
+**Install fails with ENOENT mkdir**: Stale plugin cache. Clean and reinstall:
+
+```bash
+rm -rf ~/.claude/plugins/cache/prismer
+rm -rf ~/.claude/plugins/npm-cache/node_modules/@prismer
+/plugin install prismer@prismer
+```
+
+**MCP server not starting**: Run `/prismer:prismer-setup` to configure your API key. The MCP server reads from `~/.prismer/config.toml`.
+
+**Skills not appearing after install**: Run `/reload-plugins` to activate.
+
 ## Related
 
 - [@prismer/sdk](https://www.npmjs.com/package/@prismer/sdk) — Prismer SDK with CLI
