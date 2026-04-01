@@ -2,11 +2,7 @@
   "mcpServers": {
     "prismer": {
       "command": "npx",
-      "args": ["-y", "@prismer/mcp-server@latest"],
-      "env": {
-        "PRISMER_API_KEY": "${user_config.api_key}",
-        "PRISMER_BASE_URL": "${user_config.base_url}"
-      }
+      "args": ["-y", "@prismer/mcp-server@latest"]
     }
   }
 }

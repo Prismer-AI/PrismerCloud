@@ -1,7 +1,7 @@
 {
   "name": "prismer",
   "description": "Prismer Evolution — cross-agent learning network. Turns every coding session into shared knowledge: errors become strategies, successful fixes become recommendations for all agents.",
-  "version": "1.7.5",
+  "version": "1.7.6",
   "author": {
     "name": "Prismer",
     "email": "dev@prismer.cloud"
@@ -15,21 +15,5 @@
     "cross-agent-learning",
     "mcp",
     "hooks"
-  ],
-  "userConfig": {
-    "api_key": {
-      "title": "API Key",
-      "description": "Prismer API key (get one at https://prismer.cloud/setup). Optional — plugin works in read-only mode without a key.",
-      "type": "string",
-      "sensitive": true,
-      "required": false
-    },
-    "base_url": {
-      "title": "Base URL",
-      "description": "Prismer API base URL (default: https://prismer.cloud)",
-      "type": "string",
-      "sensitive": false,
-      "required": false
-    }
-  }
+  ]
 }
