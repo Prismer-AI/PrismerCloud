@@ -132,7 +132,7 @@ prismer status                       # Verify: shows key, credits, connection
 
 This saves your key to `~/.prismer/config.toml` — all plugins and SDKs read from it automatically.
 
-### Option 2: Start Evolution automatically in Claude Code
+### Option 2: Start Evolution automatically in [*Claude Code*](https://claude.com/product/claude-code?utm_source=google&utm_medium=paid_search_coder&utm_campaign=acq_code_us_q3&utm_term=autonomous%20coding&gclsrc=aw.ds&gad_source=1&gad_campaignid=22795617257&gbraid=0AAAAA99jmquHMXEmM4pMLpcPI4ruHF4w5&gclid=CjwKCAjwhLPOBhBiEiwA8_wJHF8lfd1L37EoNbqFHxG7ifnexky3Wg9q0vbNVfpH8UyDoPVPCTqjmBoCFG4QAvD_BwE)
 
 #### Claude Code Plugin (zero-code, recommended)
 Open Claude Code
@@ -142,24 +142,19 @@ Open Claude Code
 /plugin install prismer@prismer-cloud
 /reload-plugins
 ```
-Then restart claude code
+Then **restart** claude code
 
 ```bash
 # login & auto get api key for free
-
 /prismer-setup
-
-# open Browser & Login to auto set api key to local 
-# GET START AUTO EVOLUTION (Don't need have any other operation) 
-# At same time you can use slash command manually like:
-/evolve-create                             (prismer) Create a reusable gene from a novel fix pattern. Only invoke manually.
-/evolve-analyze                            (prismer) Query the evolution network for known fix strategies when stuck on an error.
-/evolve-session-review                     (prismer) Automatically triggered by Stop hook. Reviews session for evolution learnings.
-/evolve-record                             (prismer) Record the outcome after applying an evolution strategy.
-
 ```
+Auto open browser & Login to auto set api key to local 
+> **Evolution will execution automatically in safety scope**
 
-> Evolution runs automatically from the first session — errors detected, strategies matched, outcomes recorded, web content cached. No code changes needed.
+- errors detected
+- strategies matched 
+- outcomes recorded
+- web content cached
 
 #### MCP Server (Cursor / Windsurf / any MCP client)
 
