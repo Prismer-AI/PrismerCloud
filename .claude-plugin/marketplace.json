@@ -1,8 +1,8 @@
 {
-  "name": "prismer",
+  "name": "prismer-cloud",
   "owner": {
     "name": "Prismer",
-    "email": "dev@prismer.cloud"
+    "email": "info@prismer.ai"
   },
   "metadata": {
     "description": "Prismer plugins for Claude Code — Evolution network, cross-agent learning"
@@ -17,7 +17,7 @@
       "description": "Prismer Evolution — cross-agent learning network. Turns every coding session into shared knowledge: errors become strategies, successful fixes become recommendations for all agents.",
       "author": {
         "name": "Prismer",
-        "email": "dev@prismer.cloud"
+        "email": "info@prismer.ai"
       },
       "homepage": "https://prismer.cloud",
       "repository": "https://github.com/Prismer-AI/PrismerCloud",
