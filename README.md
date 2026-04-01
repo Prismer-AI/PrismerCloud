@@ -22,7 +22,7 @@
   <img src="https://img.shields.io/badge/SDKs-333?style=flat-square" alt="SDKs">
   <a href="https://www.npmjs.com/package/@prismer/sdk"><img src="https://img.shields.io/npm/v/@prismer/sdk?style=flat-square&labelColor=black&color=cb3837&logo=npm&logoColor=white&label=sdk" alt="npm"></a>
   <a href="https://pypi.org/project/prismer/"><img src="https://img.shields.io/pypi/v/prismer?style=flat-square&labelColor=black&color=3775A9&logo=python&logoColor=white&label=prismer" alt="PyPI"></a>
-  <a href="https://pkg.go.dev/github.com/Prismer-AI/PrismerCloud/sdk/golang"><img src="https://img.shields.io/badge/go-pkg.go.dev-007d9c?style=flat-square&labelColor=black&logo=go&logoColor=white" alt="Go"></a>
+  <a href="https://pkg.go.dev/github.com/Prismer-AI/PrismerCloud/sdk/prismer-cloud/golang"><img src="https://img.shields.io/badge/go-pkg.go.dev-007d9c?style=flat-square&labelColor=black&logo=go&logoColor=white" alt="Go"></a>
   <a href="https://crates.io/crates/prismer-sdk"><img src="https://img.shields.io/crates/v/prismer-sdk?style=flat-square&labelColor=black&color=dea584&logo=rust&logoColor=white&label=prismer--sdk" alt="crates.io"></a>
 </p>
 
@@ -140,6 +140,12 @@ This saves your key to `~/.prismer/config.toml` — all plugins and SDKs read fr
 # claude code console
 /plugin marketplace add Prismer-AI/PrismerCloud    # add plugin source
 /plugin install prismer@prismer                     # install the plugin
+
+/reload-plugins
+
+# google login & get api key for free
+/prismer-setup
+
 ```
 
 Evolution runs automatically from the first session — errors detected, strategies matched, outcomes recorded, web content cached. No code changes needed.
@@ -179,7 +185,7 @@ runtime.learned('ETIMEDOUT', 'success', 'Fixed by backoff');
 <tr><td><strong>SDKs</strong></td><td><strong>Install</strong></td></tr>
 <tr><td>TypeScript / JavaScript</td><td><code>npm i @prismer/sdk</code></td></tr>
 <tr><td>Python</td><td><code>pip install prismer</code></td></tr>
-<tr><td>Go</td><td><code>go get github.com/Prismer-AI/PrismerCloud/sdk/golang</code></td></tr>
+<tr><td>Go</td><td><code>go get github.com/Prismer-AI/PrismerCloud/sdk/prismer-cloud/golang</code></td></tr>
 <tr><td>Rust</td><td><code>cargo add prismer-sdk</code></td></tr>
 </table>
 
@@ -278,11 +284,6 @@ docker compose up -d         # localhost:3000, ready in ~30s
 IM messaging, evolution engine, memory, tasks, and WebSocket/SSE all work out of the box with zero external API keys. Add `OPENAI_API_KEY` and `EXASEARCH_API_KEY` to unlock smart context loading.
 
 Full configuration, SDK connection, and operations guide: **[server/README.md](server/README.md)**
-
----
-
-
-
 
 ---
 
