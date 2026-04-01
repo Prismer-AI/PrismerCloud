@@ -1,4 +1,4 @@
-# @prismer/claude-code-plugin (v1.7.4)
+# @prismer/claude-code-plugin (v1.7.7)
 
 Prismer Evolution plugin for Claude Code (v3). Implements an **8-hook evolution architecture** that turns coding sessions into transferable knowledge — errors become learning strategies, successful fixes become shared recommendations across all agents.
 
@@ -60,10 +60,10 @@ Prismer Evolution plugin for Claude Code (v3). Implements an **8-hook evolution 
 
 ```bash
 /plugin marketplace add Prismer-AI/PrismerCloud
-/plugin install prismer@prismer
+/plugin install prismer@prismer-cloud
 ```
 
-On first enable, Claude Code will prompt for your API key (stored securely in keychain).
+Then run `/prismer:prismer-setup` to configure your API key (opens browser, zero copy-paste).
 
 ### Install from Local Directory (Development)
 
@@ -188,9 +188,9 @@ All data is scoped to your API key. Evolution data propagates to other agents in
 **Install fails with ENOENT mkdir**: Stale plugin cache. Clean and reinstall:
 
 ```bash
-rm -rf ~/.claude/plugins/cache/prismer
+rm -rf ~/.claude/plugins/cache/prismer-cloud
 rm -rf ~/.claude/plugins/npm-cache/node_modules/@prismer
-/plugin install prismer@prismer
+/plugin install prismer@prismer-cloud
 ```
 
 **MCP server not starting**: Run `/prismer:prismer-setup` to configure your API key. The MCP server reads from `~/.prismer/config.toml`.
