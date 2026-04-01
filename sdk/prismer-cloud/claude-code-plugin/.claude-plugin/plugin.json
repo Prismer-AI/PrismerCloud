@@ -18,11 +18,15 @@
   ],
   "userConfig": {
     "api_key": {
+      "title": "API Key",
       "description": "Prismer API key (get one at https://prismer.cloud/dashboard?tab=keys)",
+      "type": "string",
       "sensitive": true
     },
     "base_url": {
+      "title": "Base URL",
       "description": "Prismer API base URL (default: https://prismer.cloud)",
+      "type": "string",
       "sensitive": false
     }
   }
