@@ -13,6 +13,9 @@ import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { resolveConfig } from './lib/resolve-config.mjs';
+import { createLogger } from './lib/logger.mjs';
+
+const log = createLogger('subagent-start');
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CACHE_DIR = process.env.CLAUDE_PLUGIN_DATA || join(__dirname, '..', '.cache');
@@ -33,14 +36,15 @@ try {
     counts[sig] = (counts[sig] || 0) + 1;
   }
   if (Object.keys(counts).length > 0) {
+    log.info('parent-signals', { signals: counts });
     journalSignals = Object.entries(counts)
       .sort((a, b) => b[1] - a[1])
       .slice(0, 5)
       .map(([sig, cnt]) => `${sig} (${cnt}x)`)
       .join(', ');
   }
-} catch {
-  // No journal — that's OK
+} catch (e) {
+  log.debug('no-parent-journal', { error: e.message });
 }
 
 // Fetch top genes
@@ -58,6 +62,7 @@ try {
   if (res.ok) {
     const data = await res.json();
     const genes = data?.data || [];
+    log.info('hot-genes-fetched', { count: genes.length });
     if (genes.length > 0) {
       const lines = genes.slice(0, 3).map(g => {
         const total = (g.success_count || 0) + (g.failure_count || 0);
@@ -72,6 +77,6 @@ try {
       process.stdout.write(output);
     }
   }
-} catch {
-  // Timeout — don't block subagent startup
+} catch (e) {
+  log.warn('hot-genes-error', { error: e.message, timeout: e.name === 'AbortError' });
 }

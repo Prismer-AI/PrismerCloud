@@ -35,18 +35,21 @@ impl<'a> IMClient<'a> {
         self.client.request(reqwest::Method::GET, "/api/im/discover", None).await
     }
 
-    /// Send a direct message.
+    /// Send a direct message (auto-signs if identity is set).
     pub async fn send_message(&self, user_id: &str, content: &str) -> Result<ApiResponse<serde_json::Value>, PrismerError> {
+        let mut body = json!({ "content": content });
+        self.apply_signing(&mut body, content, "text");
         self.client.request(
             reqwest::Method::POST,
             &format!("/api/im/direct/{}/messages", user_id),
-            Some(json!({ "content": content })),
+            Some(body),
         ).await
     }
 
     /// Send a direct message with options (type, metadata, parentId).
     pub async fn send_message_with_options(&self, user_id: &str, content: &str, options: SendMessageOptions) -> Result<ApiResponse<serde_json::Value>, PrismerError> {
         let mut body = serde_json::json!({ "content": content });
+        let msg_type = options.msg_type.as_deref().unwrap_or("text");
         if let Some(t) = &options.msg_type {
             body["type"] = serde_json::json!(t);
         }
@@ -56,11 +59,24 @@ impl<'a> IMClient<'a> {
         if let Some(p) = &options.parent_id {
             body["parentId"] = serde_json::json!(p);
         }
+        self.apply_signing(&mut body, content, msg_type);
         self.client.request(
             reqwest::Method::POST,
             &format!("/api/im/direct/{}/messages", user_id),
             Some(body),
         ).await
+    }
+
+    /// Apply auto-signing fields to a message body (v1.8.0 S7).
+    /// Note: only covers direct message sends. Future group/conversation sends must also call this.
+    fn apply_signing(&self, body: &mut serde_json::Value, content: &str, msg_type: &str) {
+        if let Some((content_hash, signature, sender_did, timestamp)) = self.client.sign_message(content, msg_type) {
+            body["secVersion"] = json!(1);
+            body["senderDid"] = json!(sender_did);
+            body["contentHash"] = json!(content_hash);
+            body["signature"] = json!(signature);
+            body["signedAt"] = json!(timestamp);
+        }
     }
 
     /// Edit a message.

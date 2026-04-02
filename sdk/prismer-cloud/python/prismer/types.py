@@ -117,7 +117,7 @@ class ParseDocument(BaseModel):
     page_count: int = Field(alias="pageCount")
     metadata: Optional[Dict[str, Any]] = None
     images: Optional[List[ParseDocumentImage]] = None
-    estimated_time: Optional[int] = Field(default=None, alias="estimatedTime")
+    estimated_time: Optional[float] = Field(default=None, alias="estimatedTime")
 
     class Config:
         populate_by_name = True

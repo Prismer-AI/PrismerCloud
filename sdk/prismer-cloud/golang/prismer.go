@@ -22,6 +22,10 @@ package prismer
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -64,6 +68,9 @@ type Client struct {
 	imAgent    string
 	httpClient *http.Client
 	im         *IMClient
+	// v1.8.0 S7: AIP identity for auto-signing
+	identityPrivKey ed25519.PrivateKey
+	identityDID     string
 }
 
 type ClientOption func(*Client)
@@ -90,6 +97,74 @@ func WithHTTPClient(client *http.Client) ClientOption {
 
 func WithIMAgent(agent string) ClientOption {
 	return func(c *Client) { c.imAgent = agent }
+}
+
+// WithIdentityAuto derives Ed25519 signing key from the API key via SHA-256 (v1.8.0 S7).
+func WithIdentityAuto() ClientOption {
+	return func(c *Client) {
+		if c.apiKey == "" {
+			return
+		}
+		seed := sha256.Sum256([]byte(c.apiKey))
+		c.identityPrivKey = ed25519.NewKeyFromSeed(seed[:])
+		pub := c.identityPrivKey.Public().(ed25519.PublicKey)
+		c.identityDID = publicKeyToDIDKeyGo(pub)
+	}
+}
+
+// WithIdentityKey sets an explicit Ed25519 private key for signing (Base64-encoded, v1.8.0 S7).
+func WithIdentityKey(privKeyBase64 string) ClientOption {
+	return func(c *Client) {
+		seed, err := base64.StdEncoding.DecodeString(privKeyBase64)
+		if err != nil || len(seed) != 32 {
+			return
+		}
+		c.identityPrivKey = ed25519.NewKeyFromSeed(seed)
+		pub := c.identityPrivKey.Public().(ed25519.PublicKey)
+		c.identityDID = publicKeyToDIDKeyGo(pub)
+	}
+}
+
+// publicKeyToDIDKeyGo converts Ed25519 public key to did:key format.
+func publicKeyToDIDKeyGo(pub ed25519.PublicKey) string {
+	// Multicodec ed25519-pub = 0xed, varint-encoded = [0xed, 0x01]
+	multicodec := append([]byte{0xed, 0x01}, pub...)
+	// Base58btc encode with 'z' prefix
+	return "did:key:z" + base58Encode(multicodec)
+}
+
+// base58Encode encodes bytes as Base58btc (Bitcoin alphabet).
+// TODO: Replace with github.com/btcsuite/btcutil/base58 or similar when adding go.sum dependencies.
+func base58Encode(data []byte) string {
+	const alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+	result := make([]byte, 0, len(data)*2)
+	x := make([]byte, len(data))
+	copy(x, data)
+	for len(x) > 0 {
+		var carry int
+		for i := 0; i < len(x); i++ {
+			carry = carry*256 + int(x[i])
+			x[i] = byte(carry / 58)
+			carry %= 58
+		}
+		result = append(result, alphabet[carry])
+		// Remove leading zeros
+		for len(x) > 0 && x[0] == 0 {
+			x = x[1:]
+		}
+	}
+	// Add leading '1's for leading zero bytes
+	for _, b := range data {
+		if b != 0 {
+			break
+		}
+		result = append(result, alphabet[0])
+	}
+	// Reverse
+	for i, j := 0, len(result)-1; i < j; i, j = i+1, j-1 {
+		result[i], result[j] = result[j], result[i]
+	}
+	return string(result)
 }
 
 // NewClient creates a new Prismer client.
@@ -346,6 +421,29 @@ func newIMClient(c *Client) *IMClient {
 }
 
 func (im *IMClient) do(ctx context.Context, method, path string, body interface{}, query map[string]string) (*IMResult, error) {
+	// v1.8.0 S7: Auto-sign message POST requests
+	if method == "POST" && strings.Contains(path, "/messages") && im.client.identityPrivKey != nil {
+		if m, ok := body.(map[string]interface{}); ok {
+			if _, hasSig := m["signature"]; !hasSig {
+				content, _ := m["content"].(string)
+				contentHash := sha256.Sum256([]byte(content))
+				contentHashHex := hex.EncodeToString(contentHash[:])
+				msgType, _ := m["type"].(string)
+				if msgType == "" {
+					msgType = "text"
+				}
+				timestamp := time.Now().UnixMilli()
+				payload := fmt.Sprintf("1|%s|%s|%d|%s", im.client.identityDID, msgType, timestamp, contentHashHex)
+				sig := ed25519.Sign(im.client.identityPrivKey, []byte(payload))
+				m["secVersion"] = 1
+				m["senderDid"] = im.client.identityDID
+				m["contentHash"] = contentHashHex
+				m["signature"] = base64.StdEncoding.EncodeToString(sig)
+				m["signedAt"] = timestamp
+			}
+		}
+	}
+
 	data, err := im.client.doRequest(ctx, method, path, body, query)
 	if err != nil {
 		return nil, err

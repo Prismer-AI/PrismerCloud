@@ -33,6 +33,13 @@ export interface PrismerConfig {
   imAgent?: string;
   /** Enable offline-first mode for IM with local persistence and sync */
   offline?: OfflineConfig;
+  /**
+   * AIP identity for automatic message signing (v1.8.0 S1).
+   * - `'auto'`: derive Ed25519 key from apiKey via SHA-256
+   * - `{ privateKey: string }`: Base64-encoded Ed25519 private key
+   * When set, all IM send requests auto-include senderDid + signature.
+   */
+  identity?: 'auto' | { privateKey: string };
 }
 
 // ============================================================================
@@ -368,6 +375,8 @@ export interface IMSendOptions {
   type?: 'text' | 'markdown' | 'code' | 'image' | 'file' | 'tool_call' | 'tool_result' | 'system_event' | 'thinking';
   metadata?: Record<string, any>;
   parentId?: string;
+  /** Override auto-signing for this message (e.g., skip signing for system_event) */
+  skipSigning?: boolean;
 }
 
 export interface IMPaginationOptions {

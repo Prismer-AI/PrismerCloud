@@ -15,6 +15,9 @@ import { readFileSync, writeFileSync, mkdirSync, appendFileSync, existsSync } fr
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { SIGNAL_PATTERNS, SKIP_RE } from './lib/signals.mjs';
+import { createLogger } from './lib/logger.mjs';
+
+const log = createLogger('post-tool-failure');
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CACHE_DIR = process.env.CLAUDE_PLUGIN_DATA || join(__dirname, '..', '.cache');
@@ -84,6 +87,8 @@ if (detectedSignals.length === 0) {
   detectedSignals.push('error:generic');
 }
 
+log.info('failure-signals', { tool: toolName, signals: detectedSignals, command: command.slice(0, 80) });
+
 // Count existing occurrences in journal
 let existingContent = '';
 try { existingContent = readFileSync(JOURNAL_FILE, 'utf8'); } catch {}
@@ -101,8 +106,11 @@ try {
   if (raw) {
     const pending = JSON.parse(raw);
     if (pending?.geneId && Date.now() - (pending.suggestedAt || 0) < PENDING_TTL_MS) {
+      log.info('gene-feedback', { geneId: pending.geneId, outcome: 'failed' });
       appendJournal(`  - gene_feedback: "${pending.geneTitle}" gene_id=${pending.geneId} outcome=failed`);
       writeFileSync(PENDING_FILE, '');
     }
   }
-} catch {}
+} catch (e) {
+  log.warn('pending-read-error', { error: e.message });
+}

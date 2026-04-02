@@ -28,12 +28,18 @@ pub mod identity;
 pub mod files;
 
 use reqwest::Client as HttpClient;
+use ed25519_dalek::{SigningKey, Signer};
+use sha2::{Sha256, Digest};
 
 /// Main Prismer SDK client.
 pub struct PrismerClient {
     http: HttpClient,
     api_key: String,
     base_url: String,
+    /// v1.8.0 S7: Optional Ed25519 signing key for auto-signing IM messages.
+    signing_key: Option<SigningKey>,
+    /// DID:key identifier derived from signing key.
+    pub identity_did: Option<String>,
 }
 
 impl PrismerClient {
@@ -43,7 +49,39 @@ impl PrismerClient {
             http: HttpClient::new(),
             api_key: api_key.to_string(),
             base_url: base_url.unwrap_or("https://prismer.cloud").to_string(),
+            signing_key: None,
+            identity_did: None,
         }
+    }
+
+    /// Create a client with auto-signing from API key (v1.8.0 S7).
+    /// Derives Ed25519 key via SHA-256(api_key).
+    pub fn new_with_identity(api_key: &str, base_url: Option<&str>) -> Self {
+        let seed: [u8; 32] = Sha256::digest(api_key.as_bytes()).into();
+        let signing_key = SigningKey::from_bytes(&seed);
+        let pub_key = signing_key.verifying_key();
+        let did = public_key_to_did_key(&pub_key.to_bytes());
+        Self {
+            http: HttpClient::new(),
+            api_key: api_key.to_string(),
+            base_url: base_url.unwrap_or("https://prismer.cloud").to_string(),
+            signing_key: Some(signing_key),
+            identity_did: Some(did),
+        }
+    }
+
+    /// Sign a message payload and return (content_hash, signature, sender_did).
+    /// Sign a message payload (lite format: secVersion|senderDid|type|timestamp|contentHash).
+    /// Returns (content_hash, signature_b64, sender_did, timestamp_ms).
+    pub(crate) fn sign_message(&self, content: &str, msg_type: &str) -> Option<(String, String, String, u64)> {
+        let key = self.signing_key.as_ref()?;
+        let did = self.identity_did.as_ref()?;
+        let content_hash = hex::encode(Sha256::digest(content.as_bytes()));
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH).ok()?.as_millis() as u64;
+        let payload = format!("1|{}|{}|{}|{}", did, msg_type, timestamp, content_hash);
+        let sig = key.sign(payload.as_bytes());
+        Some((content_hash, base64::Engine::encode(&base64::engine::general_purpose::STANDARD, sig.to_bytes()), did.clone(), timestamp))
     }
 
     /// Get Context API client.
@@ -115,6 +153,14 @@ impl PrismerClient {
 
         serde_json::from_str(&text).map_err(|e| types::PrismerError::Parse(e.to_string()))
     }
+}
+
+/// Convert Ed25519 public key bytes to did:key format.
+fn public_key_to_did_key(pub_key: &[u8; 32]) -> String {
+    // Multicodec ed25519-pub = 0xed, varint = [0xed, 0x01]
+    let mut multicodec = vec![0xed, 0x01];
+    multicodec.extend_from_slice(pub_key);
+    format!("did:key:z{}", bs58::encode(&multicodec).into_string())
 }
 
 #[cfg(test)]

@@ -18,6 +18,9 @@ import { readFileSync, writeFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { resolveConfig } from './lib/resolve-config.mjs';
+import { createLogger } from './lib/logger.mjs';
+
+const log = createLogger('session-end');
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CACHE_DIR = process.env.CLAUDE_PLUGIN_DATA || join(__dirname, '..', '.cache');
@@ -57,6 +60,7 @@ try {
 // Conservative approach: skip if marker exists. The Stop hook's explicit MCP path is
 // higher quality than journal regex extraction, so prefer that path when available.
 if (journal.includes('[evolution-review-triggered]')) {
+  log.info('skip-stop-hook-marker');
   process.exit(0);
 }
 
@@ -84,12 +88,37 @@ while ((m = signalRe.exec(journal)) !== null) {
   signalCounts[m[1]] = (signalCounts[m[1]] || 0) + 1;
 }
 
+// --- Read checklist summary (from MCP session_checklist tool) ---
+
+const CHECKLIST_FILE = join(CACHE_DIR, 'checklist-summary.json');
+try {
+  const raw = readFileSync(CHECKLIST_FILE, 'utf8');
+  const items = JSON.parse(raw);
+  const completed = items.filter(i => i.status === 'completed');
+  if (completed.length > 0) {
+    signalCounts[`checklist_completed:${completed.length}`] = 1;
+    // Each completed item as a lightweight outcome
+    for (const item of completed) {
+      outcomes.push({
+        title: item.content,
+        geneId: '',
+        outcome: 'success',
+      });
+    }
+    log.info('checklist-loaded', { completed: completed.length, total: items.length });
+  }
+} catch {
+  // No checklist or parse error — not critical
+}
+
 // Skip if nothing to sync
 if (outcomes.length === 0 && Object.keys(signalCounts).length === 0) {
   process.exit(0);
 }
 
 // --- Async push to evolution network ---
+
+log.info('sync-push-start', { outcomes: outcomes.length, signals: Object.keys(signalCounts).length });
 
 try {
   let cursor = 0;
@@ -128,6 +157,7 @@ try {
   clearTimeout(timer);
 
   if (res.ok) {
+    log.info('sync-push-ok', { outcomes: outcomes.length });
     const data = await res.json();
     if (data?.data?.pulled?.cursor) {
       try {
@@ -139,7 +169,8 @@ try {
       } catch {}
     }
   }
-} catch {
+} catch (e) {
+  log.warn('sync-push-failed', { error: e.message, timeout: e.name === 'AbortError' });
   // Sync failed — queue for retry on next SessionStart
   try {
     const queueFile = join(CACHE_DIR, 'sync-retry-queue.json');
@@ -157,6 +188,9 @@ try {
       // Keep max 10 entries to prevent unbounded growth
       if (queue.length > 10) queue = queue.slice(-10);
       writeFileSync(queueFile, JSON.stringify(queue));
+      log.info('retry-queue-written', { entries: queue.length });
     }
-  } catch {}
+  } catch (qe) {
+    log.warn('retry-queue-error', { error: qe.message });
+  }
 }

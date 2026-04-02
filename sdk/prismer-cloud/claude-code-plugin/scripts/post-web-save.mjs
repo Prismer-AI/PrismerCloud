@@ -15,6 +15,9 @@
 
 import { readFileSync } from 'fs';
 import { resolveConfig } from './lib/resolve-config.mjs';
+import { createLogger } from './lib/logger.mjs';
+
+const log = createLogger('post-web-save');
 
 const { apiKey, baseUrl } = resolveConfig();
 if (!apiKey) process.exit(0);
@@ -38,6 +41,7 @@ function isPublicUrl(url) {
 
 function saveToCache(url, content) {
   if (!content || content.length < 100) return;
+  log.info('cache-save', { url: url.slice(0, 120), bytes: content.length });
   fetch(`${baseUrl}/api/context/save`, {
     method: 'POST',
     headers: {
@@ -46,7 +50,9 @@ function saveToCache(url, content) {
     },
     body: JSON.stringify({ url, hqcc: content }),
     signal: AbortSignal.timeout(5000),
-  }).catch(() => {});
+  }).catch((e) => {
+    log.warn('cache-save-failed', { url: url.slice(0, 120), error: e.message });
+  });
 }
 
 // --- WebFetch: save URL + content ---

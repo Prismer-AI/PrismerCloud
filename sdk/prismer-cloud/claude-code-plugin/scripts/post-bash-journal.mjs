@@ -18,6 +18,9 @@ import { readFileSync, writeFileSync, mkdirSync, appendFileSync, existsSync } fr
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { SIGNAL_PATTERNS, SKIP_RE, hasError, countSignal } from './lib/signals.mjs';
+import { createLogger } from './lib/logger.mjs';
+
+const log = createLogger('post-bash-journal');
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CACHE_DIR = process.env.CLAUDE_PLUGIN_DATA || join(__dirname, '..', '.cache');
@@ -101,6 +104,7 @@ if (toolName === 'Bash') {
 
 // Skip trivial commands (Bash only)
 if (toolName === 'Bash' && SKIP_RE.test(command)) {
+  log.debug('skip-trivial', { command: command.slice(0, 80) });
   readPending(); // side-effect: clears if expired
   process.exit(0);
 }
@@ -114,6 +118,7 @@ if (!errorDetected) {
   // Success path
   const pending = readPending();
   if (pending) {
+    log.info('gene-feedback', { geneId: pending.geneId, outcome: 'success' });
     appendJournal(`  - gene_feedback: "${pending.geneTitle}" gene_id=${pending.geneId} outcome=success`);
     clearPending();
   }
@@ -121,6 +126,7 @@ if (!errorDetected) {
 }
 
 // Error detected — extract signals and write to journal
+log.info('error-detected', { tool: toolName, command: command.slice(0, 80) });
 const detectedSignals = [];
 for (const { pattern, type } of SIGNAL_PATTERNS) {
   if (pattern.test(result) || pattern.test(command)) {
@@ -143,6 +149,7 @@ for (const sig of detectedSignals) {
 // Gene feedback on failure
 const pending = readPending();
 if (pending) {
+  log.info('gene-feedback', { geneId: pending.geneId, outcome: 'failed' });
   appendJournal(`  - gene_feedback: "${pending.geneTitle}" gene_id=${pending.geneId} outcome=failed`);
   clearPending();
 }

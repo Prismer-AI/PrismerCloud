@@ -29,8 +29,8 @@ for pkg in "${NPM_PACKAGES[@]}"; do
   fi
   cd "$local_dir"
 
-  # Build if needed
-  if [[ -f "package.json" ]] && grep -q '"build"' package.json; then
+  # Build if package has a scripts.build entry (not openclaw.build or other nested "build")
+  if [[ -f "package.json" ]] && node -e "const p=require('./package.json'); process.exit(p.scripts?.build ? 0 : 1)" 2>/dev/null; then
     run_or_dry npm run build 2>&1 | tail -2
   fi
 

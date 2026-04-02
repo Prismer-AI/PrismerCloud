@@ -29,6 +29,7 @@ import { registerSkillUninstall } from './tools/skill-uninstall.js';
 import { registerSkillInstalled } from './tools/skill-installed.js';
 import { registerSkillContent } from './tools/skill-content.js';
 import { registerSkillSearch } from './tools/skill-search.js';
+import { registerSessionChecklist } from './tools/session-checklist.js';
 import { getApiKey } from './lib/client.js';
 
 const server = new McpServer({
@@ -73,6 +74,7 @@ registerSkillInstalled(server);
 registerSkillContent(server);
 registerSkillSearch(server);
 registerSkillSync(server);
+registerSessionChecklist(server);
 
 async function main() {
   if (!getApiKey()) {

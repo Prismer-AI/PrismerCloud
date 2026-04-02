@@ -19,6 +19,9 @@ dirs = "5"
 urlencoding = "2"
 toml = "0.8"
 clap = { version = "4", features = ["derive"] }
+ed25519-dalek = { version = "2", features = ["hazmat"] }
+base64 = "0.22"
+bs58 = "0.5"
 
 [[bin]]
 name = "prismer"

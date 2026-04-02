@@ -1,3 +1,25 @@
+## [1.7.8] - 2026-04-02
+
+### Added — **Dev Mode & Observability**
+- `scripts/dev.sh`: 本地开发模式启动脚本 — `--plugin-dir` 直接加载，修改后 `/clear` 即生效
+- `scripts/test-hook.mjs`: Hook 隔离测试工具 — 模拟 Claude Code 调用单个 hook，支持自定义 stdin/env
+- `scripts/lib/logger.mjs`: 结构化日志基础设施 — JSON 格式写入 `prismer-debug.log`，自动轮转 100KB
+- 全部 9 个 hook 接入结构化日志 (info/warn/error 级别)
+- SessionStart 健康报告: `[Prismer] ✓ scope:xxx | genes:N | sync:ok | Nms`
+- `skills/debug-log/SKILL.md`: `/prismer:debug-log` 查看调试日志
+- `skills/plugin-dev/SKILL.md`: `/prismer:plugin-dev` 完整开发指南 (快速迭代/调试/测试/发布)
+
+### Changed — **Architecture (P6)**
+- **MCP 从 npm 包分离**: `.mcp.json` 不再随 `npm publish` 分发，改为可选安装 (`claude mcp add`)
+- **Per-scope 冷却**: Stop hook 冷却从全局改为 per-project (`last-block-{scope}.json`)
+- **MCP 版本固定**: `.mcp.json` 模板从 `@latest` 改为 `@1.7.7`
+- **Cache 自动清理**: SessionStart 清理 >7 天的 block 文件 + 日志轮转
+- **Setup skill 更新**: 增加 MCP 可选安装步骤引导
+
+### Fixed
+- **长 session 进化静默失效**: resume/compact 不轮转 journal，导致 `[evolution-review-triggered]` 标记永久存在，整个 session 只能触发一次进化。改为检查标记时间戳 + 冷却期判断
+- 项目 A 触发 Stop hook 后项目 B 在 1 小时内无法触发的问题 (per-scope 冷却修复)
+
 ## [1.7.4] - 2026-04-01
 
 ### Added — **Data Loop Closure**

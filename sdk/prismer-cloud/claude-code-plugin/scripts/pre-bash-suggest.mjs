@@ -18,6 +18,9 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { resolveConfig } from './lib/resolve-config.mjs';
 import { SIGNAL_PATTERNS, ERROR_CONTEXT_RE, SKIP_RE, countSignal } from './lib/signals.mjs';
+import { createLogger } from './lib/logger.mjs';
+
+const log = createLogger('pre-bash-suggest');
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CACHE_DIR = process.env.CLAUDE_PLUGIN_DATA || join(__dirname, '..', '.cache');
@@ -77,10 +80,13 @@ for (const sig of signals) {
 
 // Not stuck yet — first occurrence, let agent handle it
 if (maxCount < STUCK_THRESHOLD) {
+  log.debug('not-stuck', { maxCount, threshold: STUCK_THRESHOLD });
   process.exit(0);
 }
 
 // --- Agent is stuck (>= 2 occurrences of same signal) → query evolution ---
+
+log.info('stuck-detected', { maxCount, signals: signals.map(s => s.type) });
 
 if (!API_KEY) {
   const hint = `[Prismer Evolution] Repeated error detected (${maxCount}x): ${signals.map(s => s.type).join(', ')}. Set PRISMER_API_KEY to get fix recommendations.`;
@@ -105,7 +111,10 @@ try {
   });
 
   clearTimeout(timer);
-  if (!res.ok) process.exit(0);
+  if (!res.ok) {
+    log.warn('evolution-query-failed', { status: res.status });
+    process.exit(0);
+  }
 
   const data = await res.json();
   const advice = data?.data;
@@ -124,6 +133,7 @@ try {
     ].join('\n');
 
     process.stdout.write(suggestion);
+    log.info('suggestion-output', { geneId: advice.gene_id || gene?.id, confidence: advice.confidence });
 
     // Save pending for journal feedback tracking
     try {
@@ -136,6 +146,6 @@ try {
       }));
     } catch {}
   }
-} catch {
-  // Timeout or error — don't block
+} catch (e) {
+  log.warn('evolution-query-error', { error: e.message, timeout: e.name === 'AbortError' });
 }

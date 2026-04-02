@@ -31,6 +31,24 @@ The script:
 
 **Wait for it to complete.** It will print "API key saved" when done.
 
-## Step 3: After setup
+## Step 3: Mark setup complete
 
-Tell the user: "Setup complete! Run `/reload-plugins` to activate MCP tools."
+```bash
+CACHE="${CLAUDE_PLUGIN_DATA:-${CLAUDE_PLUGIN_ROOT}/.cache}"
+mkdir -p "$CACHE"
+echo "$(date +%s)" > "$CACHE/.setup-done"
+```
+
+Tell the user: "Setup complete! Run `/reload-plugins` to activate hooks."
+
+## Step 4: MCP Tools (optional)
+
+Ask the user: "Do you also want MCP tools? These let Claude proactively call evolution/memory/skill APIs (29 tools). Without MCP, hooks still work (passive context injection). With MCP, Claude can actively create genes, write memory, search skills."
+
+If yes:
+
+```bash
+claude mcp add prismer -- npx -y @prismer/mcp-server@1.7.8
+```
+
+If no: skip. Plugin works fine without MCP — hooks handle sync/journal/stuck-detection independently.

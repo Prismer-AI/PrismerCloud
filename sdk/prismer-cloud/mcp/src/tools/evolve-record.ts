@@ -49,7 +49,7 @@ export function registerEvolveRecord(server: McpServer) {
         let text = `## Outcome Recorded\n\n`;
         text += `- Edge updated: ${data.edge_updated}\n`;
         text += `- Personality adjusted: ${data.personality_adjusted}\n`;
-        text += `- Distillation triggered: ${data.distill_triggered}\n`;
+        text += `- Distillation ready: ${data.distill_ready}\n`;
 
         return { content: [{ type: 'text' as const, text }] };
       } catch (error: unknown) {

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { prismerFetch } from '../lib/client.js';
+import { prismerFetch, getScope } from '../lib/client.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 export function registerEvolveCreateGene(server: McpServer) {
@@ -26,9 +26,13 @@ Do NOT use for:
         max_credits_per_run: z.number().optional(),
         max_execution_time: z.number().optional(),
       }).optional().describe('Execution constraints (circuit breaker limits)'),
+      scope: z.string().optional().describe('Evolution scope (defaults to env PRISMER_SCOPE or "global")'),
     },
     async (args) => {
       try {
+        const scope = args.scope || getScope();
+        const query: Record<string, string> = {};
+        if (scope) query.scope = scope;
         const result = (await prismerFetch('/api/im/evolution/genes', {
           method: 'POST',
           body: {
@@ -39,6 +43,7 @@ Do NOT use for:
             preconditions: args.preconditions,
             constraints: args.constraints,
           },
+          query,
         })) as Record<string, unknown>;
 
         if (!result.ok) {

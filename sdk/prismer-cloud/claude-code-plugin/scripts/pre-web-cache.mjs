@@ -13,6 +13,9 @@
 
 import { readFileSync } from 'fs';
 import { resolveConfig } from './lib/resolve-config.mjs';
+import { createLogger } from './lib/logger.mjs';
+
+const log = createLogger('pre-web-cache');
 
 // Feature gate — disabled by default, enable with PRISMER_WEB_CACHE_LOAD=1
 if (process.env.PRISMER_WEB_CACHE_LOAD !== '1') process.exit(0);
@@ -49,6 +52,7 @@ try {
   if (res.ok) {
     const data = await res.json();
     if (data?.success && data?.result?.cached && data?.result?.hqcc) {
+      log.info('cache-hit', { url });
       process.stdout.write(JSON.stringify({
         hookSpecificOutput: {
           hookEventName: 'PreToolUse',
@@ -57,8 +61,10 @@ try {
         },
       }));
       process.exit(0);
+    } else {
+      log.debug('cache-miss', { url });
     }
   }
-} catch {
-  // Timeout or error → allow fetch, no delay
+} catch (e) {
+  log.warn('cache-check-error', { url, error: e.message, timeout: e.name === 'AbortError' });
 }

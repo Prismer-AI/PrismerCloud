@@ -13,9 +13,7 @@
       "require": "./dist/index.cjs"
     }
   },
-  "files": [
-    "dist"
-  ],
+  "files": ["dist"],
   "scripts": {
     "build": "tsup src/index.ts --format cjs,esm --dts",
     "test": "npx tsx test/aip.test.ts"
@@ -23,22 +21,10 @@
   "peerDependencies": {
     "@noble/curves": ">=1.0.0"
   },
-  "keywords": [
-    "aip",
-    "did",
-    "agent",
-    "identity",
-    "ed25519",
-    "verifiable-credentials"
-  ],
+  "keywords": ["aip", "did", "agent", "identity", "ed25519", "verifiable-credentials"],
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/nicepkg/prismer-aip-sdk"
-  },
-  "devDependencies": {
-    "@types/node": "^25.5.0",
-    "tsup": "^8.5.1",
-    "typescript": "^6.0.2"
   }
 }

@@ -24,6 +24,7 @@
 import { RealtimeWSClient, RealtimeSSEClient } from './realtime';
 import type { RealtimeConfig } from './realtime';
 import { OfflineManager } from './offline';
+import { AIPIdentity } from './aip';
 
 // Re-export all types
 export * from './types';
@@ -1436,6 +1437,9 @@ export class PrismerClient {
   private readonly fetchFn: typeof fetch;
   private readonly imAgent?: string;
   private _offlineManager: OfflineManager | null = null;
+  /** AIP identity for auto-signing (v1.8.0 S1) */
+  private _identity: AIPIdentity | null = null;
+  private _identityReady: Promise<void> | null = null;
 
   /** IM API sub-client */
   readonly im: IMClient;
@@ -1452,6 +1456,18 @@ export class PrismerClient {
     this.fetchFn = config.fetch || fetch;
     this.imAgent = config.imAgent;
 
+    // v1.8.0 S1: Initialize AIP identity for auto-signing
+    if (config.identity) {
+      if (config.identity === 'auto' && this.apiKey) {
+        this._identityReady = AIPIdentity.fromApiKey(this.apiKey).then(id => { this._identity = id; });
+      } else if (typeof config.identity === 'object' && config.identity.privateKey) {
+        const keyBytes = typeof Buffer !== 'undefined'
+          ? new Uint8Array(Buffer.from(config.identity.privateKey, 'base64'))
+          : new Uint8Array(atob(config.identity.privateKey).split('').map(c => c.charCodeAt(0)));
+        this._identityReady = AIPIdentity.fromPrivateKey(keyBytes).then(id => { this._identity = id; });
+      }
+    }
+
     // Initialize OfflineManager if offline config is provided
     if (config.offline) {
       this._offlineManager = new OfflineManager(
@@ -1465,11 +1481,26 @@ export class PrismerClient {
     }
 
     // IM requests go through OfflineManager when offline mode is enabled
-    const imRequest: RequestFn = this._offlineManager
+    let imRequest: RequestFn = this._offlineManager
       ? <T>(m: string, p: string, b?: unknown, q?: Record<string, string>) =>
           this._offlineManager!.dispatch<T>(m, p, b, q)
       : <T>(m: string, p: string, b?: unknown, q?: Record<string, string>) =>
           this._request<T>(m, p, b, q);
+
+    // v1.8.0 S1: Wrap with auto-signing for IM message sends
+    if (config.identity) {
+      const baseRequest = imRequest;
+      imRequest = <T>(method: string, path: string, body?: unknown, query?: Record<string, string>): Promise<T> => {
+        // Only sign POST requests to message endpoints
+        if (method === 'POST' && path.includes('/messages') && body && this._identity) {
+          const b = body as Record<string, any>;
+          if (!b.signature && !b.skipSigning) {
+            return this._signAndSend<T>(baseRequest, method, path, b, query);
+          }
+        }
+        return baseRequest<T>(method, path, body, query);
+      };
+    }
 
     this.im = new IMClient(
       imRequest,
@@ -1478,6 +1509,45 @@ export class PrismerClient {
       () => this._getAuthHeaders(),
       this._offlineManager,
     );
+  }
+
+  /** Wait for identity to be ready (useful for tests or explicit await) */
+  async ensureIdentity(): Promise<AIPIdentity | null> {
+    if (this._identityReady) await this._identityReady;
+    return this._identity;
+  }
+
+  /** Auto-sign a message body and send (v1.8.0 S1) */
+  private async _signAndSend<T>(
+    baseRequest: RequestFn,
+    method: string,
+    path: string,
+    body: Record<string, any>,
+    query?: Record<string, string>,
+  ): Promise<T> {
+    if (this._identityReady) await this._identityReady;
+    if (!this._identity) return baseRequest<T>(method, path, body, query);
+
+    const content = body.content || '';
+    const contentHashBytes = new Uint8Array(
+      await crypto.subtle.digest('SHA-256', new TextEncoder().encode(content)),
+    );
+    const contentHash = Array.from(contentHashBytes).map(b => b.toString(16).padStart(2, '0')).join('');
+
+    // Build lite signing payload (v1.8.0: secVersion|senderDid|type|timestamp|contentHash)
+    const timestamp = Date.now();
+    const payload = `1|${this._identity.did}|${body.type || 'text'}|${timestamp}|${contentHash}`;
+    const payloadBytes = new TextEncoder().encode(payload);
+    const signature = await this._identity.sign(payloadBytes);
+
+    return baseRequest<T>(method, path, {
+      ...body,
+      secVersion: 1,
+      senderDid: this._identity.did,
+      contentHash,
+      signature,
+      signedAt: timestamp,
+    }, query);
   }
 
   /** Build auth headers for raw HTTP requests (used by file upload) */

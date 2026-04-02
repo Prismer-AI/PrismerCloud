@@ -41,9 +41,12 @@ class AccountClient:
         """Get own identity, stats, bindings, credits."""
         return self._request("GET", "/api/im/me")
 
-    def refresh_token(self) -> IMResult:
+    def refresh_token(self, user_id: Optional[str] = None) -> IMResult:
         """Refresh JWT token."""
-        return self._request("POST", "/api/im/token/refresh")
+        payload = {}
+        if user_id:
+            payload["userId"] = user_id
+        return self._request("POST", "/api/im/token/refresh", json=payload or None)
 
 
 class DirectClient:
@@ -345,7 +348,8 @@ class TasksClient:
 
     def update(self, task_id: str, **kwargs) -> IMResult:
         """Update a task (creator only)."""
-        return self._request("PATCH", f"/api/im/tasks/{task_id}", json=kwargs)
+        payload = {k: v for k, v in kwargs.items() if v is not None}
+        return self._request("PATCH", f"/api/im/tasks/{task_id}", json=payload)
 
     def claim(self, task_id: str) -> IMResult:
         """Claim a pending task."""
@@ -717,12 +721,12 @@ class EvolutionClient:
         from pathlib import Path
 
         result = self.install_skill(slug_or_id)
-        result.local_paths = []
+        result["local_paths"] = []
 
-        if not result.ok or not result.data:
+        if not result.get("ok") or not result.get("data"):
             return result
 
-        skill = result.data.get("skill", {})
+        skill = result["data"].get("skill", {})
         content = skill.get("content", "")
         slug = _safe_slug(skill.get("slug", slug_or_id))
         if not slug:
@@ -730,8 +734,8 @@ class EvolutionClient:
 
         if not content:
             content_result = self.get_skill_content(slug_or_id)
-            if content_result.ok and content_result.data:
-                content = content_result.data.get("content", "")
+            if content_result.get("ok") and content_result.get("data"):
+                content = content_result["data"].get("content", "")
 
         if not content:
             return result
@@ -769,7 +773,7 @@ class EvolutionClient:
             except OSError:
                 pass
 
-        result.local_paths = local_paths
+        result["local_paths"] = local_paths
         return result
 
     def uninstall_skill_local(self, slug_or_id: str) -> IMResult:
@@ -783,7 +787,7 @@ class EvolutionClient:
 
         safe = _safe_slug(slug_or_id)
         if not safe:
-            result.removed_paths = removed
+            result["removed_paths"] = removed
             return result
 
         home = Path.home()
@@ -803,7 +807,7 @@ class EvolutionClient:
             except OSError:
                 pass
 
-        result.removed_paths = removed
+        result["removed_paths"] = removed
         return result
 
     def sync_skills_local(self, platforms: Optional[List[str]] = None) -> dict:
@@ -812,7 +816,7 @@ class EvolutionClient:
         from pathlib import Path
 
         installed = self.installed_skills()
-        if not installed.ok or not installed.data:
+        if not installed.get("ok") or not installed.get("data"):
             return {"synced": 0, "failed": 0, "paths": []}
 
         synced = 0
@@ -822,7 +826,7 @@ class EvolutionClient:
         home = Path.home()
         plugin_dir = Path(_os.environ.get("PRISMER_PLUGIN_DIR", str(home / ".claude" / "plugins" / "prismer")))
 
-        for record in installed.data:
+        for record in installed["data"]:
             skill = record.get("skill", {})
             raw_slug = skill.get("slug") if skill else None
             if not raw_slug:
@@ -835,7 +839,7 @@ class EvolutionClient:
 
             try:
                 content_result = self.get_skill_content(slug)
-                content = content_result.data.get("content", "") if content_result.ok and content_result.data else ""
+                content = content_result["data"].get("content", "") if content_result.get("ok") and content_result.get("data") else ""
                 if not content:
                     failed += 1
                     continue
@@ -1218,8 +1222,11 @@ class AsyncAccountClient:
     async def me(self) -> IMResult:
         return await self._request("GET", "/api/im/me")
 
-    async def refresh_token(self) -> IMResult:
-        return await self._request("POST", "/api/im/token/refresh")
+    async def refresh_token(self, user_id: Optional[str] = None) -> IMResult:
+        payload = {}
+        if user_id:
+            payload["userId"] = user_id
+        return await self._request("POST", "/api/im/token/refresh", json=payload or None)
 
 
 class AsyncDirectClient:
@@ -2305,6 +2312,7 @@ class PrismerClient:
         base_url: Optional[str] = None,
         timeout: float = 30.0,
         im_agent: Optional[str] = None,
+        identity: Optional[Union[str, Dict[str, str]]] = None,
     ):
         if api_key and not api_key.startswith("sk-prismer-") and not api_key.startswith("eyJ"):
             import warnings
@@ -2312,6 +2320,7 @@ class PrismerClient:
 
         self._api_key = api_key or ""
         self._im_agent = im_agent
+        self._identity = None  # AIPIdentity instance (v1.8.0 S7)
         env_url = ENVIRONMENTS.get(environment, ENVIRONMENTS["production"])
         self._base_url = (base_url or env_url).rstrip("/")
 
@@ -2329,7 +2338,49 @@ class PrismerClient:
             headers=headers,
         )
 
-        self.im = IMClient(self._request, self._base_url, self._get_auth_headers)
+        # v1.8.0 S7: Initialize AIP identity for auto-signing
+        if identity:
+            try:
+                from .aip import AIPIdentity
+                if identity == "auto" and self._api_key:
+                    self._identity = AIPIdentity.from_api_key(self._api_key)
+                elif isinstance(identity, dict) and "private_key" in identity:
+                    import base64
+                    key_bytes = base64.b64decode(identity["private_key"])
+                    self._identity = AIPIdentity.from_private_key(key_bytes)
+            except ImportError:
+                pass  # aip-sdk not installed — skip signing
+
+        request_fn = self._request
+        if self._identity:
+            request_fn = self._signing_request
+
+        self.im = IMClient(request_fn, self._base_url, self._get_auth_headers)
+
+    def _signing_request(
+        self, method: str, path: str, **kwargs: Any,
+    ) -> Any:
+        """Wrapper that auto-signs IM message POST requests (v1.8.0 S7)."""
+        if method == "POST" and "/messages" in path and self._identity:
+            json_body = kwargs.get("json")
+            if json_body and isinstance(json_body, dict) and "signature" not in json_body:
+                import hashlib
+                content = json_body.get("content", "")
+                content_hash = hashlib.sha256(content.encode()).hexdigest()
+                import time
+                timestamp = int(time.time() * 1000)
+                payload = f"1|{self._identity.did}|{json_body.get('type', 'text')}|{timestamp}|{content_hash}"
+                signature = self._identity.sign(payload.encode())
+                json_body = {
+                    **json_body,
+                    "secVersion": 1,
+                    "senderDid": self._identity.did,
+                    "contentHash": content_hash,
+                    "signature": signature,
+                    "signedAt": timestamp,
+                }
+                kwargs["json"] = json_body
+        return self._request(method, path, **kwargs)
 
     def _get_auth_headers(self) -> Dict[str, str]:
         """Build auth headers for raw HTTP requests (used by file upload)."""

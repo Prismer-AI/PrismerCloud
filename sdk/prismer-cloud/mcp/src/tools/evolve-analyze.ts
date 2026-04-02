@@ -11,15 +11,23 @@ export function registerEvolveAnalyze(server: McpServer) {
       task_capability: z.string().optional().describe('Task capability (e.g. "search", "translate")'),
       error: z.string().optional().describe('Error message if task failed'),
       tags: z.array(z.string()).optional().describe('Context tags'),
-      signals: z.union([
-        z.array(z.string()),
-        z.array(z.object({
-          type: z.string(),
-          provider: z.string().optional(),
-          stage: z.string().optional(),
-          severity: z.string().optional(),
-        })),
-      ]).optional().describe('Signals: string[] (legacy) or SignalTag[] (v0.3.0). SignalTag = {type, provider?, stage?, severity?}'),
+      signals: z.preprocess(
+        (val) => {
+          if (typeof val === 'string') {
+            try { return JSON.parse(val); } catch { return [val]; }
+          }
+          return val;
+        },
+        z.union([
+          z.array(z.string()),
+          z.array(z.object({
+            type: z.string(),
+            provider: z.string().optional(),
+            stage: z.string().optional(),
+            severity: z.string().optional(),
+          })),
+        ]),
+      ).optional().describe('Signals: string[] (legacy) or SignalTag[] (v0.3.0). SignalTag = {type, provider?, stage?, severity?}'),
       provider: z.string().optional().describe('Default provider for extracted signals (e.g. "openai", "k8s")'),
       stage: z.string().optional().describe('Default pipeline stage (e.g. "fetch", "deploy", "rollout")'),
       severity: z.string().optional().describe('Default severity: "low" | "medium" | "high" | "critical"'),
@@ -27,6 +35,7 @@ export function registerEvolveAnalyze(server: McpServer) {
     },
     async (args) => {
       try {
+        const normalizedSignals = args.signals;
         const query: Record<string, string> = {};
         if (args.scope) query.scope = args.scope;
         const result = (await prismerFetch('/api/im/evolution/analyze', {
@@ -36,7 +45,7 @@ export function registerEvolveAnalyze(server: McpServer) {
             task_capability: args.task_capability,
             error: args.error,
             tags: args.tags,
-            signals: args.signals,
+            signals: normalizedSignals,
             provider: args.provider,
             stage: args.stage,
             severity: args.severity,
@@ -57,6 +66,14 @@ export function registerEvolveAnalyze(server: McpServer) {
         if (data.strategy) text += `**Strategy:** ${JSON.stringify(data.strategy)}\n`;
         if (data.reason) text += `**Reason:** ${data.reason}\n`;
         if (data.signals) text += `**Signals:** ${JSON.stringify(data.signals)}\n`;
+
+        const memories = data.relatedMemories as Array<{ path: string; snippet: string; relevance: number }> | undefined;
+        if (memories && memories.length > 0) {
+          text += `\n### Related Memories\n`;
+          for (const m of memories) {
+            text += `- **${m.path}** (relevance: ${Math.round(m.relevance * 100)}%): ${m.snippet.slice(0, 100)}...\n`;
+          }
+        }
 
         return { content: [{ type: 'text' as const, text }] };
       } catch (error: unknown) {

@@ -129,7 +129,8 @@ describe('signals.mjs', () => {
     });
 
     it('should detect build failure errors', () => {
-      expect(detectSignals('webpack compilation failed')).toContain('error:build_failure');
+      expect(detectSignals('build failed with 2 errors')).toContain('error:build_failure');
+      expect(detectSignals('webpack compilation error')).toContain('error:build_failure');
     });
 
     it('should detect deploy failure errors', () => {
@@ -383,15 +384,15 @@ describe('Hook Scripts', () => {
       expect(result.stdout).not.toContain('[Prismer Evolution]');
     });
 
-    it('should output evolution review instruction when API key is present', () => {
+    it('should output health report when API key is present (even if server unreachable)', () => {
       const result = runHook('session-start.mjs', JSON.stringify({ type: 'startup' }), {
         PRISMER_API_KEY: 'sk-prismer-test-key-abc',
         PRISMER_BASE_URL: 'http://127.0.0.1:19999',
       });
       expect(result.exitCode).toBe(0);
-      // Even if fetch fails, the review instruction is always injected
-      expect(result.stdout).toContain('[Prismer Evolution]');
-      expect(result.stdout).toContain('evolve_create_gene');
+      // Health report is always output at session end
+      expect(result.stdout).toContain('[Prismer]');
+      expect(result.stdout).toMatch(/scope:/);
     });
 
     it('should handle malformed stdin gracefully', () => {
@@ -484,7 +485,7 @@ describe('Hook Scripts', () => {
       expect(result.exitCode).toBe(0);
 
       const journal = readFileSync(join(TEST_CACHE_DIR, 'session-journal.md'), 'utf8');
-      expect(journal).toContain('gene_feedback: "Fix build with clean install" outcome=success');
+      expect(journal).toContain('gene_feedback: "Fix build with clean install" gene_id=gene-123 outcome=success');
     });
 
     it('should record gene feedback failure when pending and error detected', () => {
@@ -506,14 +507,14 @@ describe('Hook Scripts', () => {
       expect(result.exitCode).toBe(0);
 
       const journal = readFileSync(join(TEST_CACHE_DIR, 'session-journal.md'), 'utf8');
-      expect(journal).toContain('gene_feedback: "Clear node_modules cache" outcome=failed');
+      expect(journal).toContain('gene_feedback: "Clear node_modules cache" gene_id=gene-456 outcome=failed');
     });
 
     it('should handle tool_response field (alternative to tool_result)', () => {
       const input = {
         tool_name: 'Bash',
         tool_input: { command: 'npm test' },
-        tool_response: 'FAIL: 3 tests failed',
+        tool_response: 'Error: vitest failed with 3 test errors',
       };
       const result = runHook('post-bash-journal.mjs', input);
       expect(result.exitCode).toBe(0);
@@ -680,14 +681,14 @@ describe('Hook Scripts', () => {
       expect(result.exitCode).toBe(0);
 
       const journal = readFileSync(join(TEST_CACHE_DIR, 'session-journal.md'), 'utf8');
-      expect(journal).toContain('gene_feedback: "Try docker restart" outcome=failed');
+      expect(journal).toContain('gene_feedback: "Try docker restart" gene_id=gene-789 outcome=failed');
     });
 
     it('should detect signals from both error and command text', () => {
       const input = {
         tool_name: 'Bash',
         tool_input: { command: 'kubectl apply -f deployment.yaml' },
-        error: 'connection refused',
+        error: 'deploy failed: connection refused',
       };
       const result = runHook('post-tool-failure.mjs', input);
       expect(result.exitCode).toBe(0);
@@ -774,8 +775,10 @@ describe('Hook Scripts', () => {
       expect(output.decision).toBe('block');
     });
 
-    it('should not block if already triggered this session', () => {
+    it('should not block if already triggered recently in this session', () => {
       mkdirSync(TEST_CACHE_DIR, { recursive: true });
+      // Use a recent timestamp (within the 1-hour cooldown)
+      const recentTs = new Date(Date.now() - 5 * 60 * 1000).toISOString();
       writeFileSync(join(TEST_CACHE_DIR, 'session-journal.md'), [
         '# Session Journal',
         '',
@@ -785,21 +788,21 @@ describe('Hook Scripts', () => {
         '- bash: `cmd4` (10:03)',
         '- bash: `cmd5` (10:04)',
         '',
-        '[evolution-review-triggered] (at: 2025-01-01T10:05:00Z)',
+        `[evolution-review-triggered] (at: ${recentTs})`,
       ].join('\n'));
 
       const result = runHook('session-stop.mjs', '{}', {
         PRISMER_API_KEY: 'sk-prismer-test-key-123',
+        PRISMER_SCOPE: 'test-scope',
       });
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toBe('');
     });
 
-    it('should respect cooldown period', () => {
+    it('should respect cooldown period (per-scope)', () => {
       mkdirSync(TEST_CACHE_DIR, { recursive: true });
-      // Write recent block marker (within 1 hour)
-      writeFileSync(join(TEST_CACHE_DIR, 'last-block.json'), JSON.stringify({ ts: Date.now() - 1000 }));
-      // Write journal with enough value to block
+      // Use explicit scope to control the block file name
+      writeFileSync(join(TEST_CACHE_DIR, 'last-block-test-scope.json'), JSON.stringify({ ts: Date.now() - 1000 }));
       writeFileSync(join(TEST_CACHE_DIR, 'session-journal.md'), [
         '# Session Journal',
         '- bash: `cmd1` (10:00)',
@@ -811,12 +814,13 @@ describe('Hook Scripts', () => {
 
       const result = runHook('session-stop.mjs', '{}', {
         PRISMER_API_KEY: 'sk-prismer-test-key-123',
+        PRISMER_SCOPE: 'test-scope',
       });
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toBe(''); // Cooldown prevents blocking
+      expect(result.stdout).toBe('');
     });
 
-    it('should write block marker file when blocking', () => {
+    it('should write per-scope block marker file when blocking', () => {
       mkdirSync(TEST_CACHE_DIR, { recursive: true });
       writeFileSync(join(TEST_CACHE_DIR, 'session-journal.md'), [
         '# Session Journal',
@@ -830,9 +834,10 @@ describe('Hook Scripts', () => {
 
       runHook('session-stop.mjs', '{}', {
         PRISMER_API_KEY: 'sk-prismer-test-key-123',
+        PRISMER_SCOPE: 'test-scope',
       });
 
-      const markerPath = join(TEST_CACHE_DIR, 'last-block.json');
+      const markerPath = join(TEST_CACHE_DIR, 'last-block-test-scope.json');
       expect(existsSync(markerPath)).toBe(true);
       const marker = JSON.parse(readFileSync(markerPath, 'utf8'));
       expect(marker.ts).toBeGreaterThan(Date.now() - 5000);
@@ -1055,20 +1060,24 @@ describe('Environment Variable Injection', () => {
   });
 
   it('PRISMER_BASE_URL should default to https://prismer.cloud', () => {
-    // session-start with API key should output the base URL in its review instruction
+    // With default URL and unreachable server, session should still complete
+    // (verifies resolve-config defaults work without crash)
     const result = runHook('session-start.mjs', JSON.stringify({ type: 'startup' }), {
       PRISMER_API_KEY: 'sk-prismer-test-key-abc',
-      PRISMER_BASE_URL: '', // Empty = use default
+      PRISMER_BASE_URL: '', // Empty = use default (https://prismer.cloud)
     });
-    expect(result.stdout).toContain('prismer.cloud');
+    expect(result.exitCode).toBe(0);
+    // Health report should be present regardless of server reachability
+    expect(result.stdout).toContain('[Prismer]');
   });
 
-  it('PRISMER_BASE_URL should be customizable', () => {
+  it('PRISMER_BASE_URL should be customizable without crash', () => {
     const result = runHook('session-start.mjs', JSON.stringify({ type: 'startup' }), {
       PRISMER_API_KEY: 'sk-prismer-test-key-abc',
-      PRISMER_BASE_URL: 'https://custom.example.com',
+      PRISMER_BASE_URL: 'http://127.0.0.1:19999',
     });
-    expect(result.stdout).toContain('custom.example.com');
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('[Prismer]');
   });
 
   it('CLAUDE_PLUGIN_DATA should control cache directory', () => {

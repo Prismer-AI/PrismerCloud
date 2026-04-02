@@ -15,11 +15,25 @@ import { readFileSync, writeFileSync, appendFileSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { resolveConfig } from './lib/resolve-config.mjs';
+import { createLogger } from './lib/logger.mjs';
+
+const log = createLogger('session-stop');
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CACHE_DIR = process.env.CLAUDE_PLUGIN_DATA || join(__dirname, '..', '.cache');
 const JOURNAL_FILE = join(CACHE_DIR, 'session-journal.md');
-const BLOCK_MARKER_FILE = join(CACHE_DIR, 'last-block.json');
+
+// Per-scope cooldown: project A blocking doesn't prevent project B from blocking
+function detectScopeForCooldown() {
+  if (process.env.PRISMER_SCOPE) return process.env.PRISMER_SCOPE;
+  try {
+    const pkg = JSON.parse(readFileSync(join(process.cwd(), 'package.json'), 'utf8'));
+    if (pkg.name) return pkg.name.replace(/[^a-z0-9_-]/gi, '-');
+  } catch {}
+  return 'global';
+}
+const cooldownScope = detectScopeForCooldown();
+const BLOCK_MARKER_FILE = join(CACHE_DIR, `last-block-${cooldownScope}.json`);
 
 const BLOCK_COOLDOWN_MS = 60 * 60 * 1000; // 1 hour
 
@@ -35,6 +49,7 @@ try {
 // --- Step 2: Prevent infinite loop ---
 
 if (input.stop_hook_active === true) {
+  log.debug('skip-already-active');
   process.exit(0);
 }
 
@@ -49,6 +64,7 @@ try {
   const raw = readFileSync(BLOCK_MARKER_FILE, 'utf8');
   const marker = JSON.parse(raw);
   if (Date.now() - (marker?.ts || 0) < BLOCK_COOLDOWN_MS) {
+    log.info('skip-cooldown', { scope: cooldownScope, remainMs: BLOCK_COOLDOWN_MS - (Date.now() - (marker?.ts || 0)) });
     process.exit(0);
   }
 } catch {
@@ -64,9 +80,20 @@ try {
   process.exit(0);
 }
 
-// --- Step 6: Check if already blocked this session ---
+// --- Step 6: Check if already blocked recently in this journal ---
+// v1.7.8 fix: long sessions (resume/compact) never rotate journal, so a simple
+// "marker exists" check blocked evolution for the entire session lifetime.
+// Now we parse the marker timestamp and apply the same cooldown as Step 4.
 
-if (journal.includes('[evolution-review-triggered]')) {
+const markerRe = /\[evolution-review-triggered\] \(at: ([^)]+)\)/g;
+let lastMarkerTs = 0;
+let mm;
+while ((mm = markerRe.exec(journal)) !== null) {
+  const t = new Date(mm[1]).getTime();
+  if (t > lastMarkerTs) lastMarkerTs = t;
+}
+if (lastMarkerTs > 0 && Date.now() - lastMarkerTs < BLOCK_COOLDOWN_MS) {
+  log.info('skip-journal-marker', { lastMarkerAge: Math.round((Date.now() - lastMarkerTs) / 60000), cooldownMin: BLOCK_COOLDOWN_MS / 60000 });
   process.exit(0);
 }
 

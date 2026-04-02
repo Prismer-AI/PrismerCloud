@@ -388,14 +388,28 @@ def token():
 @click.option("--json", "as_json", is_flag=True, help="JSON output")
 def token_refresh(as_json: bool):
     """Refresh IM JWT token."""
-    client = _get_im_client()
+    cfg = _load_config()
+    im_token = cfg.get("auth", {}).get("im_token", "")
+    if not im_token:
+        click.echo("No IM token. Run 'prismer register' first.", err=True)
+        sys.exit(1)
+    im_user_id = cfg.get("auth", {}).get("im_user_id", "")
+    env = cfg.get("default", {}).get("environment", "production")
+    base_url = cfg.get("default", {}).get("base_url", "")
+    from .client import PrismerClient
+    client = PrismerClient(im_token, environment=env, base_url=base_url)
     try:
-        res = client.im.account.refresh_token()
+        res = client.im.account.refresh_token(user_id=im_user_id)
         if as_json:
             click.echo(json.dumps(res, indent=2))
             return
         if not res.get("ok"):
-            click.echo(f"Error: {res.get('error')}", err=True)
+            err = res.get("error", {})
+            err_msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
+            if "not found" in err_msg.lower():
+                click.echo("User not found. Your registration may have expired. Run 'prismer register <username>' to re-register.", err=True)
+            else:
+                click.echo(f"Error: {err_msg}", err=True)
             sys.exit(1)
         data = res.get("data", {})
         if data and data.get("token"):
@@ -436,7 +450,7 @@ def im_send(user_id, message, msg_type, reply_to, as_json):
         if msg_type and msg_type != "text":
             opts["type"] = msg_type
         if reply_to:
-            opts["parentId"] = reply_to
+            opts["parent_id"] = reply_to
         res = client.im.direct.send(user_id, message, **opts)
         if not res.get("ok"):
             click.echo(f"Error: {res.get('error')}", err=True)
@@ -628,7 +642,7 @@ def im_heartbeat(hb_status, load_val, as_json):
         body: Dict[str, Any] = {"status": hb_status}
         if load_val is not None:
             body["load"] = load_val
-        res = client.im.account._r("POST", "/api/im/agents/heartbeat", body)
+        res = client.im._request("POST", "/api/im/agents/heartbeat", json=body)
         if not res.get("ok"):
             click.echo(f"Error: {res.get('error')}", err=True)
             sys.exit(1)
@@ -1098,18 +1112,21 @@ def evolve_record(gene, outcome, signals, score, summary, scope, as_json):
 
 @evolve.command("report")
 @click.option("-e", "--error", "error_msg", required=True, help="Raw error message or context")
-@click.option("--status", required=True, help="Final task outcome (success, failure, partial)")
+@click.option("--outcome", required=True, help="Final task outcome (success, failed, partial)")
 @click.option("--task", "task_ctx", default=None, help="Task context description")
 @click.option("--wait", is_flag=True, help="Poll for report completion (max 60s)")
 @click.option("--json", "as_json", is_flag=True, help="JSON output")
-def evolve_report(error_msg, status, task_ctx, wait, as_json):
-    """Submit a full evolution report (error + status context)."""
+def evolve_report(error_msg, outcome, task_ctx, wait, as_json):
+    """Submit a full evolution report (error + outcome context)."""
     import time
+    # Normalize "failure" to "failed" for server compatibility
+    if outcome == "failure":
+        outcome = "failed"
     client = _get_im_client()
     try:
         res = client.im.evolution.submit_report(
             raw_context=error_msg,
-            outcome=status,
+            outcome=outcome,
             task_context=task_ctx,
         )
         if as_json and not wait:
@@ -1605,7 +1622,13 @@ def task_get(task_id, as_json):
             click.echo(f"\nLogs ({len(logs)}):")
             for log in logs:
                 ts = log.get("createdAt") or log.get("timestamp") or ""
-                msg = log.get("message") or log.get("content") or json.dumps(log)
+                msg = log.get("message") or log.get("content") or ""
+                # Format assign logs with user info when message is missing or contains "undefined"
+                if (not msg or "undefined" in msg) and log.get("action") == "assigned":
+                    assignee = log.get("assigneeDisplayName") or log.get("assigneeUsername") or log.get("assigneeId") or "unknown"
+                    msg = f"Task assigned to {assignee}"
+                if not msg:
+                    msg = json.dumps(log)
                 click.echo(f"  [{ts}] {msg}")
     finally:
         client.close()
@@ -1975,7 +1998,7 @@ def skill_install(slug, platform, project, no_local, as_json):
         skill_data = res.get("data", {}).get("skill", {}) if isinstance(res, dict) else {}
         name = skill_data.get("name") or slug
         click.echo(f"Installed: {name}")
-        local_paths = res.get("data", {}).get("localPaths", []) if isinstance(res, dict) else []
+        local_paths = res.get("local_paths", []) if isinstance(res, dict) else []
         if local_paths:
             click.echo("Local files written:")
             for p in local_paths:
@@ -2059,7 +2082,7 @@ def skill_uninstall(slug, no_local, as_json):
             click.echo("Uninstall failed.", err=True)
             sys.exit(1)
         click.echo(f"Uninstalled: {slug}")
-        removed = res.get("data", {}).get("removedPaths", []) if isinstance(res, dict) else []
+        removed = res.get("removed_paths", []) if isinstance(res, dict) else []
         if removed:
             click.echo("Local files removed:")
             for p in removed:
@@ -2250,15 +2273,10 @@ def workspace_init(name, user_id, user_name, agent_id, agent_name, agent_type, a
     """Initialize a workspace with a user and agent."""
     client = _get_im_client()
     try:
-        capabilities = [c.strip() for c in agent_capabilities.split(",") if c.strip()] if agent_capabilities else None
         res = client.im.workspace.init(
-            name=name,
-            user_id=user_id,
-            user_name=user_name,
-            agent_id=agent_id,
-            agent_name=agent_name,
-            agent_type=agent_type,
-            **({"agent_capabilities": capabilities} if capabilities else {}),
+            name,
+            user_id,
+            user_name,
         )
         if not res.get("ok"):
             click.echo(f"Error: {res.get('error')}", err=True)
@@ -2284,7 +2302,7 @@ def workspace_init_group(name, members, as_json):
         except Exception:
             click.echo("Error: --members must be a valid JSON array", err=True)
             sys.exit(1)
-        res = client.im.workspace.init_group(name=name, members=members_list)
+        res = client.im.workspace.init_group(name, name, members_list)
         if not res.get("ok"):
             click.echo(f"Error: {res.get('error')}", err=True)
             sys.exit(1)
@@ -2381,7 +2399,7 @@ def security_set(conversation_id, mode, as_json):
     """Set encryption mode for a conversation."""
     client = _get_im_client()
     try:
-        res = client.im.security.set_conversation_security(conversation_id, encryption_mode=mode)
+        res = client.im.security.set_conversation_security(conversation_id, encryptionMode=mode)
         if not res.get("ok"):
             click.echo(f"Error: {res.get('error')}", err=True)
             sys.exit(1)
@@ -2496,7 +2514,7 @@ def identity_register_key(algorithm, public_key, as_json):
     """Register an identity public key."""
     client = _get_im_client()
     try:
-        res = client.im.identity.register_key(algorithm=algorithm, public_key=public_key)
+        res = client.im.identity.register_key(public_key, derivation_mode=algorithm)
         if not res.get("ok"):
             click.echo(f"Error: {res.get('error')}", err=True)
             sys.exit(1)
@@ -2619,7 +2637,7 @@ def shortcut_send(user_id, message, msg_type, reply_to, as_json):
         if msg_type and msg_type != "text":
             opts["type"] = msg_type
         if reply_to:
-            opts["parentId"] = reply_to
+            opts["parent_id"] = reply_to
         res = client.im.direct.send(user_id, message, **opts)
         if not res.get("ok"):
             click.echo(f"Error: {res.get('error')}", err=True)
