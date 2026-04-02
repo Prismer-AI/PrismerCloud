@@ -132,29 +132,30 @@ prismer status                       # Verify: shows key, credits, connection
 
 This saves your key to `~/.prismer/config.toml` — all plugins and SDKs read from it automatically.
 
-### Option 2: Start Evolution automatically in [*Claude Code*](https://claude.com/product/claude-code?utm_source=google&utm_medium=paid_search_coder&utm_campaign=acq_code_us_q3&utm_term=autonomous%20coding&gclsrc=aw.ds&gad_source=1&gad_campaignid=22795617257&gbraid=0AAAAA99jmquHMXEmM4pMLpcPI4ruHF4w5&gclid=CjwKCAjwhLPOBhBiEiwA8_wJHF8lfd1L37EoNbqFHxG7ifnexky3Wg9q0vbNVfpH8UyDoPVPCTqjmBoCFG4QAvD_BwE)
+### Option 2: Start Evolution automatically in [*Claude Code*](https://docs.anthropic.com/en/docs/claude-code/overview)
 
 #### Claude Code Plugin (zero-code, recommended)
-Open Claude Code
+
 ```bash
-# claude code console
+# In Claude Code console:
 /plugin marketplace add Prismer-AI/PrismerCloud
 /plugin install prismer@prismer-cloud
-/reload-plugins
 ```
-Then **restart** claude code
+
+Then restart Claude Code. On first session, the plugin will guide you through setup:
 
 ```bash
-# login & auto get api key for free
-/prismer-setup
+# Auto opens browser for one-click sign-in (zero copy-paste, 30 seconds)
+/prismer:prismer-setup
 ```
-Auto open browser & Login to auto set api key to local 
-> **Evolution will execution automatically in safety scope**
 
-- errors detected
-- strategies matched 
-- outcomes recorded
-- web content cached
+> **9 hooks run automatically** — errors detected, strategies matched, outcomes recorded, web content cached, memory synced.
+
+**Optional: Add MCP tools** for proactive evolution (Claude can call tools directly):
+
+```bash
+claude mcp add prismer -- npx -y @prismer/mcp-server@1.7.8
+```
 
 #### MCP Server (Cursor / Windsurf / any MCP client)
 
@@ -181,7 +182,7 @@ runtime.learned('ETIMEDOUT', 'success', 'Fixed by backoff');
 
 <table>
 <tr><td><strong>Agent Integrations</strong></td><td><strong>Install</strong></td><td><strong>What it does</strong></td></tr>
-<tr><td>Claude Code Plugin</td><td><code>/plugin marketplace add Prismer-AI/PrismerCloud</code></td><td>8-hook auto-evolution, context cache, skill sync</td></tr>
+<tr><td>Claude Code Plugin</td><td><code>/plugin marketplace add Prismer-AI/PrismerCloud</code></td><td>9-hook auto-evolution, context cache, memory sync, skill sync</td></tr>
 <tr><td>MCP Server</td><td><code>npx -y @prismer/mcp-server</code></td><td>33 tools for Claude Code / Cursor / Windsurf</td></tr>
 <tr><td>OpenCode Plugin</td><td><code>opencode plugins install @prismer/opencode-plugin</code></td><td>Evolution hooks for OpenCode</td></tr>
 <tr><td>OpenClaw Channel</td><td><code>openclaw plugins install @prismer/openclaw-channel</code></td><td>IM channel + 14 agent tools</td></tr>
