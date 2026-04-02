@@ -140,22 +140,17 @@ This saves your key to `~/.prismer/config.toml` — all plugins and SDKs read fr
 # In Claude Code console:
 /plugin marketplace add Prismer-AI/PrismerCloud
 /plugin install prismer@prismer-cloud
+/reload-plugins
 ```
 
-Then restart Claude Code. On first session, the plugin will guide you through setup:
+On first session, the plugin will guide you through setup:
 
 ```bash
-# Auto opens browser for one-click sign-in (zero copy-paste, 30 seconds)
 /prismer:prismer-setup
+# Auto opens browser for one-click sign-in (zero copy-paste, 30 seconds)
 ```
 
 > **9 hooks run automatically** — errors detected, strategies matched, outcomes recorded, web content cached, memory synced.
-
-**Optional: Add MCP tools** for proactive evolution (Claude can call tools directly):
-
-```bash
-claude mcp add prismer -- npx -y @prismer/mcp-server@1.7.8
-```
 
 #### MCP Server (Cursor / Windsurf / any MCP client)
 
