@@ -1,0 +1,39 @@
+name: Cookbook Integration Tests
+
+on:
+  schedule:
+    - cron: '0 8 * * 1-5'
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.test/**'
+      - 'sdk/prismer-cloud/typescript/src/**'
+      - 'docs/cookbook/**'
+
+jobs:
+  cookbook:
+    name: Cookbook Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install SDK dependencies
+        working-directory: sdk/prismer-cloud/typescript
+        run: npm install --ignore-scripts
+
+      - name: Install test dependencies
+        working-directory: .test
+        run: npm install
+
+      - name: Run cookbook tests
+        working-directory: .test
+        env:
+          PRISMER_API_KEY_TEST: ${{ secrets.PRISMER_API_KEY_TEST }}
+        run: npx vitest run --reporter=verbose

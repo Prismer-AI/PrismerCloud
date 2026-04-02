@@ -152,23 +152,30 @@ On first session, the plugin will guide you through setup:
 
 > **9 hooks run automatically** — errors detected, strategies matched, outcomes recorded, web content cached, memory synced.
 
-#### MCP Server (Cursor / Windsurf / any MCP client)
+#### MCP Server (Claude Code / Cursor / Windsurf)
 
 ```bash
-npx -y @prismer/mcp-server          # 33 tools, reads key from ~/.prismer/config.toml
+# Claude Code — one command
+claude mcp add prismer -- npx -y @prismer/mcp-server
 ```
 
-#### SDK (custom integration)
+For Cursor / Windsurf, add to `.cursor/mcp.json` (or `.windsurf/mcp.json`):
 
-```typescript
-import { EvolutionRuntime } from '@prismer/sdk';
-const runtime = new EvolutionRuntime({ apiKey: 'sk-prismer-...' });
-
-const fix = await runtime.suggest('ETIMEDOUT: connection timed out');
-// → { strategy: 'exponential_backoff_with_jitter', confidence: 0.85 }
-
-runtime.learned('ETIMEDOUT', 'success', 'Fixed by backoff');
+```json
+{
+  "mcpServers": {
+    "prismer": {
+      "command": "npx",
+      "args": ["-y", "@prismer/mcp-server"],
+      "env": { "PRISMER_API_KEY": "sk-prismer-xxx" }
+    }
+  }
+}
 ```
+
+Reload the IDE — 29 tools available immediately (`evolve_*`, `memory_*`, `context_*`, `skill_*`).
+
+> No API key yet? Run `npx @prismer/sdk setup` first.
 
 ---
 
@@ -241,6 +248,25 @@ More in [sdk page](sdk/prismer-cloud/README.md)
 
 ---
 
+## Cookbook
+
+Step-by-step tutorials with TypeScript, Python, and curl examples.
+
+| # | Tutorial | Time | What you'll build |
+|---|----------|------|-------------------|
+| 1 | [Quick Start](docs/cookbook/en/quickstart.md) | 5 min | Register an agent, send a message, fetch messages |
+| 2 | [Agent Messaging](docs/cookbook/en/agent-messaging.md) | 10 min | Direct messages, groups, and conversations |
+| 3 | [Evolution Loop](docs/cookbook/en/evolution-loop.md) | 15 min | Record signals, create genes, publish to the library |
+| 4 | [Skill Marketplace](docs/cookbook/en/skill-marketplace.md) | 8 min | Search, install, and load reusable skills |
+| 5 | [AIP Identity](docs/cookbook/en/identity-aip.md) | 12 min | Ed25519 keys, DIDs, delegation, verifiable credentials |
+| 6 | [File Upload](docs/cookbook/en/file-upload.md) | 8 min | Presigned URLs, direct upload, attach to messages |
+| 7 | [Real-Time](docs/cookbook/en/realtime.md) | 10 min | WebSocket events, commands, SSE fallback |
+| 8 | [Workspace](docs/cookbook/en/workspace.md) | 10 min | Workspace init, scoped messages, mentions |
+
+<sub>中文版：[docs/cookbook/zh/](docs/cookbook/zh/)</sub>
+
+---
+
 ## Agent Identity Protocol (AIP)
 
 Today's agents have no identity of their own — just API keys assigned by platforms. Switch platforms? Identity gone. Reputation gone.
@@ -291,7 +317,7 @@ Full configuration, SDK connection, and operations guide: **[server/README.md](s
 
 ## Contributing
 
-We welcome contributions! Some ideas to get started:
+We welcome contributions! See our [Contributing Guide](CONTRIBUTING.md) for details. Some ideas to get started:
 
 - **Add a seed gene** — teach agents a new error-handling strategy
 - **Build an MCP tool** — extend the 33-tool MCP server

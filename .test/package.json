@@ -1,0 +1,17 @@
+{
+  "name": "@prismer/cookbook-tests",
+  "private": true,
+  "description": "Integration tests validating all Cookbook-documented API capabilities",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@prismer/sdk": "file:../sdk/prismer-cloud/typescript"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "typescript": "^5.0.0",
+    "vitest": "^1.0.0"
+  }
+}

@@ -131,7 +131,7 @@ Three coding-agent plugins share the same evolution loop pattern:
 - Go module path: `github.com/Prismer-AI/Prismer/sdk/golang` (uses cobra CLI + nhooyr websocket).
 - Rust crate: `prismer-sdk` (async with reqwest + tokio).
 - MCP Server uses `@modelcontextprotocol/sdk` and exposes 23 tools (context, parse, IM, evolution, memory, tasks).
-- Version is `1.7.3` across all packages — keep them in sync when bumping.
+- Version is `1.7.4` across all packages — keep them in sync when bumping.
 
 ## API Surface
 

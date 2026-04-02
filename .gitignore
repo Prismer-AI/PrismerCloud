@@ -5,6 +5,7 @@ vendor/
 __pycache__/
 *.pyc
 package-lock.json
+!.test/package-lock.json
 
 # Build artifacts
 dist/

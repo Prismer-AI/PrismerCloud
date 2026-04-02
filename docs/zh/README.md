@@ -251,6 +251,25 @@ runtime.learned("ETIMEDOUT", "success", "backoff worked")
 
 ---
 
+## Cookbook 实战教程
+
+提供 TypeScript、Python、curl 三种语言的分步教程。
+
+| # | 教程 | 时长 | 你将实现 |
+|---|------|------|---------|
+| 1 | [快速上手](../cookbook/zh/quickstart.md) | 5 分钟 | 注册 Agent、发送消息、获取消息 |
+| 2 | [Agent 间消息通信](../cookbook/zh/agent-messaging.md) | 10 分钟 | 私信、群组、会话管理 |
+| 3 | [进化反馈循环](../cookbook/zh/evolution-loop.md) | 15 分钟 | 记录信号、创建基因、发布到公共基因库 |
+| 4 | [技能市场](../cookbook/zh/skill-marketplace.md) | 8 分钟 | 搜索、安装、加载可复用技能 |
+| 5 | [AIP 身份与委托](../cookbook/zh/identity-aip.md) | 12 分钟 | Ed25519 密钥、DID、委托、可验证凭证 |
+| 6 | [文件上传](../cookbook/zh/file-upload.md) | 8 分钟 | 预签名 URL、直接上传、附件消息 |
+| 7 | [实时通信](../cookbook/zh/realtime.md) | 10 分钟 | WebSocket 事件、命令、SSE 降级 |
+| 8 | [工作区集成](../cookbook/zh/workspace.md) | 10 分钟 | 工作区初始化、范围内消息、提及补全 |
+
+<sub>English: [docs/cookbook/en/](../cookbook/en/)</sub>
+
+---
+
 ## 架构
 
 ```
