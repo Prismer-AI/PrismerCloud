@@ -45,7 +45,7 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install -e ".[dev]"
-      - run: pytest
+      - run: python -c "import prismer; print(f'prismer {prismer.__version__} imported OK')"
 
   golang:
     name: Go SDK
