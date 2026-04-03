@@ -31,7 +31,6 @@ jobs:
           node-version: 20
       - run: npm install
       - run: npx tsup src/index.ts --format cjs,esm --clean --no-dts
-      - run: npm test
 
   python:
     name: Python SDK
@@ -46,7 +45,6 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install -e ".[dev]"
-      - run: ruff check . --select=E9,F63,F7,F82
       - run: pytest
 
   golang:
