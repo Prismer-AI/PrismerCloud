@@ -29,8 +29,12 @@ export const config = {
   },
 
   jwt: {
-    secret: process.env.JWT_SECRET || process.env.NEXTAUTH_SECRET || 'dev-secret-change-me',
-    expiresIn: process.env.JWT_EXPIRES_IN || '7d',
+    get secret() {
+      return process.env.JWT_SECRET || process.env.NEXTAUTH_SECRET || 'dev-secret-change-me';
+    },
+    get expiresIn() {
+      return process.env.JWT_EXPIRES_IN || '7d';
+    },
   },
 
   agent: {

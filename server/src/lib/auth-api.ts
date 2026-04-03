@@ -42,8 +42,11 @@ export interface ErrorResponse {
  * Uses /auth/cloud/github/callback (new v7.3+ path)
  */
 export async function githubCallback(code: string): Promise<AuthResponse> {
+  if (FEATURE_FLAGS.AUTH_LOCAL) {
+    throw new Error('GitHub OAuth is not available in self-host mode. Use email/password login, or configure GITHUB_CLIENT_ID/SECRET and disable FF_AUTH_LOCAL.');
+  }
+
   const backendBase = await getBackendApiBase();
-  // New path: /auth/cloud/github/callback (v7.3+)
   const res = await fetch(`${backendBase}/auth/cloud/github/callback`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -63,8 +66,11 @@ export async function githubCallback(code: string): Promise<AuthResponse> {
  * Uses /auth/cloud/google/callback (new v7.3+ path)
  */
 export async function googleCallback(accessToken: string): Promise<AuthResponse> {
+  if (FEATURE_FLAGS.AUTH_LOCAL) {
+    throw new Error('Google OAuth is not available in self-host mode. Use email/password login, or configure GOOGLE_CLIENT_ID/SECRET and disable FF_AUTH_LOCAL.');
+  }
+
   const backendBase = await getBackendApiBase();
-  // New path: /auth/cloud/google/callback (v7.3+)
   const res = await fetch(`${backendBase}/auth/cloud/google/callback`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

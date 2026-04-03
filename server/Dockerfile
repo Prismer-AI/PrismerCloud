@@ -10,8 +10,8 @@ RUN apk add --no-cache libc6-compat
 # 复制依赖文件
 COPY package.json package-lock.json* ./
 
-# 使用 npm 安装依赖
-RUN npm ci
+# 安装依赖（npm ci requires package-lock.json; use npm install as fallback）
+RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi
 
 # 构建应用
 FROM base AS builder
