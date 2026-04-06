@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Exa from 'exa-js';
 import { ensureNacosConfig } from '@/lib/nacos-config';
+import { apiGuard } from '@/lib/api-guard';
 import { metrics } from '@/lib/metrics';
 
 // Initialize Nacos config on module load (singleton pattern)
@@ -32,9 +33,12 @@ function getContentApiKey(): string | undefined {
 export async function POST(request: NextRequest) {
   const reqStart = Date.now();
   try {
+    const guard = await apiGuard(request, { tier: 'billable', estimatedCost: 1 });
+    if (!guard.ok) return guard.response;
+
     // Ensure Nacos config is loaded before accessing env vars
     await initNacos();
-    
+
     const CONTENT_API_KEY = getContentApiKey();
     
     if (!CONTENT_API_KEY) {
@@ -54,10 +58,34 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Validate all URLs
+    // Validate all URLs — block private/internal networks
     for (const url of urls) {
       try {
-        new URL(url);
+        const parsed = new URL(url);
+        if (!['http:', 'https:'].includes(parsed.protocol)) {
+          return NextResponse.json(
+            { error: `Invalid URL scheme: ${parsed.protocol} (only http/https allowed)` },
+            { status: 400 }
+          );
+        }
+        const host = parsed.hostname.toLowerCase();
+        if (
+          host === 'localhost' ||
+          host === '127.0.0.1' ||
+          host === '::1' ||
+          host === '0.0.0.0' ||
+          host.startsWith('10.') ||
+          host.startsWith('172.') ||
+          host.startsWith('192.168.') ||
+          host.startsWith('169.254.') ||
+          host.endsWith('.internal') ||
+          host.endsWith('.local')
+        ) {
+          return NextResponse.json(
+            { error: `Blocked URL: private/internal network addresses are not allowed` },
+            { status: 400 }
+          );
+        }
       } catch {
         return NextResponse.json(
           { error: `Invalid URL: ${url}` },

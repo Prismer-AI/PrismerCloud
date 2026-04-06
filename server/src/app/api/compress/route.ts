@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import OpenAI from 'openai';
 import { SOURCE_QUALIFIER_SYSTEM, getPromptForStrategy } from '@/lib/prompts';
 import { ensureNacosConfig } from '@/lib/nacos-config';
+import { apiGuard } from '@/lib/api-guard';
 import { metrics } from '@/lib/metrics';
 
 // Token limit configuration
@@ -98,9 +99,12 @@ function truncateContent(content: string, maxChars: number = MAX_CONTENT_CHARS):
 export async function POST(request: NextRequest) {
   const reqStart = Date.now();
   try {
+    const guard = await apiGuard(request, { tier: 'billable', estimatedCost: 1 });
+    if (!guard.ok) return guard.response;
+
     // Ensure Nacos config is loaded before accessing env vars
     await initNacos();
-    
+
     const config = getOpenAIConfig();
     
     if (!config.apiKey) {

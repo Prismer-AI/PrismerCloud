@@ -199,7 +199,7 @@ async function handleSingleUrl(
 
     const contentRes = await fetch(`${baseUrl}/api/content`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...(authHeader ? { 'Authorization': authHeader } : {}) },
       body: JSON.stringify({ urls: [url] }),
     });
 
@@ -270,7 +270,7 @@ async function handleSingleUrl(
 
     const compressRes = await fetch(`${baseUrl}/api/compress`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...(authHeader ? { 'Authorization': authHeader } : {}) },
       body: JSON.stringify({
         content: content.text,
         url: content.url || url,
@@ -457,7 +457,7 @@ async function handleBatchUrls(
         // 批量获取内容
         const contentRes = await fetch(`${baseUrl}/api/content`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...(authHeader ? { 'Authorization': authHeader } : {}) },
           body: JSON.stringify({ urls: uncachedUrls }),
         });
 
@@ -480,7 +480,7 @@ async function handleBatchUrls(
               try {
                 const compressRes = await fetch(`${baseUrl}/api/compress`, {
                   method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
+                  headers: { 'Content-Type': 'application/json', ...(authHeader ? { 'Authorization': authHeader } : {}) },
                   body: JSON.stringify({
                     content: content.text,
                     url: content.url || url,
@@ -642,7 +642,7 @@ async function handleQuery(
     // Step 1: Exa 外部搜索
     const searchRes = await fetch(`${baseUrl}/api/search`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...(authHeader ? { 'Authorization': authHeader } : {}) },
       body: JSON.stringify({ query }),
     });
 
@@ -723,7 +723,7 @@ async function handleQuery(
         try {
           const compressRes = await fetch(`${baseUrl}/api/compress`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', ...(authHeader ? { 'Authorization': authHeader } : {}) },
             body: JSON.stringify({
               content: result.text,
               url: result.url,

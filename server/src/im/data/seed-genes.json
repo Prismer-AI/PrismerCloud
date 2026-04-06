@@ -1,0 +1,506 @@
+[
+  {
+    "type": "Gene",
+    "id": "seed_repair_timeout_v1",
+    "category": "repair",
+    "title": "Timeout Recovery",
+    "description": "Handles timeout and connection errors with exponential backoff and endpoint fallback.",
+    "signals_match": ["error:timeout", "error:connection_refused", "error:ETIMEDOUT"],
+    "preconditions": ["network_available"],
+    "strategy": [
+      "Increase request timeout to 30s (from default 10s)",
+      "Retry with exponential backoff: base=1s, factor=2, max_retries=3",
+      "If endpoint supports it, switch to backup/fallback URL",
+      "Log failure chain for post-mortem: [original_error, retry_count, final_status]"
+    ],
+    "constraints": { "max_credits": 10, "max_retries": 3 },
+    "created_by": "prismer:seed",
+    "visibility": "seed"
+  },
+  {
+    "type": "Gene",
+    "id": "seed_repair_ratelimit_v1",
+    "category": "repair",
+    "title": "Rate Limit Backoff",
+    "description": "Gracefully handles 429 Too Many Requests with adaptive delay and request spreading.",
+    "signals_match": ["error:rate_limit", "error:429", "error:too_many_requests"],
+    "preconditions": [],
+    "strategy": [
+      "Parse Retry-After header if present, otherwise default to 5s",
+      "Apply jittered exponential backoff: base=2s, jitter=±500ms, max_wait=60s",
+      "Reduce concurrent request count by 50% for next 30s window",
+      "If rate limit persists after 3 cycles, queue remaining requests for batch execution"
+    ],
+    "constraints": { "max_credits": 15, "max_retries": 5 },
+    "created_by": "prismer:seed",
+    "visibility": "seed"
+  },
+  {
+    "type": "Gene",
+    "id": "seed_repair_auth_refresh_v1",
+    "category": "repair",
+    "title": "Auth Token Refresh",
+    "description": "Detects expired or invalid auth tokens and refreshes them transparently.",
+    "signals_match": ["error:401", "error:unauthorized", "error:token_expired"],
+    "preconditions": ["refresh_token_available"],
+    "strategy": [
+      "Detect 401/403 response indicating token expiry",
+      "Call refresh token endpoint to obtain new access token",
+      "Retry the original request with the new token",
+      "If refresh also fails, escalate to re-authentication flow"
+    ],
+    "constraints": { "max_credits": 5, "max_retries": 2 },
+    "created_by": "prismer:seed",
+    "visibility": "seed"
+  },
+  {
+    "type": "Gene",
+    "id": "seed_repair_dns_fallback_v1",
+    "category": "repair",
+    "title": "DNS Resolution Fallback",
+    "description": "Recovers from DNS failures by trying alternative resolvers and cached IPs.",
+    "signals_match": ["error:ENOTFOUND", "error:dns_resolution", "error:getaddrinfo"],
+    "preconditions": ["network_available"],
+    "strategy": [
+      "Retry DNS resolution with alternative resolver (8.8.8.8, 1.1.1.1)",
+      "If cached IP exists for this host, attempt direct IP connection with Host header",
+      "Fall back to alternative domain/CDN endpoint if configured",
+      "Report DNS failure for monitoring with original hostname and resolver details"
+    ],
+    "constraints": { "max_credits": 8, "max_retries": 3 },
+    "created_by": "prismer:seed",
+    "visibility": "seed"
+  },
+  {
+    "type": "Gene",
+    "id": "seed_repair_json_parse_v1",
+    "category": "repair",
+    "title": "JSON Parse Recovery",
+    "description": "Handles malformed JSON responses with sanitization, partial extraction, and format negotiation.",
+    "signals_match": ["error:json_parse", "error:SyntaxError", "error:unexpected_token"],
+    "preconditions": [],
+    "strategy": [
+      "Attempt to sanitize response: strip BOM, fix trailing commas, unescape sequences",
+      "If sanitization fails, try extracting JSON from markdown code blocks or mixed content",
+      "Re-request with explicit Accept: application/json header",
+      "As last resort, extract key-value pairs via regex and construct partial result"
+    ],
+    "constraints": { "max_credits": 8, "max_retries": 2 },
+    "created_by": "prismer:seed",
+    "visibility": "seed"
+  },
+  {
+    "type": "Gene",
+    "id": "seed_repair_500_retry_v1",
+    "category": "repair",
+    "title": "Server Error Retry",
+    "description": "Handles 5xx server errors with intelligent retry, distinguishing transient from persistent failures.",
+    "signals_match": ["error:500", "error:502", "error:503", "error:server_error"],
+    "preconditions": ["request_is_idempotent"],
+    "strategy": [
+      "Wait 2s then retry once — most 5xx are transient",
+      "If 503 with Retry-After, respect the header value",
+      "On second failure, try alternative endpoint or region if available",
+      "On third failure, mark endpoint as degraded and return cached/stale data if acceptable"
+    ],
+    "constraints": { "max_credits": 10, "max_retries": 3 },
+    "created_by": "prismer:seed",
+    "visibility": "seed"
+  },
+  {
+    "type": "Gene",
+    "id": "seed_repair_oom_reduce_v1",
+    "category": "repair",
+    "title": "OOM Payload Reduction",
+    "description": "Recovers from out-of-memory or payload-too-large errors by reducing data volume.",
+    "signals_match": ["error:oom", "error:payload_too_large", "error:413", "error:ENOMEM"],
+    "preconditions": [],
+    "strategy": [
+      "Reduce batch size by 50% and retry with smaller chunks",
+      "Enable streaming mode if API supports it (avoid full in-memory buffering)",
+      "Remove non-essential fields from request payload (thumbnails, metadata, debug info)",
+      "If still failing, split into multiple sequential requests with pagination"
+    ],
+    "constraints": { "max_credits": 12, "max_retries": 3 },
+    "created_by": "prismer:seed",
+    "visibility": "seed"
+  },
+  {
+    "type": "Gene",
+    "id": "seed_repair_ssl_cert_v1",
+    "category": "repair",
+    "title": "SSL Certificate Recovery",
+    "description": "Handles SSL/TLS certificate errors with safe fallback strategies.",
+    "signals_match": ["error:CERT_HAS_EXPIRED", "error:ssl", "error:UNABLE_TO_VERIFY_LEAF_SIGNATURE"],
+    "preconditions": [],
+    "strategy": [
+      "Check system clock — clock skew is the most common cause of cert errors",
+      "Try HTTP fallback only if endpoint explicitly supports it and data is non-sensitive",
+      "If self-signed cert in dev/test context, add to trusted store with explicit scope",
+      "Report certificate details (issuer, expiry, hostname mismatch) for operator action"
+    ],
+    "constraints": { "max_credits": 5, "max_retries": 1 },
+    "created_by": "prismer:seed",
+    "visibility": "seed"
+  },
+  {
+    "type": "Gene",
+    "id": "seed_repair_encoding_v1",
+    "category": "repair",
+    "title": "Encoding Fix",
+    "description": "Fixes character encoding mismatches that produce garbled text or parse errors.",
+    "signals_match": ["error:encoding", "error:invalid_utf8", "error:charset_mismatch"],
+    "preconditions": [],
+    "strategy": [
+      "Detect encoding from Content-Type charset, BOM, or byte pattern analysis",
+      "Convert from detected encoding (ISO-8859-1, GB2312, Shift_JIS, etc.) to UTF-8",
+      "Strip invalid byte sequences that can't be mapped",
+      "Re-request with Accept-Charset: utf-8 header to hint server"
+    ],
+    "constraints": { "max_credits": 5, "max_retries": 2 },
+    "created_by": "prismer:seed",
+    "visibility": "seed"
+  },
+  {
+    "type": "Gene",
+    "id": "seed_repair_partial_response_v1",
+    "category": "repair",
+    "title": "Partial Response Recovery",
+    "description": "Handles truncated or incomplete responses with resume and reconstruction strategies.",
+    "signals_match": ["error:ECONNRESET", "error:incomplete_response", "error:stream_truncated"],
+    "preconditions": [],
+    "strategy": [
+      "Check if response has Content-Length mismatch indicating truncation",
+      "If Range requests are supported, resume download from last received byte",
+      "If response is a paginated list, re-fetch from the last seen cursor/offset",
+      "Accept partial data if >80% received and mark result as potentially incomplete"
+    ],
+    "constraints": { "max_credits": 10, "max_retries": 3 },
+    "created_by": "prismer:seed",
+    "visibility": "seed"
+  },
+  {
+    "type": "Gene",
+    "id": "seed_repair_cors_proxy_v1",
+    "category": "repair",
+    "title": "CORS Proxy Fallback",
+    "description": "Handles CORS-blocked requests by routing through a server-side proxy.",
+    "signals_match": ["error:cors", "error:CORS_policy", "error:access_control"],
+    "preconditions": ["proxy_endpoint_available"],
+    "strategy": [
+      "Detect CORS error from browser/runtime error message pattern",
+      "Route request through server-side proxy endpoint instead of direct fetch",
+      "Preserve original headers (Authorization, Content-Type) in proxied request",
+      "Cache proxy result to reduce future proxy load"
+    ],
+    "constraints": { "max_credits": 8, "max_retries": 1 },
+    "created_by": "prismer:seed",
+    "visibility": "seed"
+  },
+  {
+    "type": "Gene",
+    "id": "seed_repair_connection_pool_v1",
+    "category": "repair",
+    "title": "Connection Pool Reset",
+    "description": "Recovers from exhausted or stale connection pools by draining and re-establishing connections.",
+    "signals_match": ["error:ECONNREFUSED", "error:pool_exhausted", "error:too_many_connections"],
+    "preconditions": [],
+    "strategy": [
+      "Destroy stale/idle connections older than 30s in the pool",
+      "Reduce pool max size temporarily to allow cleanup",
+      "Wait 1s for in-flight requests to complete, then retry",
+      "If pool library supports it, enable health check ping on checkout"
+    ],
+    "constraints": { "max_credits": 5, "max_retries": 2 },
+    "created_by": "prismer:seed",
+    "visibility": "seed"
+  },
+  {
+    "type": "Gene",
+    "id": "seed_optimize_cache_first_v1",
+    "category": "optimize",
+    "title": "Cache-First Strategy",
+    "description": "Reduces latency and cost by checking cache before making external requests.",
+    "signals_match": ["task.completed", "capability:search", "capability:fetch", "perf:high_latency"],
+    "preconditions": ["cache_available"],
+    "strategy": [
+      "Check local/Redis cache with composite key (method + URL + essential params hash)",
+      "If cache hit and TTL valid, return cached result immediately (0ms external call)",
+      "If cache miss, fetch externally and store result with appropriate TTL (5m for search, 1h for static)",
+      "Implement stale-while-revalidate: serve stale cache while refreshing in background"
+    ],
+    "constraints": { "max_credits": 3, "max_retries": 0 },
+    "created_by": "prismer:seed",
+    "visibility": "seed"
+  },
+  {
+    "type": "Gene",
+    "id": "seed_optimize_request_batching_v1",
+    "category": "optimize",
+    "title": "Request Batching & Dedup",
+    "description": "Combines multiple similar requests into batches and deduplicates identical in-flight requests.",
+    "signals_match": ["perf:many_requests", "perf:redundant_calls", "capability:batch_support"],
+    "preconditions": [],
+    "strategy": [
+      "Collect requests within a 50ms window and merge into a single batch call",
+      "Deduplicate identical in-flight requests — second caller awaits first's result",
+      "If batch API available, use it; otherwise, parallelize with concurrency limit",
+      "Split oversized batches (>100 items) into chunks to avoid payload limits"
+    ],
+    "constraints": { "max_credits": 5, "max_retries": 1 },
+    "created_by": "prismer:seed",
+    "visibility": "seed"
+  },
+  {
+    "type": "Gene",
+    "id": "seed_optimize_concurrency_limit_v1",
+    "category": "optimize",
+    "title": "Adaptive Concurrency",
+    "description": "Dynamically adjusts concurrent request count based on success rate and latency.",
+    "signals_match": ["perf:high_latency", "perf:throughput_drop", "error:rate_limit"],
+    "preconditions": [],
+    "strategy": [
+      "Start with conservative concurrency (3 parallel requests)",
+      "If p95 latency < 500ms and success rate > 95%, increase by 1 (max 10)",
+      "If error rate > 5% or p95 > 2s, decrease by 2 (min 1)",
+      "Apply AIMD (additive increase, multiplicative decrease) for stability"
+    ],
+    "constraints": { "max_credits": 3, "max_retries": 0 },
+    "created_by": "prismer:seed",
+    "visibility": "seed"
+  },
+  {
+    "type": "Gene",
+    "id": "seed_optimize_response_compression_v1",
+    "category": "optimize",
+    "title": "Response Compression",
+    "description": "Reduces bandwidth by requesting and handling compressed responses.",
+    "signals_match": ["perf:large_payload", "perf:slow_download", "perf:bandwidth_limited"],
+    "preconditions": [],
+    "strategy": [
+      "Add Accept-Encoding: gzip, br, deflate to all outgoing requests",
+      "For JSON responses > 1KB, enable compression at the transport layer",
+      "Strip unnecessary fields from response before caching (debug info, null values)",
+      "If response is repeated structure, consider delta-encoding between sequential requests"
+    ],
+    "constraints": { "max_credits": 2, "max_retries": 0 },
+    "created_by": "prismer:seed",
+    "visibility": "seed"
+  },
+  {
+    "type": "Gene",
+    "id": "seed_optimize_connection_reuse_v1",
+    "category": "optimize",
+    "title": "Connection Reuse (Keep-Alive)",
+    "description": "Eliminates TCP/TLS handshake overhead by reusing persistent connections.",
+    "signals_match": ["perf:high_latency", "perf:many_requests", "perf:handshake_overhead"],
+    "preconditions": [],
+    "strategy": [
+      "Enable HTTP keep-alive with idle timeout of 30s",
+      "Use a connection pool with per-host limit (6 for HTTP/1.1, 1 for HTTP/2 multiplexing)",
+      "Prefer HTTP/2 when available — single connection handles all requests to same origin",
+      "Monitor connection reuse ratio and alert if < 80%"
+    ],
+    "constraints": { "max_credits": 2, "max_retries": 0 },
+    "created_by": "prismer:seed",
+    "visibility": "seed"
+  },
+  {
+    "type": "Gene",
+    "id": "seed_optimize_parallel_fetch_v1",
+    "category": "optimize",
+    "title": "Parallel Fetch with Early Return",
+    "description": "Fetches from multiple sources in parallel and returns as soon as sufficient data arrives.",
+    "signals_match": ["perf:sequential_bottleneck", "capability:multi_source", "perf:high_latency"],
+    "preconditions": [],
+    "strategy": [
+      "Identify independent data sources that can be fetched in parallel",
+      "Launch all fetches concurrently with Promise.allSettled or equivalent",
+      "Return composite result as soon as required sources respond (don't wait for all)",
+      "Timeout slow sources after 5s and proceed with partial data set"
+    ],
+    "constraints": { "max_credits": 8, "max_retries": 1 },
+    "created_by": "prismer:seed",
+    "visibility": "seed"
+  },
+  {
+    "type": "Gene",
+    "id": "seed_optimize_dedup_requests_v1",
+    "category": "optimize",
+    "title": "Request Deduplication",
+    "description": "Prevents redundant API calls by deduplicating identical requests within a time window.",
+    "signals_match": ["perf:redundant_calls", "perf:duplicate_requests", "cost:high_api_usage"],
+    "preconditions": [],
+    "strategy": [
+      "Hash request signature (method + URL + body hash) as dedup key",
+      "If identical request is in-flight, return a promise that resolves with the same result",
+      "For POST/PUT, only dedup if request is marked idempotent (Idempotency-Key header)",
+      "Evict dedup cache entries after 5s to allow intentional retries"
+    ],
+    "constraints": { "max_credits": 2, "max_retries": 0 },
+    "created_by": "prismer:seed",
+    "visibility": "seed"
+  },
+  {
+    "type": "Gene",
+    "id": "seed_optimize_incremental_sync_v1",
+    "category": "optimize",
+    "title": "Incremental Sync",
+    "description": "Syncs only changed data instead of full refresh, using cursors, ETags, or timestamps.",
+    "signals_match": ["perf:full_refresh_slow", "perf:large_dataset", "capability:incremental"],
+    "preconditions": ["last_sync_cursor_available"],
+    "strategy": [
+      "Store last sync cursor/timestamp/ETag after each successful sync",
+      "On next sync, request only changes since last cursor (If-Modified-Since, since_id, etc.)",
+      "If server returns 304 Not Modified, skip processing entirely",
+      "Fall back to full sync if cursor is too old (>7d) or server rejects it"
+    ],
+    "constraints": { "max_credits": 5, "max_retries": 1 },
+    "created_by": "prismer:seed",
+    "visibility": "seed"
+  },
+  {
+    "type": "Gene",
+    "id": "seed_optimize_priority_queue_v1",
+    "category": "optimize",
+    "title": "Priority Task Queue",
+    "description": "Ensures high-priority tasks execute first when system is under load.",
+    "signals_match": ["perf:queue_congestion", "perf:slow_response", "task.queued"],
+    "preconditions": [],
+    "strategy": [
+      "Classify tasks into priority tiers: critical (0), normal (1), background (2)",
+      "Process critical tasks immediately, bypassing queue if capacity exists",
+      "Apply weighted fair scheduling: 60% critical, 30% normal, 10% background",
+      "Shed background tasks when queue depth exceeds threshold (>100 pending)"
+    ],
+    "constraints": { "max_credits": 3, "max_retries": 0 },
+    "created_by": "prismer:seed",
+    "visibility": "seed"
+  },
+  {
+    "type": "Gene",
+    "id": "seed_innovate_task_decompose_v1",
+    "category": "innovate",
+    "title": "Task Decomposition",
+    "description": "Breaks complex tasks into smaller subtasks for parallel execution and partial success.",
+    "signals_match": ["task.failed", "error:complexity", "task.large_input"],
+    "preconditions": [],
+    "strategy": [
+      "Analyze task input to identify independent sub-problems",
+      "Create subtasks with clear input/output contracts and dependency graph",
+      "Execute independent subtasks in parallel, dependent ones sequentially",
+      "Aggregate subtask results; accept partial success if >70% of subtasks succeed"
+    ],
+    "constraints": { "max_credits": 20, "max_retries": 1 },
+    "created_by": "prismer:seed",
+    "visibility": "seed"
+  },
+  {
+    "type": "Gene",
+    "id": "seed_innovate_multimodal_fallback_v1",
+    "category": "innovate",
+    "title": "Multi-Modal Fallback",
+    "description": "When primary input mode fails, automatically tries alternative modalities (text→image→audio).",
+    "signals_match": ["error:unsupported_format", "error:parse_failed", "capability:multimodal"],
+    "preconditions": ["alternative_modality_available"],
+    "strategy": [
+      "If text parsing fails, attempt OCR/image-based extraction of the source",
+      "If image processing fails, fall back to text description or metadata",
+      "Try format conversion pipeline: PDF→text, HTML→markdown, audio→transcript",
+      "Return best available modality with confidence indicator"
+    ],
+    "constraints": { "max_credits": 15, "max_retries": 2 },
+    "created_by": "prismer:seed",
+    "visibility": "seed"
+  },
+  {
+    "type": "Gene",
+    "id": "seed_innovate_tool_chain_switch_v1",
+    "category": "innovate",
+    "title": "Tool Chain Switch",
+    "description": "When primary tool/API fails repeatedly, switches to alternative tool chain.",
+    "signals_match": ["error:tool_unavailable", "error:api_deprecated", "task.failed"],
+    "preconditions": ["alternative_tools_available"],
+    "strategy": [
+      "Maintain a ranked list of tool alternatives per capability (e.g., search: Exa → Serper → Bing)",
+      "On primary tool failure, promote next alternative to primary position",
+      "Test alternative with a lightweight probe request before full switchover",
+      "Record tool reliability metrics to inform future ranking"
+    ],
+    "constraints": { "max_credits": 10, "max_retries": 2 },
+    "created_by": "prismer:seed",
+    "visibility": "seed"
+  },
+  {
+    "type": "Gene",
+    "id": "seed_innovate_context_compression_v1",
+    "category": "innovate",
+    "title": "Context Compression",
+    "description": "Reduces context window usage by compressing conversation history and intermediate results.",
+    "signals_match": ["error:context_length", "error:token_limit", "perf:large_context"],
+    "preconditions": [],
+    "strategy": [
+      "Summarize older conversation turns (keep last 3 verbatim, summarize earlier)",
+      "Remove redundant information across messages (repeated instructions, boilerplate)",
+      "Compress structured data: collapse JSON arrays to schema + sample, truncate long strings",
+      "Maintain a 'key facts' buffer that preserves critical information across compressions"
+    ],
+    "constraints": { "max_credits": 8, "max_retries": 1 },
+    "created_by": "prismer:seed",
+    "visibility": "seed"
+  },
+  {
+    "type": "Gene",
+    "id": "seed_innovate_feedback_loop_v1",
+    "category": "innovate",
+    "title": "Self-Correcting Feedback Loop",
+    "description": "Uses output validation to detect errors and iteratively refine results.",
+    "signals_match": ["task.completed", "quality:low_score", "quality:validation_failed"],
+    "preconditions": ["validator_available"],
+    "strategy": [
+      "After task completion, run output through validation checks (schema, assertions, heuristics)",
+      "If validation fails, analyze the specific failure mode and generate correction prompt",
+      "Re-execute with correction context appended (max 3 iterations)",
+      "Track iteration count — if >2 corrections needed, flag for human review"
+    ],
+    "constraints": { "max_credits": 20, "max_retries": 3 },
+    "created_by": "prismer:seed",
+    "visibility": "seed"
+  },
+  {
+    "type": "Gene",
+    "id": "seed_innovate_progressive_enhance_v1",
+    "category": "innovate",
+    "title": "Progressive Enhancement",
+    "description": "Returns fast approximate results first, then refines progressively if time allows.",
+    "signals_match": ["perf:time_pressure", "task.queued", "capability:progressive"],
+    "preconditions": [],
+    "strategy": [
+      "Return a fast approximate answer within 2s (cached, heuristic, or lightweight model)",
+      "Start background refinement with full pipeline (search, compress, validate)",
+      "Stream refined results as they become available (SSE or polling)",
+      "Set quality threshold — stop refining when improvement < 5% per iteration"
+    ],
+    "constraints": { "max_credits": 15, "max_retries": 0 },
+    "created_by": "prismer:seed",
+    "visibility": "seed"
+  },
+  {
+    "type": "Gene",
+    "id": "seed_innovate_self_healing_v1",
+    "category": "innovate",
+    "title": "Self-Healing Pipeline",
+    "description": "Automatically detects and repairs broken pipeline stages without human intervention.",
+    "signals_match": ["error:pipeline_stage_failed", "task.failed", "error:dependency_missing"],
+    "preconditions": [],
+    "strategy": [
+      "Instrument each pipeline stage with health checks (input validation, output assertion)",
+      "On stage failure, isolate the broken stage and attempt hot-swap with fallback implementation",
+      "If no fallback exists, skip non-critical stage and mark output as degraded",
+      "Record failure pattern to evolution system for future gene creation"
+    ],
+    "constraints": { "max_credits": 12, "max_retries": 2 },
+    "created_by": "prismer:seed",
+    "visibility": "seed"
+  }
+]
