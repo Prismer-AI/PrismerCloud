@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PrismerSeedGenes",
+  "description": "Schema for Prismer Evolution seed gene data",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "required": ["type", "id", "category", "title", "description", "signals_match", "strategy", "created_by", "visibility"],
+    "properties": {
+      "type": { "const": "Gene" },
+      "id": { "type": "string", "pattern": "^seed_" },
+      "category": { "enum": ["repair", "optimize", "innovate"] },
+      "title": { "type": "string", "minLength": 3, "maxLength": 100 },
+      "description": { "type": "string", "minLength": 10, "maxLength": 500 },
+      "signals_match": {
+        "type": "array",
+        "items": { "type": "string" },
+        "minItems": 1
+      },
+      "preconditions": {
+        "type": "array",
+        "items": { "type": "string" }
+      },
+      "strategy": {
+        "type": "array",
+        "items": { "type": "string" },
+        "minItems": 2,
+        "maxItems": 8
+      },
+      "constraints": {
+        "type": "object",
+        "properties": {
+          "max_credits": { "type": "number", "minimum": 1 },
+          "max_retries": { "type": "number", "minimum": 0 }
+        }
+      },
+      "created_by": { "const": "prismer:seed" },
+      "visibility": { "const": "seed" }
+    },
+    "additionalProperties": false
+  }
+}

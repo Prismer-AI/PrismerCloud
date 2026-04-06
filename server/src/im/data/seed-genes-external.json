@@ -1,0 +1,354 @@
+[
+  {
+    "_source": "evomap",
+    "_source_id": "sha256:58b272ab",
+    "_source_gdi": 34.15,
+    "type": "Gene",
+    "id": "ext_optimize_nextjs_lcp_v1",
+    "category": "optimize",
+    "title": "Next.js LCP Optimization",
+    "description": "Optimizes Largest Contentful Paint in Next.js apps through image priority, responsive sizes, and CDN caching.",
+    "signals_match": ["perf:lcp_slow", "perf:web_vitals", "capability:nextjs", "perf:image_optimization"],
+    "preconditions": ["nextjs_project"],
+    "strategy": [
+      "Identify the actual LCP element in production field data (not just lab)",
+      "Set priority on the primary above-the-fold image using next/image",
+      "Define accurate sizes rules for each breakpoint to prevent layout shift",
+      "Use placeholder='blur' with blurDataURL for perceived performance",
+      "Serve cached AVIF/WebP variants through CDN with long-lived cache headers",
+      "Validate improvements with repeatable Lighthouse and Web Vitals measurements"
+    ],
+    "constraints": { "max_credits": 5, "max_retries": 0 },
+    "created_by": "external:evomap",
+    "visibility": "published"
+  },
+  {
+    "_source": "evomap",
+    "_source_id": "sha256:9e322d50",
+    "_source_gdi": 34.15,
+    "type": "Gene",
+    "id": "ext_innovate_embedding_privacy_v1",
+    "category": "innovate",
+    "title": "Embedding Differential Privacy",
+    "description": "Applies differential privacy techniques to embedding-based retrieval systems to prevent data leakage.",
+    "signals_match": ["security:data_leakage", "capability:embeddings", "capability:vector_search", "security:privacy"],
+    "preconditions": ["embedding_pipeline_available"],
+    "strategy": [
+      "Define the threat model: who are the adversaries and what can they observe",
+      "Minimize and normalize source text before embedding to reduce surface area",
+      "Apply differential privacy mechanisms at the dataset layer (not query-time)",
+      "Track privacy budget parameters (epsilon, delta) and evaluate retrieval utility tradeoff",
+      "Restrict retrieval scope with metadata filters to limit exposure",
+      "Use offline attack simulations to verify guarantees hold in practice"
+    ],
+    "constraints": { "max_credits": 10, "max_retries": 0 },
+    "created_by": "external:evomap",
+    "visibility": "published"
+  },
+  {
+    "_source": "evomap",
+    "_source_id": "sha256:d313fd44",
+    "_source_gdi": 30.05,
+    "type": "Gene",
+    "id": "ext_repair_cqrs_read_join_v1",
+    "category": "repair",
+    "title": "CQRS Cross-Service Read Joins",
+    "description": "Repairs data consistency in CQRS architectures by implementing materialized views and event-driven joins.",
+    "signals_match": ["error:data_inconsistency", "error:join_failure", "capability:microservices", "capability:cqrs"],
+    "preconditions": ["event_bus_available"],
+    "strategy": [
+      "Create dedicated read models that pre-compute joins from multiple services",
+      "Subscribe to domain events from each service to keep read models in sync",
+      "Implement API composition at gateway level for ad-hoc cross-service queries",
+      "Use Change Data Capture (CDC) to propagate database changes as a fallback"
+    ],
+    "constraints": { "max_credits": 12, "max_retries": 1 },
+    "created_by": "external:evomap",
+    "visibility": "published"
+  },
+  {
+    "_source": "evomap",
+    "_source_id": "sha256:c74917a5",
+    "_source_gdi": 33.55,
+    "type": "Gene",
+    "id": "ext_repair_ffmpeg_crash_v1",
+    "category": "repair",
+    "title": "FFmpeg Pipeline Crash Recovery",
+    "description": "Prevents and recovers from FFmpeg transcoding crashes with defensive codec initialization and input validation.",
+    "signals_match": ["error:null_pointer", "error:segfault", "error:ffmpeg", "error:codec_init"],
+    "preconditions": ["ffmpeg_available"],
+    "strategy": [
+      "Implement defensive codec initialization with null checks before any transcoding",
+      "Add pre-transcoding validation layer that verifies container format integrity",
+      "Wrap pipeline stages with crash boundary that captures stderr and exit codes",
+      "On crash, retry with safer codec settings (lower resolution, software decoder fallback)"
+    ],
+    "constraints": { "max_credits": 10, "max_retries": 2 },
+    "created_by": "external:evomap",
+    "visibility": "published"
+  },
+  {
+    "_source": "evomap",
+    "_source_id": "sha256:ad92f17e",
+    "_source_gdi": 30.3,
+    "type": "Gene",
+    "id": "ext_innovate_browser_fallback_v1",
+    "category": "innovate",
+    "title": "Browser Automation Fallback",
+    "description": "Falls back to browser automation when APIs are unavailable, rate-limited, or return incomplete data.",
+    "signals_match": ["error:api_unavailable", "error:rate_limit", "error:incomplete_data", "capability:browser"],
+    "preconditions": ["browser_automation_available"],
+    "strategy": [
+      "When API calls fail due to rate limits or insufficient credits, switch to browser automation",
+      "Use Playwright or similar tools to navigate pages and extract structured data",
+      "Snapshot page content and parse using DOM selectors with retry on dynamic content",
+      "Cache browser-extracted results to reduce future automation overhead"
+    ],
+    "constraints": { "max_credits": 20, "max_retries": 2 },
+    "created_by": "external:evomap",
+    "visibility": "published"
+  },
+  {
+    "_source": "evomap",
+    "_source_id": "sha256:f7dc941d",
+    "_source_gdi": 34.15,
+    "type": "Gene",
+    "id": "ext_repair_capability_gap_v1",
+    "category": "repair",
+    "title": "Agent Capability Gap Framework",
+    "description": "Detects and addresses capability gaps in agent environments with pre-checks and fallback mechanisms.",
+    "signals_match": ["error:capability_missing", "error:tool_unavailable", "error:permission_denied"],
+    "preconditions": [],
+    "strategy": [
+      "Implement pre-execution capability check before committing to a strategy",
+      "Create wrapper authority validation layer to detect permission boundaries early",
+      "Design flexible fallback mechanisms that degrade gracefully when capabilities are missing",
+      "Establish automated testing framework to verify capability availability",
+      "Provide alternative approach library indexed by capability requirements"
+    ],
+    "constraints": { "max_credits": 8, "max_retries": 2 },
+    "created_by": "external:evomap",
+    "visibility": "published"
+  },
+  {
+    "_source": "evomap",
+    "_source_id": "sha256:885d8b8b",
+    "_source_gdi": 33.9,
+    "type": "Gene",
+    "id": "ext_repair_redis_sentinel_v1",
+    "category": "repair",
+    "title": "Redis Sentinel with ACL Recovery",
+    "description": "Recovers Redis authentication and connection failures using Sentinel architecture and circuit breaker patterns.",
+    "signals_match": ["error:redis_auth", "error:redis_connection", "error:authentication_failure"],
+    "preconditions": ["redis_available"],
+    "strategy": [
+      "Configure Redis Sentinel with ACL users and automated password rotation",
+      "Implement connection pool circuit breaker to prevent cascade failures",
+      "On auth failure, attempt re-authentication with rotated credentials",
+      "Fall back to read-only replica if primary is unreachable"
+    ],
+    "constraints": { "max_credits": 8, "max_retries": 2 },
+    "created_by": "external:evomap",
+    "visibility": "published"
+  },
+  {
+    "_source": "openclaw:devops-and-cloud",
+    "type": "Gene",
+    "id": "ext_repair_k8s_pod_crash_v1",
+    "category": "repair",
+    "title": "Kubernetes Pod CrashLoopBackOff Recovery",
+    "description": "Diagnoses and recovers from Kubernetes pod crash loops by analyzing logs, resources, and liveness probes.",
+    "signals_match": ["error:CrashLoopBackOff", "error:k8s_pod_restart", "error:OOMKilled"],
+    "preconditions": ["kubectl_available"],
+    "strategy": [
+      "Fetch pod events and container logs to identify crash root cause",
+      "Check resource limits — if OOMKilled, increase memory limit by 50% or optimize app memory",
+      "Verify liveness/readiness probe endpoints are correct and responding within timeout",
+      "If image pull error, verify image tag exists and registry credentials are valid",
+      "Apply fix and wait for pod to stabilize (3 consecutive successful probes)"
+    ],
+    "constraints": { "max_credits": 10, "max_retries": 2 },
+    "created_by": "external:openclaw",
+    "visibility": "published"
+  },
+  {
+    "_source": "openclaw:devops-and-cloud",
+    "type": "Gene",
+    "id": "ext_optimize_docker_image_v1",
+    "category": "optimize",
+    "title": "Docker Image Size Optimization",
+    "description": "Reduces Docker image size by 50-80% through multi-stage builds, layer optimization, and distroless bases.",
+    "signals_match": ["perf:large_image", "perf:slow_deploy", "capability:docker"],
+    "preconditions": ["dockerfile_available"],
+    "strategy": [
+      "Use multi-stage build: builder stage for compilation, runtime stage with minimal base",
+      "Switch base image to alpine or distroless (gcr.io/distroless) for production",
+      "Combine RUN commands to reduce layers; clean apt/apk cache in same layer",
+      "Use .dockerignore to exclude node_modules, .git, docs, tests from context",
+      "Pin dependency versions to prevent unnecessary layer invalidation"
+    ],
+    "constraints": { "max_credits": 5, "max_retries": 0 },
+    "created_by": "external:openclaw",
+    "visibility": "published"
+  },
+  {
+    "_source": "openclaw:coding-agents-and-ides",
+    "type": "Gene",
+    "id": "ext_repair_test_flakiness_v1",
+    "category": "repair",
+    "title": "Test Flakiness Detection & Fix",
+    "description": "Identifies and fixes flaky tests caused by timing, shared state, or non-deterministic dependencies.",
+    "signals_match": ["error:test_flaky", "error:test_intermittent", "error:assertion_random"],
+    "preconditions": ["test_suite_available"],
+    "strategy": [
+      "Identify flaky tests by running suite 3x and comparing results (different outcomes = flaky)",
+      "Check for timing dependencies: replace sleep/setTimeout with explicit waits or polling",
+      "Isolate shared state: ensure each test has fresh fixtures, no dependency on execution order",
+      "Mock non-deterministic inputs (Date.now, Math.random, network calls) with deterministic values",
+      "Add retry annotation only as last resort — fix root cause first"
+    ],
+    "constraints": { "max_credits": 8, "max_retries": 1 },
+    "created_by": "external:openclaw",
+    "visibility": "published"
+  },
+  {
+    "_source": "openclaw:coding-agents-and-ides",
+    "type": "Gene",
+    "id": "ext_repair_type_error_ts_v1",
+    "category": "repair",
+    "title": "TypeScript Type Error Resolution",
+    "description": "Systematically resolves TypeScript type errors by analyzing type flow, narrowing, and declaration fixes.",
+    "signals_match": ["error:TS2322", "error:TS2345", "error:type_mismatch", "error:typescript"],
+    "preconditions": [],
+    "strategy": [
+      "Read the full error chain — TS errors often point to the symptom, not the cause",
+      "Trace the type backward from error site to source declaration to find the mismatch origin",
+      "Prefer narrowing (type guards, discriminated unions) over type assertions (as/any)",
+      "If third-party types are wrong, use module augmentation rather than @ts-ignore",
+      "Run tsc --noEmit after fix to verify no new errors were introduced"
+    ],
+    "constraints": { "max_credits": 5, "max_retries": 2 },
+    "created_by": "external:openclaw",
+    "visibility": "published"
+  },
+  {
+    "_source": "openclaw:search-and-research",
+    "type": "Gene",
+    "id": "ext_optimize_search_relevance_v1",
+    "category": "optimize",
+    "title": "Search Result Relevance Tuning",
+    "description": "Improves search result quality through query expansion, re-ranking, and result deduplication.",
+    "signals_match": ["quality:low_relevance", "quality:search_poor", "capability:search"],
+    "preconditions": ["search_api_available"],
+    "strategy": [
+      "Expand query with synonyms and related terms to increase recall",
+      "Apply re-ranking model (cross-encoder) on top-K results to improve precision",
+      "Deduplicate results by content similarity (>90% overlap = remove lower-ranked)",
+      "If results are still poor, fall back to broader query with stricter post-filtering",
+      "Track click-through rate as feedback signal for future query refinement"
+    ],
+    "constraints": { "max_credits": 8, "max_retries": 1 },
+    "created_by": "external:openclaw",
+    "visibility": "published"
+  },
+  {
+    "_source": "openclaw:browser-and-automation",
+    "type": "Gene",
+    "id": "ext_repair_scraping_blocked_v1",
+    "category": "repair",
+    "title": "Web Scraping Anti-Block Recovery",
+    "description": "Recovers from web scraping blocks (CAPTCHA, IP ban, JS challenge) with rotation and stealth techniques.",
+    "signals_match": ["error:403", "error:captcha", "error:cloudflare_challenge", "error:ip_blocked"],
+    "preconditions": ["browser_automation_available"],
+    "strategy": [
+      "Rotate User-Agent and HTTP headers to match real browser fingerprint",
+      "If IP blocked, switch to proxy rotation pool with residential IPs",
+      "For JS challenges, use headless browser with stealth plugin (undetected-chromedriver/playwright-stealth)",
+      "If CAPTCHA detected, fall back to API-based data source or cached version",
+      "Implement respectful rate limiting (1-3 req/s) to avoid triggering anti-bot"
+    ],
+    "constraints": { "max_credits": 15, "max_retries": 3 },
+    "created_by": "external:openclaw",
+    "visibility": "published"
+  },
+  {
+    "_source": "openclaw:ai-and-llms",
+    "type": "Gene",
+    "id": "ext_optimize_llm_cost_v1",
+    "category": "optimize",
+    "title": "LLM Cost Optimization",
+    "description": "Reduces LLM API costs by 40-70% through model routing, prompt caching, and tiered model selection.",
+    "signals_match": ["cost:high_api_usage", "cost:llm_expensive", "capability:llm"],
+    "preconditions": [],
+    "strategy": [
+      "Route simple queries to cheaper/smaller models (Haiku for classification, Sonnet for generation)",
+      "Enable prompt caching for repeated system prompts and few-shot examples",
+      "Truncate context to essential information — remove verbose history older than 3 turns",
+      "Batch similar requests to amortize fixed prompt overhead across items",
+      "Cache LLM responses for identical inputs with 1h TTL"
+    ],
+    "constraints": { "max_credits": 3, "max_retries": 0 },
+    "created_by": "external:openclaw",
+    "visibility": "published"
+  },
+  {
+    "_source": "openclaw:ai-and-llms",
+    "type": "Gene",
+    "id": "ext_innovate_prompt_chain_v1",
+    "category": "innovate",
+    "title": "Prompt Chain Orchestration",
+    "description": "Breaks complex LLM tasks into chained prompts with validation gates between stages.",
+    "signals_match": ["quality:low_output", "error:llm_hallucination", "capability:llm", "task.complex"],
+    "preconditions": [],
+    "strategy": [
+      "Decompose complex task into 2-4 focused prompt stages (analyze → plan → execute → verify)",
+      "Add validation gate between stages: check output format, key assertions, factual consistency",
+      "If validation fails, retry the stage with error context appended (max 2 retries per stage)",
+      "Pass only structured intermediate results between stages — not raw LLM text",
+      "Final stage: self-critique prompt that checks for contradictions and hallucinations"
+    ],
+    "constraints": { "max_credits": 25, "max_retries": 2 },
+    "created_by": "external:openclaw",
+    "visibility": "published"
+  },
+  {
+    "_source": "openclaw:security-and-passwords",
+    "type": "Gene",
+    "id": "ext_repair_secret_leak_v1",
+    "category": "repair",
+    "title": "Secret Leak Remediation",
+    "description": "Detects and remediates leaked secrets (API keys, tokens, passwords) in code repositories.",
+    "signals_match": ["security:secret_leaked", "security:credential_exposed", "error:git_secret"],
+    "preconditions": [],
+    "strategy": [
+      "Immediately rotate the leaked credential — revoke old key, generate new one",
+      "Scan git history for the secret: git log -p --all -S 'leaked_string' | head",
+      "Remove secret from git history using git-filter-repo or BFG Repo Cleaner",
+      "Add pre-commit hook (e.g., gitleaks, detect-secrets) to prevent future leaks",
+      "Move all secrets to environment variables or secrets manager (Vault, AWS SM)"
+    ],
+    "constraints": { "max_credits": 5, "max_retries": 0 },
+    "created_by": "external:openclaw",
+    "visibility": "published"
+  },
+  {
+    "_source": "openclaw:cli-utilities",
+    "type": "Gene",
+    "id": "ext_optimize_ci_pipeline_v1",
+    "category": "optimize",
+    "title": "CI Pipeline Speed Optimization",
+    "description": "Reduces CI pipeline execution time by 30-60% through caching, parallelism, and selective runs.",
+    "signals_match": ["perf:ci_slow", "perf:build_slow", "capability:ci_cd"],
+    "preconditions": ["ci_config_available"],
+    "strategy": [
+      "Cache dependency installation (node_modules, pip cache, Go modules) across runs",
+      "Parallelize independent jobs (lint, unit test, build) instead of running sequentially",
+      "Use incremental/affected-only test runs: only test packages changed in this commit",
+      "Split large test suites into shards running on parallel CI workers",
+      "Cache Docker build layers using registry-based cache (--cache-from)"
+    ],
+    "constraints": { "max_credits": 5, "max_retries": 0 },
+    "created_by": "external:openclaw",
+    "visibility": "published"
+  }
+]
