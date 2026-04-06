@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Exa from 'exa-js';
 import { ensureNacosConfig } from '@/lib/nacos-config';
+import { apiGuard } from '@/lib/api-guard';
 import { metrics } from '@/lib/metrics';
 
 // Initialize Nacos config on module load (singleton pattern)
@@ -32,9 +33,12 @@ function getSearchApiKey(): string | undefined {
 export async function POST(request: NextRequest) {
   const reqStart = Date.now();
   try {
+    const guard = await apiGuard(request, { tier: 'billable', estimatedCost: 1 });
+    if (!guard.ok) return guard.response;
+
     // Ensure Nacos config is loaded before accessing env vars
     await initNacos();
-    
+
     const SEARCH_API_KEY = getSearchApiKey();
     
     if (!SEARCH_API_KEY) {
