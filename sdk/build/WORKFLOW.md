@@ -148,17 +148,13 @@ sleep 30
 sdk/build/release.sh --scope prismer-cloud
 ```
 
-### Plugin 独立 Repo 同步 + Marketplace PR
+### Plugin 独立 Repo 同步
 
-Plugin 发布后还需要两步：
+Plugin 发布后同步到独立 repo（Anthropic marketplace 引用此 repo）：
 
 ```bash
-# 5. 同步到独立 plugin repo (Anthropic marketplace 引用此 repo)
+# 5. 同步到独立 plugin repo
 sdk/build/sync-plugin.sh    # rsync claude-code-plugin → Prismer-AI/claude-code-plugin
-
-# 6. 更新 Anthropic 官方 marketplace (仅首次或结构变化时提 PR)
-#    PR 目标: anthropics/claude-plugins-official
-#    修改: .claude-plugin/marketplace.json + external_plugins/prismer/
 ```
 
 #### sync-plugin.sh 行为
@@ -173,36 +169,16 @@ sdk/build/sync-plugin.sh    # rsync claude-code-plugin → Prismer-AI/claude-cod
 4. git push origin main v{VERSION}
 ```
 
-#### Anthropic 官方 Marketplace PR 内容
+#### Anthropic 官方 Marketplace
 
-```
-anthropics/claude-plugins-official/
-├── external_plugins/
-│   └── prismer/                          # 新增
-│       └── .claude-plugin/
-│           └── plugin.json               # name, description, author
-└── .claude-plugin/
-    └── marketplace.json                  # 追加条目 ↓
-```
+`anthropics/claude-plugins-official` **不接受外部 PR**，只有 Anthropic 团队成员可以合入。
 
-marketplace.json 追加条目：
+**我们的操作：**
+1. 通过 [submission form](https://clau.de/plugin-directory-submission) 提交 plugin
+2. 保持独立 repo `Prismer-AI/claude-code-plugin` 更新
+3. 等 Anthropic 审核后自行合入到 `claude-plugins-official`
 
-```json
-{
-  "name": "prismer",
-  "source": {
-    "source": "url",
-    "url": "https://github.com/Prismer-AI/claude-code-plugin.git"
-  },
-  "description": "Prismer Evolution — cross-agent learning network with 9 hooks and 12 skills. Auto-learns from every coding session.",
-  "author": { "name": "Prismer" },
-  "homepage": "https://prismer.cloud",
-  "repository": "https://github.com/Prismer-AI/claude-code-plugin",
-  "license": "MIT",
-  "category": "ai",
-  "tags": ["evolution", "cross-agent-learning", "auto-learning"]
-}
-```
+**当前状态：** Submission 已 Published (2026-04-01)，等待 Anthropic 合入。
 
 ---
 
@@ -353,11 +329,7 @@ artifacts/
 | 步骤 | 状态 | 说明 |
 |------|------|------|
 | 1. Submission form 提交 | ✅ Published (2026-04-01) | `@prismer/claude-code-plugin` |
-| 2. 创建独立 plugin repo | 待做 | `Prismer-AI/claude-code-plugin` |
-| 3. sync-plugin.sh 同步 | 待做 | 闭源 → 独立 repo |
-| 4. Fork `anthropics/claude-plugins-official` | 待做 | |
-| 5. 添加 `external_plugins/prismer/` | 待做 | plugin.json |
-| 6. 追加 `marketplace.json` 条目 | 待做 | source → `Prismer-AI/claude-code-plugin.git` |
-| 7. 提 PR 到 `anthropics/claude-plugins-official` | 待做 | |
-| 8. Anthropic review + merge | 待 Anthropic | |
-| 9. 用户可 `/plugin install prismer@claude-plugins-official` | 待合入 | |
+| 2. 创建独立 plugin repo | ✅ 完成 | `Prismer-AI/claude-code-plugin` (v1.8.0) |
+| 3. sync-plugin.sh 同步 | ✅ 完成 | 闭源 → 独立 repo |
+| 4. Anthropic 审核合入 | ⏳ 等待 | Anthropic 内部操作，不接受外部 PR |
+| 5. 用户可 `/plugin install prismer@claude-plugins-official` | ⏳ 待合入 | |
