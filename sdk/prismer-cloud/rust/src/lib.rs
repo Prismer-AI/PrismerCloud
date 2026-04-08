@@ -23,13 +23,92 @@ pub mod evolution_runtime;
 pub mod signal_rules;
 pub mod webhook;
 pub mod memory;
+pub mod knowledge;
+pub mod community;
 pub mod tasks;
 pub mod identity;
 pub mod files;
+pub mod daemon;
 
 use reqwest::Client as HttpClient;
 use ed25519_dalek::{SigningKey, Signer};
 use sha2::{Sha256, Digest};
+
+/// Resolve API key with priority chain:
+///   1. Explicit value passed (non-empty string)
+///   2. `PRISMER_API_KEY` environment variable
+///   3. `~/.prismer/config.toml` api_key field
+///   4. Empty string
+fn resolve_api_key(explicit: &str) -> String {
+    if !explicit.is_empty() {
+        return explicit.to_string();
+    }
+    if let Ok(env_key) = std::env::var("PRISMER_API_KEY") {
+        if !env_key.is_empty() {
+            return env_key;
+        }
+    }
+    if let Some(home) = dirs::home_dir() {
+        let config_path = home.join(".prismer").join("config.toml");
+        if let Ok(raw) = std::fs::read_to_string(&config_path) {
+            if let Some(key) = toml_find(&raw, "api_key") {
+                return key;
+            }
+        }
+    }
+    String::new()
+}
+
+/// Resolve base URL with priority chain:
+///   1. Explicit value passed (Some with non-empty string)
+///   2. `PRISMER_BASE_URL` environment variable
+///   3. `~/.prismer/config.toml` base_url field
+///   4. Default `https://prismer.cloud`
+fn resolve_base_url(explicit: Option<&str>) -> String {
+    if let Some(url) = explicit {
+        if !url.is_empty() {
+            return url.to_string();
+        }
+    }
+    if let Ok(env_url) = std::env::var("PRISMER_BASE_URL") {
+        if !env_url.is_empty() {
+            return env_url;
+        }
+    }
+    if let Some(home) = dirs::home_dir() {
+        let config_path = home.join(".prismer").join("config.toml");
+        if let Ok(raw) = std::fs::read_to_string(&config_path) {
+            if let Some(url) = toml_find(&raw, "base_url") {
+                return url;
+            }
+        }
+    }
+    "https://prismer.cloud".to_string()
+}
+
+/// Parse a TOML-like config field from raw text.
+/// Looks for lines matching: `key = 'value'` or `key = "value"` (whitespace tolerant).
+fn toml_find(haystack: &str, key: &str) -> Option<String> {
+    for line in haystack.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with(key) {
+            let rest = &trimmed[key.len()..];
+            let rest = rest.trim_start_matches(|c: char| c.is_whitespace());
+            if let Some(rest) = rest.strip_prefix('=') {
+                let rest = rest.trim_start();
+                for quote in ['"', '\''] {
+                    if rest.starts_with(quote) {
+                        let inner = &rest[1..];
+                        if let Some(end) = inner.find(quote) {
+                            return Some(inner[..end].to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
 
 /// Main Prismer SDK client.
 pub struct PrismerClient {
@@ -44,11 +123,14 @@ pub struct PrismerClient {
 
 impl PrismerClient {
     /// Create a new client with API key and optional base URL override.
+    /// Fallback chain: explicit → PRISMER_API_KEY env → ~/.prismer/config.toml → ''
     pub fn new(api_key: &str, base_url: Option<&str>) -> Self {
+        let resolved_key = resolve_api_key(api_key);
+        let resolved_url = resolve_base_url(base_url);
         Self {
             http: HttpClient::new(),
-            api_key: api_key.to_string(),
-            base_url: base_url.unwrap_or("https://prismer.cloud").to_string(),
+            api_key: resolved_key,
+            base_url: resolved_url,
             signing_key: None,
             identity_did: None,
         }
@@ -56,15 +138,18 @@ impl PrismerClient {
 
     /// Create a client with auto-signing from API key (v1.8.0 S7).
     /// Derives Ed25519 key via SHA-256(api_key).
+    /// Fallback chain: explicit → PRISMER_API_KEY env → ~/.prismer/config.toml → ''
     pub fn new_with_identity(api_key: &str, base_url: Option<&str>) -> Self {
-        let seed: [u8; 32] = Sha256::digest(api_key.as_bytes()).into();
+        let resolved_key = resolve_api_key(api_key);
+        let resolved_url = resolve_base_url(base_url);
+        let seed: [u8; 32] = Sha256::digest(resolved_key.as_bytes()).into();
         let signing_key = SigningKey::from_bytes(&seed);
         let pub_key = signing_key.verifying_key();
         let did = public_key_to_did_key(&pub_key.to_bytes());
         Self {
             http: HttpClient::new(),
-            api_key: api_key.to_string(),
-            base_url: base_url.unwrap_or("https://prismer.cloud").to_string(),
+            api_key: resolved_key,
+            base_url: resolved_url,
             signing_key: Some(signing_key),
             identity_did: Some(did),
         }
@@ -107,6 +192,16 @@ impl PrismerClient {
     /// Get Memory API client.
     pub fn memory(&self) -> memory::MemoryClient<'_> {
         memory::MemoryClient { client: self }
+    }
+
+    /// Get Knowledge Links API client (v1.8.0).
+    pub fn knowledge(&self) -> knowledge::KnowledgeLinkClient<'_> {
+        knowledge::KnowledgeLinkClient { client: self }
+    }
+
+    /// Get Community API client.
+    pub fn community(&self) -> community::CommunityClient<'_> {
+        community::CommunityClient { client: self }
     }
 
     /// Get Tasks API client.
@@ -232,5 +327,17 @@ mod tests {
     fn client_files_returns_files_client() {
         let client = PrismerClient::new("sk-test", None);
         let _f = client.files();
+    }
+
+    #[test]
+    fn client_community_returns_community_client() {
+        let client = PrismerClient::new("sk-test", None);
+        let _c = client.community();
+    }
+
+    #[test]
+    fn client_knowledge_returns_knowledge_client() {
+        let client = PrismerClient::new("sk-test", None);
+        let _k = client.knowledge();
     }
 }

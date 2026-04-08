@@ -48,7 +48,7 @@ Ask the user: "Do you also want MCP tools? These let Claude proactively call evo
 If yes:
 
 ```bash
-claude mcp add prismer -- npx -y @prismer/mcp-server@1.7.8
+claude mcp add prismer -- npx -y @prismer/mcp-server@1.8.0
 ```
 
 If no: skip. Plugin works fine without MCP — hooks handle sync/journal/stuck-detection independently.

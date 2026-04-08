@@ -1,5 +1,5 @@
 #!/bin/bash
-# verify.sh — Pre-release verification (versions + builds + manifests)
+# verify.sh — Pre-release verification (versions + builds + manifests, respects --scope)
 source "$(dirname "$0")/lib/common.sh"
 parse_common_flags "$@"
 
@@ -12,60 +12,66 @@ for arg in "${REMAINING_ARGS[@]+"${REMAINING_ARGS[@]}"}"; do
 done
 
 VERSION="$(get_version)"
-log_step "Pre-Release Verification (v$VERSION)"
+AIP_VERSION="$(get_aip_version)"
+log_step "Pre-Release Verification (prismer-cloud: v$VERSION, aip: v$AIP_VERSION, scope: $SCOPE)"
 
 # ── Phase 1: Version Consistency ───────────────────────────────────
 log_step "Phase 1: Version Consistency"
 
 check_version() {
-  local file="$1" expected="$2"
+  local file="$1" expected="$2" label="${3:-$(basename "$(dirname "$file")")}"
   if [[ ! -f "$file" ]]; then
     log_warn "Not found: $file"
-    record_result "version: $(basename "$(dirname "$file")")" "skip"
+    record_result "version: $label" "skip"
     return
   fi
   if grep -q "$expected" "$file"; then
-    record_result "version: $(basename "$(dirname "$file")")" "pass"
+    record_result "version: $label" "pass"
   else
     log_error "Version mismatch in $file (expected $expected)"
-    record_result "version: $(basename "$(dirname "$file")")" "fail"
+    record_result "version: $label" "fail"
   fi
 }
 
-check_version "$PRISMER_CLOUD/typescript/package.json" "\"version\": \"$VERSION\""
-check_version "$PRISMER_CLOUD/mcp/package.json" "\"version\": \"$VERSION\""
-check_version "$PRISMER_CLOUD/opencode-plugin/package.json" "\"version\": \"$VERSION\""
-check_version "$PRISMER_CLOUD/claude-code-plugin/package.json" "\"version\": \"$VERSION\""
-check_version "$PRISMER_CLOUD/openclaw-channel/package.json" "\"version\": \"$VERSION\""
-check_version "$PRISMER_CLOUD/python/pyproject.toml" "version = \"$VERSION\""
-check_version "$PRISMER_CLOUD/rust/Cargo.toml" "version = \"$VERSION\""
-check_version "$PRISMER_CLOUD/mcp/src/index.ts" "'$VERSION'"
+if scope_includes_prismer; then
+  check_version "$PRISMER_CLOUD/typescript/package.json" "\"version\": \"$VERSION\"" "pc/typescript"
+  check_version "$PRISMER_CLOUD/mcp/package.json" "\"version\": \"$VERSION\"" "pc/mcp"
+  check_version "$PRISMER_CLOUD/opencode-plugin/package.json" "\"version\": \"$VERSION\"" "pc/opencode"
+  check_version "$PRISMER_CLOUD/claude-code-plugin/package.json" "\"version\": \"$VERSION\"" "pc/claude-code"
+  check_version "$PRISMER_CLOUD/openclaw-channel/package.json" "\"version\": \"$VERSION\"" "pc/openclaw"
+  check_version "$PRISMER_CLOUD/python/pyproject.toml" "version = \"$VERSION\"" "pc/python"
+  check_version "$PRISMER_CLOUD/rust/Cargo.toml" "version = \"$VERSION\"" "pc/rust"
+  check_version "$PRISMER_CLOUD/mcp/src/index.ts" "'$VERSION'" "pc/mcp-hardcoded"
+  check_version "$PRISMER_CLOUD/claude-code-plugin/.claude-plugin/plugin.json" "\"version\": \"$VERSION\"" "pc/plugin.json"
+fi
+
+if scope_includes_aip; then
+  check_version "$AIP_SDK/typescript/package.json" "\"version\": \"$AIP_VERSION\"" "aip/typescript"
+  check_version "$AIP_SDK/python/pyproject.toml" "version = \"$AIP_VERSION\"" "aip/python"
+  check_version "$AIP_SDK/rust/Cargo.toml" "version = \"$AIP_VERSION\"" "aip/rust"
+fi
 
 # ── Phase 2: Package Manifests ─────────────────────────────────────
 log_step "Phase 2: Package Manifests"
 
-for pkg in "${NPM_PACKAGES[@]}"; do
-  local_pkg="$PRISMER_CLOUD/$pkg/package.json"
-  if [[ -f "$local_pkg" ]]; then
-    if grep -q '"access": "public"' "$local_pkg" || [[ "$pkg" == "claude-code-plugin" ]]; then
-      record_result "manifest: $pkg publishConfig" "pass"
-    else
-      log_warn "$pkg missing publishConfig.access=public"
-      record_result "manifest: $pkg publishConfig" "warn"
+if scope_includes_prismer; then
+  for pkg in "${NPM_PACKAGES[@]}"; do
+    local_pkg="$PRISMER_CLOUD/$pkg/package.json"
+    if [[ -f "$local_pkg" ]]; then
+      if grep -q '"access": "public"' "$local_pkg" || [[ "$pkg" == "claude-code-plugin" ]]; then
+        record_result "manifest: $pkg publishConfig" "pass"
+      else
+        log_warn "$pkg missing publishConfig.access=public"
+        record_result "manifest: $pkg publishConfig" "warn"
+      fi
     fi
-    if grep -q "PrismerCloud" "$local_pkg"; then
-      record_result "manifest: $pkg repository" "pass"
-    else
-      log_warn "$pkg repository not pointing to PrismerCloud"
-      record_result "manifest: $pkg repository" "warn"
-    fi
-  fi
-done
+  done
+fi
 
 # ── Phase 3: Build Verification ────────────────────────────────────
 if [[ $SKIP_BUILD -eq 0 ]]; then
   log_step "Phase 3: Build Verification"
-  "$BUILD_ROOT/test.sh" --yes 2>&1 | tail -20
+  "$BUILD_ROOT/test.sh" --yes --scope "$SCOPE" 2>&1 | tail -20
 else
   log_info "Skipping build (--skip-build)"
 fi

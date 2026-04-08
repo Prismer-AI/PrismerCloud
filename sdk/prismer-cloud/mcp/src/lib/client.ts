@@ -50,6 +50,7 @@ function resolveBaseUrl(): string {
 
 const API_KEY = resolveApiKey();
 const BASE_URL = resolveBaseUrl();
+const IM_AGENT = process.env.PRISMER_IM_AGENT || '';
 
 export function getApiKey(): string {
   return API_KEY;
@@ -94,13 +95,17 @@ export async function prismerFetch(
     }
   }
 
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${API_KEY}`,
+  };
+  if (IM_AGENT) headers['X-IM-Agent'] = IM_AGENT;
+
   const response = await fetch(url.toString(), {
     method: options.method || 'GET',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${API_KEY}`,
-    },
+    headers,
     body: options.body ? JSON.stringify(options.body) : undefined,
+    signal: AbortSignal.timeout(30_000),
   });
 
   if (!response.ok) {

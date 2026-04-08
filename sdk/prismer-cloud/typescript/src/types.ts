@@ -40,6 +40,14 @@ export interface PrismerConfig {
    * When set, all IM send requests auto-include senderDid + signature.
    */
   identity?: 'auto' | { privateKey: string };
+  /** v1.8.0 CommunityHub cache tuning (`im.community`) */
+  community?: CommunityHubConfig;
+}
+
+/** Options for `CommunityHub` (see `community-hub.ts`) */
+export interface CommunityHubConfig {
+  feedTTLMs?: number;
+  statsTTLMs?: number;
 }
 
 // ============================================================================
@@ -275,12 +283,60 @@ export interface IMGroupData {
 }
 
 export interface IMContact {
+  userId: string;
   username: string;
   displayName: string;
   role: string;
+  avatarUrl?: string;
+  isAgent?: boolean;
+  institution?: string;
+  lastSeenAt?: string;
+  remark?: string;
+  addedAt?: string;
   lastMessageAt?: string;
+  lastMessage?: string;
   unreadCount: number;
   conversationId: string;
+  conversationType?: string;
+}
+
+export interface IMUserProfile {
+  userId: string;
+  username: string;
+  displayName: string;
+  role: string;
+  avatarUrl?: string;
+  status?: string;
+  isAgent?: boolean;
+  agentType?: string;
+  capabilities?: string[];
+  description?: string;
+  institution?: string;
+  did?: string;
+  isContact?: boolean;
+  lastSeenAt?: string;
+}
+
+export interface IMFriendRequest {
+  id: string;
+  fromUserId: string;
+  toUserId: string;
+  reason?: string;
+  source?: string;
+  status: 'pending' | 'accepted' | 'rejected' | 'expired';
+  createdAt: string;
+  updatedAt: string;
+  fromUser?: { username: string; displayName: string; avatarUrl?: string };
+  toUser?: { username: string; displayName: string; avatarUrl?: string };
+}
+
+export interface IMBlockedUser {
+  userId: string;
+  username: string;
+  displayName: string;
+  avatarUrl?: string;
+  reason?: string;
+  blockedAt: string;
 }
 
 export interface IMDiscoverAgent {
@@ -327,6 +383,9 @@ export interface IMConversation {
   lastMessage?: IMMessage;
   unreadCount?: number;
   members?: IMGroupMember[];
+  pinned?: boolean;
+  muted?: boolean;
+  archived?: boolean;
   createdAt: string;
   updatedAt?: string;
 }
@@ -666,6 +725,41 @@ export interface IMMemoryLoadResult {
   scope: string;
   path: string;
   template: string;
+}
+
+// ============================================================================
+// Knowledge Links API Types
+// ============================================================================
+
+export type KnowledgeLinkSource = 'memory' | 'gene' | 'capsule' | 'signal';
+export type KnowledgeLinkType = 'related' | 'derived_from' | 'applied_in' | 'contradicts';
+
+export interface IMKnowledgeLink {
+  id: string;
+  sourceType: KnowledgeLinkSource;
+  sourceId: string;
+  targetType: KnowledgeLinkSource;
+  targetId: string;
+  linkType: KnowledgeLinkType;
+  strength: number;
+  scope: string;
+  createdAt: string;
+}
+
+export interface IMMemoryKnowledgeLinks {
+  links: Array<{
+    memoryId: string;
+    memoryPath: string;
+    genes: Array<{
+      geneId: string;
+      title: string;
+      linkType: string;
+      strength: number;
+      successRate: number;
+    }>;
+  }>;
+  unlinkedMemories: string[];
+  totalLinks: number;
 }
 
 // ============================================================================

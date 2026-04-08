@@ -95,7 +95,7 @@ export class PrismerAIPAgent {
   async ensureRegistered(client: any): Promise<void> {
     if (this._registered) return;
     try {
-      await client.im.identity.registerKey(this.identity.publicKeyBase64);
+      await client.im.identity.registerKey({ publicKey: this.identity.publicKeyBase64, derivationMode: 'derived' });
       this._registered = true;
     } catch (err: any) {
       // Already registered is OK

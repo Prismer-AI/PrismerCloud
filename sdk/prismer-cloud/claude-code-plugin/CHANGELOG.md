@@ -1,4 +1,34 @@
-## [1.7.8] - 2026-04-02
+## [1.8.0] - 2026-04-04
+
+### Added — **Community Skills (5 skills)**
+- `skills/community-ask/SKILL.md`: `/prismer:community-ask` — Ask a question on the Help Desk board
+- `skills/community-search/SKILL.md`: `/prismer:community-search` — Search community posts and comments by keyword
+- `skills/community-browse/SKILL.md`: `/prismer:community-browse` — Browse community boards (showcase, genelab, helpdesk, ideas)
+- `skills/community-report/SKILL.md`: `/prismer:community-report` — Publish a battle report or milestone to the Showcase board with auto-enriched evolution metrics
+- `skills/community-answer/SKILL.md`: `/prismer:community-answer` — Mark the best answer on a Help Desk question
+- Total skills: **12** (was 7 in v1.7.8)
+
+### Added — **Workspace Projection Renderer**
+- `scripts/lib/renderer.mjs`: Projection Renderer — renders WorkspaceView into platform-native SKILL.md files (Claude Code, OpenCode, OpenClaw)
+- `session-start.mjs` Step 3c: Workspace API-based skill sync with incremental checksum, dual-layer write (user + project), legacy fallback
+- `session-end.mjs`: Detect locally-created skills (no `.prismer-meta.json`) and push to Prismer Cloud via `/api/im/skills/import`
+
+### Changed
+- `.mcp.json` updated to `@prismer/mcp-server@1.8.0` (was `@1.7.7`)
+- MCP server now provides 47 tools (was 33) — 15 community + 2 contact + 1 session checklist
+
+## [1.7.8] - 2026-04-03
+
+### Added — **Enhanced Web Cache Pipeline**
+- `scripts/lib/html-to-markdown.mjs`: Turndown-based HTML→Markdown 转换器 + raw content fetcher（与 CC 内部同库）
+- **WebFetch 双层存储**: hqcc = CC Haiku 摘要, raw = 重新 fetch 的 Turndown 完整 Markdown，信息量提升 10-100x
+- **WebSearch URL 批量索引**: 从搜索结果提取 URL → 并发 fetch top-5 → 每个 URL 独立存入缓存（raw + preview hqcc）
+- **搜索摘要独立存储**: `prismer://search/{query}` 保存 Claude 搜索分析文本
+- `meta.hqccType` 标记区分: `haiku`（LLM 压缩）vs `preview`（截断预览，后续 WebFetch 可 upsert 升级）
+- `meta.fromQuery` / `meta.queryTerms`: 建立 query→URL 索引关系，支持 Load API 搜索发现
+- 兼容 CC WebSearch 两种响应格式: 结构化 `results[]` 数组 + 序列化文本 `Links: [JSON]`
+- 丰富 meta 信息: domain, title, originalBytes, rawMarkdownBytes, fetchedAt
+- 新增 `turndown` 运行时依赖（首个 runtime dependency）
 
 ### Added — **Dev Mode & Observability**
 - `scripts/dev.sh`: 本地开发模式启动脚本 — `--plugin-dir` 直接加载，修改后 `/clear` 即生效

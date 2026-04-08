@@ -1,6 +1,6 @@
 {
   "name": "@prismer/claude-code-plugin",
-  "version": "1.7.8",
+  "version": "1.8.0",
   "description": "Prismer Evolution plugin for Claude Code — auto-learning from every coding session",
   "keywords": [
     "prismer",
@@ -19,10 +19,14 @@
   },
   "license": "MIT",
   "author": "Prismer <dev@prismer.cloud>",
+  "bin": {
+    "prismer-plugin": "./scripts/cli.mjs"
+  },
   "files": [
     ".claude-plugin/plugin.json",
     "hooks/",
     "scripts/lib/",
+    "scripts/cli.mjs",
     "scripts/session-start.mjs",
     "scripts/session-stop.mjs",
     "scripts/session-end.mjs",
@@ -45,6 +49,9 @@
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest"
+  },
+  "dependencies": {
+    "turndown": "^7.2.2"
   },
   "devDependencies": {
     "vitest": "^3.1.1"

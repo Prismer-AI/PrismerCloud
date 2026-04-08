@@ -646,6 +646,181 @@ mod tests {
         assert!(result.coverage_score.unwrap() > 0.0);
     }
 
+    // ── Thompson Sampling confidence ─────────────────────
+
+    #[test]
+    fn thompson_sampling_more_successes_higher_confidence() {
+        let mut cache = EvolutionCache::new();
+        cache.load_snapshot(&make_snapshot(
+            vec![
+                gene_json("g-weak", &["error:timeout"], 3, 3),
+                gene_json("g-strong", &["error:timeout"], 50, 2),
+            ],
+            vec![],
+        ));
+        let result = cache.select_gene(&[make_signal("error:timeout")]);
+        assert_eq!(result.action, "apply_gene");
+        assert_eq!(result.gene_id.as_deref(), Some("g-strong"));
+        // The strong gene should have clearly higher confidence
+        assert!(result.confidence > 0.5);
+        // Alternatives should contain the weaker gene
+        assert_eq!(result.alternatives.len(), 1);
+        assert_eq!(result.alternatives[0].gene_id, "g-weak");
+        assert!(result.confidence > result.alternatives[0].confidence);
+    }
+
+    #[test]
+    fn thompson_sampling_global_prior_boosts_confidence() {
+        // Without global prior
+        let mut cache_no_prior = EvolutionCache::new();
+        cache_no_prior.load_snapshot(&make_snapshot(
+            vec![gene_json("g1", &["error:timeout"], 5, 5)],
+            vec![],
+        ));
+        let result_no_prior = cache_no_prior.select_gene(&[make_signal("error:timeout")]);
+
+        // With strong global prior favoring the signal type
+        let mut cache_with_prior = EvolutionCache::new();
+        let snapshot = json!({
+            "genes": [gene_json("g1", &["error:timeout"], 5, 5)],
+            "globalPrior": {
+                "error:timeout": {"alpha": 50.0, "beta": 1.0},
+            },
+            "cursor": 1,
+        });
+        cache_with_prior.load_snapshot(&snapshot);
+        let result_with_prior = cache_with_prior.select_gene(&[make_signal("error:timeout")]);
+
+        // Global prior should boost confidence
+        assert!(result_with_prior.confidence > result_no_prior.confidence);
+    }
+
+    // ── Edge-based selection ─────────────────────────────
+
+    #[test]
+    fn load_snapshot_with_edges() {
+        let mut cache = EvolutionCache::new();
+        let snapshot = json!({
+            "genes": [
+                gene_json("g1", &["error:timeout"], 10, 1),
+            ],
+            "edges": [
+                {"signal_key": "error:timeout", "gene_id": "g1", "weight": 0.9},
+                {"signalKey": "error:crash", "geneId": "g1", "weight": 0.5},
+            ],
+            "cursor": 100,
+        });
+        cache.load_snapshot(&snapshot);
+        assert_eq!(cache.gene_count(), 1);
+        assert_eq!(cache.cursor(), 100);
+    }
+
+    #[test]
+    fn apply_delta_updates_edges() {
+        let mut cache = EvolutionCache::new();
+        cache.load_snapshot(&make_snapshot(
+            vec![gene_json("g1", &["error:timeout"], 10, 1)],
+            vec![],
+        ));
+
+        let delta = json!({
+            "pulled": {
+                "edges": [
+                    {"signal_key": "error:timeout", "gene_id": "g1", "weight": 0.95},
+                ],
+                "cursor": 60,
+            }
+        });
+        cache.apply_delta(&delta);
+        assert_eq!(cache.cursor(), 60);
+    }
+
+    #[test]
+    fn apply_delta_updates_existing_gene() {
+        let mut cache = EvolutionCache::new();
+        cache.load_snapshot(&make_snapshot(
+            vec![gene_json("g1", &["error:timeout"], 5, 1)],
+            vec![],
+        ));
+
+        // Update g1 with new success count
+        let delta = json!({
+            "pulled": {
+                "genes": [{"id": "g1", "signals_match": ["error:timeout"], "success_count": 20, "failure_count": 1}],
+                "cursor": 70,
+            }
+        });
+        cache.apply_delta(&delta);
+        // Still 1 gene (updated, not added)
+        assert_eq!(cache.gene_count(), 1);
+
+        let result = cache.select_gene(&[make_signal("error:timeout")]);
+        assert_eq!(result.action, "apply_gene");
+        assert_eq!(result.gene_id.as_deref(), Some("g1"));
+    }
+
+    #[test]
+    fn apply_delta_updates_global_prior() {
+        let mut cache = EvolutionCache::new();
+        cache.load_snapshot(&make_snapshot(
+            vec![gene_json("g1", &["error:timeout"], 5, 5)],
+            vec![],
+        ));
+        let result_before = cache.select_gene(&[make_signal("error:timeout")]);
+
+        let delta = json!({
+            "pulled": {
+                "globalPrior": {
+                    "error:timeout": {"alpha": 100.0, "beta": 1.0},
+                },
+                "cursor": 80,
+            }
+        });
+        cache.apply_delta(&delta);
+        let result_after = cache.select_gene(&[make_signal("error:timeout")]);
+
+        // After applying a strong prior, confidence should increase
+        assert!(result_after.confidence >= result_before.confidence);
+    }
+
+    // ── Multi-signal matching ────────────────────────────
+
+    #[test]
+    fn select_gene_multi_signal_coverage() {
+        let mut cache = EvolutionCache::new();
+        cache.load_snapshot(&make_snapshot(
+            vec![
+                // g1 matches only 1 of 2 signals
+                gene_json("g1", &["error:timeout"], 10, 1),
+                // g2 matches both signals
+                gene_json("g2", &["error:timeout", "error:crash"], 8, 1),
+            ],
+            vec![],
+        ));
+        let result = cache.select_gene(&[
+            make_signal("error:timeout"),
+            make_signal("error:crash"),
+        ]);
+        assert_eq!(result.action, "apply_gene");
+        // g2 should win due to higher coverage score (2/2 vs 1/1 for both full coverage,
+        // but g2 matches more of the input signals)
+        assert!(result.coverage_score.is_some());
+    }
+
+    #[test]
+    fn select_gene_no_signal_types_on_gene() {
+        let mut cache = EvolutionCache::new();
+        // Gene with empty signals_match
+        let snapshot = json!({
+            "genes": [{"id": "g1", "signals_match": [], "success_count": 10, "failure_count": 0}],
+            "cursor": 1,
+        });
+        cache.load_snapshot(&snapshot);
+        let result = cache.select_gene(&[make_signal("error:timeout")]);
+        // Should not match — empty signal types
+        assert_eq!(result.action, "create_suggested");
+    }
+
     // ── signals_match with object format ─────────────────
 
     #[test]

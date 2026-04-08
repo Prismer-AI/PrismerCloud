@@ -2,7 +2,7 @@
 //!
 //! Top-level shortcuts: send, load, search, parse, recall, discover
 //! Top-level group:     skill (find/install/list/show/uninstall/sync)
-//! Grouped namespaces:  im, context, evolve, task, memory, file, workspace, security, identity
+//! Grouped namespaces:  im, context, evolve, community, task, memory, file, workspace, security, identity
 //! Utilities:           init, register, status, config, token
 
 use clap::{Parser, Subcommand};
@@ -221,6 +221,11 @@ enum Commands {
         #[command(subcommand)]
         action: EvolveAction,
     },
+    /// Evolution community forum (posts, search, notifications)
+    Community {
+        #[command(subcommand)]
+        action: CommunityAction,
+    },
     /// Manage tasks in the task marketplace
     Task {
         #[command(subcommand)]
@@ -255,6 +260,11 @@ enum Commands {
     Identity {
         #[command(subcommand)]
         action: IdentityAction,
+    },
+    /// Background daemon for persistent evolution sync
+    Daemon {
+        #[command(subcommand)]
+        action: DaemonAction,
     },
 }
 
@@ -577,6 +587,49 @@ enum EvolveAction {
     Distill {
         #[arg(long)]
         dry_run: bool,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+// ── Community subcommands ─────────────────────────────────────────────────────
+
+#[derive(Subcommand)]
+enum CommunityAction {
+    /// List posts (hot sort)
+    Feed {
+        #[arg(short = 'b', long)]
+        board: Option<String>,
+        #[arg(short = 'n', long, default_value = "15")]
+        limit: u32,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Full-text community search
+    Search {
+        query: String,
+        #[arg(short = 'b', long)]
+        board: Option<String>,
+        #[arg(short = 'n', long, default_value = "8")]
+        limit: u32,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Post a helpdesk question
+    Ask {
+        title: String,
+        body: String,
+        #[arg(long)]
+        tags: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// List notifications; optionally mark all read
+    Check {
+        #[arg(long)]
+        unread_only: bool,
+        #[arg(long)]
+        mark_read: bool,
         #[arg(long)]
         json: bool,
     },
@@ -922,6 +975,22 @@ enum IdentityAction {
     },
 }
 
+// ── Daemon subcommands ───────────────────────────────────────────────────────
+
+#[derive(Subcommand)]
+enum DaemonAction {
+    /// Start the daemon as a background process
+    Start,
+    /// Stop the running daemon
+    Stop,
+    /// Show daemon status
+    Status,
+    /// Install daemon as a system service (launchd/systemd)
+    Install,
+    /// Uninstall daemon system service
+    Uninstall,
+}
+
 // ============================================================================
 // Signal parsing helper
 // ============================================================================
@@ -947,6 +1016,9 @@ fn parse_signals(raw: &str) -> Vec<serde_json::Value> {
 
 #[tokio::main]
 async fn main() {
+    // If spawned as daemon child (PRISMER_DAEMON=1), run daemon loop and exit.
+    prismer_sdk::daemon::daemon_main();
+
     let cli = Cli::parse();
 
     match cli.command {
@@ -1233,6 +1305,12 @@ async fn main() {
             handle_evolve(evo, action).await;
         }
 
+        // ── community group ───────────────────────────────────────────────────
+        Commands::Community { action } => {
+            let client = get_im_client();
+            handle_community(&client, action).await;
+        }
+
         // ── task group ────────────────────────────────────────────────────────
         Commands::Task { action } => {
             let client = get_im_client();
@@ -1280,12 +1358,153 @@ async fn main() {
             let id = client.identity();
             handle_identity(id, action).await;
         }
+
+        // ── daemon group ─────────────────────────────────────────────────────
+        Commands::Daemon { action } => match action {
+            DaemonAction::Start => prismer_sdk::daemon::start_daemon(),
+            DaemonAction::Stop => prismer_sdk::daemon::stop_daemon(),
+            DaemonAction::Status => prismer_sdk::daemon::daemon_status(),
+            DaemonAction::Install => prismer_sdk::daemon::install_daemon_service(),
+            DaemonAction::Uninstall => prismer_sdk::daemon::uninstall_daemon_service(),
+        },
     }
 }
 
 // ============================================================================
 // Handler functions
 // ============================================================================
+
+async fn handle_community(client: &PrismerClient, action: CommunityAction) {
+    use prismer_sdk::community::{CommunityListOptions, CommunityPostInput};
+
+    let com = client.community();
+    match action {
+        CommunityAction::Feed { board, limit, json } => {
+            let mut opts = CommunityListOptions::default();
+            opts.board_id = board;
+            opts.sort = Some("hot".to_string());
+            opts.limit = Some(limit);
+            match com.community_list_posts(&opts).await {
+                Ok(res) => {
+                    if json {
+                        print_json(&res.data);
+                    } else {
+                        println!(
+                            "{}",
+                            serde_json::to_string(&res.data).unwrap_or_default()
+                        );
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        CommunityAction::Search {
+            query,
+            board,
+            limit,
+            json,
+        } => {
+            match com
+                .community_search(&query, board.as_deref(), Some(limit), None)
+                .await
+            {
+                Ok(res) => {
+                    if json {
+                        print_json(&res.data);
+                    } else {
+                        println!(
+                            "{}",
+                            serde_json::to_string(&res.data).unwrap_or_default()
+                        );
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        CommunityAction::Ask {
+            title,
+            body,
+            tags,
+            json,
+        } => {
+            let mut input = CommunityPostInput::new("helpdesk", title, body);
+            input.post_type = Some("question".to_string());
+            if let Some(t) = tags {
+                let v: Vec<String> = t
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                if !v.is_empty() {
+                    input.tags = Some(v);
+                }
+            }
+            match com.community_create_post(&input).await {
+                Ok(res) => {
+                    if json {
+                        print_json(&res.data);
+                    } else {
+                        println!(
+                            "{}",
+                            serde_json::to_string(&res.data).unwrap_or_default()
+                        );
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        CommunityAction::Check {
+            unread_only,
+            mark_read,
+            json,
+        } => {
+            match com
+                .community_get_notifications(unread_only, 50, 0)
+                .await
+            {
+                Ok(res) => {
+                    if json {
+                        print_json(&res.data);
+                    } else {
+                        println!(
+                            "{}",
+                            serde_json::to_string(&res.data).unwrap_or_default()
+                        );
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
+            }
+            if mark_read {
+                match com.community_mark_notifications_read(None).await {
+                    Ok(res) => {
+                        if json {
+                            print_json(&res.data);
+                        } else if !res.is_ok() {
+                            eprintln!("mark read failed");
+                            std::process::exit(1);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Error: {}", e);
+                        std::process::exit(1);
+                    }
+                }
+            }
+        }
+    }
+}
 
 async fn handle_im(im: prismer_sdk::im::IMClient<'_>, action: ImAction) {
     match action {
@@ -2012,7 +2231,7 @@ async fn handle_skill(evo: prismer_sdk::evolution::EvolutionClient<'_>, action: 
 
         SkillAction::Install { slug, platform, no_local, json } => {
             if no_local {
-                match evo.install_skill(&slug).await {
+                match evo.install_skill(&slug, None).await {
                     Ok(res) => {
                         if json { print_json(&res.data); return; }
                         println!("Installed: {} (cloud-only)", slug);

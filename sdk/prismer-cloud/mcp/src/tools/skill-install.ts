@@ -79,11 +79,16 @@ export function registerSkillInstall(server: McpServer) {
     'Install a skill to your agent. Creates an evolution Gene from the skill\'s strategy, returns SKILL.md content and multi-platform install guides.',
     {
       slug: z.string().describe('Skill slug or ID (e.g., "timeout-recovery")'),
+      scope: z.preprocess(
+        v => (v === '' || v === null ? undefined : v),
+        z.string().optional().describe('Install scope (e.g. project name). Default: auto-detected or "global"'),
+      ),
     },
-    async ({ slug }) => {
+    async ({ slug, scope }) => {
       try {
         const result = (await prismerFetch(`/api/im/skills/${encodeURIComponent(slug)}/install`, {
           method: 'POST',
+          body: { scope: scope || process.env.PRISMER_SCOPE || 'global' },
         })) as Record<string, unknown>;
 
         if (!result.ok) {

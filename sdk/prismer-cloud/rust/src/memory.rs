@@ -56,4 +56,9 @@ impl<'a> MemoryClient<'a> {
         let qs = if params.is_empty() { String::new() } else { format!("?{}", params.join("&")) };
         self.client.request(reqwest::Method::GET, &format!("/api/im/memory/load{}", qs), None).await
     }
+
+    /// Get memory-gene knowledge links for the authenticated user's memory files (v1.8.0).
+    pub async fn get_knowledge_links(&self) -> Result<ApiResponse<serde_json::Value>, PrismerError> {
+        self.client.request(reqwest::Method::GET, "/api/im/memory/links", None).await
+    }
 }

@@ -1,76 +1,118 @@
 import { z } from 'zod';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { prismerFetch } from '../lib/client.js';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { writeFileSync, mkdirSync, existsSync } from 'fs';
-import { join } from 'path';
+import { renderForClaudeCode, renderForOpenCode, renderForOpenClaw } from '../renderers.js';
+import type { LocalFile } from '../renderers.js';
+import { existsSync, mkdirSync, writeFileSync } from 'fs';
+import { join, dirname } from 'path';
 import { homedir } from 'os';
 
 export function registerSkillSync(server: McpServer) {
   server.tool(
     'skill_sync',
-    'Sync cloud-installed skills to local filesystem. Downloads SKILL.md files for skills installed on the server but missing locally.',
+    'Sync installed skills from Prismer Cloud to local filesystem',
     {
-      platform: z.enum(['claude-code', 'opencode', 'openclaw', 'all']).optional().describe('Target platform (default: claude-code)'),
+      platform: z.enum(['claude-code', 'opencode', 'openclaw', 'all']).optional()
+        .describe('Target platform (default: claude-code)'),
+      scope: z.preprocess(
+        v => (v === '' || v === null ? undefined : v),
+        z.string().optional().describe('Workspace scope. Default: auto-detected or "global"'),
+      ),
     },
     async (args) => {
+      const platform = args.platform || 'claude-code';
+      const scope = args.scope || process.env.PRISMER_SCOPE || 'global';
+
+      const renderers: Record<string, typeof renderForClaudeCode> = {
+        'claude-code': renderForClaudeCode,
+        'opencode': renderForOpenCode,
+        'openclaw': renderForOpenClaw,
+      };
+
+      let localFiles: LocalFile[] = [];
+      let usedLegacy = false;
+
+      // Try Workspace API first
       try {
-        const result = (await prismerFetch('/api/im/skills/installed')) as Record<string, unknown>;
-        if (!result.ok) {
-          return { content: [{ type: 'text' as const, text: `Error: ${result.error || 'Failed to fetch installed skills'}` }] };
-        }
+        const wsData = await prismerFetch('/api/im/workspace', {
+          query: { scope, slots: 'strategies' },
+        }) as { data?: { strategies?: unknown[]; scope: string } };
 
-        const entries = (result.data || []) as Array<{ skill: Record<string, unknown> }>;
-        if (entries.length === 0) {
-          return { content: [{ type: 'text' as const, text: 'No skills installed.' }] };
-        }
-
-        const home = homedir();
-        const platform = args.platform || 'claude-code';
-        const platformDirs: Record<string, string> = {
-          'claude-code': join(home, '.claude', 'skills'),
-          'opencode': join(home, '.config', 'opencode', 'skills'),
-          'openclaw': join(home, '.openclaw', 'skills'),
-        };
-
-        const targets = platform === 'all' ? Object.values(platformDirs) : [platformDirs[platform] || platformDirs['claude-code']];
-        let synced = 0;
-        let skipped = 0;
-
-        for (const entry of entries) {
-          const skill = entry.skill;
-          const slug = String(skill.slug || skill.id || '').replace(/[^a-z0-9_-]/gi, '-');
-          if (!slug) continue;
-
-          // Fetch content
-          let content = '';
-          try {
-            const contentRes = (await prismerFetch(`/api/im/skills/${encodeURIComponent(slug)}/content`)) as Record<string, unknown>;
-            const data = contentRes.data as Record<string, unknown> | undefined;
-            content = String(data?.content || '');
-          } catch { continue; }
-
-          if (!content) { skipped++; continue; }
-
-          for (const dir of targets) {
-            const skillDir = join(dir, slug);
-            const filePath = join(skillDir, 'SKILL.md');
-            if (existsSync(filePath)) { skipped++; continue; }
-            mkdirSync(skillDir, { recursive: true });
-            writeFileSync(filePath, content, 'utf-8');
-            synced++;
+        if (wsData?.data?.strategies?.length) {
+          if (platform === 'all') {
+            for (const r of Object.values(renderers)) {
+              localFiles.push(...r(wsData.data as any));
+            }
+          } else {
+            const render = renderers[platform] || renderers['claude-code'];
+            localFiles = render(wsData.data as any);
           }
         }
-
-        return {
-          content: [{
-            type: 'text' as const,
-            text: `Skill sync complete: ${synced} written, ${skipped} skipped (already exist or no content). ${entries.length} installed skill(s).`,
-          }],
-        };
-      } catch (error: unknown) {
-        const msg = error instanceof Error ? error.message : String(error);
-        return { content: [{ type: 'text' as const, text: `Failed: ${msg}` }] };
+      } catch (e: any) {
+        if (e.message?.includes('404') || e.message?.includes('Not Found')) {
+          usedLegacy = true;
+        } else {
+          throw e;
+        }
       }
-    }
+
+      // Fallback: legacy installed → per-skill content
+      if (usedLegacy || localFiles.length === 0) {
+        usedLegacy = true;
+        const installed = await prismerFetch('/api/im/skills/installed') as {
+          data?: { skills?: Array<{ skill?: { slug: string }; slug?: string }> } | Array<{ skill?: { slug: string }; slug?: string }>;
+        };
+        const skills = Array.isArray(installed?.data) ? installed.data : ((installed?.data as any)?.skills || []);
+
+        for (const entry of skills) {
+          const slug = (entry as any).skill?.slug || (entry as any).slug;
+          if (!slug) continue;
+          const safeSlug = slug.replace(/[^a-zA-Z0-9_-]/g, '');
+          try {
+            const contentData = await prismerFetch(`/api/im/skills/${encodeURIComponent(slug)}/content`) as { data?: { content?: string } };
+            if (contentData?.data?.content) {
+              localFiles.push({
+                relativePath: `skills/${safeSlug}/SKILL.md`,
+                content: contentData.data.content,
+                meta: { sourceSlot: 'legacy', sourceId: slug, scope, checksum: '' },
+              });
+            }
+          } catch { /* skip individual failures */ }
+        }
+      }
+
+      // Write to platform targets
+      const home = homedir();
+      const targetDirs: string[] = [];
+
+      if (platform === 'all' || platform === 'claude-code') {
+        targetDirs.push(join(home, '.claude'));
+      }
+      if (platform === 'all' || platform === 'opencode') {
+        targetDirs.push(join(home, '.config', 'opencode'));
+      }
+      if (platform === 'all' || platform === 'openclaw') {
+        targetDirs.push(join(home, '.openclaw', 'workspace'));
+      }
+
+      let synced = 0;
+      let skipped = 0;
+      for (const file of localFiles) {
+        for (const dir of targetDirs) {
+          const filePath = join(dir, file.relativePath);
+          if (existsSync(filePath) && !file.meta.checksum) { skipped++; continue; }
+          mkdirSync(dirname(filePath), { recursive: true });
+          writeFileSync(filePath, file.content, 'utf-8');
+          synced++;
+        }
+      }
+
+      return {
+        content: [{
+          type: 'text' as const,
+          text: `Synced ${synced} skill file(s), skipped ${skipped}. Total installed: ${localFiles.length}.${usedLegacy ? ' (legacy fallback)' : ''}`,
+        }],
+      };
+    },
   );
 }

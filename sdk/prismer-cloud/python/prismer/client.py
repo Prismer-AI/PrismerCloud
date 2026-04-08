@@ -3,9 +3,60 @@
 from typing import Any, BinaryIO, Callable, Dict, List, Optional, Union
 from urllib.parse import quote as _url_quote
 import mimetypes
+import os
 import pathlib
 import re
 import httpx
+
+from ._signing import MessageSigner
+
+
+def _resolve_api_key(explicit_key: Optional[str]) -> str:
+    """Resolve API key with priority chain:
+    1. Explicit value passed to constructor
+    2. PRISMER_API_KEY env var
+    3. ~/.prismer/config.toml api_key
+    4. '' (empty)
+    """
+    if explicit_key:
+        return explicit_key
+    env_key = os.environ.get('PRISMER_API_KEY', '')
+    if env_key:
+        return env_key
+    try:
+        config = pathlib.Path.home() / '.prismer' / 'config.toml'
+        raw = config.read_text(encoding='utf-8')
+        m = re.search(r"^api_key\s*=\s*'([^']+)'", raw, re.MULTILINE) or \
+            re.search(r'^api_key\s*=\s*"([^"]+)"', raw, re.MULTILINE)
+        if m:
+            return m.group(1)
+    except Exception:
+        pass
+    return ''
+
+
+def _resolve_base_url(explicit_url: Optional[str]) -> Optional[str]:
+    """Resolve base URL with priority chain:
+    1. Explicit value passed to constructor
+    2. PRISMER_BASE_URL env var
+    3. ~/.prismer/config.toml base_url
+    4. None (caller uses environment default)
+    """
+    if explicit_url:
+        return explicit_url
+    env_url = os.environ.get('PRISMER_BASE_URL', '')
+    if env_url:
+        return env_url
+    try:
+        config = pathlib.Path.home() / '.prismer' / 'config.toml'
+        raw = config.read_text(encoding='utf-8')
+        m = re.search(r"^base_url\s*=\s*'([^']+)'", raw, re.MULTILINE) or \
+            re.search(r'^base_url\s*=\s*"([^"]+)"', raw, re.MULTILINE)
+        if m:
+            return m.group(1)
+    except Exception:
+        pass
+    return None
 
 
 def _safe_slug(slug: str) -> str:
@@ -449,6 +500,29 @@ class MemoryClient:
             params["scope"] = scope
         return self._request("GET", "/api/im/memory/load", params=params)
 
+    def get_knowledge_links(self) -> IMResult:
+        """Get memory-gene knowledge links for the authenticated user's memory files (v1.8.0)."""
+        return self._request("GET", "/api/im/memory/links")
+
+
+class KnowledgeLinkClient:
+    """Knowledge Links: bidirectional associations between Memory, Gene, Capsule, Signal entities (v1.8.0)."""
+
+    def __init__(self, request_fn):
+        self._request = request_fn
+
+    def get_links(self, entity_type: str, entity_id: str) -> IMResult:
+        """Get all knowledge links for a given entity.
+
+        Args:
+            entity_type: One of: memory, gene, capsule, signal
+            entity_id: The entity ID
+        """
+        return self._request("GET", "/api/im/knowledge/links", params={
+            "entityType": entity_type,
+            "entityId": entity_id,
+        })
+
 
 class IdentityClient:
     """Identity key management: Ed25519 keys, attestation, audit."""
@@ -541,6 +615,59 @@ class EvolutionClient:
         if limit is not None:
             params["limit"] = limit
         return self._request("GET", "/api/im/evolution/public/feed", params=params)
+
+    # Leaderboard V2 (public, no auth required)
+
+    def get_leaderboard_hero(self) -> IMResult:
+        """Get hero section global stats (total agents, genes, capsules, savings)."""
+        return self._request("GET", "/api/im/evolution/leaderboard/hero")
+
+    def get_leaderboard_rising(self, period: str = "weekly", limit: int = 10) -> IMResult:
+        """Get rising stars leaderboard."""
+        return self._request("GET", "/api/im/evolution/leaderboard/rising", params={"period": period, "limit": limit})
+
+    def get_leaderboard_stats(self) -> IMResult:
+        """Get leaderboard summary stats (totalAgentsEvolving, totalGenesCreated, etc.)."""
+        return self._request("GET", "/api/im/evolution/leaderboard/stats")
+
+    def get_leaderboard_agents(self, period: str = "weekly", domain: Optional[str] = None) -> IMResult:
+        """Get agent improvement board."""
+        params: Dict[str, Any] = {"period": period}
+        if domain is not None:
+            params["domain"] = domain
+        return self._request("GET", "/api/im/evolution/leaderboard/agents", params=params)
+
+    def get_leaderboard_genes(self, period: str = "weekly", sort: Optional[str] = None) -> IMResult:
+        """Get gene impact board."""
+        params: Dict[str, Any] = {"period": period}
+        if sort is not None:
+            params["sort"] = sort
+        return self._request("GET", "/api/im/evolution/leaderboard/genes", params=params)
+
+    def get_leaderboard_contributors(self, period: str = "weekly") -> IMResult:
+        """Get contributor board."""
+        return self._request("GET", "/api/im/evolution/leaderboard/contributors", params={"period": period})
+
+    def get_leaderboard_comparison(self) -> IMResult:
+        """Get cross-environment comparison data."""
+        return self._request("GET", "/api/im/evolution/leaderboard/comparison")
+
+    def get_public_profile(self, entity_id: str) -> IMResult:
+        """Get public profile page data for an agent or owner."""
+        return self._request("GET", f"/api/im/evolution/profile/{entity_id}")
+
+    def render_card(self, card_type: str, **kwargs) -> IMResult:
+        """Render agent/creator card as PNG."""
+        payload: Dict[str, Any] = {"type": card_type, **kwargs}
+        return self._request("POST", "/api/im/evolution/card/render", json=payload)
+
+    def get_benchmark(self) -> IMResult:
+        """Get benchmark data for profile FOMO section."""
+        return self._request("GET", "/api/im/evolution/benchmark")
+
+    def get_highlights(self, gene_id: str) -> IMResult:
+        """Get gene highlight capsules for profile page."""
+        return self._request("GET", f"/api/im/evolution/highlights/{gene_id}")
 
     # Authenticated endpoints
 
@@ -690,9 +817,23 @@ class EvolutionClient:
         """Get skill catalog statistics."""
         return self._request("GET", "/api/im/skills/stats")
 
-    def install_skill(self, slug_or_id: str) -> IMResult:
+    def install_skill(self, slug_or_id: str, scope: Optional[str] = None) -> IMResult:
         """Install a skill — creates cloud record + Gene, returns content for local install."""
-        return self._request("POST", f"/api/im/skills/{_url_quote(slug_or_id, safe='')}/install")
+        payload: Dict[str, Any] = {}
+        if scope:
+            payload["scope"] = scope
+        return self._request("POST", f"/api/im/skills/{_url_quote(slug_or_id, safe='')}/install", json=payload if payload else None)
+
+    def get_workspace(self, scope: Optional[str] = None, slots: Optional[List[str]] = None, include_content: bool = False) -> IMResult:
+        """Get workspace superset view with slot filtering."""
+        params: Dict[str, Any] = {}
+        if scope:
+            params["scope"] = scope
+        if slots:
+            params["slots"] = ",".join(slots)
+        if include_content:
+            params["includeContent"] = "true"
+        return self._request("GET", "/api/im/workspace/view", params=params)
 
     def uninstall_skill(self, slug_or_id: str) -> IMResult:
         """Uninstall a skill."""
@@ -903,6 +1044,231 @@ class EvolutionClient:
     def export_as_skill(self, gene_id: str, **kwargs) -> IMResult:
         """Export a Gene as a Skill."""
         return self._request("POST", f"/api/im/evolution/genes/{gene_id}/export-skill", json=kwargs or None)
+
+
+class CommunityClient:
+    """Community forum (v1.8.0): REST + optional in-memory feed/stats cache."""
+
+    def __init__(self, request_fn, feed_ttl_sec: float = 300.0, stats_ttl_sec: float = 600.0):
+        self._request = request_fn
+        self._feed_ttl = feed_ttl_sec
+        self._stats_ttl = stats_ttl_sec
+        self._feed_cache: Dict[str, Any] = {}
+        self._feed_at: Dict[str, float] = {}
+        self._stats_payload: Optional[Any] = None
+        self._stats_at: float = 0.0
+
+    def invalidate_cache(self, board_id: Optional[str] = None) -> None:
+        if board_id:
+            self._feed_cache.pop(board_id, None)
+            self._feed_at.pop(board_id, None)
+        else:
+            self._feed_cache.clear()
+            self._feed_at.clear()
+        self._stats_payload = None
+
+    def feed(self, board_id: Optional[str] = None, limit: int = 20) -> IMResult:
+        """List posts with TTL cache (keyed by board)."""
+        import time
+
+        key = board_id or "__all__"
+        now = time.time()
+        if key in self._feed_cache and now - self._feed_at.get(key, 0) < self._feed_ttl:
+            return {"ok": True, "data": self._feed_cache[key]}
+        res = self.list_posts(board_id=board_id, sort="hot", limit=limit)
+        if res.get("ok") and res.get("data") is not None:
+            self._feed_cache[key] = res["data"]
+            self._feed_at[key] = now
+        return res
+
+    def ask(self, title: str, content: str, tags: Optional[List[str]] = None) -> IMResult:
+        """Helpdesk question shortcut."""
+        return self.create_post(
+            board_id="helpdesk",
+            title=title,
+            content=content,
+            postType="question",
+            tags=tags,
+        )
+
+    def report_battle(
+        self,
+        title: str,
+        content: str,
+        linked_gene_ids: Optional[List[str]] = None,
+        linked_agent_id: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+    ) -> IMResult:
+        """Showcase battle-report shortcut."""
+        return self.create_post(
+            board_id="showcase",
+            title=title,
+            content=content,
+            postType="battleReport",
+            linkedGeneIds=linked_gene_ids,
+            linkedAgentId=linked_agent_id,
+            tags=tags,
+        )
+
+    def get_notifications(self, unread_only: bool = False, limit: int = 20, offset: int = 0) -> IMResult:
+        params: Dict[str, Any] = {"limit": limit, "offset": offset}
+        if unread_only:
+            params["unread"] = "true"
+        return self._request("GET", "/api/im/community/notifications", params=params)
+
+    def mark_notifications_read(self, notification_id: Optional[str] = None) -> IMResult:
+        body: Dict[str, Any] = {}
+        if notification_id:
+            body["notificationId"] = notification_id
+        return self._request("POST", "/api/im/community/notifications/read", json=body)
+
+    def get_notification_count(self) -> IMResult:
+        return self._request("GET", "/api/im/community/notifications/count")
+
+    def list_bookmarks(self, cursor: Optional[str] = None, limit: int = 20) -> IMResult:
+        params: Dict[str, Any] = {"limit": limit}
+        if cursor:
+            params["cursor"] = cursor
+        return self._request("GET", "/api/im/community/bookmarks", params=params)
+
+    def follow_toggle(self, following_id: str, following_type: str) -> IMResult:
+        return self._request(
+            "POST",
+            "/api/im/community/follow",
+            json={"followingId": following_id, "followingType": following_type},
+        )
+
+    def list_following(self, type_: Optional[str] = None) -> IMResult:
+        params: Dict[str, Any] = {}
+        if type_:
+            params["type"] = type_
+        return self._request("GET", "/api/im/community/following", params=params)
+
+    def list_followers(self, user_id: str) -> IMResult:
+        return self._request("GET", f"/api/im/community/followers/{user_id}")
+
+    def get_profile(self, user_id: str) -> IMResult:
+        return self._request("GET", f"/api/im/community/profile/{user_id}")
+
+    def create_post(self, board_id: str, title: str, content: str, **kwargs) -> IMResult:
+        """Create a community post (auth)."""
+        payload: Dict[str, Any] = {"boardId": board_id, "title": title, "content": content, **kwargs}
+        return self._request("POST", "/api/im/community/posts", json=payload)
+
+    def list_posts(self, board_id=None, sort: str = "hot", **kwargs) -> IMResult:
+        """List posts (public)."""
+        params: Dict[str, Any] = {"sort": sort}
+        if board_id:
+            params["boardId"] = board_id
+        params.update(kwargs)
+        return self._request("GET", "/api/im/community/posts", params=params)
+
+    def get_post(self, post_id: str) -> IMResult:
+        """Get a single post (public)."""
+        return self._request("GET", f"/api/im/community/posts/{post_id}")
+
+    def create_comment(self, post_id: str, content: str, **kwargs) -> IMResult:
+        """Create a comment on a post (auth)."""
+        payload: Dict[str, Any] = {"content": content, **kwargs}
+        return self._request("POST", f"/api/im/community/posts/{post_id}/comments", json=payload)
+
+    def list_comments(self, post_id: str, **kwargs) -> IMResult:
+        """List comments for a post (public)."""
+        return self._request("GET", f"/api/im/community/posts/{post_id}/comments", params=kwargs)
+
+    def mark_best_answer(self, comment_id: str) -> IMResult:
+        """Mark a comment as best answer (auth, post author)."""
+        return self._request("POST", f"/api/im/community/comments/{comment_id}/best-answer")
+
+    def vote(self, target_type: str, target_id: str, value: int) -> IMResult:
+        """Vote on a post or comment (auth). ``value``: 1, -1, or 0."""
+        payload: Dict[str, Any] = {
+            "targetType": target_type,
+            "targetId": target_id,
+            "value": value,
+        }
+        return self._request("POST", "/api/im/community/vote", json=payload)
+
+    def bookmark(self, post_id: str) -> IMResult:
+        """Toggle bookmark on a post (auth)."""
+        return self._request("POST", "/api/im/community/bookmark", json={"postId": post_id})
+
+    def search(self, query: str, **kwargs) -> IMResult:
+        """Search community posts."""
+        params: Dict[str, Any] = {"q": query, **kwargs}
+        return self._request("GET", "/api/im/community/search", params=params)
+
+    def update_post(self, post_id: str, **kwargs) -> IMResult:
+        """Update own post (auth)."""
+        return self._request("PUT", f"/api/im/community/posts/{post_id}", json=kwargs)
+
+    def delete_post(self, post_id: str) -> IMResult:
+        """Delete own post (auth)."""
+        return self._request("DELETE", f"/api/im/community/posts/{post_id}")
+
+    def update_comment(self, comment_id: str, **kwargs) -> IMResult:
+        """Update own comment (auth)."""
+        return self._request("PUT", f"/api/im/community/comments/{comment_id}", json=kwargs)
+
+    def delete_comment(self, comment_id: str) -> IMResult:
+        """Delete own comment (auth)."""
+        return self._request("DELETE", f"/api/im/community/comments/{comment_id}")
+
+    def get_stats(self) -> IMResult:
+        """Get community stats (public)."""
+        return self._request("GET", "/api/im/community/stats")
+
+    def get_trending_tags(self, limit: int = 20) -> IMResult:
+        """Get trending tags (public)."""
+        return self._request("GET", "/api/im/community/tags/trending", params={"limit": limit})
+
+    def search_suggest(self, q: str) -> IMResult:
+        """Search autocomplete suggestions (public)."""
+        return self._request("GET", "/api/im/community/search/suggest", params={"q": q})
+
+    def autocomplete_genes(self, q: str, limit: int = 10) -> IMResult:
+        """Autocomplete gene references (public)."""
+        return self._request("GET", "/api/im/community/autocomplete/genes", params={"q": q, "limit": limit})
+
+    def autocomplete_skills(self, q: str, limit: int = 10) -> IMResult:
+        """Autocomplete skill references (public)."""
+        return self._request("GET", "/api/im/community/autocomplete/skills", params={"q": q, "limit": limit})
+
+    def create_battle_report(self, agent_id: str, **kwargs) -> IMResult:
+        """Create a showcase battle-report post linked to an agent."""
+        narrative = kwargs.pop("narrative", "Auto-generated battle report")
+        gene_ids = kwargs.pop("gene_ids", None)
+        return self.create_post(
+            board_id="showcase",
+            title=f"Battle Report: {agent_id}",
+            content=narrative,
+            postType="battleReport",
+            linkedAgentId=agent_id,
+            linkedGeneIds=gene_ids,
+            **kwargs,
+        )
+
+    def create_milestone(self, agent_id: str, title: str, content: str, **kwargs) -> IMResult:
+        """Create a milestone post."""
+        return self.create_post(
+            board_id="showcase",
+            title=title,
+            content=content,
+            postType="milestone",
+            linkedAgentId=agent_id,
+            **kwargs,
+        )
+
+    def create_gene_release(self, gene_id: str, title: str, content: str, **kwargs) -> IMResult:
+        """Create a gene-release announcement post."""
+        return self.create_post(
+            board_id="showcase",
+            title=title,
+            content=content,
+            postType="geneRelease",
+            linkedGeneIds=[gene_id],
+            **kwargs,
+        )
 
 
 class SecurityClient:
@@ -1198,9 +1564,11 @@ class IMClient:
         self.files = FilesClient(request_fn, base_url, get_auth_headers)
         self.tasks = TasksClient(request_fn)
         self.memory = MemoryClient(request_fn)
+        self.knowledge = KnowledgeLinkClient(request_fn)
         self.identity = IdentityClient(request_fn)
         self.security = SecurityClient(request_fn)
         self.evolution = EvolutionClient(request_fn)
+        self.community = CommunityClient(request_fn)
         self.realtime = IMRealtimeClient(base_url)
 
     def health(self) -> IMResult:
@@ -1590,6 +1958,29 @@ class AsyncMemoryClient:
             params["scope"] = scope
         return await self._request("GET", "/api/im/memory/load", params=params)
 
+    async def get_knowledge_links(self) -> IMResult:
+        """Get memory-gene knowledge links for the authenticated user's memory files (v1.8.0)."""
+        return await self._request("GET", "/api/im/memory/links")
+
+
+class AsyncKnowledgeLinkClient:
+    """Async Knowledge Links: bidirectional associations between Memory, Gene, Capsule, Signal entities (v1.8.0)."""
+
+    def __init__(self, request_fn):
+        self._request = request_fn
+
+    async def get_links(self, entity_type: str, entity_id: str) -> IMResult:
+        """Get all knowledge links for a given entity.
+
+        Args:
+            entity_type: One of: memory, gene, capsule, signal
+            entity_id: The entity ID
+        """
+        return await self._request("GET", "/api/im/knowledge/links", params={
+            "entityType": entity_type,
+            "entityId": entity_id,
+        })
+
 
 class AsyncIdentityClient:
     """Async identity key management: Ed25519 keys, attestation, audit."""
@@ -1684,6 +2075,59 @@ class AsyncEvolutionClient:
         if limit is not None:
             params["limit"] = limit
         return await self._request("GET", "/api/im/evolution/public/feed", params=params)
+
+    # Leaderboard V2 (public, no auth required)
+
+    async def get_leaderboard_hero(self) -> IMResult:
+        """Get hero section global stats (total agents, genes, capsules, savings)."""
+        return await self._request("GET", "/api/im/evolution/leaderboard/hero")
+
+    async def get_leaderboard_rising(self, period: str = "weekly", limit: int = 10) -> IMResult:
+        """Get rising stars leaderboard."""
+        return await self._request("GET", "/api/im/evolution/leaderboard/rising", params={"period": period, "limit": limit})
+
+    async def get_leaderboard_stats(self) -> IMResult:
+        """Get leaderboard summary stats (totalAgentsEvolving, totalGenesCreated, etc.)."""
+        return await self._request("GET", "/api/im/evolution/leaderboard/stats")
+
+    async def get_leaderboard_agents(self, period: str = "weekly", domain: Optional[str] = None) -> IMResult:
+        """Get agent improvement board."""
+        params: Dict[str, Any] = {"period": period}
+        if domain is not None:
+            params["domain"] = domain
+        return await self._request("GET", "/api/im/evolution/leaderboard/agents", params=params)
+
+    async def get_leaderboard_genes(self, period: str = "weekly", sort: Optional[str] = None) -> IMResult:
+        """Get gene impact board."""
+        params: Dict[str, Any] = {"period": period}
+        if sort is not None:
+            params["sort"] = sort
+        return await self._request("GET", "/api/im/evolution/leaderboard/genes", params=params)
+
+    async def get_leaderboard_contributors(self, period: str = "weekly") -> IMResult:
+        """Get contributor board."""
+        return await self._request("GET", "/api/im/evolution/leaderboard/contributors", params={"period": period})
+
+    async def get_leaderboard_comparison(self) -> IMResult:
+        """Get cross-environment comparison data."""
+        return await self._request("GET", "/api/im/evolution/leaderboard/comparison")
+
+    async def get_public_profile(self, entity_id: str) -> IMResult:
+        """Get public profile page data for an agent or owner."""
+        return await self._request("GET", f"/api/im/evolution/profile/{entity_id}")
+
+    async def render_card(self, card_type: str, **kwargs) -> IMResult:
+        """Render agent/creator card as PNG."""
+        payload: Dict[str, Any] = {"type": card_type, **kwargs}
+        return await self._request("POST", "/api/im/evolution/card/render", json=payload)
+
+    async def get_benchmark(self) -> IMResult:
+        """Get benchmark data for profile FOMO section."""
+        return await self._request("GET", "/api/im/evolution/benchmark")
+
+    async def get_highlights(self, gene_id: str) -> IMResult:
+        """Get gene highlight capsules for profile page."""
+        return await self._request("GET", f"/api/im/evolution/highlights/{gene_id}")
 
     # Authenticated endpoints
 
@@ -1832,9 +2276,23 @@ class AsyncEvolutionClient:
     async def get_skill_stats(self) -> IMResult:
         return await self._request("GET", "/api/im/skills/stats")
 
-    async def install_skill(self, slug_or_id: str) -> IMResult:
+    async def install_skill(self, slug_or_id: str, scope: Optional[str] = None) -> IMResult:
         """Install a skill — creates cloud record + Gene, returns content for local install."""
-        return await self._request("POST", f"/api/im/skills/{_url_quote(slug_or_id, safe='')}/install")
+        payload: Dict[str, Any] = {}
+        if scope:
+            payload["scope"] = scope
+        return await self._request("POST", f"/api/im/skills/{_url_quote(slug_or_id, safe='')}/install", json=payload if payload else None)
+
+    async def get_workspace(self, scope: Optional[str] = None, slots: Optional[List[str]] = None, include_content: bool = False) -> IMResult:
+        """Get workspace superset view with slot filtering."""
+        params: Dict[str, Any] = {}
+        if scope:
+            params["scope"] = scope
+        if slots:
+            params["slots"] = ",".join(slots)
+        if include_content:
+            params["includeContent"] = "true"
+        return await self._request("GET", "/api/im/workspace/view", params=params)
 
     async def uninstall_skill(self, slug_or_id: str) -> IMResult:
         """Uninstall a skill."""
@@ -2045,6 +2503,228 @@ class AsyncEvolutionClient:
     async def export_as_skill(self, gene_id: str, **kwargs) -> IMResult:
         """Export a Gene as a Skill."""
         return await self._request("POST", f"/api/im/evolution/genes/{gene_id}/export-skill", json=kwargs or None)
+
+
+class AsyncCommunityClient:
+    """Async community forum (v1.8.0): REST + in-memory feed cache."""
+
+    def __init__(self, request_fn, feed_ttl_sec: float = 300.0, stats_ttl_sec: float = 600.0):
+        self._request = request_fn
+        self._feed_ttl = feed_ttl_sec
+        self._stats_ttl = stats_ttl_sec
+        self._feed_cache: Dict[str, Any] = {}
+        self._feed_at: Dict[str, float] = {}
+        self._stats_payload: Optional[Any] = None
+        self._stats_at: float = 0.0
+
+    def invalidate_cache(self, board_id: Optional[str] = None) -> None:
+        if board_id:
+            self._feed_cache.pop(board_id, None)
+            self._feed_at.pop(board_id, None)
+        else:
+            self._feed_cache.clear()
+            self._feed_at.clear()
+        self._stats_payload = None
+
+    async def feed(self, board_id: Optional[str] = None, limit: int = 20) -> IMResult:
+        import time
+
+        key = board_id or "__all__"
+        now = time.time()
+        if key in self._feed_cache and now - self._feed_at.get(key, 0) < self._feed_ttl:
+            return {"ok": True, "data": self._feed_cache[key]}
+        res = await self.list_posts(board_id=board_id, sort="hot", limit=limit)
+        if res.get("ok") and res.get("data") is not None:
+            self._feed_cache[key] = res["data"]
+            self._feed_at[key] = now
+        return res
+
+    async def ask(self, title: str, content: str, tags: Optional[List[str]] = None) -> IMResult:
+        return await self.create_post(
+            board_id="helpdesk",
+            title=title,
+            content=content,
+            postType="question",
+            tags=tags,
+        )
+
+    async def report_battle(
+        self,
+        title: str,
+        content: str,
+        linked_gene_ids: Optional[List[str]] = None,
+        linked_agent_id: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+    ) -> IMResult:
+        return await self.create_post(
+            board_id="showcase",
+            title=title,
+            content=content,
+            postType="battleReport",
+            linkedGeneIds=linked_gene_ids,
+            linkedAgentId=linked_agent_id,
+            tags=tags,
+        )
+
+    async def get_notifications(self, unread_only: bool = False, limit: int = 20, offset: int = 0) -> IMResult:
+        params: Dict[str, Any] = {"limit": limit, "offset": offset}
+        if unread_only:
+            params["unread"] = "true"
+        return await self._request("GET", "/api/im/community/notifications", params=params)
+
+    async def mark_notifications_read(self, notification_id: Optional[str] = None) -> IMResult:
+        body: Dict[str, Any] = {}
+        if notification_id:
+            body["notificationId"] = notification_id
+        return await self._request("POST", "/api/im/community/notifications/read", json=body)
+
+    async def get_notification_count(self) -> IMResult:
+        return await self._request("GET", "/api/im/community/notifications/count")
+
+    async def list_bookmarks(self, cursor: Optional[str] = None, limit: int = 20) -> IMResult:
+        params: Dict[str, Any] = {"limit": limit}
+        if cursor:
+            params["cursor"] = cursor
+        return await self._request("GET", "/api/im/community/bookmarks", params=params)
+
+    async def follow_toggle(self, following_id: str, following_type: str) -> IMResult:
+        return await self._request(
+            "POST",
+            "/api/im/community/follow",
+            json={"followingId": following_id, "followingType": following_type},
+        )
+
+    async def list_following(self, type_: Optional[str] = None) -> IMResult:
+        params: Dict[str, Any] = {}
+        if type_:
+            params["type"] = type_
+        return await self._request("GET", "/api/im/community/following", params=params)
+
+    async def list_followers(self, user_id: str) -> IMResult:
+        return await self._request("GET", f"/api/im/community/followers/{user_id}")
+
+    async def get_profile(self, user_id: str) -> IMResult:
+        return await self._request("GET", f"/api/im/community/profile/{user_id}")
+
+    async def create_post(self, board_id: str, title: str, content: str, **kwargs) -> IMResult:
+        """Create a community post (auth)."""
+        payload: Dict[str, Any] = {"boardId": board_id, "title": title, "content": content, **kwargs}
+        return await self._request("POST", "/api/im/community/posts", json=payload)
+
+    async def list_posts(self, board_id=None, sort: str = "hot", **kwargs) -> IMResult:
+        """List posts (public)."""
+        params: Dict[str, Any] = {"sort": sort}
+        if board_id:
+            params["boardId"] = board_id
+        params.update(kwargs)
+        return await self._request("GET", "/api/im/community/posts", params=params)
+
+    async def get_post(self, post_id: str) -> IMResult:
+        """Get a single post (public)."""
+        return await self._request("GET", f"/api/im/community/posts/{post_id}")
+
+    async def create_comment(self, post_id: str, content: str, **kwargs) -> IMResult:
+        """Create a comment on a post (auth)."""
+        payload: Dict[str, Any] = {"content": content, **kwargs}
+        return await self._request("POST", f"/api/im/community/posts/{post_id}/comments", json=payload)
+
+    async def list_comments(self, post_id: str, **kwargs) -> IMResult:
+        """List comments for a post (public)."""
+        return await self._request("GET", f"/api/im/community/posts/{post_id}/comments", params=kwargs)
+
+    async def mark_best_answer(self, comment_id: str) -> IMResult:
+        """Mark a comment as best answer (auth, post author)."""
+        return await self._request("POST", f"/api/im/community/comments/{comment_id}/best-answer")
+
+    async def vote(self, target_type: str, target_id: str, value: int) -> IMResult:
+        """Vote on a post or comment (auth). ``value``: 1, -1, or 0."""
+        payload: Dict[str, Any] = {
+            "targetType": target_type,
+            "targetId": target_id,
+            "value": value,
+        }
+        return await self._request("POST", "/api/im/community/vote", json=payload)
+
+    async def bookmark(self, post_id: str) -> IMResult:
+        """Toggle bookmark on a post (auth)."""
+        return await self._request("POST", "/api/im/community/bookmark", json={"postId": post_id})
+
+    async def search(self, query: str, **kwargs) -> IMResult:
+        """Search community posts."""
+        params: Dict[str, Any] = {"q": query, **kwargs}
+        return await self._request("GET", "/api/im/community/search", params=params)
+
+    async def update_post(self, post_id: str, **kwargs) -> IMResult:
+        """Update own post (auth)."""
+        return await self._request("PUT", f"/api/im/community/posts/{post_id}", json=kwargs)
+
+    async def delete_post(self, post_id: str) -> IMResult:
+        """Delete own post (auth)."""
+        return await self._request("DELETE", f"/api/im/community/posts/{post_id}")
+
+    async def update_comment(self, comment_id: str, **kwargs) -> IMResult:
+        """Update own comment (auth)."""
+        return await self._request("PUT", f"/api/im/community/comments/{comment_id}", json=kwargs)
+
+    async def delete_comment(self, comment_id: str) -> IMResult:
+        """Delete own comment (auth)."""
+        return await self._request("DELETE", f"/api/im/community/comments/{comment_id}")
+
+    async def get_stats(self) -> IMResult:
+        """Get community stats (public)."""
+        return await self._request("GET", "/api/im/community/stats")
+
+    async def get_trending_tags(self, limit: int = 20) -> IMResult:
+        """Get trending tags (public)."""
+        return await self._request("GET", "/api/im/community/tags/trending", params={"limit": limit})
+
+    async def search_suggest(self, q: str) -> IMResult:
+        """Search autocomplete suggestions (public)."""
+        return await self._request("GET", "/api/im/community/search/suggest", params={"q": q})
+
+    async def autocomplete_genes(self, q: str, limit: int = 10) -> IMResult:
+        """Autocomplete gene references (public)."""
+        return await self._request("GET", "/api/im/community/autocomplete/genes", params={"q": q, "limit": limit})
+
+    async def autocomplete_skills(self, q: str, limit: int = 10) -> IMResult:
+        """Autocomplete skill references (public)."""
+        return await self._request("GET", "/api/im/community/autocomplete/skills", params={"q": q, "limit": limit})
+
+    async def create_battle_report(self, agent_id: str, **kwargs) -> IMResult:
+        """Create a showcase battle-report post linked to an agent."""
+        narrative = kwargs.pop("narrative", "Auto-generated battle report")
+        gene_ids = kwargs.pop("gene_ids", None)
+        return await self.create_post(
+            board_id="showcase",
+            title=f"Battle Report: {agent_id}",
+            content=narrative,
+            postType="battleReport",
+            linkedAgentId=agent_id,
+            linkedGeneIds=gene_ids,
+            **kwargs,
+        )
+
+    async def create_milestone(self, agent_id: str, title: str, content: str, **kwargs) -> IMResult:
+        """Create a milestone post."""
+        return await self.create_post(
+            board_id="showcase",
+            title=title,
+            content=content,
+            postType="milestone",
+            linkedAgentId=agent_id,
+            **kwargs,
+        )
+
+    async def create_gene_release(self, gene_id: str, title: str, content: str, **kwargs) -> IMResult:
+        """Create a gene-release announcement post."""
+        return await self.create_post(
+            board_id="showcase",
+            title=title,
+            content=content,
+            postType="geneRelease",
+            linkedGeneIds=[gene_id],
+            **kwargs,
+        )
 
 
 class AsyncSecurityClient:
@@ -2270,9 +2950,11 @@ class AsyncIMClient:
         self.files = AsyncFilesClient(request_fn, base_url, get_auth_headers)
         self.tasks = AsyncTasksClient(request_fn)
         self.memory = AsyncMemoryClient(request_fn)
+        self.knowledge = AsyncKnowledgeLinkClient(request_fn)
         self.identity = AsyncIdentityClient(request_fn)
         self.security = AsyncSecurityClient(request_fn)
         self.evolution = AsyncEvolutionClient(request_fn)
+        self.community = AsyncCommunityClient(request_fn)
         self.realtime = AsyncIMRealtimeClient(base_url)
 
     async def health(self) -> IMResult:
@@ -2314,15 +2996,18 @@ class PrismerClient:
         im_agent: Optional[str] = None,
         identity: Optional[Union[str, Dict[str, str]]] = None,
     ):
-        if api_key and not api_key.startswith("sk-prismer-") and not api_key.startswith("eyJ"):
+        # Resolve API key: explicit → env → config.toml → ''
+        resolved_api_key = _resolve_api_key(api_key)
+        if resolved_api_key and not resolved_api_key.startswith("sk-prismer-") and not resolved_api_key.startswith("eyJ"):
             import warnings
             warnings.warn('API key should start with "sk-prismer-" (or "eyJ" for IM JWT)')
 
-        self._api_key = api_key or ""
+        self._api_key = resolved_api_key
         self._im_agent = im_agent
-        self._identity = None  # AIPIdentity instance (v1.8.0 S7)
+        self._signer: Optional[MessageSigner] = None  # Ed25519 auto-signer (v1.8.0 S7)
         env_url = ENVIRONMENTS.get(environment, ENVIRONMENTS["production"])
-        self._base_url = (base_url or env_url).rstrip("/")
+        # Resolve base URL: explicit → env → config.toml → environment default
+        self._base_url = (_resolve_base_url(base_url) or env_url).rstrip("/")
 
         headers: Dict[str, str] = {
             "Content-Type": "application/json",
@@ -2338,21 +3023,18 @@ class PrismerClient:
             headers=headers,
         )
 
-        # v1.8.0 S7: Initialize AIP identity for auto-signing
+        # v1.8.0 S7: Initialize Ed25519 identity for auto-signing IM messages.
+        # Uses built-in _signing module (PyNaCl or cryptography backend).
         if identity:
-            try:
-                from .aip import AIPIdentity
-                if identity == "auto" and self._api_key:
-                    self._identity = AIPIdentity.from_api_key(self._api_key)
-                elif isinstance(identity, dict) and "private_key" in identity:
-                    import base64
-                    key_bytes = base64.b64decode(identity["private_key"])
-                    self._identity = AIPIdentity.from_private_key(key_bytes)
-            except ImportError:
-                pass  # aip-sdk not installed — skip signing
+            if identity == "auto" and self._api_key:
+                self._signer = MessageSigner.from_api_key(self._api_key)
+            elif isinstance(identity, dict) and "private_key" in identity:
+                import base64 as _b64
+                key_bytes = _b64.b64decode(identity["private_key"])
+                self._signer = MessageSigner.from_private_key(key_bytes)
 
         request_fn = self._request
-        if self._identity:
+        if self._signer:
             request_fn = self._signing_request
 
         self.im = IMClient(request_fn, self._base_url, self._get_auth_headers)
@@ -2361,25 +3043,10 @@ class PrismerClient:
         self, method: str, path: str, **kwargs: Any,
     ) -> Any:
         """Wrapper that auto-signs IM message POST requests (v1.8.0 S7)."""
-        if method == "POST" and "/messages" in path and self._identity:
+        if method == "POST" and "/messages" in path and self._signer:
             json_body = kwargs.get("json")
             if json_body and isinstance(json_body, dict) and "signature" not in json_body:
-                import hashlib
-                content = json_body.get("content", "")
-                content_hash = hashlib.sha256(content.encode()).hexdigest()
-                import time
-                timestamp = int(time.time() * 1000)
-                payload = f"1|{self._identity.did}|{json_body.get('type', 'text')}|{timestamp}|{content_hash}"
-                signature = self._identity.sign(payload.encode())
-                json_body = {
-                    **json_body,
-                    "secVersion": 1,
-                    "senderDid": self._identity.did,
-                    "contentHash": content_hash,
-                    "signature": signature,
-                    "signedAt": timestamp,
-                }
-                kwargs["json"] = json_body
+                kwargs["json"] = self._signer.sign_body(json_body)
         return self._request(method, path, **kwargs)
 
     def _get_auth_headers(self) -> Dict[str, str]:
@@ -2390,6 +3057,11 @@ class PrismerClient:
         if self._im_agent:
             headers["X-IM-Agent"] = self._im_agent
         return headers
+
+    @property
+    def identity_did(self) -> Optional[str]:
+        """DID:key identifier of the auto-signing identity, or ``None``."""
+        return self._signer.did if self._signer else None
 
     def set_token(self, token: str) -> None:
         """Set or update the auth token (API key or IM JWT).
@@ -2598,13 +3270,22 @@ class AsyncPrismerClient:
         base_url: Optional[str] = None,
         timeout: float = 30.0,
         im_agent: Optional[str] = None,
+        identity: Optional[Union[str, Dict[str, str]]] = None,
         offline: Optional[Dict[str, Any]] = None,
     ):
-        self._api_key = api_key or ""
+        # Resolve API key: explicit → env → config.toml → ''
+        resolved_api_key = _resolve_api_key(api_key)
+        if resolved_api_key and not resolved_api_key.startswith("sk-prismer-") and not resolved_api_key.startswith("eyJ"):
+            import warnings
+            warnings.warn('API key should start with "sk-prismer-" (or "eyJ" for IM JWT)')
+
+        self._api_key = resolved_api_key
         self._im_agent = im_agent
+        self._signer: Optional[MessageSigner] = None  # Ed25519 auto-signer (v1.8.0 S7)
         self._offline_config = offline
         env_url = ENVIRONMENTS.get(environment, ENVIRONMENTS["production"])
-        self._base_url = (base_url or env_url).rstrip("/")
+        # Resolve base URL: explicit → env → config.toml → environment default
+        self._base_url = (_resolve_base_url(base_url) or env_url).rstrip("/")
 
         headers: Dict[str, str] = {
             "Content-Type": "application/json",
@@ -2620,11 +3301,28 @@ class AsyncPrismerClient:
             headers=headers,
         )
 
+        # v1.8.0 S7: Initialize Ed25519 identity for auto-signing IM messages.
+        if identity:
+            if identity == "auto" and self._api_key:
+                self._signer = MessageSigner.from_api_key(self._api_key)
+            elif isinstance(identity, dict) and "private_key" in identity:
+                import base64 as _b64
+                key_bytes = _b64.b64decode(identity["private_key"])
+                self._signer = MessageSigner.from_private_key(key_bytes)
+
         # Offline manager (initialized lazily via init_offline())
         self._offline_manager = None
 
-        # If offline config is provided, create IM client with offline dispatch
-        self.im = AsyncIMClient(self._request, self._base_url, self._get_auth_headers)
+        request_fn = self._request
+        if self._signer:
+            request_fn = self._signing_request
+
+        self.im = AsyncIMClient(request_fn, self._base_url, self._get_auth_headers)
+
+    @property
+    def identity_did(self) -> Optional[str]:
+        """DID:key identifier of the auto-signing identity, or ``None``."""
+        return self._signer.did if self._signer else None
 
     def _get_auth_headers(self) -> Dict[str, str]:
         """Build auth headers for raw HTTP requests (used by file upload)."""
@@ -2634,6 +3332,16 @@ class AsyncPrismerClient:
         if self._im_agent:
             headers["X-IM-Agent"] = self._im_agent
         return headers
+
+    async def _signing_request(
+        self, method: str, path: str, **kwargs: Any,
+    ) -> Any:
+        """Wrapper that auto-signs IM message POST requests (v1.8.0 S7)."""
+        if method == "POST" and "/messages" in path and self._signer:
+            json_body = kwargs.get("json")
+            if json_body and isinstance(json_body, dict) and "signature" not in json_body:
+                kwargs["json"] = self._signer.sign_body(json_body)
+        return await self._request(method, path, **kwargs)
 
     def set_token(self, token: str) -> None:
         """Set or update the auth token (API key or IM JWT)."""
@@ -2664,8 +3372,21 @@ class AsyncPrismerClient:
         self._offline_manager = OfflineManager(storage, self._request, config)
         await self._offline_manager.init()
 
-        # Rewire IM client to use offline dispatch for write operations
-        self.im = AsyncIMClient(self._offline_dispatch, self._base_url, self._get_auth_headers)
+        # Rewire IM client to use offline dispatch for write operations.
+        # If signing is active, wrap the offline dispatch with signing too.
+        request_fn = self._offline_dispatch
+        if self._signer:
+            _base_dispatch = request_fn
+
+            async def _signed_offline_dispatch(method: str, path: str, **kwargs: Any) -> Any:
+                if method == "POST" and "/messages" in path and self._signer:
+                    json_body = kwargs.get("json")
+                    if json_body and isinstance(json_body, dict) and "signature" not in json_body:
+                        kwargs["json"] = self._signer.sign_body(json_body)
+                return await _base_dispatch(method, path, **kwargs)
+
+            request_fn = _signed_offline_dispatch
+        self.im = AsyncIMClient(request_fn, self._base_url, self._get_auth_headers)
 
         return self._offline_manager
 

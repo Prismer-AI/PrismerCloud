@@ -15,6 +15,7 @@ import { readFileSync, writeFileSync, mkdirSync, renameSync, existsSync, readdir
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { execFileSync, spawn } from 'child_process';
+import { homedir } from 'os';
 import { resolveConfig } from './lib/resolve-config.mjs';
 import { createLogger, rotateLogIfNeeded } from './lib/logger.mjs';
 
@@ -98,7 +99,45 @@ log.debug('scope', { scope });
 
 // --- Step 3: Sync pull (if API key available) ---
 
-if (API_KEY) {
+// --- Step 3a: Try daemon cache first (fast path, <10ms) ---
+let usedDaemonCache = false;
+try {
+  const daemonPortFile = join(homedir(), '.prismer', 'daemon.port');
+  const portRaw = readFileSync(daemonPortFile, 'utf-8').trim();
+  const port = parseInt(portRaw, 10);
+  if (port > 0) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 200);
+    timer.unref();
+    const healthRes = await fetch(`http://127.0.0.1:${port}/health`, { signal: controller.signal });
+    clearTimeout(timer);
+
+    if (healthRes.ok) {
+      const cacheFile = join(homedir(), '.prismer', 'cache', 'evolution.json');
+      const cached = JSON.parse(readFileSync(cacheFile, 'utf-8'));
+      if (cached?.genes?.length > 0) {
+        const topGenes = cached.genes
+          .filter(g => (g.successCount || 0) + (g.failureCount || 0) >= 3)
+          .sort((a, b) => {
+            const aRate = (a.successCount || 0) / Math.max((a.successCount || 0) + (a.failureCount || 0), 1);
+            const bRate = (b.successCount || 0) / Math.max((b.successCount || 0) + (b.failureCount || 0), 1);
+            return bRate - aRate;
+          })
+          .slice(0, 5);
+        if (topGenes.length > 0) {
+          health.genes = topGenes.length;
+          health.sync = 'daemon-cache';
+          usedDaemonCache = true;
+          log.info('daemon-cache-hit', { genes: topGenes.length, cacheAge: Date.now() - (cached.ts || 0) });
+        }
+      }
+    }
+  }
+} catch {
+  // Daemon not running or cache miss — fall through to network sync
+}
+
+if (!usedDaemonCache && API_KEY) {
   let cursor = 0;
   try {
     const raw = readFileSync(CURSOR_FILE, 'utf8');
@@ -221,8 +260,8 @@ if (!API_KEY && eventType === 'startup') {
   }
 }
 
-// --- Step 3b1: MCP migration notice (v1.7.7 → v1.7.8+, one-time) ---
-// v1.7.8 removed .mcp.json from npm package. Users upgrading from v1.7.7 lose MCP tools silently.
+// --- Step 3b1: MCP migration notice (v1.7.7 → v1.8.0+, one-time) ---
+// v1.8.0 removed .mcp.json from npm package. Users upgrading from v1.7.7 lose MCP tools silently.
 // Detect: .mcp-migrated marker absent + API key present (was a real user, not first install)
 if (API_KEY && eventType === 'startup') {
   const migratedFile = join(CACHE_DIR, '.mcp-migrated');
@@ -234,10 +273,10 @@ if (API_KEY && eventType === 'startup') {
     const hasMcpInPlugin = existsSync(join(pluginDir, '.mcp.json'));
     if (!hasMcpInPlugin) {
       process.stdout.write([
-        '\n[Prismer v1.7.8] MCP tools are now installed separately from the plugin.',
+        '\n[Prismer v1.8.0] MCP tools are now installed separately from the plugin.',
         'Hooks (auto-learning, stuck detection, sync) work without MCP.',
         'To restore MCP tools (evolve_analyze, memory_write, etc.), run:',
-        '  claude mcp add prismer -- npx -y @prismer/mcp-server@1.7.8',
+        '  claude mcp add prismer -- npx -y @prismer/mcp-server@1.8.0',
       ].join('\n'));
       log.info('mcp-migration-notice');
     }
@@ -290,78 +329,149 @@ if (API_KEY && eventType === 'startup') {
   }
 }
 
-// --- Step 3c: Skill sync (download cloud-installed skills to local) ---
+// --- Step 3c: Workspace-aware skill projection ---
 
 if (API_KEY && eventType === 'startup') {
   try {
-    const controller2 = new AbortController();
-    const timer2 = setTimeout(() => controller2.abort(), 3000);
-    timer2.unref();
+    let synced = 0;
+    let usedLegacy = false;
 
-    const installedRes = await fetch(`${BASE_URL}/api/im/skills/installed`, {
-      headers: { Authorization: `Bearer ${API_KEY}`, 'Content-Type': 'application/json' },
-      signal: controller2.signal,
-    });
-    clearTimeout(timer2);
+    // Try Workspace API first (requires Platform PR 2)
+    let localFiles = null;
+    try {
+      const wsRes = await fetch(
+        `${BASE_URL}/api/im/workspace?scope=${encodeURIComponent(scope)}&slots=strategies`,
+        {
+          headers: { Authorization: `Bearer ${API_KEY}` },
+          signal: AbortSignal.timeout(5000),
+        },
+      );
 
-    if (installedRes.ok) {
-      const installedData = await installedRes.json();
-      const skills = installedData?.data || [];
+      if (wsRes.ok) {
+        const wsData = await wsRes.json();
+        const workspace = wsData?.data;
+        if (workspace?.strategies?.length) {
+          const { renderForClaudeCode } = await import('./lib/renderer.mjs');
+          localFiles = renderForClaudeCode(workspace);
+        }
+      } else if (wsRes.status !== 404) {
+        log.warn('workspace-api-error', { status: wsRes.status });
+      }
+      // 404 = old backend without workspace API, fall through to legacy
+    } catch (e) {
+      log.warn('workspace-api-failed', { error: e.message });
+    }
 
-      if (skills.length > 0) {
-        const { homedir } = await import('os');
-        const home = homedir();
-        const skillsDir = join(home, '.claude', 'skills');
-
-        let synced = 0;
-        for (const entry of skills) {
-          const skill = entry?.skill || entry;
-          const slug = skill?.slug;
-          if (!slug || typeof slug !== 'string') continue;
-
-          // Sanitize slug (prevent directory traversal)
-          const safeSlug = slug.replace(/[^a-z0-9_-]/gi, '-');
-          const skillDir = join(skillsDir, safeSlug);
-          const skillFile = join(skillDir, 'SKILL.md');
-
-          // Skip if already exists locally
-          try {
-            readFileSync(skillFile, 'utf8');
-            continue; // File exists — skip
-          } catch {
-            // File doesn't exist — download and write
-          }
-
-          // Fetch content
-          try {
-            const contentRes = await fetch(`${BASE_URL}/api/im/skills/${encodeURIComponent(slug)}/content`, {
-              headers: { Authorization: `Bearer ${API_KEY}` },
-              signal: AbortSignal.timeout(2000),
-            });
-            if (contentRes.ok) {
-              const contentData = await contentRes.json();
-              const content = contentData?.data?.content;
-              if (content) {
-                mkdirSync(skillDir, { recursive: true });
-                writeFileSync(skillFile, content, 'utf8');
-                synced++;
+    // Fallback: legacy /skills/installed → per-skill content fetch
+    if (!localFiles) {
+      usedLegacy = true;
+      try {
+        const listRes = await fetch(`${BASE_URL}/api/im/skills/installed`, {
+          headers: { Authorization: `Bearer ${API_KEY}` },
+          signal: AbortSignal.timeout(3000),
+        });
+        if (listRes.ok) {
+          const listData = await listRes.json();
+          const skills = listData?.data?.skills || listData?.data || [];
+          localFiles = [];
+          for (const entry of skills) {
+            const slug = entry.skill?.slug || entry.slug;
+            if (!slug) continue;
+            const safeSlug = slug.replace(/[^a-zA-Z0-9_-]/g, '');
+            try {
+              const contentRes = await fetch(`${BASE_URL}/api/im/skills/${encodeURIComponent(slug)}/content`, {
+                headers: { Authorization: `Bearer ${API_KEY}` },
+                signal: AbortSignal.timeout(2000),
+              });
+              if (contentRes.ok) {
+                const contentData = await contentRes.json();
+                const content = contentData?.data?.content;
+                if (content) {
+                  localFiles.push({
+                    relativePath: `skills/${safeSlug}/SKILL.md`,
+                    content,
+                    meta: { sourceSlot: 'legacy', sourceId: slug, scope, checksum: '' },
+                  });
+                }
               }
-            }
-          } catch {
-            // Skip this skill on error
+            } catch {}
           }
         }
-
-        if (synced > 0) {
-          process.stdout.write(`\n[Prismer Skills] Synced ${synced} skill(s) to ~/.claude/skills/`);
-        }
-        health.synced = synced;
-        health.skills = 'ok';
+      } catch (e) {
+        log.warn('legacy-skill-sync-failed', { error: e.message });
       }
     }
+
+    // Write files to disk (dual-layer: user + project)
+    if (localFiles?.length) {
+      const home = homedir();
+      const userSkillsDir = join(home, '.claude', 'skills');
+      const projectSkillsDir = existsSync(join(process.cwd(), '.claude'))
+        ? join(process.cwd(), '.claude', 'skills')
+        : null;
+
+      for (const file of localFiles) {
+        const targets = [join(userSkillsDir, file.relativePath)];
+        if (projectSkillsDir) targets.push(join(projectSkillsDir, file.relativePath));
+
+        for (const target of targets) {
+          const metaPath = join(dirname(target), '.prismer-meta.json');
+
+          // Incremental: compare checksum (skip for legacy which has no checksum)
+          if (file.meta.checksum) {
+            let existing = null;
+            try { existing = JSON.parse(readFileSync(metaPath, 'utf8')); } catch {}
+            if (existing?.checksum === file.meta.checksum) continue;
+          } else {
+            // Legacy path: skip if SKILL.md already exists
+            if (existsSync(target)) continue;
+          }
+
+          mkdirSync(dirname(target), { recursive: true });
+          writeFileSync(target, file.content, 'utf8');
+          writeFileSync(metaPath, JSON.stringify({ ...file.meta, syncedAt: new Date().toISOString() }));
+          synced++;
+        }
+      }
+    }
+
+    if (synced > 0) {
+      process.stdout.write(`\n[Prismer Skills] Synced ${synced} file(s)${usedLegacy ? ' (legacy)' : ''}`);
+    }
+    health.synced = synced;
+    health.skills = 'ok';
   } catch (e) {
     log.warn('skill-sync-failed', { error: e.message });
     health.skills = 'error';
+  }
+}
+
+// --- Step 3d: Community context (trending discussions, optional) ---
+
+if (API_KEY && eventType === 'startup') {
+  try {
+    const commRes = await fetch(`${BASE_URL}/api/im/community/stats`, {
+      headers: { Authorization: `Bearer ${API_KEY}` },
+      signal: AbortSignal.timeout(1500),
+    });
+
+    if (commRes.ok) {
+      const commData = await commRes.json();
+      const stats = commData?.data;
+      if (stats && (stats.postsToday > 0 || stats.activeAuthors7d > 0)) {
+        const trendingTags = (stats.trendingTags || [])
+          .slice(0, 3)
+          .map((t) => `#${t.name}`)
+          .join(' ');
+        process.stdout.write(
+          `\n[Prismer Community] ${stats.postsToday} posts today, ${stats.activeAuthors7d} active authors (7d)` +
+          (trendingTags ? ` | Trending: ${trendingTags}` : '') +
+          `\nUse community_browse / community_search MCP tools to participate.`
+        );
+      }
+    }
+  } catch {
+    // Community context is optional — skip silently
   }
 }
 

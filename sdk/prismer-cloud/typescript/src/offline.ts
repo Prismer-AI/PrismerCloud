@@ -101,6 +101,10 @@ const WRITE_PATTERNS: Array<{ method: string; pattern: RegExp; opType: OutboxOpe
   { method: 'PATCH', pattern: /\/api\/im\/messages\//, opType: 'message.edit' },
   { method: 'DELETE', pattern: /\/api\/im\/messages\//, opType: 'message.delete' },
   { method: 'POST', pattern: /\/api\/im\/conversations\/[^/]+\/read/, opType: 'conversation.read' },
+  // v1.8.0 Community — queued when offline-first IM is enabled
+  { method: 'POST', pattern: /\/api\/im\/community\/posts$/, opType: 'community_post' },
+  { method: 'POST', pattern: /\/api\/im\/community\/posts\/[^/]+\/comments$/, opType: 'community_comment' },
+  { method: 'POST', pattern: /\/api\/im\/community\/vote$/, opType: 'community_vote' },
 ];
 
 function matchWriteOp(method: string, path: string): OutboxOperation['type'] | null {

@@ -1,3 +1,18 @@
+## v1.8.0 (2026-04-04)
+
+### Added — **Workspace Projection Renderer**
+- `renderer.ts`: Full OpenClaw workspace bootstrap renderer — converts workspace superset (strategies, personality, identity, memory, extensions) into local file tree
+  - Strategies rendered as `skills/<slug>/SKILL.md` with frontmatter + body (signals, preconditions, success rate)
+  - Bootstrap files: SOUL.md (personality), IDENTITY.md (DID + capabilities), MEMORY.md, AGENTS.md, USER.md
+  - Per-file truncation (20KB) and total budget (150KB) to prevent workspace bloat
+  - Checksum-based meta for incremental sync
+- `prismer_workspace_sync` tool (15th tool): Sync full workspace from Prismer Cloud to local OpenClaw workspace directory
+  - Fetches strategies, memory, personality, identity, and extensions slots
+  - Writes to `~/.openclaw/workspace/` (or `workspace-<profile>` for multi-profile)
+  - Supports `OPENCLAW_WORKSPACE` env var override and `OPENCLAW_PROFILE` for named profiles
+- `scope` parameter added to `prismer_evolve_analyze`, `prismer_evolve_record`, `prismer_evolve_report` for data isolation across projects/teams
+- Total tools: 15 (was 14 in v1.7.3)
+
 ## v1.7.4 (2026-04-01)
 
 ### Added — **Evolution Loop Enhancement**

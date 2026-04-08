@@ -2,7 +2,7 @@
 
 Top-level shortcuts: send, load, search, parse, recall, discover
 Top-level group:     skill (find/install/list/show/uninstall/sync)
-Grouped namespaces:  im, context, evolve, task, memory, file, workspace, security, identity
+Grouped namespaces:  im, context, evolve, community, task, memory, file, workspace, security, identity
 Utilities:           init, register, status, config, token
 """
 
@@ -124,11 +124,102 @@ def cli():
 
 @cli.command()
 @click.argument("api_key", required=False, default=None)
-def init(api_key):
+@click.option('--browser', is_flag=True, help='Open browser for authentication (link to existing account)')
+def init(api_key, browser):
     """Initialize Prismer. With key: store and verify. Without: auto-register with free credits."""
     import time as _time
     cfg = _load_config()
     cfg.setdefault("default", {})
+
+    if browser:
+        # ── Path C: Browser OAuth / setup flow ──
+        import http.server
+        import secrets
+        import socket
+        import threading
+        import urllib.parse
+        import webbrowser
+
+        base_url = cfg["default"].get("base_url", "") or "https://prismer.cloud"
+        state = secrets.token_urlsafe(32)
+        received = {}
+        server_holder = {}
+
+        # Find a free port
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            port = s.getsockname()[1]
+
+        class _CallbackHandler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                parsed = urllib.parse.urlparse(self.path)
+                if parsed.path != "/callback":
+                    self.send_response(404)
+                    self.end_headers()
+                    return
+                params = urllib.parse.parse_qs(parsed.query)
+                recv_state = (params.get("state") or [""])[0]
+                recv_key = (params.get("key") or [""])[0]
+                if recv_state != state:
+                    self.send_response(400)
+                    self.end_headers()
+                    self.wfile.write(b"State mismatch. Please retry.")
+                    return
+                received["key"] = recv_key
+                body = (
+                    b"<html><body style='font-family:sans-serif;text-align:center;padding:40px'>"
+                    b"<h2>Prismer connected!</h2>"
+                    b"<p>You can close this tab and return to the terminal.</p>"
+                    b"</body></html>"
+                )
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                # Signal the main thread after response is flushed
+                threading.Thread(target=server_holder["srv"].shutdown, daemon=True).start()
+
+            def log_message(self, format, *args):
+                pass  # suppress request logs
+
+        httpd = http.server.HTTPServer(("127.0.0.1", port), _CallbackHandler)
+        server_holder["srv"] = httpd
+
+        callback_url = f"http://127.0.0.1:{port}/callback"
+        auth_url = (
+            f"{base_url}/setup"
+            f"?callback={urllib.parse.quote(callback_url, safe='')}"
+            f"&state={state}"
+            f"&utm_source=python-sdk"
+        )
+
+        click.echo("Opening browser for Prismer authentication...")
+        click.echo(f"  URL: {auth_url}")
+        click.echo("Waiting for callback (timeout: 5 minutes)...")
+
+        webbrowser.open(auth_url)
+
+        # Serve with a 5-minute timeout using a daemon thread
+        def _serve():
+            httpd.serve_forever()
+
+        t = threading.Thread(target=_serve, daemon=True)
+        t.start()
+        t.join(timeout=300)
+
+        api_key_received = received.get("key", "")
+        if not api_key_received:
+            click.echo("Authentication timed out or no key received.")
+            click.echo(f"Get your key at: {base_url}/dashboard")
+            raise SystemExit(1)
+
+        cfg["default"]["api_key"] = api_key_received
+        cfg["default"].setdefault("base_url", "https://prismer.cloud")
+        _save_config(cfg)
+        click.echo(f"API key saved to {CONFIG_FILE}")
+        click.echo("You can now use all Prismer CLI, plugin, and MCP features.")
+        return
 
     if api_key:
         # ── Path B: Human provides API key ──
@@ -2801,6 +2892,152 @@ def shortcut_discover(agent_type, capability, as_json):
             click.echo(f"{a.get('username', ''):<20}{a.get('agentType', ''):<14}{a.get('status', ''):<10}{a.get('displayName', '')}")
     finally:
         client.close()
+
+
+# ============================================================================
+# Community (v1.8.0)
+# ============================================================================
+
+
+@cli.group()
+def community():
+    """Evolution community forum — feed, ask, search, notifications."""
+    pass
+
+
+@community.command("feed")
+@click.option("-b", "--board", default=None, help="Board id")
+@click.option("-n", "--limit", default=15, type=int)
+@click.option("--json", "as_json", is_flag=True)
+def community_feed(board, limit, as_json):
+    client = _get_im_client()
+    try:
+        res = client.im.community.feed(board_id=board, limit=limit)
+        if as_json:
+            click.echo(json.dumps(res, indent=2, default=str))
+            return
+        if not res.get("ok"):
+            click.echo(f"Error: {res.get('error')}", err=True)
+            sys.exit(1)
+        click.echo(json.dumps(res.get("data"), indent=2, default=str))
+    finally:
+        client.close()
+
+
+@community.command("ask")
+@click.argument("title")
+@click.argument("body", required=False, default="")
+@click.option("-f", "--file", "body_file", type=click.Path(exists=True), default=None)
+@click.option("--tags", default=None, help="Comma-separated tags")
+@click.option("--json", "as_json", is_flag=True)
+def community_ask(title, body, body_file, tags, as_json):
+    client = _get_im_client()
+    try:
+        content = Path(body_file).read_text(encoding="utf8") if body_file else body
+        tag_list = [t.strip() for t in tags.split(",")] if tags else None
+        res = client.im.community.ask(title, content or "(empty)", tags=tag_list)
+        if as_json:
+            click.echo(json.dumps(res, indent=2, default=str))
+            return
+        if not res.get("ok"):
+            click.echo(f"Error: {res.get('error')}", err=True)
+            sys.exit(1)
+        click.echo(json.dumps(res.get("data"), indent=2, default=str))
+    finally:
+        client.close()
+
+
+@community.command("search")
+@click.argument("query")
+@click.option("-b", "--board", default=None)
+@click.option("-n", "--limit", default=8, type=int)
+@click.option("--json", "as_json", is_flag=True)
+def community_search(query, board, limit, as_json):
+    client = _get_im_client()
+    try:
+        kwargs: Dict[str, Any] = {"limit": limit}
+        if board:
+            kwargs["boardId"] = board
+        res = client.im.community.search(query, **kwargs)
+        if as_json:
+            click.echo(json.dumps(res, indent=2, default=str))
+            return
+        if not res.get("ok"):
+            click.echo(f"Error: {res.get('error')}", err=True)
+            sys.exit(1)
+        click.echo(json.dumps(res.get("data"), indent=2, default=str))
+    finally:
+        client.close()
+
+
+@community.command("check")
+@click.option("--unread-only", is_flag=True)
+@click.option("--mark-read", is_flag=True)
+@click.option("--json", "as_json", is_flag=True)
+def community_check(unread_only, mark_read, as_json):
+    client = _get_im_client()
+    try:
+        res = client.im.community.get_notifications(unread_only=unread_only, limit=50)
+        if as_json:
+            click.echo(json.dumps(res, indent=2, default=str))
+        elif res.get("ok"):
+            click.echo(json.dumps(res.get("data"), indent=2, default=str))
+        else:
+            click.echo(f"Error: {res.get('error')}", err=True)
+            sys.exit(1)
+        if mark_read:
+            mr = client.im.community.mark_notifications_read()
+            if as_json:
+                click.echo(json.dumps(mr, indent=2, default=str))
+            elif not mr.get("ok"):
+                click.echo(f"mark read error: {mr.get('error')}", err=True)
+    finally:
+        client.close()
+
+
+# ============================================================================
+# daemon group
+# ============================================================================
+
+@cli.group("daemon")
+def daemon():
+    """Daemon management: background evolution sync."""
+    pass
+
+
+@daemon.command("start")
+def daemon_start():
+    """Start the daemon as a background process."""
+    from .daemon import start_daemon
+    start_daemon()
+
+
+@daemon.command("stop")
+def daemon_stop():
+    """Stop the running daemon."""
+    from .daemon import stop_daemon
+    stop_daemon()
+
+
+@daemon.command("status")
+def daemon_status_cmd():
+    """Show daemon status."""
+    from .daemon import daemon_status
+    daemon_status()
+
+
+@daemon.command("install")
+def daemon_install():
+    """Install daemon as a system service (launchd/systemd)."""
+    from .daemon import install_daemon_service
+    install_daemon_service()
+
+
+@daemon.command("uninstall")
+def daemon_uninstall():
+    """Uninstall daemon system service."""
+    from .daemon import uninstall_daemon_service
+    uninstall_daemon_service()
 
 
 # ============================================================================
