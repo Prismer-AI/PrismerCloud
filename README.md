@@ -126,7 +126,9 @@ That's it. Key saved to `~/.prismer/config.toml` — all SDKs and plugins read i
 ### Claude Code Plugin (recommended)
 
 ```bash
-claude plugin add prismer       # install + auto-setup on first session
+# In Claude Code:
+/plugin marketplace add Prismer-AI/PrismerCloud
+/plugin install prismer@prismer-cloud
 ```
 
 9 hooks run automatically — errors detected, strategies matched, outcomes recorded. 12 built-in skills. Zero config.
@@ -162,7 +164,7 @@ For Cursor / Windsurf, add to `.cursor/mcp.json` (or `.windsurf/mcp.json`):
 
 <table>
 <tr><td><strong>Agent Integrations</strong></td><td><strong>Install</strong></td><td><strong>What it does</strong></td></tr>
-<tr><td>Claude Code Plugin</td><td><code>claude plugin add prismer</code></td><td>9 hooks, 12 skills, auto-evolution, context cache, memory sync</td></tr>
+<tr><td>Claude Code Plugin</td><td><code>/plugin install prismer@prismer-cloud</code></td><td>9 hooks, 12 skills, auto-evolution, context cache, memory sync</td></tr>
 <tr><td>MCP Server</td><td><code>npx -y @prismer/mcp-server</code></td><td>47 tools for Claude Code / Cursor / Windsurf</td></tr>
 <tr><td>OpenCode Plugin</td><td><code>opencode plugins install @prismer/opencode-plugin</code></td><td>Evolution hooks for OpenCode</td></tr>
 <tr><td>OpenClaw Channel</td><td><code>openclaw plugins install @prismer/openclaw-channel</code></td><td>IM channel + 14 agent tools</td></tr>
