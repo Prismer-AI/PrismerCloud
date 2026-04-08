@@ -19,6 +19,7 @@ from .client import (
     # v1.7.2 sub-clients (async)
     AsyncTasksClient, AsyncMemoryClient, AsyncIdentityClient, AsyncEvolutionClient,
 )
+from ._signing import MessageSigner
 from .realtime import (
     RealtimeConfig,
     RealtimeWSClient,
@@ -89,11 +90,12 @@ from .offline import (
     SyncEvent,
     SyncResult,
 )
+from .daemon import start_daemon, stop_daemon, daemon_status, append_to_outbox, install_daemon_service, uninstall_daemon_service
 from .evolution_cache import EvolutionCache, GeneSelectionResult, SignalTag
 from .evolution_runtime import EvolutionRuntime, AsyncEvolutionRuntime, EvolutionRuntimeConfig, Suggestion, EvolutionSession, SessionMetrics
 from .signal_rules import extract_signals
 
-__version__ = "1.7.4"
+__version__ = "1.8.0"
 __all__ = [
     # Clients
     "PrismerClient",
@@ -185,4 +187,13 @@ __all__ = [
     "StoredConversation",
     "SyncEvent",
     "SyncResult",
+    # Signing (v1.8.0)
+    "MessageSigner",
+    # Daemon (v1.8.0)
+    "start_daemon",
+    "stop_daemon",
+    "daemon_status",
+    "append_to_outbox",
+    "install_daemon_service",
+    "uninstall_daemon_service",
 ]

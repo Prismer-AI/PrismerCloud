@@ -69,6 +69,78 @@ impl<'a> EvolutionClient<'a> {
         self.client.request(reqwest::Method::GET, "/api/im/evolution/metrics", None).await
     }
 
+    // ─── Leaderboard V2 (public, no auth) ────────
+
+    /// Get hero section global stats (total agents, genes, capsules, savings).
+    pub async fn leaderboard_hero(&self) -> Result<ApiResponse<serde_json::Value>, PrismerError> {
+        self.client.request(reqwest::Method::GET, "/api/im/evolution/leaderboard/hero", None).await
+    }
+
+    /// Get rising stars leaderboard.
+    pub async fn leaderboard_rising(&self, period: Option<&str>, limit: Option<u32>) -> Result<ApiResponse<Vec<serde_json::Value>>, PrismerError> {
+        let mut params = vec![];
+        if let Some(p) = period { params.push(format!("period={}", p)); }
+        if let Some(l) = limit { params.push(format!("limit={}", l)); }
+        let qs = if params.is_empty() { String::new() } else { format!("?{}", params.join("&")) };
+        self.client.request(reqwest::Method::GET, &format!("/api/im/evolution/leaderboard/rising{}", qs), None).await
+    }
+
+    /// Get leaderboard summary stats.
+    pub async fn leaderboard_stats(&self) -> Result<ApiResponse<serde_json::Value>, PrismerError> {
+        self.client.request(reqwest::Method::GET, "/api/im/evolution/leaderboard/stats", None).await
+    }
+
+    /// Get agent improvement board.
+    pub async fn leaderboard_agents(&self, period: Option<&str>, domain: Option<&str>) -> Result<ApiResponse<Vec<serde_json::Value>>, PrismerError> {
+        let mut params = vec![];
+        if let Some(p) = period { params.push(format!("period={}", p)); }
+        if let Some(d) = domain { params.push(format!("domain={}", d)); }
+        let qs = if params.is_empty() { String::new() } else { format!("?{}", params.join("&")) };
+        self.client.request(reqwest::Method::GET, &format!("/api/im/evolution/leaderboard/agents{}", qs), None).await
+    }
+
+    /// Get gene impact board.
+    pub async fn leaderboard_genes(&self, period: Option<&str>, sort: Option<&str>) -> Result<ApiResponse<Vec<serde_json::Value>>, PrismerError> {
+        let mut params = vec![];
+        if let Some(p) = period { params.push(format!("period={}", p)); }
+        if let Some(s) = sort { params.push(format!("sort={}", s)); }
+        let qs = if params.is_empty() { String::new() } else { format!("?{}", params.join("&")) };
+        self.client.request(reqwest::Method::GET, &format!("/api/im/evolution/leaderboard/genes{}", qs), None).await
+    }
+
+    /// Get contributor board.
+    pub async fn leaderboard_contributors(&self, period: Option<&str>) -> Result<ApiResponse<Vec<serde_json::Value>>, PrismerError> {
+        let mut params = vec![];
+        if let Some(p) = period { params.push(format!("period={}", p)); }
+        let qs = if params.is_empty() { String::new() } else { format!("?{}", params.join("&")) };
+        self.client.request(reqwest::Method::GET, &format!("/api/im/evolution/leaderboard/contributors{}", qs), None).await
+    }
+
+    /// Get cross-environment comparison data.
+    pub async fn leaderboard_comparison(&self) -> Result<ApiResponse<serde_json::Value>, PrismerError> {
+        self.client.request(reqwest::Method::GET, "/api/im/evolution/leaderboard/comparison", None).await
+    }
+
+    /// Get public profile page data for an agent or owner.
+    pub async fn public_profile(&self, entity_id: &str) -> Result<ApiResponse<serde_json::Value>, PrismerError> {
+        self.client.request(reqwest::Method::GET, &format!("/api/im/evolution/profile/{}", entity_id), None).await
+    }
+
+    /// Render agent/creator card as PNG.
+    pub async fn render_card(&self, input: serde_json::Value) -> Result<ApiResponse<serde_json::Value>, PrismerError> {
+        self.client.request(reqwest::Method::POST, "/api/im/evolution/card/render", Some(input)).await
+    }
+
+    /// Get benchmark data for profile FOMO section.
+    pub async fn benchmark(&self) -> Result<ApiResponse<serde_json::Value>, PrismerError> {
+        self.client.request(reqwest::Method::GET, "/api/im/evolution/benchmark", None).await
+    }
+
+    /// Get gene highlight capsules for profile page.
+    pub async fn highlights(&self, gene_id: &str) -> Result<ApiResponse<Vec<serde_json::Value>>, PrismerError> {
+        self.client.request(reqwest::Method::GET, &format!("/api/im/evolution/highlights/{}", gene_id), None).await
+    }
+
     // ─── Auth required ───────────────────────────
 
     /// Analyze signals and get gene recommendation.
@@ -253,12 +325,33 @@ impl<'a> EvolutionClient<'a> {
     }
 
     /// Install a skill — creates cloud record + Gene, returns content for local install.
-    pub async fn install_skill(&self, slug_or_id: &str) -> Result<ApiResponse<serde_json::Value>, PrismerError> {
+    /// Pass `scope` to associate the install with a specific evolution scope.
+    pub async fn install_skill(&self, slug_or_id: &str, scope: Option<&str>) -> Result<ApiResponse<serde_json::Value>, PrismerError> {
+        let body = scope.map(|s| json!({ "scope": s }));
         self.client.request(
             reqwest::Method::POST,
             &format!("/api/im/skills/{}/install", urlencoding::encode(slug_or_id)),
-            None,
+            body,
         ).await
+    }
+
+    /// Get workspace view — active genes/skills/memory visible to this agent.
+    /// `scope` filters by evolution scope, `slots` restricts returned slot types,
+    /// `include_content` embeds full SKILL.md content in the response.
+    pub async fn get_workspace(
+        &self,
+        scope: Option<&str>,
+        slots: Option<&[&str]>,
+        include_content: bool,
+    ) -> Result<ApiResponse<serde_json::Value>, PrismerError> {
+        let mut params = vec![];
+        if let Some(s) = scope { params.push(format!("scope={}", s)); }
+        if let Some(sl) = slots {
+            for slot in sl { params.push(format!("slots[]={}", slot)); }
+        }
+        if include_content { params.push("include_content=true".to_string()); }
+        let qs = if params.is_empty() { String::new() } else { format!("?{}", params.join("&")) };
+        self.client.request(reqwest::Method::GET, &format!("/api/im/workspace/view{}", qs), None).await
     }
 
     /// Uninstall a skill.
@@ -296,7 +389,7 @@ impl<'a> EvolutionClient<'a> {
         project_root: Option<&str>,
     ) -> Result<(ApiResponse<serde_json::Value>, Vec<String>), PrismerError> {
         // 1. Cloud install
-        let cloud_res = self.install_skill(slug_or_id).await?;
+        let cloud_res = self.install_skill(slug_or_id, None).await?;
 
         let mut local_paths = Vec::new();
 

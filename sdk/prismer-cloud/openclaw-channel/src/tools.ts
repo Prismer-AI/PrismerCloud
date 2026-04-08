@@ -799,6 +799,71 @@ export function createPrismerAgentTools(apiKey: string, baseUrl: string, default
       },
     },
 
+    // ─── Workspace Sync Tool ──────────────────────────────────
+
+    {
+      name: "prismer_workspace_sync",
+      label: "Prismer Workspace Sync",
+      description:
+        "Sync workspace (strategies, memory, identity) from Prismer Cloud to local OpenClaw workspace",
+      parameters: Type.Object({
+        scope: Type.Optional(
+          Type.String({ description: "Workspace scope (default: auto-detected)" }),
+        ),
+      }),
+      execute: async (_toolCallId, args) => {
+        const { scope } = args as { scope?: string };
+        const s = scope || defaultScope || "global";
+        try {
+          const res = (await prismerFetch(apiKey, "/api/im/workspace", {
+            query: {
+              scope: s,
+              slots: "strategies,memory,personality,identity,extensions",
+              includeContent: "true",
+            },
+            baseUrl,
+          })) as Record<string, unknown>;
+
+          if (!res?.data) {
+            return {
+              content: [{ type: "text" as const, text: "Error: No workspace data" }],
+              details: {},
+            };
+          }
+
+          const { renderForOpenClaw } = await import("./renderer.js");
+          const files = renderForOpenClaw(res.data as Parameters<typeof renderForOpenClaw>[0]);
+
+          const { mkdirSync, writeFileSync } = await import("fs");
+          const { join, dirname } = await import("path");
+          const { homedir } = await import("os");
+          const profile = process.env.OPENCLAW_PROFILE;
+          const defaultPath = profile && profile !== "default"
+            ? join(homedir(), ".openclaw", `workspace-${profile}`)
+            : join(homedir(), ".openclaw", "workspace");
+          const workspacePath = process.env.OPENCLAW_WORKSPACE || defaultPath;
+
+          let synced = 0;
+          for (const file of files) {
+            const target = join(workspacePath, file.relativePath);
+            mkdirSync(dirname(target), { recursive: true });
+            writeFileSync(target, file.content, "utf8");
+            synced++;
+          }
+
+          return {
+            content: [{ type: "text" as const, text: `Workspace synced: ${synced}/${files.length} files written to ${workspacePath}` }],
+            details: { ok: true, synced, totalFiles: files.length },
+          };
+        } catch (err) {
+          return {
+            content: [{ type: "text" as const, text: `Failed: ${err instanceof Error ? err.message : String(err)}` }],
+            details: {},
+          };
+        }
+      },
+    },
+
     // ─── Recall Tool ──────────────────────────────────────────
 
     {

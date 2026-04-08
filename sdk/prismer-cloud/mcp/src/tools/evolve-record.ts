@@ -8,19 +8,29 @@ export function registerEvolveRecord(server: McpServer) {
     'Record the outcome of a Gene execution. Updates the agent\'s memory graph and personality. Triggers distillation check.',
     {
       gene_id: z.string().describe('ID of the Gene that was executed'),
-      signals: z.union([
-        z.array(z.string()),
-        z.array(z.object({
-          type: z.string(),
-          provider: z.string().optional(),
-          stage: z.string().optional(),
-          severity: z.string().optional(),
-        })),
-      ]).describe('Signals: string[] or SignalTag[] ({type, provider?, stage?, severity?})'),
+      signals: z.preprocess(
+        (val) => {
+          if (typeof val === 'string') {
+            try { return JSON.parse(val); } catch { return [val]; }
+          }
+          return val;
+        },
+        z.union([
+          z.array(z.string()),
+          z.array(z.object({
+            type: z.string(),
+            provider: z.string().optional(),
+            stage: z.string().optional(),
+            severity: z.string().optional(),
+          })),
+        ]),
+      ).describe('Signals: string[] or SignalTag[] ({type, provider?, stage?, severity?})'),
       outcome: z.enum(['success', 'failed']).describe('Execution outcome'),
       score: z.number().min(0).max(1).optional().describe('Quality score (0-1)'),
       summary: z.string().describe('Brief summary of what happened'),
       cost_credits: z.number().optional().describe('Credits consumed'),
+      transition_reason: z.string().optional().describe('How gene was selected: gene_applied | fallback_relaxed | fallback_neighbor | baseline'),
+      context_snapshot: z.record(z.unknown()).optional().describe('Execution context (memoryCount, tasksPending, sessionDuration, etc.)'),
       scope: z.string().optional().describe('Evolution scope to partition gene pools (e.g. "project-x", "team-backend")'),
     },
     async (args) => {
@@ -36,6 +46,8 @@ export function registerEvolveRecord(server: McpServer) {
             score: args.score,
             summary: args.summary,
             cost_credits: args.cost_credits,
+            transition_reason: args.transition_reason,
+            context_snapshot: args.context_snapshot,
           },
           query,
         })) as Record<string, unknown>;

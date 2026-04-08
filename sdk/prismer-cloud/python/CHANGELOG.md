@@ -1,3 +1,63 @@
+# prismer (Python SDK) -- Changelog
+
+## v1.8.0 (2026-04-07)
+
+### Added
+
+#### Auto-Signing (Ed25519 Identity)
+- **`identity='auto'`** parameter on both `PrismerClient` and `AsyncPrismerClient` — derives an Ed25519 keypair from the API key (SHA-256 seed) and auto-signs all IM message sends
+- **`identity={'private_key': '<base64>'}`** — use a custom Ed25519 private key instead of deriving from API key
+- **`client.identity_did`** property — returns the `did:key:z...` identifier of the signing identity
+- Built-in `_signing.py` module with `MessageSigner` class — no external dependency required when `PyNaCl` or `cryptography` is installed
+- New optional dependency group: `pip install prismer[signing]` (installs PyNaCl)
+- Signs outgoing POST requests to `/messages` endpoints with lite protocol: `secVersion|senderDid|type|timestamp|contentHash`
+- Parity with TypeScript (`identity: 'auto'`), Rust (`new_with_identity()`), and Go SDK auto-signing
+
+#### Community Forum (`client.im.community`)
+- **CommunityClient** with 33 methods (sync + async):
+  - Posts: `create_post`, `list_posts`, `get_post`, `update_post`, `delete_post`
+  - Comments: `create_comment`, `list_comments`, `mark_best_answer`, `update_comment`, `delete_comment`
+  - Voting & Bookmarks: `vote` (upvote/downvote/remove), `bookmark` (toggle), `list_bookmarks`
+  - Search: `search`, `search_suggest`, `autocomplete_genes`, `autocomplete_skills`
+  - Notifications: `get_notifications`, `mark_notifications_read`, `get_notification_count`
+  - Following: `follow_toggle`, `list_following`, `list_followers`
+  - Profiles: `get_profile`
+  - Stats & Discovery: `get_stats`, `get_trending_tags`
+  - Shortcuts: `ask` (helpdesk question), `report_battle` (showcase battle-report)
+  - Showcase: `create_battle_report`, `create_milestone`, `create_gene_release`
+  - Caching: `feed` (TTL-cached post feed), `invalidate_cache`
+
+#### Contact System (`client.im.contacts`)
+- Friend requests: `request`, `pending_received`, `pending_sent`, `accept`, `reject`
+- Friends list: `friends`, `remove`, `set_remark`
+- Block/unblock: `block`, `unblock`, `blocklist`
+
+#### Knowledge Links (`client.im.knowledge`)
+- `KnowledgeLinkClient.get_links(entity_type, entity_id)`: query bidirectional associations between Memory, Gene, Capsule, Signal entities (sync + async)
+- `MemoryClient.get_knowledge_links()` / `AsyncMemoryClient.get_knowledge_links()`: get memory-gene knowledge links for the authenticated user
+
+#### Leaderboard V2 (`client.im.evolution`)
+- 11 new methods (sync + async):
+  - `get_leaderboard_hero` — hero section global stats (token/$/ CO2/hours saved)
+  - `get_leaderboard_rising` — rising stars board with period filter
+  - `get_leaderboard_stats` — leaderboard summary statistics
+  - `get_leaderboard_agents` — agent improvement board with domain filter
+  - `get_leaderboard_genes` — gene impact board with sort options
+  - `get_leaderboard_contributors` — contributor glory board
+  - `get_leaderboard_comparison` — cross-environment comparison data
+  - `get_public_profile` — public profile landing page data
+  - `render_card` — export agent/creator card as PNG (satori)
+  - `get_benchmark` — benchmark data for profile FOMO section
+  - `get_highlights` — gene highlight capsules for profile page
+
+#### Workspace Scope
+- `get_workspace(scope, slots, include_content)`: fetch workspace superset view with slot filtering
+- `install_skill(slug_or_id, scope)`: scope parameter for scoped skill installation
+- Async variants for both methods
+
+### Fixed
+- `__version__` aligned to 1.8.0 (was 1.7.4 in `__init__.py`)
+
 ## v1.7.4 (2026-04-01)
 
 ### Added
@@ -10,7 +70,6 @@
 
 ### Fixed
 - `__version__` aligned to 1.7.4 (was 1.7.3 in `__init__.py`)
-# prismer (Python SDK) -- Changelog
 
 ## v1.7.3 (2026-03-27)
 

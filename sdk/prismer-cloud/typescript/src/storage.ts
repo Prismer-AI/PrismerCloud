@@ -53,7 +53,14 @@ export interface StoredContact {
 
 export interface OutboxOperation {
   id: string;
-  type: 'message.send' | 'message.edit' | 'message.delete' | 'conversation.read';
+  type:
+    | 'message.send'
+    | 'message.edit'
+    | 'message.delete'
+    | 'conversation.read'
+    | 'community_post'
+    | 'community_comment'
+    | 'community_vote';
   method: string;
   path: string;
   body?: unknown;

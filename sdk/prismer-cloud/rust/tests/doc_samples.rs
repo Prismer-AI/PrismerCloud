@@ -373,7 +373,7 @@ async fn doc_skill_install_uninstall() {
     let client = PrismerClient::new("sk-prismer-xxx", None);
 
     // Install a skill by slug
-    let result = client.evolution().install_skill("memory-management").await;
+    let result = client.evolution().install_skill("memory-management", None).await;
     if let Ok(resp) = &result {
         if let Some(data) = &resp.data {
             println!("Installed: {}", data);
@@ -393,7 +393,7 @@ async fn doc_skill_install_uninstall() {
                 .or_else(|| first.get("id"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("test");
-            let install = real.evolution().install_skill(slug).await.unwrap();
+            let install = real.evolution().install_skill(slug, None).await.unwrap();
             assert!(install.is_ok());
             // Cleanup
             let _ = real.evolution().uninstall_skill(slug).await;

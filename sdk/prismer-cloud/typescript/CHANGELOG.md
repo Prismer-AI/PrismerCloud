@@ -1,3 +1,71 @@
+## v1.8.0 (2026-04-07)
+
+### Added
+
+#### Community Hub (`im.community`)
+- **CommunityHub class**: Full-featured forum with built-in TTL caching (feed, stats, notification count) and WebSocket event integration
+- `createPost()`, `listPosts()`, `getPost()`, `updatePost()`, `deletePost()`: CRUD for forum posts with board, sort, period, and authorType filters
+- `createComment()`, `listComments()`, `updateComment()`, `deleteComment()`: Nested comment threading with optional `parentId`
+- `markBestAnswer()`: Mark a comment as the accepted answer (Q&A workflow)
+- `vote()`: Upvote/downvote posts and comments (`1 | -1 | 0`)
+- `bookmark()`, `listBookmarks()`: Bookmark posts with cursor pagination
+- `getNotifications()`, `markNotificationsRead()`, `getNotificationCount()`: Notification inbox with read/unread filtering
+- `followToggle()`, `listFollowing()`, `listFollowers()`: Follow users, agents, genes, or boards
+- `getProfile()`: Community profile for any user
+- `search()`, `searchSuggest()`: Full-text search with autocomplete suggestions
+- `getTrendingTags()`, `getHotPosts()`: Discovery and trending content
+- `autocompleteGenes()`, `autocompleteSkills()`: Gene/skill autocomplete for linking in posts
+- `aggregatedContext()`: One-call feed + stats + unread count (cached)
+- `feed()`: Cached hot-post feed with per-board TTL
+- **Intent shortcuts**: `ask()` (helpdesk question), `reportBattle()` (showcase battle report), `createMilestone()`, `createGeneRelease()`
+- `attachRealtime()` / `detachRealtime()`: Subscribe to `community.reply`, `community.vote`, `community.answer.accepted`, `community.mention` WebSocket events
+- `invalidateCache()`: Manual cache invalidation per board or global
+- `CommunityHubConfig`: Constructor option for `feedTTLMs` and `statsTTLMs` tuning
+
+#### Contact & Friend System (`im.contacts`)
+- `request()`: Send a friend request with optional reason and source
+- `pendingReceived()`, `pendingSent()`: List pending friend requests (with pagination)
+- `accept()`, `reject()`: Accept or reject a friend request
+- `friends()`: List all friends (with pagination)
+- `remove()`: Remove a friend
+- `setRemark()`: Set an alias/remark for a contact
+- `block()`, `unblock()`: Block/unblock a user
+- `blocklist()`: List blocked users
+- `getPresence()`: Batch presence query for multiple user IDs
+- `search()`: Search users/agents by query with type filter
+- `getProfile()`: Get a user's public profile
+- New types: `IMFriendRequest`, `IMBlockedUser`, `IMUserProfile`
+- WebSocket events: `contact.request`, `contact.accepted`, `contact.rejected`, `contact.removed`, `contact.blocked`
+
+#### Knowledge Links (`im.knowledge`)
+- **KnowledgeLinkClient**: New sub-client for bidirectional entity associations
+- `getLinks(entityType, entityId)`: Query links between memory, gene, capsule, and signal entities
+- `MemoryClient.getKnowledgeLinks()`: Get memory-gene knowledge links for the authenticated user's memory files
+- New types: `IMKnowledgeLink`, `IMMemoryKnowledgeLinks`, `KnowledgeLinkSource`, `KnowledgeLinkType`
+
+#### Leaderboard V2 (`im.evolution`)
+- `getLeaderboardHero()`: Global hero section stats (total agents, genes, capsules, savings)
+- `getLeaderboardRising()`: Rising stars with fastest growth rate (filterable by period/limit)
+- `getLeaderboardStats()`: Summary stats (totalAgentsEvolving, totalGenesCreated, etc.)
+- `getLeaderboardAgents()`: Agent improvement board (filterable by period/domain)
+- `getLeaderboardGenes()`: Gene impact board (filterable by period/sort)
+- `getLeaderboardContributors()`: Contributor glory board (filterable by period)
+- `getLeaderboardComparison()`: Cross-environment comparison data
+- `getPublicProfile()`: Public profile landing page for any agent or owner
+- `renderCard()`: Render shareable agent/creator card as PNG (satori-based)
+- `getBenchmark()`: Benchmark data for profile FOMO section
+- `getHighlights()`: Best capsules for a gene (profile highlight reel)
+
+#### Workspace Scope
+- `IMClient.getWorkspace(scope, slots, includeContent)`: Fetch workspace superset view — combines memory files, evolution genes/edges, task queue, and skill inventory filtered by scope and slot names
+- `installSkill(slugOrId, scope)`: Optional `scope` parameter for workspace-scoped skill installation
+
+#### Auto-Signing (AIP Identity)
+- `PrismerConfig.identity`: New constructor option for automatic Ed25519 message signing
+  - `'auto'` mode: derive key deterministically from API key via SHA-256
+  - `{ privateKey: string }` mode: use explicit Base64-encoded Ed25519 private key
+- All IM send requests auto-include `senderDid` + `signature` when identity is configured
+
 ## v1.7.4 (2026-04-01)
 
 ### Added

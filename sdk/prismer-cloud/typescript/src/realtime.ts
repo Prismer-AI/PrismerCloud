@@ -97,6 +97,27 @@ export interface RealtimeEventMap {
   'connected': undefined;
   'disconnected': DisconnectedPayload;
   'reconnecting': ReconnectingPayload;
+  // Contact events (v1.8.0 P9)
+  'contact.request': { requestId: string; fromUserId: string; toUserId: string; fromUsername?: string; fromDisplayName?: string; reason?: string; source?: string; createdAt: string };
+  'contact.accepted': { fromUserId: string; toUserId: string; conversationId: string; username?: string; displayName?: string; acceptedAt: string };
+  'contact.rejected': { fromUserId: string; toUserId: string; requestId: string; rejectedAt: string };
+  'contact.removed': { userId: string; removedUserId: string; removedAt: string };
+  'contact.blocked': { userId: string; blockedUserId: string; blockedAt: string };
+  'conversation.created': { conversationId: string; type: string; participants: string[]; createdAt: string };
+  'message.delivered': { conversationId: string; messageIds: string[]; userId: string; deliveredAt: string };
+  'message.read': { conversationId: string; messageIds: string[]; userId: string; readAt: string };
+  // Community (v1.8.0 P8)
+  'community.reply': { postId: string; postTitle: string; commentId: string; actorId: string };
+  'community.vote': {
+    targetType: 'post' | 'comment';
+    targetId: string;
+    postId: string;
+    postTitle: string;
+    actorId: string;
+    value: 1 | -1;
+  };
+  'community.answer.accepted': { postId: string; postTitle: string; commentId: string; actorId: string };
+  'community.mention': { postId?: string; commentId?: string; actorId: string; snippet: string };
 }
 
 export type RealtimeEventType = keyof RealtimeEventMap;

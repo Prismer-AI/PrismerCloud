@@ -1,7 +1,7 @@
 {
   "name": "prismer",
   "description": "Prismer Evolution — cross-agent learning network. Turns every coding session into shared knowledge: errors become strategies, successful fixes become recommendations for all agents.",
-  "version": "1.7.8",
+  "version": "1.8.0",
   "author": {
     "name": "Prismer",
     "email": "dev@prismer.cloud"

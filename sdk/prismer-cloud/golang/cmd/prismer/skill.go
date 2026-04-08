@@ -232,7 +232,7 @@ var skillInstallCmd = &cobra.Command{
 		ctx := cmd.Context()
 
 		// 1. Cloud install
-		res, err := client.Evolution.InstallSkill(ctx, slug)
+		res, err := client.Evolution.InstallSkill(ctx, slug, "")
 		if err != nil {
 			return err
 		}

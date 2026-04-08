@@ -19,7 +19,7 @@ RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'
 BLUE='\033[0;34m'; BOLD='\033[1m'; RESET='\033[0m'
 
 # ── Flags ──────────────────────────────────────────────────────────
-DRY_RUN=0; VERBOSE=0; YES_FLAG=0
+DRY_RUN=0; VERBOSE=0; YES_FLAG=0; SCOPE="all"
 
 parse_common_flags() {
   local args=()
@@ -28,11 +28,16 @@ parse_common_flags() {
       --dry-run)  DRY_RUN=1; shift ;;
       --verbose)  VERBOSE=1; shift ;;
       --yes|-y)   YES_FLAG=1; shift ;;
+      --scope)    SCOPE="${2:-all}"; shift 2 ;;
       *)          args+=("$1"); shift ;;
     esac
   done
   REMAINING_ARGS=("${args[@]+"${args[@]}"}")
 }
+
+# ── Scope helpers ─────────────────────────────────────────────────
+scope_includes_aip()    { [[ "$SCOPE" == "all" || "$SCOPE" == "aip" ]]; }
+scope_includes_prismer() { [[ "$SCOPE" == "all" || "$SCOPE" == "prismer-cloud" ]]; }
 
 # ── Logging ────────────────────────────────────────────────────────
 log_info()    { echo -e "${BLUE}[INFO]${RESET} $*"; }
@@ -70,6 +75,15 @@ get_version() {
   fi
 }
 
+get_aip_version() {
+  local pkg="$AIP_SDK/typescript/package.json"
+  if [[ -f "$pkg" ]]; then
+    grep '"version"' "$pkg" | head -1 | sed 's/.*"version": *"\([^"]*\)".*/\1/'
+  else
+    echo "unknown"
+  fi
+}
+
 # ── Result Tracking ────────────────────────────────────────────────
 declare -a RESULT_NAMES=()
 declare -a RESULT_STATUSES=()
@@ -97,5 +111,6 @@ print_results() {
 
 # ── Package Lists ──────────────────────────────────────────────────
 NPM_PACKAGES=("typescript" "mcp" "opencode-plugin" "claude-code-plugin" "openclaw-channel")
+AIP_NPM_PACKAGES=("typescript")
 ALL_PACKAGES=("typescript" "python" "golang" "rust" "mcp" "opencode-plugin" "claude-code-plugin" "openclaw-channel")
 AIP_PACKAGES=("typescript" "python" "golang" "rust")

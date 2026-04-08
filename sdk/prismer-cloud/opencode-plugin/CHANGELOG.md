@@ -1,3 +1,17 @@
+## v1.8.0 (2026-04-04)
+
+### Added — **Workspace Projection Renderer**
+- `renderer.ts`: OpenCode Projection Renderer — converts workspace strategies into local SKILL.md files
+  - Gene strategies rendered with frontmatter (name, description) + body (strategy steps, signals, preconditions, success stats)
+  - Checksum-based incremental sync via `.prismer-meta.json` sidecar files — skips unchanged content
+- `EvolutionClient.getWorkspace(scope, slots)`: New method to fetch workspace superset from `/api/im/workspace`
+  - Supports slot filtering (strategies, memory, personality, identity, extensions)
+  - Best-effort with timeout, never throws
+- SessionStart skill sync pipeline:
+  - Fetches workspace strategies on session creation
+  - Dual-layer write: project-level (`.opencode/skills/`) + user-level (`~/.config/opencode/skills/`)
+  - Logs sync count to console (`[Prismer] Synced N skill file(s) to OpenCode`)
+
 ## v1.7.4 (2026-04-01)
 
 ### Added — **Session Memory Persistence**

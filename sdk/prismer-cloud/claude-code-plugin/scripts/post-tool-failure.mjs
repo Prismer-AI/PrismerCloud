@@ -67,7 +67,7 @@ if (toolName === 'Bash') {
   journalPrefix = 'write';
 }
 
-const error = input?.error || '';
+const error = String(input?.error || '');
 
 // Skip trivial commands (Bash only)
 if (toolName === 'Bash' && SKIP_RE.test(command)) process.exit(0);
@@ -98,6 +98,17 @@ for (const sig of detectedSignals) {
   const regex = new RegExp(`signal:${escaped}`, 'g');
   const existingCount = (existingContent.match(regex) || []).length;
   appendJournal(`  - signal:${sig} (count: ${existingCount + 1}, at: ${now()})`);
+}
+
+// Suggest community search for recurring failures (≥3 occurrences of same signal)
+for (const sig of detectedSignals) {
+  const escaped = sig.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const regex = new RegExp(`signal:${escaped}`, 'g');
+  const sigCount = (existingContent.match(regex) || []).length + 1;
+  if (sigCount >= 3) {
+    appendJournal(`  - hint: community_search may have solutions for "${sig}" (${sigCount} occurrences)`);
+    log.info('community-hint', { signal: sig, occurrences: sigCount });
+  }
 }
 
 // Gene feedback on failure

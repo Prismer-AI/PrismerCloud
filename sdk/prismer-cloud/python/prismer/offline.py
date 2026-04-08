@@ -226,6 +226,9 @@ _WRITE_PATTERNS = [
     ("PATCH", re.compile(r"/api/im/messages/"), "message.edit"),
     ("DELETE", re.compile(r"/api/im/messages/"), "message.delete"),
     ("POST", re.compile(r"/api/im/conversations/[^/]+/read"), "conversation.read"),
+    ("POST", re.compile(r"/api/im/community/posts$"), "community_post"),
+    ("POST", re.compile(r"/api/im/community/posts/[^/]+/comments$"), "community_comment"),
+    ("POST", re.compile(r"/api/im/community/vote$"), "community_vote"),
 ]
 
 

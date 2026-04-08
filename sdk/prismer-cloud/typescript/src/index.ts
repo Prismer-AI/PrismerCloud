@@ -24,7 +24,70 @@
 import { RealtimeWSClient, RealtimeSSEClient } from './realtime';
 import type { RealtimeConfig } from './realtime';
 import { OfflineManager } from './offline';
+import { CommunityHub } from './community-hub';
 import { AIPIdentity } from './aip';
+
+// Node.js built-ins — optional (not available in browser environments)
+let _fs: typeof import('fs') | null = null;
+let _os: typeof import('os') | null = null;
+let _path: typeof import('path') | null = null;
+try {
+  _fs = require('fs');
+  _os = require('os');
+  _path = require('path');
+} catch {
+  // Browser environment — config.toml fallback not available
+}
+
+/**
+ * Resolve API key with priority chain:
+ *   1. Explicit value passed to constructor
+ *   2. PRISMER_API_KEY env var
+ *   3. ~/.prismer/config.toml api_key
+ *   4. '' (empty)
+ */
+function resolveApiKey(explicit?: string): string {
+  if (explicit) return explicit;
+  try {
+    if (typeof process !== 'undefined' && process.env?.PRISMER_API_KEY) {
+      return process.env.PRISMER_API_KEY;
+    }
+  } catch { /* ignore */ }
+  if (_fs && _os && _path) {
+    try {
+      const configPath = _path.join(_os.homedir(), '.prismer', 'config.toml');
+      const raw = _fs.readFileSync(configPath, 'utf-8');
+      const match = raw.match(/^api_key\s*=\s*'([^']+)'/m) || raw.match(/^api_key\s*=\s*"([^"]+)"/m);
+      if (match?.[1]) return match[1];
+    } catch { /* file not found — that's OK */ }
+  }
+  return '';
+}
+
+/**
+ * Resolve base URL with priority chain:
+ *   1. Explicit value passed to constructor
+ *   2. PRISMER_BASE_URL env var
+ *   3. ~/.prismer/config.toml base_url
+ *   4. undefined (caller uses environment default)
+ */
+function resolveBaseUrl(explicit?: string): string | undefined {
+  if (explicit) return explicit;
+  try {
+    if (typeof process !== 'undefined' && process.env?.PRISMER_BASE_URL) {
+      return process.env.PRISMER_BASE_URL;
+    }
+  } catch { /* ignore */ }
+  if (_fs && _os && _path) {
+    try {
+      const configPath = _path.join(_os.homedir(), '.prismer', 'config.toml');
+      const raw = _fs.readFileSync(configPath, 'utf-8');
+      const match = raw.match(/^base_url\s*=\s*'([^']+)'/m) || raw.match(/^base_url\s*=\s*"([^"]+)"/m);
+      if (match?.[1]) return match[1];
+    } catch { /* file not found — that's OK */ }
+  }
+  return undefined;
+}
 
 // Re-export all types
 export * from './types';
@@ -101,6 +164,9 @@ import type {
   IMConversationsOptions,
   IMConversation,
   IMContact,
+  IMFriendRequest,
+  IMBlockedUser,
+  IMUserProfile,
   IMDiscoverOptions,
   IMDiscoverAgent,
   IMCreateBindingOptions,
@@ -139,6 +205,11 @@ import type {
   IMMemoryFileDetail,
   IMCompactionSummary,
   IMMemoryLoadResult,
+  // Knowledge Links
+  KnowledgeLinkSource,
+  KnowledgeLinkType,
+  IMKnowledgeLink,
+  IMMemoryKnowledgeLinks,
   // Identity
   IMRegisterKeyOptions,
   IMIdentityKey,
@@ -181,6 +252,15 @@ export class AccountClient {
   /** Get own identity, stats, bindings, credits */
   async me(): Promise<IMResult<IMMeData>> {
     return this._r('GET', '/api/im/me');
+  }
+
+  /** Update own profile */
+  async updateProfile(options: {
+    displayName?: string;
+    avatarUrl?: string;
+    metadata?: Record<string, any>;
+  }): Promise<IMResult<IMMeData>> {
+    return this._r('PATCH', '/api/im/me', options);
   }
 
   /** Refresh JWT token */
@@ -286,6 +366,40 @@ export class ConversationsClient {
   async markAsRead(conversationId: string): Promise<IMResult<void>> {
     return this._r('POST', `/api/im/conversations/${conversationId}/read`);
   }
+
+  /** Archive a conversation */
+  async archive(conversationId: string): Promise<IMResult<void>> {
+    return this._r('POST', `/api/im/conversations/${conversationId}/archive`);
+  }
+
+  /** Unarchive a conversation */
+  async unarchive(conversationId: string): Promise<IMResult<void>> {
+    return this._r('POST', `/api/im/conversations/${conversationId}/unarchive`);
+  }
+
+  /** Update conversation metadata */
+  async update(conversationId: string, options: {
+    title?: string;
+    description?: string;
+    metadata?: Record<string, any>;
+  }): Promise<IMResult<IMConversation>> {
+    return this._r('PATCH', `/api/im/conversations/${conversationId}`, options);
+  }
+
+  /** Pin or unpin a conversation */
+  async pin(conversationId: string, pinned: boolean): Promise<IMResult<void>> {
+    return this._r('PATCH', `/api/im/conversations/${conversationId}/pin`, { pinned });
+  }
+
+  /** Mute or unmute a conversation */
+  async mute(conversationId: string, muted: boolean): Promise<IMResult<void>> {
+    return this._r('PATCH', `/api/im/conversations/${conversationId}/mute`, { muted });
+  }
+
+  /** Delete a conversation */
+  async delete(conversationId: string): Promise<IMResult<void>> {
+    return this._r('DELETE', `/api/im/conversations/${conversationId}`);
+  }
 }
 
 /** Low-level message operations (by conversation ID) */
@@ -319,6 +433,11 @@ export class MessagesClient {
   async delete(conversationId: string, messageId: string): Promise<IMResult<void>> {
     return this._r('DELETE', `/api/im/messages/${conversationId}/${messageId}`);
   }
+
+  /** Mark messages as delivered */
+  async markDelivered(conversationId: string, messageIds: string[]): Promise<IMResult<void>> {
+    return this._r('POST', '/api/im/messages/delivered', { conversationId, messageIds });
+  }
 }
 
 /** Contacts and agent discovery */
@@ -330,12 +449,104 @@ export class ContactsClient {
     return this._r('GET', '/api/im/contacts');
   }
 
+  /** Search users/agents by query */
+  async search(query: string, options?: {
+    type?: 'human' | 'agent' | 'all';
+    limit?: number;
+    offset?: number;
+  }): Promise<IMResult<IMUserProfile[]>> {
+    const params: Record<string, string> = { q: query };
+    if (options?.type && options.type !== 'all') params.type = options.type;
+    if (options?.limit) params.limit = String(options.limit);
+    if (options?.offset) params.offset = String(options.offset);
+    return this._r('GET', '/api/im/discover', undefined, params);
+  }
+
+  /** Get a user's public profile */
+  async getProfile(userId: string): Promise<IMResult<IMUserProfile>> {
+    return this._r('GET', `/api/im/users/${userId}`);
+  }
+
   /** Discover agents by capability or type */
   async discover(options?: IMDiscoverOptions): Promise<IMResult<IMDiscoverAgent[]>> {
     const query: Record<string, string> = {};
     if (options?.type) query.type = options.type;
     if (options?.capability) query.capability = options.capability;
     return this._r('GET', '/api/im/discover', undefined, query);
+  }
+
+  // ─── Friend System (v1.8.0 P9) ─────────────────────────
+
+  /** Send a friend request */
+  async request(userId: string, opts?: { reason?: string; source?: string }): Promise<IMResult<IMFriendRequest>> {
+    return this._r('POST', '/api/im/contacts/request', { userId, ...opts });
+  }
+
+  /** List pending friend requests received */
+  async pendingReceived(opts?: IMPaginationOptions): Promise<IMResult<IMFriendRequest[]>> {
+    const params: Record<string, string> = {};
+    if (opts?.limit) params.limit = String(opts.limit);
+    if (opts?.offset) params.offset = String(opts.offset);
+    return this._r('GET', '/api/im/contacts/requests/received', undefined, params);
+  }
+
+  /** List pending friend requests sent */
+  async pendingSent(opts?: IMPaginationOptions): Promise<IMResult<IMFriendRequest[]>> {
+    const params: Record<string, string> = {};
+    if (opts?.limit) params.limit = String(opts.limit);
+    if (opts?.offset) params.offset = String(opts.offset);
+    return this._r('GET', '/api/im/contacts/requests/sent', undefined, params);
+  }
+
+  /** Accept a friend request */
+  async accept(requestId: string): Promise<IMResult<{ contact: IMContact; conversationId: string }>> {
+    return this._r('POST', `/api/im/contacts/requests/${requestId}/accept`);
+  }
+
+  /** Reject a friend request */
+  async reject(requestId: string): Promise<IMResult<void>> {
+    return this._r('POST', `/api/im/contacts/requests/${requestId}/reject`);
+  }
+
+  /** List friends */
+  async friends(opts?: IMPaginationOptions): Promise<IMResult<IMContact[]>> {
+    const params: Record<string, string> = {};
+    if (opts?.limit) params.limit = String(opts.limit);
+    if (opts?.offset) params.offset = String(opts.offset);
+    return this._r('GET', '/api/im/contacts/friends', undefined, params);
+  }
+
+  /** Remove a friend */
+  async remove(userId: string): Promise<IMResult<void>> {
+    return this._r('DELETE', `/api/im/contacts/${userId}/remove`);
+  }
+
+  /** Set a remark/alias for a contact */
+  async setRemark(userId: string, remark: string): Promise<IMResult<void>> {
+    return this._r('PATCH', `/api/im/contacts/${userId}/remark`, { remark });
+  }
+
+  /** Block a user */
+  async block(userId: string): Promise<IMResult<void>> {
+    return this._r('POST', `/api/im/contacts/${userId}/block`, {});
+  }
+
+  /** Unblock a user */
+  async unblock(userId: string): Promise<IMResult<void>> {
+    return this._r('DELETE', `/api/im/contacts/${userId}/block`);
+  }
+
+  /** List blocked users */
+  async blocklist(opts?: IMPaginationOptions): Promise<IMResult<IMBlockedUser[]>> {
+    const params: Record<string, string> = {};
+    if (opts?.limit) params.limit = String(opts.limit);
+    if (opts?.offset) params.offset = String(opts.offset);
+    return this._r('GET', '/api/im/contacts/blocked', undefined, params);
+  }
+
+  /** Get presence status for multiple users */
+  async getPresence(userIds: string[]): Promise<IMResult<Array<{ userId: string; status: string; lastSeenAt?: string }>>> {
+    return this._r('POST', '/api/im/presence/batch', { userIds });
   }
 }
 
@@ -515,6 +726,25 @@ export class MemoryClient {
     if (scope) query.scope = scope;
     return this._r('GET', '/api/im/memory/load', undefined, query);
   }
+
+  /** Get memory-gene knowledge links for the authenticated user's memory files (v1.8.0) */
+  async getKnowledgeLinks(): Promise<IMResult<IMMemoryKnowledgeLinks>> {
+    return this._r('GET', '/api/im/memory/links');
+  }
+}
+
+/** Knowledge Links: bidirectional associations between Memory, Gene, Capsule, Signal entities (v1.8.0) */
+export class KnowledgeLinkClient {
+  constructor(private _r: RequestFn) {}
+
+  /**
+   * Get all knowledge links for a given entity.
+   * @param entityType - One of: memory, gene, capsule, signal
+   * @param entityId   - The entity ID
+   */
+  async getLinks(entityType: KnowledgeLinkSource, entityId: string): Promise<IMResult<IMKnowledgeLink[]>> {
+    return this._r('GET', '/api/im/knowledge/links', undefined, { entityType, entityId });
+  }
 }
 
 /** Identity key management: Ed25519 keys, attestation, audit */
@@ -635,6 +865,74 @@ export class EvolutionClient {
     const query: Record<string, string> = {};
     if (limit != null) query.limit = String(limit);
     return this._r('GET', '/api/im/evolution/public/feed', undefined, query);
+  }
+
+  // ── Leaderboard V2 (public, no auth required) ──
+
+  /** Get hero section global stats (total agents, genes, capsules, savings) */
+  async getLeaderboardHero(): Promise<IMResult<any>> {
+    return this._r('GET', '/api/im/evolution/leaderboard/hero');
+  }
+
+  /** Get rising stars leaderboard */
+  async getLeaderboardRising(period?: string, limit?: number): Promise<IMResult<any[]>> {
+    const query: Record<string, string> = {};
+    if (period) query.period = period;
+    if (limit != null) query.limit = String(limit);
+    return this._r('GET', '/api/im/evolution/leaderboard/rising', undefined, query);
+  }
+
+  /** Get leaderboard summary stats (totalAgentsEvolving, totalGenesCreated, etc.) */
+  async getLeaderboardStats(): Promise<IMResult<any>> {
+    return this._r('GET', '/api/im/evolution/leaderboard/stats');
+  }
+
+  /** Get agent improvement board */
+  async getLeaderboardAgents(period?: string, domain?: string): Promise<IMResult<any[]>> {
+    const query: Record<string, string> = {};
+    if (period) query.period = period;
+    if (domain) query.domain = domain;
+    return this._r('GET', '/api/im/evolution/leaderboard/agents', undefined, query);
+  }
+
+  /** Get gene impact board */
+  async getLeaderboardGenes(period?: string, sort?: string): Promise<IMResult<any[]>> {
+    const query: Record<string, string> = {};
+    if (period) query.period = period;
+    if (sort) query.sort = sort;
+    return this._r('GET', '/api/im/evolution/leaderboard/genes', undefined, query);
+  }
+
+  /** Get contributor board */
+  async getLeaderboardContributors(period?: string): Promise<IMResult<any[]>> {
+    const query: Record<string, string> = {};
+    if (period) query.period = period;
+    return this._r('GET', '/api/im/evolution/leaderboard/contributors', undefined, query);
+  }
+
+  /** Get cross-environment comparison data */
+  async getLeaderboardComparison(): Promise<IMResult<any>> {
+    return this._r('GET', '/api/im/evolution/leaderboard/comparison');
+  }
+
+  /** Get public profile page data for an agent or owner */
+  async getPublicProfile(entityId: string): Promise<IMResult<any>> {
+    return this._r('GET', `/api/im/evolution/profile/${encodeURIComponent(entityId)}`);
+  }
+
+  /** Render agent/creator card as PNG */
+  async renderCard(input: { type: string; agentId?: string; agentName?: string; [key: string]: unknown }): Promise<IMResult<any>> {
+    return this._r('POST', '/api/im/evolution/card/render', input);
+  }
+
+  /** Get benchmark data for profile FOMO section */
+  async getBenchmark(): Promise<IMResult<any>> {
+    return this._r('GET', '/api/im/evolution/benchmark');
+  }
+
+  /** Get gene highlight capsules for profile page */
+  async getHighlights(geneId: string): Promise<IMResult<any[]>> {
+    return this._r('GET', `/api/im/evolution/highlights/${encodeURIComponent(geneId)}`);
   }
 
   // ── Authenticated endpoints ──
@@ -840,8 +1138,8 @@ export class EvolutionClient {
   }
 
   /** Install a skill — creates Gene + returns content + install guide */
-  async installSkill(slugOrId: string): Promise<IMResult<IMSkillInstallResult>> {
-    return this._r('POST', `/api/im/skills/${encodeURIComponent(slugOrId)}/install`);
+  async installSkill(slugOrId: string, scope?: string): Promise<IMResult<IMSkillInstallResult>> {
+    return this._r('POST', `/api/im/skills/${encodeURIComponent(slugOrId)}/install`, scope ? { scope } : undefined);
   }
 
   /** Uninstall a skill */
@@ -1096,6 +1394,10 @@ export class EvolutionClient {
     return this._r('POST', '/api/im/evolution/sync', body);
   }
 }
+
+/** Re-export v1.8.0 community module (cache + intents + REST). */
+export { CommunityHub } from './community-hub';
+export type { CommunityHubConfig } from './types';
 
 /** Sanitize a slug/id to prevent path traversal (removes slashes, .., and null bytes) */
 export function safeSlug(input: string): string {
@@ -1386,9 +1688,11 @@ export class IMClient {
   readonly workspace: WorkspaceClient;
   readonly tasks: TasksClient;
   readonly memory: MemoryClient;
+  readonly knowledge: KnowledgeLinkClient;
   readonly identity: IdentityClient;
   readonly security: SecurityClient;
   readonly evolution: EvolutionClient;
+  readonly community: CommunityHub;
   readonly files: FilesClient;
   readonly realtime: IMRealtimeClient;
   /** Offline manager (null if offline mode not enabled) */
@@ -1400,6 +1704,7 @@ export class IMClient {
     fetchFn: typeof fetch,
     getAuthHeaders: () => Record<string, string>,
     offlineManager?: OfflineManager | null,
+    communityHubConfig?: import('./types').CommunityHubConfig | null,
   ) {
     this.account = new AccountClient(request);
     this.direct = new DirectClient(request);
@@ -1412,9 +1717,11 @@ export class IMClient {
     this.workspace = new WorkspaceClient(request);
     this.tasks = new TasksClient(request);
     this.memory = new MemoryClient(request);
+    this.knowledge = new KnowledgeLinkClient(request);
     this.identity = new IdentityClient(request);
     this.security = new SecurityClient(request);
     this.evolution = new EvolutionClient(request);
+    this.community = new CommunityHub(request, communityHubConfig ?? undefined);
     this.files = new FilesClient(request, wsBase, fetchFn, getAuthHeaders);
     this.realtime = new IMRealtimeClient(wsBase);
     this.offline = offlineManager ?? null;
@@ -1423,6 +1730,15 @@ export class IMClient {
   /** IM health check */
   async health(): Promise<IMResult<void>> {
     return this.account['_r']('GET', '/api/im/health');
+  }
+
+  /** Get workspace superset view with slot filtering */
+  async getWorkspace(scope?: string, slots?: string[], includeContent?: boolean): Promise<any> {
+    const params = new URLSearchParams();
+    if (scope) params.set('scope', scope);
+    if (slots?.length) params.set('slots', slots.join(','));
+    if (includeContent) params.set('includeContent', 'true');
+    return this.workspace['_r']('GET', `/api/im/workspace/view?${params}`);
   }
 }
 
@@ -1445,13 +1761,16 @@ export class PrismerClient {
   readonly im: IMClient;
 
   constructor(config: PrismerConfig = {}) {
-    if (config.apiKey && !config.apiKey.startsWith('sk-prismer-') && !config.apiKey.startsWith('eyJ')) {
+    // Resolve API key: explicit → env → config.toml → ''
+    const resolvedApiKey = resolveApiKey(config.apiKey);
+    if (resolvedApiKey && !resolvedApiKey.startsWith('sk-prismer-') && !resolvedApiKey.startsWith('eyJ')) {
       console.warn('Warning: API key should start with "sk-prismer-" (or "eyJ" for IM JWT)');
     }
 
-    this.apiKey = config.apiKey || '';
+    this.apiKey = resolvedApiKey;
     const envUrl = ENVIRONMENTS[config.environment || 'production'];
-    this.baseUrl = (config.baseUrl || envUrl).replace(/\/$/, '');
+    // Resolve base URL: explicit → env → config.toml → environment default
+    this.baseUrl = (resolveBaseUrl(config.baseUrl) || envUrl).replace(/\/$/, '');
     this.timeout = config.timeout || 30000;
     this.fetchFn = config.fetch || fetch;
     this.imAgent = config.imAgent;
@@ -1459,12 +1778,16 @@ export class PrismerClient {
     // v1.8.0 S1: Initialize AIP identity for auto-signing
     if (config.identity) {
       if (config.identity === 'auto' && this.apiKey) {
-        this._identityReady = AIPIdentity.fromApiKey(this.apiKey).then(id => { this._identity = id; });
+        this._identityReady = AIPIdentity.fromApiKey(this.apiKey)
+          .then(id => { this._identity = id; })
+          .catch(err => console.warn('[PrismerSDK] Identity init failed:', err));
       } else if (typeof config.identity === 'object' && config.identity.privateKey) {
         const keyBytes = typeof Buffer !== 'undefined'
           ? new Uint8Array(Buffer.from(config.identity.privateKey, 'base64'))
           : new Uint8Array(atob(config.identity.privateKey).split('').map(c => c.charCodeAt(0)));
-        this._identityReady = AIPIdentity.fromPrivateKey(keyBytes).then(id => { this._identity = id; });
+        this._identityReady = AIPIdentity.fromPrivateKey(keyBytes)
+          .then(id => { this._identity = id; })
+          .catch(err => console.warn('[PrismerSDK] Identity init failed:', err));
       }
     }
 
@@ -1492,10 +1815,17 @@ export class PrismerClient {
       const baseRequest = imRequest;
       imRequest = <T>(method: string, path: string, body?: unknown, query?: Record<string, string>): Promise<T> => {
         // Only sign POST requests to message endpoints
-        if (method === 'POST' && path.includes('/messages') && body && this._identity) {
+        if (method === 'POST' && path.includes('/messages') && body) {
           const b = body as Record<string, any>;
           if (!b.signature && !b.skipSigning) {
-            return this._signAndSend<T>(baseRequest, method, path, b, query);
+            // Await identity initialization before signing to avoid race condition
+            const ready = this._identityReady || Promise.resolve();
+            return ready.then(() => {
+              if (this._identity) {
+                return this._signAndSend<T>(baseRequest, method, path, b, query);
+              }
+              return baseRequest<T>(method, path, body, query);
+            });
           }
         }
         return baseRequest<T>(method, path, body, query);
@@ -1508,6 +1838,7 @@ export class PrismerClient {
       this.fetchFn,
       () => this._getAuthHeaders(),
       this._offlineManager,
+      config.community ?? null,
     );
   }
 
@@ -1718,3 +2049,12 @@ export default PrismerClient;
 export function createClient(config: PrismerConfig): PrismerClient {
   return new PrismerClient(config);
 }
+
+export type {
+  LLMDispatcher, LLMBackend, LLMTask, LLMResult,
+  NotificationSink, PrismerEvent,
+  TaskExecutor, ExecutionPolicy, QueuedTask,
+  CacheManager,
+  KeyManager,
+  DaemonControlPlane, ControlCommand, CommandResult,
+} from './daemon-interfaces';

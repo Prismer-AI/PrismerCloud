@@ -19,8 +19,8 @@ prismer-cloud-next/sdk/     (闭源 — 开发 + 编译 + 打包 + 测试)
 │   ├── python/             PyPI (deps: aip-sdk)
 │   ├── golang/             Go modules
 │   ├── rust/               crates.io
-│   ├── mcp/                npm (@prismer/mcp-server)
-│   ├── claude-code-plugin/ npm (@prismer/claude-code-plugin)
+│   ├── mcp/                npm (@prismer/mcp-server, 47 tools)
+│   ├── claude-code-plugin/ npm (@prismer/claude-code-plugin, 9 hooks + 12 skills)
 │   ├── opencode-plugin/    npm (@prismer/opencode-plugin)
 │   └── openclaw-channel/   npm (@prismer/openclaw-channel)
 └── build/                  脚本（两边完全一致）
@@ -40,6 +40,46 @@ PrismerCloud/sdk/           (开源 — release 专用)
 └── build/                  完全镜像
 ```
 
+## 用户侧 Oneliner 安装
+
+### Claude Code Plugin (推荐)
+
+```bash
+# 一键安装 — 首次 SessionStart 自动引导 setup
+claude plugin add prismer
+```
+
+### MCP Server (任意 AI 编辑器)
+
+```bash
+# Claude Code
+claude mcp add prismer -- npx -y @prismer/mcp-server
+
+# Cursor / Windsurf / VS Code
+npx -y @prismer/mcp-server    # 47 tools, 自动读取 ~/.prismer/config
+
+# 手动设置 API Key
+PRISMER_API_KEY=sk-prismer-... npx -y @prismer/mcp-server
+```
+
+### SDK (编程集成)
+
+```bash
+npm install @prismer/sdk                        # TypeScript
+pip install prismer                             # Python
+go get github.com/Prismer-AI/PrismerCloud/sdk/prismer-cloud/golang  # Go
+cargo add prismer-sdk                           # Rust
+```
+
+### 首次配置 (CLI)
+
+```bash
+prismer setup           # 开浏览器 → 登录 → key 自动保存 (推荐)
+prismer setup --agent   # 无浏览器，自动注册 agent + 100 免费 credits (CI/脚本用)
+```
+
+---
+
 ## 日常流程
 
 ### 开发（在闭源仓库）
@@ -56,7 +96,7 @@ sdk/build/test.sh --scope aip
 sdk/build/test.sh --scope prismer-cloud
 
 # 编译验证
-sdk/build/verify.sh --scope all --skip-tests
+sdk/build/verify.sh --scope all --skip-build
 
 # 打包（不发布）
 sdk/build/pack.sh --scope all --clean
@@ -71,8 +111,8 @@ cd PrismerCloud
 sdk/build/sync.sh
 
 # 2. 版本号 bump
-sdk/build/version.sh --scope aip 1.7.4
-sdk/build/version.sh --scope prismer-cloud 1.7.4
+sdk/build/version.sh --scope aip 1.8.0
+sdk/build/version.sh --scope prismer-cloud 1.8.0
 
 # 3. 验证
 sdk/build/verify.sh --scope all
@@ -99,31 +139,28 @@ sdk/build/release.sh --scope prismer-cloud
 - **Prismer Cloud 版本统一** — `sdk/prismer-cloud/*/package.json` 全部同一版本
 - **发布顺序: AIP 先 → Prismer Cloud 后**（依赖关系）
 
-### AIP 版本文件 (5 个)
+### AIP 版本文件 (4 个)
 
 ```
 sdk/aip/typescript/package.json
 sdk/aip/python/pyproject.toml
 sdk/aip/golang/go.mod           (module path)
 sdk/aip/rust/Cargo.toml
-sdk/aip/typescript/CHANGELOG.md
 ```
 
-### Prismer Cloud 版本文件 (17+ 个)
+### Prismer Cloud 版本文件 (10 个)
 
 ```
 sdk/prismer-cloud/typescript/package.json
 sdk/prismer-cloud/mcp/package.json
+sdk/prismer-cloud/mcp/src/index.ts              (hardcoded version string)
 sdk/prismer-cloud/opencode-plugin/package.json
 sdk/prismer-cloud/claude-code-plugin/package.json
 sdk/prismer-cloud/claude-code-plugin/.claude-plugin/plugin.json
 sdk/prismer-cloud/openclaw-channel/package.json
 sdk/prismer-cloud/python/pyproject.toml
+sdk/prismer-cloud/python/prismer/__init__.py    (__version__)
 sdk/prismer-cloud/rust/Cargo.toml
-sdk/prismer-cloud/python/prismer/__init__.py
-sdk/prismer-cloud/mcp/src/index.ts
-sdk/prismer-cloud/rust/src/cli.rs
-+ 各包 CHANGELOG.md 和 README.md
 ```
 
 ## 注册表
@@ -145,9 +182,9 @@ sdk/prismer-cloud/rust/src/cli.rs
 | `prismer` | PyPI | `pip install prismer` |
 | `prismer-sdk-go` | Go Proxy | `go get github.com/Prismer-AI/PrismerCloud/sdk/prismer-cloud/golang` |
 | `prismer-sdk` | crates.io | `cargo add prismer-sdk` |
-| `@prismer/mcp-server` | npm | `npx -y @prismer/mcp-server` |
-| `@prismer/claude-code-plugin` | npm | `npm i @prismer/claude-code-plugin` |
-| `@prismer/opencode-plugin` | npm | `npm i @prismer/opencode-plugin` |
+| `@prismer/mcp-server` | npm | `npx -y @prismer/mcp-server` (47 tools) |
+| `@prismer/claude-code-plugin` | npm | `claude plugin add prismer` |
+| `@prismer/opencode-plugin` | npm | `opencode plugins install @prismer/opencode-plugin` |
 | `@prismer/openclaw-channel` | npm | `openclaw plugins install @prismer/openclaw-channel` |
 
 ## Release 密钥
@@ -184,8 +221,11 @@ sdk/build/release.sh --scope prismer-cloud
 sdk/build/release.sh --scope all --dry-run
 
 # 版本号 bump
-sdk/build/version.sh --scope aip --patch      # 1.7.4 → 1.7.5
+sdk/build/version.sh --scope aip --patch      # 1.7.3 → 1.7.4
 sdk/build/version.sh --scope prismer-cloud 1.8.0
+
+# 只打包，不发布
+sdk/build/pack.sh --scope prismer-cloud --clean
 ```
 
 ## sync.sh 行为
@@ -195,3 +235,21 @@ sdk/build/version.sh --scope prismer-cloud 1.8.0
 - `--scope` 控制只同步 aip 或 prismer-cloud
 - `--no-clean` 增量同步（默认先删后同步）
 - `--dry-run` 预览
+
+## 产物清单 (v1.8.0)
+
+```
+artifacts/
+├── npm/
+│   ├── prismer-aip-sdk-1.7.3.tgz          6.5K
+│   ├── prismer-sdk-1.8.0.tgz              187K
+│   ├── prismer-mcp-server-1.8.0.tgz       27K
+│   ├── prismer-claude-code-plugin-1.8.0.tgz 47K
+│   ├── prismer-opencode-plugin-1.8.0.tgz  17K
+│   └── prismer-openclaw-channel-1.8.0.tgz 22K
+├── pypi/
+│   ├── prismer-1.8.0-py3-none-any.whl     134K
+│   └── prismer-1.8.0.tar.gz               160K
+└── crates/
+    └── prismer-sdk-1.8.0.crate            86K
+```

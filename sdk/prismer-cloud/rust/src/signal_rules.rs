@@ -197,6 +197,96 @@ mod tests {
         let signals = extract_signals(&ctx_error("deadlock detected in transaction"));
         assert_eq!(signals[0].signal_type, "error:deadlock");
     }
+    // ── Build failure (falls through to fallback normalization) ──
+
+    #[test]
+    fn test_build_failure_fallback() {
+        // "build failure" is not a recognized pattern, so it falls to normalized fallback
+        let signals = extract_signals(&ctx_error("Build failure: exit code 1"));
+        assert!(signals[0].signal_type.starts_with("error:"));
+        assert!(signals[0].signal_type.contains("build"));
+    }
+
+    // ── Multiple signals from combined context ──
+
+    #[test]
+    fn test_multiple_signals_combined_context() {
+        // error + task_status + capability + tags all at once
+        let ctx = SignalExtractionContext {
+            error: Some("Connection refused on port 8080".to_string()),
+            task_status: Some("failed".to_string()),
+            task_capability: Some("web_scrape".to_string()),
+            tags: vec!["env:prod".to_string(), "region:us-west".to_string()],
+            provider: Some("custom".to_string()),
+            stage: Some("init".to_string()),
+            severity: Some("critical".to_string()),
+        };
+        let signals = extract_signals(&ctx);
+        // Should produce: error:connection_refused, task.failed, capability:web_scrape, env:prod, region:us-west
+        assert_eq!(signals.len(), 5);
+        assert_eq!(signals[0].signal_type, "error:connection_refused");
+        assert_eq!(signals[0].provider, Some("custom".to_string()));
+        assert_eq!(signals[0].stage, Some("init".to_string()));
+        assert_eq!(signals[0].severity, Some("critical".to_string()));
+        assert_eq!(signals[1].signal_type, "task.failed");
+        assert_eq!(signals[2].signal_type, "capability:web_scrape");
+        assert_eq!(signals[3].signal_type, "env:prod");
+        assert_eq!(signals[4].signal_type, "region:us-west");
+    }
+
+    #[test]
+    fn test_error_only_first_pattern_matches() {
+        // Text contains both "timeout" and "500" but only the first match should produce a signal
+        let signals = extract_signals(&ctx_error("timeout after 500ms waiting for server"));
+        assert_eq!(signals.len(), 1);
+        assert_eq!(signals[0].signal_type, "error:timeout");
+    }
+
+    #[test]
+    fn test_case_insensitive_matching() {
+        let signals = extract_signals(&ctx_error("TIMEOUT ERROR"));
+        assert_eq!(signals[0].signal_type, "error:timeout");
+    }
+
+    #[test]
+    fn test_oom_heap_variant() {
+        let signals = extract_signals(&ctx_error("Allocation failed: JavaScript heap out of memory"));
+        assert_eq!(signals[0].signal_type, "error:oom");
+    }
+
+    #[test]
+    fn test_permission_denied_access() {
+        let signals = extract_signals(&ctx_error("Access denied: permission to write /var/log"));
+        assert_eq!(signals[0].signal_type, "error:permission_error");
+    }
+
+    #[test]
+    fn test_task_status_unknown_ignored() {
+        let ctx = SignalExtractionContext {
+            task_status: Some("running".to_string()),
+            ..Default::default()
+        };
+        let signals = extract_signals(&ctx);
+        // "running" is not "failed" or "completed", so no signal produced
+        assert!(signals.is_empty());
+    }
+
+    #[test]
+    fn test_provider_stage_propagation_on_error() {
+        let ctx = SignalExtractionContext {
+            error: Some("403 Forbidden".to_string()),
+            provider: Some("aws".to_string()),
+            stage: Some("deploy".to_string()),
+            severity: Some("high".to_string()),
+            ..Default::default()
+        };
+        let signals = extract_signals(&ctx);
+        assert_eq!(signals[0].signal_type, "error:permission_error");
+        assert_eq!(signals[0].provider, Some("aws".to_string()));
+        assert_eq!(signals[0].stage, Some("deploy".to_string()));
+        assert_eq!(signals[0].severity, Some("high".to_string()));
+    }
+
     #[test]
     fn test_fallback_normalization() {
         let signals = extract_signals(&ctx_error("some weird error @#$ happened"));

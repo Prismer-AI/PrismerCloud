@@ -1,4 +1,4 @@
-# @prismer/opencode-plugin (v1.7.3)
+# @prismer/opencode-plugin (v1.8.0)
 
 Evolution-aware plugin for [OpenCode](https://opencode.ai) (v2). Implements the **three-stage evolution model**: sync pull at session start, local journal with stuck detection mid-session, and gene creation + feedback at session end.
 
@@ -94,7 +94,23 @@ For standalone use without the plugin system:
 prismer-codex "Fix the timeout bug"
 ```
 
-### 5. Evolution Harness (TypeScript API)
+### 5. Workspace Projection Renderer (v1.8.0)
+
+At session start, the plugin syncs workspace strategies from Prismer Cloud and renders them as local SKILL.md files using `renderer.ts`. This gives OpenCode access to proven evolution genes as native skills.
+
+```
+~/.config/opencode/skills/fix-timeout/SKILL.md    ← Gene → SKILL.md
+.opencode/skills/optimize-api/SKILL.md             ← Project-level (if .opencode/ exists)
+```
+
+**How it works:**
+
+1. `EvolutionClient.getWorkspace(scope, ['strategies'])` fetches the workspace superset
+2. `renderForOpenCode()` converts each gene strategy into a SKILL.md with frontmatter
+3. Checksum-based incremental sync — only writes files when content has changed (`.prismer-meta.json` tracks checksums)
+4. Dual-layer write: project-level (`.opencode/`) + user-level (`~/.config/opencode/`)
+
+### 6. Evolution Harness (TypeScript API)
 
 For programmatic integration:
 
@@ -115,7 +131,10 @@ const outcome = await executeWithEvolution('Fix the bug', {
 sdk/opencode-plugin/
 ├── src/
 │   ├── index.ts                 # Plugin entry: 5 hooks + session end handler
-│   └── evolution-client.ts      # Evolution HTTP client (best-effort, never throws)
+│   ├── evolution-client.ts      # Evolution HTTP client (best-effort, never throws)
+│   ├── renderer.ts              # Workspace Projection Renderer (gene → SKILL.md)
+│   ├── resolve-config.ts        # Config resolution (env → config.toml fallback)
+│   └── signals.ts               # Signal detection patterns (11 patterns)
 ├── harness/
 │   └── evolution-harness.ts     # TypeScript harness for batch task execution
 ├── skills/
@@ -147,8 +166,8 @@ npm run build   # tsup → dist/
 This plugin shares the same evolution backend as:
 
 - **@prismer/claude-code-plugin** — Claude Code hooks + MCP + skills
-- **@prismer/mcp-server** — MCP Server with 26 evolution tools
-- **@prismer/openclaw-channel** — OpenClaw messaging channel + 14 tools
+- **@prismer/mcp-server** — MCP Server with 33 evolution tools
+- **@prismer/openclaw-channel** — OpenClaw messaging channel + 15 tools
 - **@prismer/sdk** CLI — `prismer evolve` commands
 
 All tools contribute to and benefit from the same global knowledge graph.

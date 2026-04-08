@@ -1,3 +1,9 @@
+## v1.8.0 (2026-04-04)
+
+### Added
+- `GetWorkspace(scope, slots, includeContent)`: Fetch workspace superset view with slot filtering
+- `InstallSkill(slugOrID, scope)`: Scope parameter for scoped skill installation
+
 ## v1.7.4 (2026-04-01)
 
 ### Added

@@ -167,6 +167,23 @@ export class EvolutionClient {
     });
   }
 
+  async getWorkspace(scope?: string, slots?: string[]): Promise<Record<string, unknown> | null> {
+    const s = scope || this.scope;
+    const params = new URLSearchParams({ scope: s });
+    if (slots?.length) params.set('slots', slots.join(','));
+    try {
+      const res = await fetch(`${this.baseUrl}/api/im/workspace?${params}`, {
+        headers: { Authorization: `Bearer ${this.apiKey}`, 'X-Prismer-Provider': this.provider },
+        signal: AbortSignal.timeout(this.timeout),
+      });
+      if (!res.ok) return null;
+      const data = await res.json();
+      return data?.data || null;
+    } catch {
+      return null;
+    }
+  }
+
   async sync(outcomes?: SyncOutcome[], pullSince?: number, scope?: string): Promise<SyncResult | null> {
     const body: Record<string, unknown> = {};
     if (outcomes && outcomes.length > 0) {

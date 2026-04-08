@@ -263,6 +263,47 @@ export const PrismerEvolution: Plugin = async (ctx) => {
     // Best-effort
   }
 
+  // ─── SessionStart: workspace-aware skill sync ─────────────
+  try {
+    const workspace = await client.getWorkspace(scope, ['strategies']);
+    if (workspace?.strategies) {
+      const { renderForOpenCode } = await import('./renderer.js');
+      const files = renderForOpenCode(workspace as any);
+      const { existsSync, mkdirSync, writeFileSync, readFileSync } = await import('fs');
+      const { join, dirname } = await import('path');
+      const { homedir } = await import('os');
+      const home = homedir();
+
+      const projectDir = existsSync(join(process.cwd(), '.opencode'))
+        ? join(process.cwd(), '.opencode')
+        : null;
+      const userDir = join(home, '.config', 'opencode');
+
+      let synced = 0;
+      for (const file of files) {
+        const targets = [join(userDir, file.relativePath)];
+        if (projectDir) targets.push(join(projectDir, file.relativePath));
+
+        for (const target of targets) {
+          const metaPath = join(dirname(target), '.prismer-meta.json');
+          let existing = null;
+          try { existing = JSON.parse(readFileSync(metaPath, 'utf8')); } catch {}
+          if (existing?.checksum === file.meta.checksum) continue;
+
+          mkdirSync(dirname(target), { recursive: true });
+          writeFileSync(target, file.content, 'utf8');
+          writeFileSync(metaPath, JSON.stringify({ ...file.meta, syncedAt: new Date().toISOString() }));
+          synced++;
+        }
+      }
+      if (synced > 0) {
+        console.log(`[Prismer] Synced ${synced} skill file(s) to OpenCode`);
+      }
+    }
+  } catch (e: any) {
+    console.warn(`[Prismer] workspace skill sync failed: ${e.message}`);
+  }
+
   return {
     // ─── Inject Prismer env vars into shell sessions ────────
     'shell.env': async (_input, output) => {

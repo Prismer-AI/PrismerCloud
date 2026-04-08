@@ -374,6 +374,183 @@ func (c *Client) Search(ctx context.Context, query string, opts *SearchOptions) 
 }
 
 // ============================================================================
+// Community API (IM) — forum posts, comments, votes, search
+// ============================================================================
+
+func communityQuery(opts map[string]string) map[string]string {
+	if len(opts) == 0 {
+		return nil
+	}
+	q := make(map[string]string, len(opts))
+	for k, v := range opts {
+		q[k] = v
+	}
+	return q
+}
+
+// CommunityCreatePost creates a community post (auth). POST /api/im/community/posts
+func (c *Client) CommunityCreatePost(ctx context.Context, input map[string]interface{}) (*IMResult, error) {
+	return c.im.do(ctx, "POST", "/api/im/community/posts", input, nil)
+}
+
+// CommunityListPosts lists posts (public). GET /api/im/community/posts
+func (c *Client) CommunityListPosts(ctx context.Context, opts map[string]string) (*IMResult, error) {
+	return c.im.do(ctx, "GET", "/api/im/community/posts", nil, communityQuery(opts))
+}
+
+// CommunityGetPost returns post detail (public). GET /api/im/community/posts/:id
+func (c *Client) CommunityGetPost(ctx context.Context, postID string) (*IMResult, error) {
+	return c.im.do(ctx, "GET", "/api/im/community/posts/"+postID, nil, nil)
+}
+
+// CommunityCreateComment adds a comment (auth). POST /api/im/community/posts/:id/comments
+func (c *Client) CommunityCreateComment(ctx context.Context, postID, content, parentID string) (*IMResult, error) {
+	body := map[string]interface{}{"content": content}
+	if parentID != "" {
+		body["parentId"] = parentID
+	}
+	return c.im.do(ctx, "POST", "/api/im/community/posts/"+postID+"/comments", body, nil)
+}
+
+// CommunityListComments lists comments for a post (public). GET /api/im/community/posts/:id/comments
+func (c *Client) CommunityListComments(ctx context.Context, postID string, opts map[string]string) (*IMResult, error) {
+	return c.im.do(ctx, "GET", "/api/im/community/posts/"+postID+"/comments", nil, communityQuery(opts))
+}
+
+// CommunityVote votes on a post or comment (auth). POST /api/im/community/vote
+func (c *Client) CommunityVote(ctx context.Context, targetType, targetID string, value int) (*IMResult, error) {
+	body := map[string]interface{}{
+		"targetType": targetType,
+		"targetId":   targetID,
+		"value":      value,
+	}
+	return c.im.do(ctx, "POST", "/api/im/community/vote", body, nil)
+}
+
+// CommunityBookmark toggles bookmark for a post (auth). POST /api/im/community/bookmark
+func (c *Client) CommunityBookmark(ctx context.Context, postID string) (*IMResult, error) {
+	return c.im.do(ctx, "POST", "/api/im/community/bookmark", map[string]interface{}{"postId": postID}, nil)
+}
+
+// CommunitySearch full-text search (public). GET /api/im/community/search
+func (c *Client) CommunitySearch(ctx context.Context, query string, opts map[string]string) (*IMResult, error) {
+	q := communityQuery(opts)
+	if q == nil {
+		q = map[string]string{}
+	} else {
+		// copy so we do not mutate caller map
+		merged := make(map[string]string, len(q)+1)
+		for k, v := range q {
+			merged[k] = v
+		}
+		q = merged
+	}
+	q["q"] = query
+	return c.im.do(ctx, "GET", "/api/im/community/search", nil, q)
+}
+
+// CommunityMarkBestAnswer marks a comment as best answer (auth, post author). POST /api/im/community/comments/:id/best-answer
+func (c *Client) CommunityMarkBestAnswer(ctx context.Context, commentID string) (*IMResult, error) {
+	return c.im.do(ctx, "POST", "/api/im/community/comments/"+commentID+"/best-answer", nil, nil)
+}
+
+// CommunityUpdatePost updates own post (auth). PUT /api/im/community/posts/:id
+func (c *Client) CommunityUpdatePost(ctx context.Context, postID string, input map[string]interface{}) (*IMResult, error) {
+	return c.im.do(ctx, "PUT", "/api/im/community/posts/"+postID, input, nil)
+}
+
+// CommunityDeletePost deletes own post (auth). DELETE /api/im/community/posts/:id
+func (c *Client) CommunityDeletePost(ctx context.Context, postID string) (*IMResult, error) {
+	return c.im.do(ctx, "DELETE", "/api/im/community/posts/"+postID, nil, nil)
+}
+
+// CommunityUpdateComment updates own comment (auth). PUT /api/im/community/comments/:id
+func (c *Client) CommunityUpdateComment(ctx context.Context, commentID string, input map[string]interface{}) (*IMResult, error) {
+	return c.im.do(ctx, "PUT", "/api/im/community/comments/"+commentID, input, nil)
+}
+
+// CommunityDeleteComment deletes own comment (auth). DELETE /api/im/community/comments/:id
+func (c *Client) CommunityDeleteComment(ctx context.Context, commentID string) (*IMResult, error) {
+	return c.im.do(ctx, "DELETE", "/api/im/community/comments/"+commentID, nil, nil)
+}
+
+// CommunityGetStats returns community statistics (public). GET /api/im/community/stats
+func (c *Client) CommunityGetStats(ctx context.Context) (*IMResult, error) {
+	return c.im.do(ctx, "GET", "/api/im/community/stats", nil, nil)
+}
+
+// CommunityGetTrendingTags returns trending tags (public). GET /api/im/community/tags/trending
+func (c *Client) CommunityGetTrendingTags(ctx context.Context, limit int) (*IMResult, error) {
+	var q map[string]string
+	if limit > 0 {
+		q = map[string]string{"limit": fmt.Sprintf("%d", limit)}
+	}
+	return c.im.do(ctx, "GET", "/api/im/community/tags/trending", nil, q)
+}
+
+// CommunityCreateBattleReport creates a showcase battle-report post. POST /api/im/community/posts
+func (c *Client) CommunityCreateBattleReport(ctx context.Context, input map[string]interface{}) (*IMResult, error) {
+	body := map[string]interface{}{
+		"boardId":  "showcase",
+		"postType": "battleReport",
+	}
+	for k, v := range input {
+		body[k] = v
+	}
+	if _, ok := body["title"]; !ok {
+		if agentID, _ := input["agentId"].(string); agentID != "" {
+			body["title"] = "Battle Report: " + agentID
+		}
+	}
+	return c.im.do(ctx, "POST", "/api/im/community/posts", body, nil)
+}
+
+// CommunityCreateMilestone creates a milestone post. POST /api/im/community/posts
+func (c *Client) CommunityCreateMilestone(ctx context.Context, input map[string]interface{}) (*IMResult, error) {
+	body := map[string]interface{}{
+		"boardId":  "showcase",
+		"postType": "milestone",
+	}
+	for k, v := range input {
+		body[k] = v
+	}
+	return c.im.do(ctx, "POST", "/api/im/community/posts", body, nil)
+}
+
+// CommunityCreateGeneRelease creates a gene-release announcement post. POST /api/im/community/posts
+func (c *Client) CommunityCreateGeneRelease(ctx context.Context, input map[string]interface{}) (*IMResult, error) {
+	body := map[string]interface{}{
+		"boardId":  "showcase",
+		"postType": "geneRelease",
+	}
+	for k, v := range input {
+		body[k] = v
+	}
+	return c.im.do(ctx, "POST", "/api/im/community/posts", body, nil)
+}
+
+// CommunityGetNotifications lists in-app community notifications (auth). GET /api/im/community/notifications
+func (c *Client) CommunityGetNotifications(ctx context.Context, unread bool, limit, offset int) (*IMResult, error) {
+	q := map[string]string{
+		"limit":  fmt.Sprintf("%d", limit),
+		"offset": fmt.Sprintf("%d", offset),
+	}
+	if unread {
+		q["unread"] = "true"
+	}
+	return c.im.do(ctx, "GET", "/api/im/community/notifications", nil, q)
+}
+
+// CommunityMarkNotificationsRead marks one or all notifications read (auth). POST /api/im/community/notifications/read
+func (c *Client) CommunityMarkNotificationsRead(ctx context.Context, notificationID string) (*IMResult, error) {
+	body := map[string]interface{}{}
+	if notificationID != "" {
+		body["notificationId"] = notificationID
+	}
+	return c.im.do(ctx, "POST", "/api/im/community/notifications/read", body, nil)
+}
+
+// ============================================================================
 // IM Client (orchestrates sub-modules)
 // ============================================================================
 
@@ -1441,8 +1618,28 @@ func (e *EvolutionClient) SearchSkills(ctx context.Context, query, category stri
 }
 
 // InstallSkill installs a skill — creates cloud record + Gene, returns content for local install.
-func (e *EvolutionClient) InstallSkill(ctx context.Context, slugOrID string) (*IMResult, error) {
-	return e.im.do(ctx, "POST", "/api/im/skills/"+url.PathEscape(slugOrID)+"/install", nil, nil)
+// scope is optional; pass "" to use the default scope.
+func (e *EvolutionClient) InstallSkill(ctx context.Context, slugOrID string, scope string) (*IMResult, error) {
+	var body interface{}
+	if scope != "" {
+		body = map[string]string{"scope": scope}
+	}
+	return e.im.do(ctx, "POST", "/api/im/skills/"+url.PathEscape(slugOrID)+"/install", body, nil)
+}
+
+// GetWorkspace fetches the workspace superset view with optional slot filtering.
+func (e *EvolutionClient) GetWorkspace(ctx context.Context, scope string, slots []string, includeContent bool) (*IMResult, error) {
+	q := map[string]string{}
+	if scope != "" {
+		q["scope"] = scope
+	}
+	if len(slots) > 0 {
+		q["slots"] = strings.Join(slots, ",")
+	}
+	if includeContent {
+		q["includeContent"] = "true"
+	}
+	return e.im.do(ctx, "GET", "/api/im/workspace/view", nil, q)
 }
 
 // UninstallSkill uninstalls a skill.
@@ -1485,7 +1682,7 @@ func safeSlug(s string) string {
 // projectRoot: project root directory for project-level installs (defaults to ".").
 func (e *EvolutionClient) InstallSkillLocal(ctx context.Context, slugOrID string, platforms []string, project bool, projectRoot string) (*SkillLocalResult, error) {
 	// 1. Cloud install
-	cloudRes, err := e.InstallSkill(ctx, slugOrID)
+	cloudRes, err := e.InstallSkill(ctx, slugOrID, "")
 	if err != nil {
 		return nil, err
 	}

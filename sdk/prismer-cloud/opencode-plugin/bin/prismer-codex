@@ -15,6 +15,14 @@ set -euo pipefail
 
 # ── Configuration ──────────────────────────────────────────────────────
 
+# Resolve API key: env var → ~/.prismer/config.toml → empty
+if [ -z "${PRISMER_API_KEY:-}" ] && [ -f "$HOME/.prismer/config.toml" ]; then
+  _key=$(grep -m1 "^api_key" "$HOME/.prismer/config.toml" 2>/dev/null | sed "s/.*['\"]\\(sk-prismer-[^'\"]*\\)['\"].*/\\1/" || true)
+  if [ -n "$_key" ]; then
+    export PRISMER_API_KEY="$_key"
+  fi
+fi
+
 PRISMER_BASE_URL="${PRISMER_BASE_URL:-https://prismer.cloud}"
 CODEX_BIN="${CODEX_BIN:-codex}"
 PRISMER_EVOLVE="${PRISMER_EVOLVE:-on}"

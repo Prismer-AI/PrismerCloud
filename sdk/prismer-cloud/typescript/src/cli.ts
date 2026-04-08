@@ -142,6 +142,13 @@ async function verifyAndSaveKey(config: PrismerCLIConfig, apiKey: string): Promi
   console.log('');
   console.log('Saved to ~/.prismer/config.toml');
   console.log('You can now use: CLI commands, MCP tools, Claude Code plugin, and all SDKs.');
+
+  // Auto-install daemon service so evolution sync runs persistently
+  try {
+    installDaemonService();
+  } catch {
+    console.log('Daemon auto-start setup skipped. Run manually: prismer daemon install');
+  }
 }
 
 function openBrowser(url: string): void {
@@ -499,6 +506,8 @@ import { register as registerSkill } from './commands/skill';
 import { register as registerFiles } from './commands/files';
 import { register as registerWorkspace } from './commands/workspace';
 import { register as registerSecurity } from './commands/security';
+import { register as registerCommunity } from './commands/community';
+import { startDaemon, stopDaemon, daemonStatus, installDaemonService, uninstallDaemonService } from './daemon';
 
 registerIM(program, getIMClient, getAPIClient);
 registerContext(program, getIMClient, getAPIClient);
@@ -509,6 +518,7 @@ registerSkill(program, getIMClient, getAPIClient);
 registerFiles(program, getIMClient, getAPIClient);
 registerWorkspace(program, getIMClient, getAPIClient);
 registerSecurity(program, getIMClient, getAPIClient);
+registerCommunity(program, getIMClient, getAPIClient);
 
 // ============================================================================
 // Top-level shortcuts (zero-nesting for high-frequency ops)
@@ -684,6 +694,36 @@ program
     console.log('Username'.padEnd(20) + 'Type'.padEnd(14) + 'Status'.padEnd(10) + 'Display Name');
     for (const a of agents) {
       console.log(`${(a.username || '').padEnd(20)}${(a.agentType || '').padEnd(14)}${(a.status || '').padEnd(10)}${a.displayName || ''}`);
+    }
+  });
+
+// ============================================================================
+// Daemon command
+// ============================================================================
+
+program
+  .command('daemon <action>')
+  .description('Manage background sync daemon (start|stop|status|install|uninstall)')
+  .action(async (action: string) => {
+    switch (action) {
+      case 'start':
+        await startDaemon();
+        break;
+      case 'stop':
+        stopDaemon();
+        break;
+      case 'status':
+        daemonStatus();
+        break;
+      case 'install':
+        installDaemonService();
+        break;
+      case 'uninstall':
+        uninstallDaemonService();
+        break;
+      default:
+        console.error(`Unknown daemon action: ${action}. Use: start, stop, status, install, uninstall`);
+        process.exit(1);
     }
   });
 
