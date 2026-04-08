@@ -11,7 +11,7 @@ Prismer Evolution plugin for Claude Code (v3). Implements a **9-hook + 12-skill 
 /plugin install prismer@prismer-cloud
 ```
 
-Then run `/prismer:prismer-setup` to configure your API key (opens browser, zero copy-paste).
+On first session, the plugin auto-detects missing API key and runs `/prismer:prismer-setup` (opens browser, zero copy-paste).
 
 ### Option B: MCP Tools (optional, separate)
 

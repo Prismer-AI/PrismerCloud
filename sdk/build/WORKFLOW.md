@@ -40,14 +40,39 @@ PrismerCloud/sdk/           (开源 — release 专用)
 └── build/                  完全镜像
 ```
 
-## 用户侧 Oneliner 安装
+### 发布目标仓库
+
+| 仓库 | 用途 | 地址 |
+|------|------|------|
+| `PrismerCloud` | SDK + Plugin 源码 + release | `github.com/Prismer-AI/PrismerCloud` |
+| `claude-code-plugin` | Plugin 独立仓库 (Anthropic marketplace 要求) | `github.com/Prismer-AI/claude-code-plugin` |
+| `anthropics/claude-plugins-official` | Anthropic 官方 marketplace (提 PR 合入) | `github.com/anthropics/claude-plugins-official` |
+
+**Plugin 双发布：** `claude-code-plugin/` 同时存在于 `PrismerCloud/sdk/prismer-cloud/claude-code-plugin/` (源码) 和独立 repo `Prismer-AI/claude-code-plugin` (marketplace 引用)。sync 脚本会自动同步两处。
+
+---
+
+## 用户侧安装
 
 ### Claude Code Plugin (推荐)
 
+**当前（自有 marketplace）：**
+
 ```bash
-# 一键安装 — 首次 SessionStart 自动引导 setup
-claude plugin add prismer
+# In Claude Code:
+/plugin marketplace add Prismer-AI/PrismerCloud
+/plugin install prismer@prismer-cloud
 ```
+
+**目标（Anthropic 官方 marketplace 合入后）：**
+
+```bash
+# In Claude Code — 无需 marketplace add，官方预装：
+/plugin install prismer@claude-plugins-official
+```
+
+> **状态：** Submission 已通过 (Published 2026-04-01)，需向 `anthropics/claude-plugins-official` 提 PR 合入。
+> PR 内容：在 `external_plugins/prismer/` 加 plugin.json + 在 `marketplace.json` 加 source 条目指向 `Prismer-AI/claude-code-plugin`。
 
 ### MCP Server (任意 AI 编辑器)
 
@@ -123,6 +148,64 @@ sleep 30
 sdk/build/release.sh --scope prismer-cloud
 ```
 
+### Plugin 独立 Repo 同步 + Marketplace PR
+
+Plugin 发布后还需要两步：
+
+```bash
+# 5. 同步到独立 plugin repo (Anthropic marketplace 引用此 repo)
+sdk/build/sync-plugin.sh    # rsync claude-code-plugin → Prismer-AI/claude-code-plugin
+
+# 6. 更新 Anthropic 官方 marketplace (仅首次或结构变化时提 PR)
+#    PR 目标: anthropics/claude-plugins-official
+#    修改: .claude-plugin/marketplace.json + external_plugins/prismer/
+```
+
+#### sync-plugin.sh 行为
+
+```
+源: prismer-cloud-next/sdk/prismer-cloud/claude-code-plugin/
+目标: ~/workspace/claude-code-plugin/  (独立 repo)
+
+1. rsync --delete (排除 node_modules/.dev-cache 等)
+2. git add -A && git commit
+3. git tag v{VERSION}
+4. git push origin main v{VERSION}
+```
+
+#### Anthropic 官方 Marketplace PR 内容
+
+```
+anthropics/claude-plugins-official/
+├── external_plugins/
+│   └── prismer/                          # 新增
+│       └── .claude-plugin/
+│           └── plugin.json               # name, description, author
+└── .claude-plugin/
+    └── marketplace.json                  # 追加条目 ↓
+```
+
+marketplace.json 追加条目：
+
+```json
+{
+  "name": "prismer",
+  "source": {
+    "source": "url",
+    "url": "https://github.com/Prismer-AI/claude-code-plugin.git"
+  },
+  "description": "Prismer Evolution — cross-agent learning network with 9 hooks and 12 skills. Auto-learns from every coding session.",
+  "author": { "name": "Prismer" },
+  "homepage": "https://prismer.cloud",
+  "repository": "https://github.com/Prismer-AI/claude-code-plugin",
+  "license": "MIT",
+  "category": "ai",
+  "tags": ["evolution", "cross-agent-learning", "auto-learning"]
+}
+```
+
+---
+
 ## --scope 参数
 
 所有脚本支持 `--scope`：
@@ -183,7 +266,7 @@ sdk/prismer-cloud/rust/Cargo.toml
 | `prismer-sdk-go` | Go Proxy | `go get github.com/Prismer-AI/PrismerCloud/sdk/prismer-cloud/golang` |
 | `prismer-sdk` | crates.io | `cargo add prismer-sdk` |
 | `@prismer/mcp-server` | npm | `npx -y @prismer/mcp-server` (47 tools) |
-| `@prismer/claude-code-plugin` | npm | `claude plugin add prismer` |
+| `@prismer/claude-code-plugin` | npm + GitHub repo | `/plugin install prismer@prismer-cloud` (自有) 或 `@claude-plugins-official` (官方) |
 | `@prismer/opencode-plugin` | npm | `opencode plugins install @prismer/opencode-plugin` |
 | `@prismer/openclaw-channel` | npm | `openclaw plugins install @prismer/openclaw-channel` |
 
@@ -195,7 +278,7 @@ sdk/prismer-cloud/rust/Cargo.toml
 |------|------|
 | `.npmrc` | npm token (`//registry.npmjs.org/:_authToken=...`) |
 | `.pypirc` | PyPI credentials |
-| `CARGO_REGISTRY_TOKEN` (env) | crates.io token |
+| `.cargo-credentials` | crates.io token (`export CARGO_REGISTRY_TOKEN=...`) |
 | `gh auth` | GitHub CLI login |
 
 ## 常见操作
@@ -217,6 +300,9 @@ sdk/build/release.sh --scope aip
 sleep 30
 sdk/build/release.sh --scope prismer-cloud
 
+# Plugin 独立 repo 同步 (每次 release 后)
+sdk/build/sync-plugin.sh
+
 # Dry run（预览不执行）
 sdk/build/release.sh --scope all --dry-run
 
@@ -236,6 +322,14 @@ sdk/build/pack.sh --scope prismer-cloud --clean
 - `--no-clean` 增量同步（默认先删后同步）
 - `--dry-run` 预览
 
+## sync-plugin.sh 行为
+
+- 源: `sdk/prismer-cloud/claude-code-plugin/`
+- 目标: `~/workspace/claude-code-plugin/` (独立 GitHub repo `Prismer-AI/claude-code-plugin`)
+- rsync 排除: `node_modules`, `.dev-cache`, `*.tgz`, `.DS_Store`
+- 自动 commit + tag + push
+- Anthropic 官方 marketplace 的 source URL 指向此 repo
+
 ## 产物清单 (v1.8.0)
 
 ```
@@ -253,3 +347,17 @@ artifacts/
 └── crates/
     └── prismer-sdk-1.8.0.crate            86K
 ```
+
+## Anthropic Marketplace 上架清单
+
+| 步骤 | 状态 | 说明 |
+|------|------|------|
+| 1. Submission form 提交 | ✅ Published (2026-04-01) | `@prismer/claude-code-plugin` |
+| 2. 创建独立 plugin repo | 待做 | `Prismer-AI/claude-code-plugin` |
+| 3. sync-plugin.sh 同步 | 待做 | 闭源 → 独立 repo |
+| 4. Fork `anthropics/claude-plugins-official` | 待做 | |
+| 5. 添加 `external_plugins/prismer/` | 待做 | plugin.json |
+| 6. 追加 `marketplace.json` 条目 | 待做 | source → `Prismer-AI/claude-code-plugin.git` |
+| 7. 提 PR 到 `anthropics/claude-plugins-official` | 待做 | |
+| 8. Anthropic review + merge | 待 Anthropic | |
+| 9. 用户可 `/plugin install prismer@claude-plugins-official` | 待合入 | |
