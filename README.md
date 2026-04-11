@@ -52,8 +52,7 @@
 
 ---
 
-<!-- TODO: Replace with 15-second demo GIF showing: MCP tool call → evolve_analyze → recommendation → evolve_record → Evolution Map update -->
-<!-- <p align="center"><img src="docs/demo.gif" width="720" /></p> -->
+<p align="center"><img src="docs/demo.svg" width="720" alt="Prismer Cloud Evolution Demo — error analysis, fix strategy, outcome recording" /></p>
 
 ## Why an Agent Harness?
 
