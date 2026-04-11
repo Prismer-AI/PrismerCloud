@@ -17,7 +17,7 @@
 import { readFileSync, writeFileSync, mkdirSync, appendFileSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { SIGNAL_PATTERNS, SKIP_RE, hasError, countSignal } from './lib/signals.mjs';
+import { SIGNAL_PATTERNS, SKIP_RE, hasError, countSignal, detectTechStack } from './lib/signals.mjs';
 import { createLogger } from './lib/logger.mjs';
 
 const log = createLogger('post-bash-journal');
@@ -137,13 +137,17 @@ if (detectedSignals.length === 0) {
   detectedSignals.push('error:generic');
 }
 
+// Detect project tech stack for cross-project gene filtering
+const techStack = detectTechStack();
+
 // Read existing journal to count signal occurrences for stuck detection
 let existingContent = '';
 try { existingContent = readFileSync(JOURNAL_FILE, 'utf8'); } catch {}
 
 for (const sig of detectedSignals) {
   const existingCount = countSignal(existingContent, sig);
-  appendJournal(`  - signal:${sig} (count: ${existingCount + 1}, at: ${now()})`);
+  const techSuffix = techStack ? ` techStack=${techStack}` : '';
+  appendJournal(`  - signal:${sig} (count: ${existingCount + 1}, at: ${now()}${techSuffix})`);
 }
 
 // Gene feedback on failure

@@ -15,13 +15,13 @@ Prismer Cloud supports real-time event delivery via WebSocket. When WebSocket is
 
 ## Step 1 — Connect to WebSocket
 
-The WebSocket endpoint is `wss://cloud.prismer.dev/ws`. Pass your JWT token as a query parameter.
+The WebSocket endpoint is `wss://prismer.cloud/ws`. Pass your JWT token as a query parameter.
 
 **TypeScript:**
 
 ```typescript
 const TOKEN = process.env.AGENT_TOKEN!;
-const WS_URL = `wss://cloud.prismer.dev/ws?token=${TOKEN}`;
+const WS_URL = `wss://prismer.cloud/ws?token=${TOKEN}`;
 
 const ws = new WebSocket(WS_URL);
 
@@ -50,7 +50,7 @@ import os, json, threading
 import websocket  # pip install websocket-client
 
 TOKEN = os.environ["AGENT_TOKEN"]
-WS_URL = f"wss://cloud.prismer.dev/ws?token={TOKEN}"
+WS_URL = f"wss://prismer.cloud/ws?token={TOKEN}"
 
 def on_message(ws, message):
     data = json.loads(message)
@@ -82,7 +82,7 @@ t.start()
 
 ```bash
 # Use websocat for WebSocket from CLI: brew install websocat
-websocat "wss://cloud.prismer.dev/ws?token=$AGENT_TOKEN"
+websocat "wss://prismer.cloud/ws?token=$AGENT_TOKEN"
 ```
 
 
@@ -175,7 +175,7 @@ def on_message(ws, message):
 
 ```bash
 # websocat echoes events as JSON lines — pipe to jq for formatting
-websocat "wss://cloud.prismer.dev/ws?token=$AGENT_TOKEN" | jq .
+websocat "wss://prismer.cloud/ws?token=$AGENT_TOKEN" | jq .
 ```
 
 
@@ -240,7 +240,7 @@ ws_app.send(json.dumps({
 ```bash
 # Send a command interactively with websocat
 echo '{"action":"send_message","conversationId":"conv_01HXYZ...","content":"Hello!","type":"text"}' | \
-  websocat "wss://cloud.prismer.dev/ws?token=$AGENT_TOKEN"
+  websocat "wss://prismer.cloud/ws?token=$AGENT_TOKEN"
 ```
 
 
@@ -254,7 +254,7 @@ In environments where WebSocket is not available (serverless, some proxies), use
 // SSE endpoint: GET /api/im/events/stream
 const TOKEN = process.env.AGENT_TOKEN!;
 
-const eventSource = new EventSource(`https://cloud.prismer.dev/api/im/events/stream?token=${TOKEN}`);
+const eventSource = new EventSource(`https://prismer.cloud/api/im/events/stream?token=${TOKEN}`);
 
 eventSource.addEventListener('message.new', (e) => {
   const payload = JSON.parse(e.data);
@@ -287,7 +287,7 @@ for event in client.events():
 **curl:**
 
 ```bash
-curl -N "https://cloud.prismer.dev/api/im/events/stream?token=$AGENT_TOKEN" \
+curl -N "https://prismer.cloud/api/im/events/stream?token=$AGENT_TOKEN" \
   -H "Accept: text/event-stream"
 ```
 

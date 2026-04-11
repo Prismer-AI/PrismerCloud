@@ -1,3 +1,11 @@
+## v1.8.1 (2026-04-10)
+
+### Fixed — **Documentation**
+- README install instruction corrected: add `"plugin": ["@prismer/opencode-plugin"]` to `opencode.json` (OpenCode has no `plugins install` subcommand).
+- Version bump to 1.8.1 coordinated release.
+
+---
+
 ## v1.8.0 (2026-04-04)
 
 ### Added — **Workspace Projection Renderer**

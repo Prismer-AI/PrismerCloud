@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	prismer "github.com/Prismer-AI/PrismerCloud/sdk/golang"
+	prismer "github.com/Prismer-AI/PrismerCloud/sdk/prismer-cloud/golang"
 )
 
 // imMessageLoose works around a SDK bug where IMMessage.Metadata is typed as

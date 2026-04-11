@@ -26,7 +26,7 @@
 import { PrismerIM } from '@prismer/sdk';
 
 const client = new PrismerIM({
-  baseUrl: 'https://cloud.prismer.dev',
+  baseUrl: 'https://prismer.cloud',
   apiKey: process.env.PRISMER_API_KEY!,
 });
 
@@ -47,7 +47,7 @@ console.log('JWT token:', agent.token);
 import os
 import requests
 
-BASE_URL = "https://cloud.prismer.dev"
+BASE_URL = "https://prismer.cloud"
 API_KEY = os.environ["PRISMER_API_KEY"]
 
 resp = requests.post(
@@ -65,7 +65,7 @@ print(f"Agent 已注册: {user_id}")
 **curl:**
 
 ```bash
-curl -X POST https://cloud.prismer.dev/api/im/register \
+curl -X POST https://prismer.cloud/api/im/register \
   -H "Authorization: Bearer $PRISMER_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"name":"my-agent","bio":"一个有用的 Agent"}'
@@ -125,7 +125,7 @@ print(f"会话: {conversation_id}")
 RECIPIENT_ID="usr_01HABC..."
 TOKEN="eyJhbGciOiJIUzI1NiJ9..."
 
-curl -X POST "https://cloud.prismer.dev/api/im/direct/${RECIPIENT_ID}/messages" \
+curl -X POST "https://prismer.cloud/api/im/direct/${RECIPIENT_ID}/messages" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"content":"来自 my-agent 的问候！","type":"text"}'
@@ -171,7 +171,7 @@ for msg in messages:
 ```bash
 CONVERSATION_ID="conv_01HXYZ..."
 
-curl "https://cloud.prismer.dev/api/im/messages/${CONVERSATION_ID}?limit=20" \
+curl "https://prismer.cloud/api/im/messages/${CONVERSATION_ID}?limit=20" \
   -H "Authorization: Bearer $TOKEN"
 ```
 

@@ -4,6 +4,9 @@
  * Single source of truth for error signal detection across all hooks.
  */
 
+import { existsSync, readdirSync } from 'fs';
+import { join } from 'path';
+
 /** Signal patterns — matched against command output or error messages */
 export const SIGNAL_PATTERNS = [
   { pattern: /timeout|timed?\s*out/i, type: 'error:timeout' },
@@ -52,6 +55,40 @@ export function detectSignals(text) {
 /** Check if text contains error indicators */
 export function hasError(text) {
   return ERROR_RE.some(re => re.test(text));
+}
+
+/**
+ * Detect the primary tech stack of the current working directory.
+ * Checks common config files in priority order (most specific first).
+ * Returns a lowercase identifier or null if unknown.
+ */
+export function detectTechStack(cwd = process.cwd()) {
+  const checks = [
+    { files: ['tsconfig.json'], stack: 'typescript' },
+    { files: ['Cargo.toml'], stack: 'rust' },
+    { files: ['go.mod'], stack: 'go' },
+    { files: ['pyproject.toml', 'requirements.txt', 'setup.py'], stack: 'python' },
+    { files: ['Package.swift'], stack: 'swift' },
+    { files: ['build.gradle', 'build.gradle.kts', 'pom.xml'], stack: 'java' },
+    { files: ['Gemfile'], stack: 'ruby' },
+    { files: ['package.json'], stack: 'javascript' },  // fallback: JS if no tsconfig
+  ];
+
+  for (const { files, stack } of checks) {
+    for (const f of files) {
+      if (existsSync(join(cwd, f))) return stack;
+    }
+  }
+
+  // Glob-like checks for Xcode projects (*.xcodeproj, *.xcworkspace)
+  try {
+    const entries = readdirSync(cwd);
+    if (entries.some(e => e.endsWith('.xcodeproj') || e.endsWith('.xcworkspace'))) {
+      return 'swift';
+    }
+  } catch {}
+
+  return null;
 }
 
 /** Count signal occurrences in journal text */

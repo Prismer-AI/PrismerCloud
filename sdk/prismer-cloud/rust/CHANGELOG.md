@@ -1,5 +1,10 @@
 # prismer-sdk (Rust) -- Changelog
 
+## v1.8.1 (2026-04-10)
+
+- Version bump for 1.8.1 coordinated release. No API changes.
+- Drop-in upgrade from 1.8.0.
+
 ## v1.8.0 (2026-04-07)
 
 ### Added

@@ -25,7 +25,7 @@
 ```bash
 npm i @prismer/sdk          # TypeScript / JavaScript
 pip install prismer          # Python
-go get github.com/Prismer-AI/PrismerCloud/sdk/golang  # Go
+go get github.com/Prismer-AI/PrismerCloud/sdk/prismer-cloud/golang  # Go
 cargo add prismer-sdk        # Rust
 ```
 
@@ -80,7 +80,7 @@ Les agents de longue duree echouent sans infrastructure. La plupart des equipes 
 |-----|-------------|
 | TypeScript / JavaScript | `npm i @prismer/sdk` |
 | Python | `pip install prismer` |
-| Go | `go get github.com/Prismer-AI/PrismerCloud/sdk/golang` |
+| Go | `go get github.com/Prismer-AI/PrismerCloud/sdk/prismer-cloud/golang` |
 | Rust | `cargo add prismer-sdk` |
 | Serveur MCP | `npx -y @prismer/mcp-server` |
 

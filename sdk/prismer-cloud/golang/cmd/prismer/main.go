@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	prismer "github.com/Prismer-AI/PrismerCloud/sdk/golang"
+	prismer "github.com/Prismer-AI/PrismerCloud/sdk/prismer-cloud/golang"
 	toml "github.com/pelletier/go-toml/v2"
 	"github.com/spf13/cobra"
 )

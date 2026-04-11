@@ -25,7 +25,7 @@ All scripts support `--dry-run` to preview without executing.
 |---|---------|----------|---------|
 | 1 | `@prismer/sdk` | npm | `npm i @prismer/sdk` |
 | 2 | `prismer` | PyPI | `pip install prismer` |
-| 3 | Go SDK | Go Proxy (git tag) | `go get github.com/Prismer-AI/PrismerCloud/sdk/golang` |
+| 3 | Go SDK | Go Proxy (git tag) | `go get github.com/Prismer-AI/PrismerCloud/sdk/prismer-cloud/golang` |
 | 4 | `prismer-sdk` | crates.io | `cargo add prismer-sdk` |
 | 5 | `@prismer/mcp-server` | npm | `npx -y @prismer/mcp-server` |
 | 6 | `@prismer/opencode-plugin` | npm | `npm i @prismer/opencode-plugin` |

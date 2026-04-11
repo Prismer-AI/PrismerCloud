@@ -13,7 +13,7 @@ Usage (platform integration — planned v1.7.4):
 """
 
 # Re-export from standalone AIP SDK
-from aip_sdk import (  # type: ignore[import-untyped]
+from aip import (  # type: ignore[import-untyped]
     AIPIdentity,
     public_key_to_did_key,
     did_key_to_public_key,

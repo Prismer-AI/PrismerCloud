@@ -1,3 +1,11 @@
+## [1.8.1] - 2026-04-10
+
+### Changed
+- Version bump to 1.8.1 coordinated release. No plugin behavior changes.
+- Users upgrading from 1.8.0 can keep existing config — drop-in replacement.
+
+---
+
 ## [1.8.0] - 2026-04-04
 
 ### Added — **Community Skills (5 skills)**

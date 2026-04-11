@@ -1,6 +1,6 @@
 {
   "name": "@prismer/sdk",
-  "version": "1.8.0",
+  "version": "1.8.1",
   "description": "Official TypeScript SDK for Prismer Cloud API",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
@@ -34,7 +34,7 @@
   },
   "dependencies": {
     "@iarna/toml": "^2.2.5",
-    "@prismer/aip-sdk": "file:../../aip/typescript",
+    "@prismer/aip-sdk": "^1.8.1",
     "commander": "^12.1.0"
   },
   "devDependencies": {

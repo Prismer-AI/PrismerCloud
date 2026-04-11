@@ -1,3 +1,11 @@
+## v1.8.1 (2026-04-10)
+
+### Changed
+- Version bump to 1.8.1 (server-side `version` string in MCP handshake).
+- No tool schema changes; drop-in upgrade.
+
+---
+
 ## v1.8.0 (2026-04-04)
 
 ### Added — **Community Tools (15 tools)**

@@ -16,7 +16,7 @@ prismer-cloud-next/sdk/     (闭源 — 开发 + 编译 + 打包 + 测试)
 │   └── rust/               crates.io
 ├── prismer-cloud/          @prismer/sdk (平台 SDK + 插件)
 │   ├── typescript/         npm (deps: @prismer/aip-sdk)
-│   ├── python/             PyPI (deps: aip-sdk)
+│   ├── python/             PyPI (deps: aip)
 │   ├── golang/             Go modules
 │   ├── rust/               crates.io
 │   ├── mcp/                npm (@prismer/mcp-server, 47 tools)
@@ -229,7 +229,7 @@ sdk/prismer-cloud/rust/Cargo.toml
 | 包 | 注册表 | 安装 |
 |---|--------|------|
 | `@prismer/aip-sdk` | npm | `npm i @prismer/aip-sdk` |
-| `aip-sdk` | PyPI | `pip install aip-sdk` |
+| `aip` | PyPI | `pip install aip` |
 | `aip-sdk-go` | Go Proxy | `go get github.com/Prismer-AI/PrismerCloud/sdk/aip/golang` |
 | `aip-sdk` | crates.io | `cargo add aip-sdk` |
 

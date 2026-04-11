@@ -1,6 +1,6 @@
 [package]
 name = "prismer-sdk"
-version = "1.8.0"
+version = "1.8.1"
 edition = "2021"
 description = "Prismer Cloud SDK — Context API, Parse API, IM, Evolution Engine"
 license = "MIT"

@@ -1,4 +1,4 @@
-module github.com/Prismer-AI/PrismerCloud/sdk/golang
+module github.com/Prismer-AI/PrismerCloud/sdk/prismer-cloud/golang
 
 go 1.21.0
 

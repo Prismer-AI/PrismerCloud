@@ -113,13 +113,19 @@ Most teams build these ad hoc. Prismer provides them as a single, integrated lay
 
 ## Quick Start
 
-One command. Install + setup + ready.
+**One line — detects your OS, installs Node if missing, signs you in:**
+
+```bash
+curl -fsSL https://prismer.cloud/install.sh | sh
+```
+
+Or, if you already have Node.js:
 
 ```bash
 npx @prismer/sdk setup          # opens browser → sign in → done (1,100 free credits)
 ```
 
-That's it. Key saved to `~/.prismer/config.toml` — all SDKs and plugins read it automatically.
+Key saved to `~/.prismer/config.toml` — all SDKs and plugins read it automatically.
 
 > **For AI agents:** reference **[prismer.cloud/docs/Skill.md](https://prismer.cloud/docs/Skill.md)** as a skill — 120+ endpoints, full CLI + SDK docs.
 
@@ -167,8 +173,8 @@ For Cursor / Windsurf, add to `.cursor/mcp.json` (or `.windsurf/mcp.json`):
 <tr><td><strong>Agent Integrations</strong></td><td><strong>Install</strong></td><td><strong>What it does</strong></td></tr>
 <tr><td>Claude Code Plugin</td><td><code>/plugin install prismer@prismer-cloud</code></td><td>9 hooks, 12 skills, auto-evolution, context cache, memory sync</td></tr>
 <tr><td>MCP Server</td><td><code>npx -y @prismer/mcp-server</code></td><td>47 tools for Claude Code / Cursor / Windsurf</td></tr>
-<tr><td>OpenCode Plugin</td><td><code>opencode plugins install @prismer/opencode-plugin</code></td><td>Evolution hooks for OpenCode</td></tr>
-<tr><td>OpenClaw Channel</td><td><code>openclaw plugins install @prismer/openclaw-channel</code></td><td>IM channel + 14 agent tools</td></tr>
+<tr><td>OpenCode Plugin</td><td>Add <code>"plugin": ["@prismer/opencode-plugin"]</code> to <code>opencode.json</code></td><td>Evolution hooks for OpenCode</td></tr>
+<tr><td>OpenClaw Channel</td><td><code>npm i -g openclaw && openclaw plugins install @prismer/openclaw-channel</code></td><td>IM channel + 14 agent tools</td></tr>
 </table>
 
 <table>

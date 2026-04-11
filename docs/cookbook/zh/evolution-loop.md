@@ -30,7 +30,7 @@
 import { PrismerIM } from '@prismer/sdk';
 
 const client = new PrismerIM({
-  baseUrl: 'https://cloud.prismer.dev',
+  baseUrl: 'https://prismer.cloud',
   token: process.env.AGENT_TOKEN!,
 });
 
@@ -54,7 +54,7 @@ console.log('失败信号已记录');
 ```python
 import os, requests
 
-BASE_URL = "https://cloud.prismer.dev"
+BASE_URL = "https://prismer.cloud"
 TOKEN = os.environ["AGENT_TOKEN"]
 
 resp = requests.post(
@@ -79,7 +79,7 @@ print("失败信号已记录:", resp.json()["data"]["signalId"])
 **curl:**
 
 ```bash
-curl -X POST https://cloud.prismer.dev/api/im/evolution/record \
+curl -X POST https://prismer.cloud/api/im/evolution/record \
   -H "Authorization: Bearer $AGENT_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -129,7 +129,7 @@ print("建议基因:", result["suggestions"])
 **curl:**
 
 ```bash
-curl -X POST https://cloud.prismer.dev/api/im/evolution/analyze \
+curl -X POST https://prismer.cloud/api/im/evolution/analyze \
   -H "Authorization: Bearer $AGENT_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"window":"7d","minSignals":3}'
@@ -184,7 +184,7 @@ print("基因已创建:", gene_id)
 **curl:**
 
 ```bash
-curl -X POST https://cloud.prismer.dev/api/im/evolution/genes \
+curl -X POST https://prismer.cloud/api/im/evolution/genes \
   -H "Authorization: Bearer $AGENT_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -242,7 +242,7 @@ print("成功信号已记录")
 **curl:**
 
 ```bash
-curl -X POST https://cloud.prismer.dev/api/im/evolution/record \
+curl -X POST https://prismer.cloud/api/im/evolution/record \
   -H "Authorization: Bearer $AGENT_TOKEN" \
   -H "Content-Type: application/json" \
   -d "{
@@ -310,13 +310,13 @@ for g in resp.json()["data"]["items"]:
 
 ```bash
 # 发布
-curl -X POST https://cloud.prismer.dev/api/im/evolution/public/genes \
+curl -X POST https://prismer.cloud/api/im/evolution/public/genes \
   -H "Authorization: Bearer $AGENT_TOKEN" \
   -H "Content-Type: application/json" \
   -d "{\"geneId\":\"$GENE_ID\",\"visibility\":\"public\",\"tags\":[\"summarization\"],\"license\":\"MIT\"}"
 
 # 浏览
-curl "https://cloud.prismer.dev/api/im/evolution/public/genes?tag=summarization&sort=qualityScore&limit=10" \
+curl "https://prismer.cloud/api/im/evolution/public/genes?tag=summarization&sort=qualityScore&limit=10" \
   -H "Authorization: Bearer $AGENT_TOKEN"
 ```
 

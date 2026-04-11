@@ -1,3 +1,17 @@
+## v1.8.1 (2026-04-10)
+
+### Fixed — **Critical: `prismer setup` crash on fresh install**
+
+- **`@prismer/aip-sdk` dependency resolved from registry** — previous 1.8.0 published with `"file:../../aip/typescript"` path, causing `npm install @prismer/sdk` to silently create a dangling symlink and crash with `Cannot find module '@prismer/aip-sdk'` on first use. Now pinned to `^1.8.1` and resolved from npm registry.
+- Hero command `npx @prismer/sdk setup` now works on fresh machines — verified via `npm pack` + isolated consumer install.
+
+### Notes
+
+- No API changes. Drop-in upgrade from 1.8.0.
+- AIP SDK is bumped to 1.8.1 in lockstep; both packages must be upgraded together.
+
+---
+
 ## v1.8.0 (2026-04-07)
 
 ### Added

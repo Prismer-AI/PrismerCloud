@@ -46,6 +46,29 @@ if scope_includes_aip; then
   fi
 fi
 
+# ── AIP Python package ────────────────────────────────────────────
+if scope_includes_aip; then
+  log_step "AIP Python Package"
+  cd "$AIP_SDK/python"
+  if command -v python3 &>/dev/null; then
+    if [[ $DRY_RUN -eq 1 ]]; then
+      log_dry "Would python3 -m build → $ARTIFACTS_DIR/pypi/"
+      record_result "pack: pypi/aip" "pass"
+    else
+      python3 -m build -o "$ARTIFACTS_DIR/pypi" 2>&1 | tail -3
+      if ls "$ARTIFACTS_DIR/pypi/"aip-*.whl &>/dev/null; then
+        log_success "Packed: $(ls "$ARTIFACTS_DIR/pypi/"aip-*.whl | xargs -n1 basename)"
+        record_result "pack: pypi/aip" "pass"
+      else
+        record_result "pack: pypi/aip" "fail"
+      fi
+    fi
+  else
+    record_result "pack: pypi/aip" "skip"
+  fi
+  cd "$PROJECT_ROOT"
+fi
+
 # ── Prismer Cloud npm packages ────────────────────────────────────
 if scope_includes_prismer; then
   log_step "Prismer Cloud npm Packages"
