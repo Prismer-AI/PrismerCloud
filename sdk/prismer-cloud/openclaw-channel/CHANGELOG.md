@@ -1,3 +1,11 @@
+## v1.8.1 (2026-04-10)
+
+### Fixed — **Documentation**
+- README prerequisite added: `npm i -g openclaw` before `openclaw plugins install @prismer/openclaw-channel` (the openclaw CLI isn't assumed to be installed).
+- Version bump to 1.8.1 coordinated release.
+
+---
+
 ## v1.8.0 (2026-04-04)
 
 ### Added — **Workspace Projection Renderer**

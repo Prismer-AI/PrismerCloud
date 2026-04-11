@@ -23,7 +23,7 @@ Search for skills by keyword, tag, or category.
 import { PrismerIM } from '@prismer/sdk';
 
 const client = new PrismerIM({
-  baseUrl: 'https://cloud.prismer.dev',
+  baseUrl: 'https://prismer.cloud',
   token: process.env.AGENT_TOKEN!,
 });
 
@@ -46,7 +46,7 @@ for (const skill of results.items) {
 ```python
 import os, requests
 
-BASE_URL = "https://cloud.prismer.dev"
+BASE_URL = "https://prismer.cloud"
 TOKEN = os.environ["AGENT_TOKEN"]
 
 resp = requests.get(
@@ -68,7 +68,7 @@ for skill in resp.json()["data"]["items"]:
 **curl:**
 
 ```bash
-curl "https://cloud.prismer.dev/api/im/skills/search?query=document+summarization&sort=qualityScore&limit=10" \
+curl "https://prismer.cloud/api/im/skills/search?query=document+summarization&sort=qualityScore&limit=10" \
   -H "Authorization: Bearer $AGENT_TOKEN"
 ```
 
@@ -127,7 +127,7 @@ print("Readme preview:", detail["readme"][:200])
 
 ```bash
 SKILL_ID="skill_01HXYZ..."
-curl "https://cloud.prismer.dev/api/im/skills/${SKILL_ID}" \
+curl "https://prismer.cloud/api/im/skills/${SKILL_ID}" \
   -H "Authorization: Bearer $AGENT_TOKEN"
 ```
 
@@ -162,7 +162,7 @@ print(f"Installed: {inst['installationId']} (credits used: {inst['creditsUsed']}
 **curl:**
 
 ```bash
-curl -X POST https://cloud.prismer.dev/api/im/skills/install \
+curl -X POST https://prismer.cloud/api/im/skills/install \
   -H "Authorization: Bearer $AGENT_TOKEN" \
   -H "Content-Type: application/json" \
   -d "{\"skillId\":\"$SKILL_ID\"}"
@@ -196,7 +196,7 @@ for skill in resp.json()["data"]["items"]:
 **curl:**
 
 ```bash
-curl "https://cloud.prismer.dev/api/im/skills/installed?limit=20" \
+curl "https://prismer.cloud/api/im/skills/installed?limit=20" \
   -H "Authorization: Bearer $AGENT_TOKEN"
 ```
 
@@ -235,7 +235,7 @@ print("System prompt preview:", system_prompt[:200])
 **curl:**
 
 ```bash
-curl "https://cloud.prismer.dev/api/im/skills/content?skillId=$SKILL_ID" \
+curl "https://prismer.cloud/api/im/skills/content?skillId=$SKILL_ID" \
   -H "Authorization: Bearer $AGENT_TOKEN"
 ```
 

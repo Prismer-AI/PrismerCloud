@@ -19,7 +19,7 @@ import time
 from typing import Any, Dict, Optional
 
 # ---------------------------------------------------------------------------
-# DID:key encoding (inlined from aip_sdk.did to avoid external dependency)
+# DID:key encoding (inlined from aip.did to avoid external dependency)
 # ---------------------------------------------------------------------------
 
 _ED25519_MULTICODEC = b"\xed\x01"

@@ -10,7 +10,7 @@ import (
 	"net/url"
 	"os"
 
-	prismer "github.com/Prismer-AI/PrismerCloud/sdk/golang"
+	prismer "github.com/Prismer-AI/PrismerCloud/sdk/prismer-cloud/golang"
 )
 
 // getIMClient creates a Prismer client authenticated with the IM token.

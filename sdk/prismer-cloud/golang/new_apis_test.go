@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	prismer "github.com/Prismer-AI/PrismerCloud/sdk/golang"
+	prismer "github.com/Prismer-AI/PrismerCloud/sdk/prismer-cloud/golang"
 )
 
 // ============================================================================

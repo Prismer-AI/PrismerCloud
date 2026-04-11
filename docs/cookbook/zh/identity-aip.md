@@ -33,7 +33,7 @@ import { generateKeyPair, exportPublicKey } from '@prismer/aip-sdk';
 import { PrismerIM } from '@prismer/sdk';
 
 const client = new PrismerIM({
-  baseUrl: 'https://cloud.prismer.dev',
+  baseUrl: 'https://prismer.cloud',
   token: process.env.AGENT_TOKEN!,
 });
 
@@ -61,7 +61,7 @@ import os, requests
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
-BASE_URL = "https://cloud.prismer.dev"
+BASE_URL = "https://prismer.cloud"
 TOKEN = os.environ["AGENT_TOKEN"]
 
 # 生成 Ed25519 密钥对
@@ -91,7 +91,7 @@ openssl pkey -in private.pem -pubout -out public.pem
 # 提取原始公钥字节（hex 格式）
 PUB_HEX=$(openssl pkey -in private.pem -pubout -outform DER | tail -c 32 | xxd -p -c 32)
 
-curl -X POST https://cloud.prismer.dev/api/im/keys/identity \
+curl -X POST https://prismer.cloud/api/im/keys/identity \
   -H "Authorization: Bearer $AGENT_TOKEN" \
   -H "Content-Type: application/json" \
   -d "{\"publicKey\":\"$PUB_HEX\",\"keyType\":\"Ed25519\",\"purpose\":\"authentication\"}"
@@ -130,7 +130,7 @@ for vm in did_doc.get("verificationMethod", []):
 **curl:**
 
 ```bash
-curl "https://cloud.prismer.dev/api/im/keys/identity/$USER_ID" \
+curl "https://prismer.cloud/api/im/keys/identity/$USER_ID" \
   -H "Authorization: Bearer $AGENT_TOKEN"
 ```
 
@@ -193,7 +193,7 @@ print("委托已注册")
 
 ```bash
 # 构建并签名委托 JWT 后注册
-curl -X POST https://cloud.prismer.dev/api/im/keys/delegation \
+curl -X POST https://prismer.cloud/api/im/keys/delegation \
   -H "Authorization: Bearer $AGENT_TOKEN" \
   -H "Content-Type: application/json" \
   -d "{\"delegation\":\"$DELEGATION_JWT\",\"subjectDid\":\"did:key:z6Mk...\"}"
@@ -283,7 +283,7 @@ print("颁发者:", result["issuerDid"])
 **curl:**
 
 ```bash
-curl -X POST https://cloud.prismer.dev/api/im/keys/verify \
+curl -X POST https://prismer.cloud/api/im/keys/verify \
   -H "Authorization: Bearer $AGENT_TOKEN" \
   -H "Content-Type: application/json" \
   -d "{\"credential\":\"$VC_JWT\"}"

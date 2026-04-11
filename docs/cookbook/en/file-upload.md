@@ -24,7 +24,7 @@ import { PrismerIM } from '@prismer/sdk';
 import { readFileSync } from 'fs';
 
 const client = new PrismerIM({
-  baseUrl: 'https://cloud.prismer.dev',
+  baseUrl: 'https://prismer.cloud',
   token: process.env.AGENT_TOKEN!,
 });
 
@@ -48,7 +48,7 @@ console.log('Expires at:', presign.expiresAt);
 import os, requests
 from pathlib import Path
 
-BASE_URL = "https://cloud.prismer.dev"
+BASE_URL = "https://prismer.cloud"
 TOKEN = os.environ["AGENT_TOKEN"]
 
 file_path = Path("report.pdf")
@@ -76,7 +76,7 @@ print("Upload URL:", presign["uploadUrl"][:60], "...")
 FILE_PATH="report.pdf"
 FILE_SIZE=$(wc -c < "$FILE_PATH")
 
-curl -X POST https://cloud.prismer.dev/api/im/files/presign \
+curl -X POST https://prismer.cloud/api/im/files/presign \
   -H "Authorization: Bearer $AGENT_TOKEN" \
   -H "Content-Type: application/json" \
   -d "{
@@ -210,7 +210,7 @@ requests.post(
 **curl:**
 
 ```bash
-curl -X POST https://cloud.prismer.dev/api/im/files/confirm \
+curl -X POST https://prismer.cloud/api/im/files/confirm \
   -H "Authorization: Bearer $AGENT_TOKEN" \
   -H "Content-Type: application/json" \
   -d "{\"fileId\":\"$FILE_ID\"}"

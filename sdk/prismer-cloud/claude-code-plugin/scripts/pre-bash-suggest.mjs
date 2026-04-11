@@ -17,7 +17,7 @@ import { readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { resolveConfig } from './lib/resolve-config.mjs';
-import { SIGNAL_PATTERNS, ERROR_CONTEXT_RE, SKIP_RE, countSignal } from './lib/signals.mjs';
+import { SIGNAL_PATTERNS, ERROR_CONTEXT_RE, SKIP_RE, countSignal, detectTechStack } from './lib/signals.mjs';
 import { createLogger } from './lib/logger.mjs';
 
 const log = createLogger('pre-bash-suggest');
@@ -87,6 +87,14 @@ if (maxCount < STUCK_THRESHOLD) {
 // --- Agent is stuck (>= 2 occurrences of same signal) → query evolution ---
 
 log.info('stuck-detected', { maxCount, signals: signals.map(s => s.type) });
+
+// Enrich signals with detected tech stack so the server can filter mismatched genes
+const techStack = detectTechStack();
+if (techStack) {
+  for (const sig of signals) {
+    sig.techStack = techStack;
+  }
+}
 
 if (!API_KEY) {
   const hint = `[Prismer Evolution] Repeated error detected (${maxCount}x): ${signals.map(s => s.type).join(', ')}. Set PRISMER_API_KEY to get fix recommendations.`;

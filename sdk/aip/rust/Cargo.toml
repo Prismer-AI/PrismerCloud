@@ -1,6 +1,6 @@
 [package]
 name = "aip-sdk"
-version = "1.7.3"
+version = "1.8.1"
 edition = "2021"
 description = "Agent Identity Protocol SDK — DID-based identity for AI Agents"
 license = "MIT"

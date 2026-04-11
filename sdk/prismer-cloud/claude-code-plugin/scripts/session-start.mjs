@@ -487,6 +487,37 @@ if (eventType === 'startup') {
   } catch {}
 }
 
+// --- Step 4b: Auto-update check (non-blocking, startup only) ---
+// Check if plugin is outdated. If so, clear stale npm cache so next /plugin install pulls fresh.
+
+if (eventType === 'startup') {
+  try {
+    const pkgPath = join(__dirname, '..', 'package.json');
+    const currentVersion = JSON.parse(readFileSync(pkgPath, 'utf-8')).version;
+    const result = execFileSync('npm', ['view', '@prismer/claude-code-plugin', 'version'], {
+      timeout: 3000, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'],
+    }).trim();
+    if (result && result !== currentVersion) {
+      // Auto-clear stale npm cache so next install pulls fresh
+      const { rmSync } = await import('fs');
+      const npmCachePaths = [
+        join(homedir(), '.claude', 'plugins', 'npm-cache', 'node_modules', '@prismer'),
+        join(homedir(), '.claude', 'plugins', 'cache', 'prismer-cloud'),
+      ];
+      for (const p of npmCachePaths) {
+        try { rmSync(p, { recursive: true, force: true }); } catch {}
+      }
+      process.stdout.write(
+        `\n[Prismer] \u26A0 Update available: ${currentVersion} \u2192 ${result}. ` +
+        `Cache cleared \u2014 run: /plugin install prismer@prismer-cloud\n`
+      );
+      log.info('update-available', { current: currentVersion, latest: result, cacheCleared: true });
+    }
+  } catch {
+    // npm view failed (offline, timeout) — skip silently
+  }
+}
+
 // --- Step 5: Health report ---
 
 const elapsed = Date.now() - sessionStartTs;

@@ -1,15 +1,27 @@
 [build-system]
-requires = ["setuptools>=61.0"]
-build-backend = "setuptools.backends._legacy:_Backend"
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
 
 [project]
-name = "aip-sdk"
-version = "1.7.3"
+name = "aip"
+version = "1.8.1"
 description = "Agent Identity Protocol SDK — DID-based identity for AI Agents"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.9"
 dependencies = ["pynacl>=1.5.0"]
+authors = [
+    {name = "Prismer", email = "dev@prismer.cloud"}
+]
+keywords = ["aip", "did", "agent", "identity", "ed25519", "verifiable-credentials"]
+
+[project.urls]
+Homepage = "https://prismer.cloud"
+Repository = "https://github.com/Prismer-AI/PrismerCloud/tree/main/sdk/aip/python"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["aip*"]
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0"]

@@ -120,8 +120,11 @@ function hasEvolutionValue(text) {
   // Gene was used during session
   if (/gene_feedback:/m.test(text)) return true;
 
-  // Enough activity (>= 5 tool entries — bash, edit, or write)
-  if ((text.match(/^- (bash|edit|write):/gm) || []).length >= 5) return true;
+  // Enough activity (>= 5 tool entries) BUT only if there were any signals at all.
+  // Without signals, there is nothing evolution-relevant to record — only memory_write
+  // might be useful, and that does not justify blocking the session.
+  const hasAnySignal = /signal:\S+/m.test(text);
+  if (hasAnySignal && (text.match(/^- (bash|edit|write):/gm) || []).length >= 5) return true;
 
   return false;
 }
@@ -165,12 +168,20 @@ function buildContext(text) {
     parts.push(`Repeated signals: ${sigList.join(', ')}`);
   }
 
-  // Concise instructions
+  // Concise instructions: only suggest evolve_record/evolve_create_gene when there is
+  // gene feedback or repeated signals (evolution-relevant). Otherwise only memory_write.
+  const hasGeneFeedback = feedbacks.length > 0;
+  const hasRepeatedSignals = sigList.length > 0;
+
   if (parts.length === 0) {
-    parts.push('Session had evolution value. Review: evolve_record / evolve_create_gene / memory_write. Max 3 calls.');
-  } else {
+    // No gene feedback and no repeated signals — only memory_write is relevant
+    parts.push('Session had activity. Review: memory_write (project-specific learnings). Max 1 call.');
+  } else if (hasGeneFeedback || hasRepeatedSignals) {
     parts.push('');
     parts.push('Review: evolve_record (gene feedback) / evolve_create_gene (general pattern) / memory_write (project-specific). Max 3 calls.');
+  } else {
+    parts.push('');
+    parts.push('Review: memory_write (project-specific learnings). Max 1 call.');
   }
 
   return parts.join('\n');

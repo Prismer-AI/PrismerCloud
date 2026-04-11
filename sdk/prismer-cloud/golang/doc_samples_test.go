@@ -24,7 +24,7 @@ import (
 	"testing"
 	"time"
 
-	prismer "github.com/Prismer-AI/PrismerCloud/sdk/golang"
+	prismer "github.com/Prismer-AI/PrismerCloud/sdk/prismer-cloud/golang"
 )
 
 // testAPIKey returns the API key for tests, failing if unset.

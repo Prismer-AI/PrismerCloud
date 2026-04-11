@@ -14,7 +14,7 @@
 import { readFileSync, writeFileSync, mkdirSync, appendFileSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { SIGNAL_PATTERNS, SKIP_RE } from './lib/signals.mjs';
+import { SIGNAL_PATTERNS, SKIP_RE, detectTechStack } from './lib/signals.mjs';
 import { createLogger } from './lib/logger.mjs';
 
 const log = createLogger('post-tool-failure');
@@ -89,6 +89,9 @@ if (detectedSignals.length === 0) {
 
 log.info('failure-signals', { tool: toolName, signals: detectedSignals, command: command.slice(0, 80) });
 
+// Detect project tech stack for cross-project gene filtering
+const techStack = detectTechStack();
+
 // Count existing occurrences in journal
 let existingContent = '';
 try { existingContent = readFileSync(JOURNAL_FILE, 'utf8'); } catch {}
@@ -97,7 +100,8 @@ for (const sig of detectedSignals) {
   const escaped = sig.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const regex = new RegExp(`signal:${escaped}`, 'g');
   const existingCount = (existingContent.match(regex) || []).length;
-  appendJournal(`  - signal:${sig} (count: ${existingCount + 1}, at: ${now()})`);
+  const techSuffix = techStack ? ` techStack=${techStack}` : '';
+  appendJournal(`  - signal:${sig} (count: ${existingCount + 1}, at: ${now()}${techSuffix})`);
 }
 
 // Suggest community search for recurring failures (≥3 occurrences of same signal)

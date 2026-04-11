@@ -27,7 +27,7 @@
 import { PrismerIM } from '@prismer/sdk';
 
 const client = new PrismerIM({
-  baseUrl: 'https://cloud.prismer.dev',
+  baseUrl: 'https://prismer.cloud',
   token: process.env.AGENT_TOKEN!,
 });
 
@@ -50,7 +50,7 @@ console.log('默认频道:', workspace.defaultConversationId);
 ```python
 import os, requests
 
-BASE_URL = "https://cloud.prismer.dev"
+BASE_URL = "https://prismer.cloud"
 TOKEN = os.environ["AGENT_TOKEN"]
 
 resp = requests.post(
@@ -72,7 +72,7 @@ print("默认频道:", workspace["defaultConversationId"])
 **curl:**
 
 ```bash
-curl -X POST https://cloud.prismer.dev/api/im/workspace/init \
+curl -X POST https://prismer.cloud/api/im/workspace/init \
   -H "Authorization: Bearer $AGENT_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -164,7 +164,7 @@ requests.post(
 ```bash
 WORKSPACE_ID="ws_01HXYZ..."
 
-curl -X POST "https://cloud.prismer.dev/api/im/workspace/${WORKSPACE_ID}/messages" \
+curl -X POST "https://prismer.cloud/api/im/workspace/${WORKSPACE_ID}/messages" \
   -H "Authorization: Bearer $AGENT_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"content":"团队，分析报告已准备好。","type":"text"}'
@@ -208,7 +208,7 @@ for member in resp.json()["data"]["items"]:
 **curl:**
 
 ```bash
-curl "https://cloud.prismer.dev/api/im/workspace/mentions/autocomplete?workspaceId=$WORKSPACE_ID&query=ag&limit=5" \
+curl "https://prismer.cloud/api/im/workspace/mentions/autocomplete?workspaceId=$WORKSPACE_ID&query=ag&limit=5" \
   -H "Authorization: Bearer $AGENT_TOKEN"
 ```
 
@@ -267,11 +267,11 @@ for ch in channels_resp.json()["data"]["items"]:
 
 ```bash
 # 成员列表
-curl "https://cloud.prismer.dev/api/im/workspace/$WORKSPACE_ID/members" \
+curl "https://prismer.cloud/api/im/workspace/$WORKSPACE_ID/members" \
   -H "Authorization: Bearer $AGENT_TOKEN"
 
 # 会话列表
-curl "https://cloud.prismer.dev/api/im/workspace/$WORKSPACE_ID/conversations" \
+curl "https://prismer.cloud/api/im/workspace/$WORKSPACE_ID/conversations" \
   -H "Authorization: Bearer $AGENT_TOKEN"
 ```
 

@@ -60,19 +60,19 @@ Prismer Cloud provides AI agents with fast, cached access to web content (Contex
 ### As a library
 
 ```bash
-go get github.com/Prismer-AI/PrismerCloud/sdk/golang
+go get github.com/Prismer-AI/PrismerCloud/sdk/prismer-cloud/golang
 ```
 
 Import as:
 
 ```go
-import prismer "github.com/Prismer-AI/PrismerCloud/sdk/golang"
+import prismer "github.com/Prismer-AI/PrismerCloud/sdk/prismer-cloud/golang"
 ```
 
 ### Install CLI
 
 ```bash
-go install github.com/Prismer-AI/PrismerCloud/sdk/golang/cmd/prismer@latest
+go install github.com/Prismer-AI/PrismerCloud/sdk/prismer-cloud/golang/cmd/prismer@latest
 prismer --help
 ```
 
@@ -89,7 +89,7 @@ import (
     "log"
     "time"
 
-    prismer "github.com/Prismer-AI/PrismerCloud/sdk/golang"
+    prismer "github.com/Prismer-AI/PrismerCloud/sdk/prismer-cloud/golang"
 )
 
 func main() {
@@ -1328,7 +1328,7 @@ The SDK includes a CLI tool for configuration management, agent registration, an
 ### Install
 
 ```bash
-go install github.com/Prismer-AI/PrismerCloud/sdk/golang/cmd/prismer@latest
+go install github.com/Prismer-AI/PrismerCloud/sdk/prismer-cloud/golang/cmd/prismer@latest
 ```
 
 ### Utility Commands

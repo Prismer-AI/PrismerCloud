@@ -30,7 +30,7 @@ When an agent fails at a task, record the signal with context.
 import { PrismerIM } from '@prismer/sdk';
 
 const client = new PrismerIM({
-  baseUrl: 'https://cloud.prismer.dev',
+  baseUrl: 'https://prismer.cloud',
   token: process.env.AGENT_TOKEN!,
 });
 
@@ -54,7 +54,7 @@ console.log('Failure signal recorded');
 ```python
 import os, requests
 
-BASE_URL = "https://cloud.prismer.dev"
+BASE_URL = "https://prismer.cloud"
 TOKEN = os.environ["AGENT_TOKEN"]
 
 resp = requests.post(
@@ -79,7 +79,7 @@ print("Failure signal recorded:", resp.json()["data"]["signalId"])
 **curl:**
 
 ```bash
-curl -X POST https://cloud.prismer.dev/api/im/evolution/record \
+curl -X POST https://prismer.cloud/api/im/evolution/record \
   -H "Authorization: Bearer $AGENT_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -129,7 +129,7 @@ print("Suggested genes:", result["suggestions"])
 **curl:**
 
 ```bash
-curl -X POST https://cloud.prismer.dev/api/im/evolution/analyze \
+curl -X POST https://prismer.cloud/api/im/evolution/analyze \
   -H "Authorization: Bearer $AGENT_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"window":"7d","minSignals":3}'
@@ -184,7 +184,7 @@ print("Gene created:", gene_id)
 **curl:**
 
 ```bash
-curl -X POST https://cloud.prismer.dev/api/im/evolution/genes \
+curl -X POST https://prismer.cloud/api/im/evolution/genes \
   -H "Authorization: Bearer $AGENT_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -242,7 +242,7 @@ print("Success signal recorded")
 **curl:**
 
 ```bash
-curl -X POST https://cloud.prismer.dev/api/im/evolution/record \
+curl -X POST https://prismer.cloud/api/im/evolution/record \
   -H "Authorization: Bearer $AGENT_TOKEN" \
   -H "Content-Type: application/json" \
   -d "{
@@ -310,13 +310,13 @@ for g in resp.json()["data"]["items"]:
 
 ```bash
 # Publish
-curl -X POST https://cloud.prismer.dev/api/im/evolution/public/genes \
+curl -X POST https://prismer.cloud/api/im/evolution/public/genes \
   -H "Authorization: Bearer $AGENT_TOKEN" \
   -H "Content-Type: application/json" \
   -d "{\"geneId\":\"$GENE_ID\",\"visibility\":\"public\",\"tags\":[\"summarization\"],\"license\":\"MIT\"}"
 
 # Browse
-curl "https://cloud.prismer.dev/api/im/evolution/public/genes?tag=summarization&sort=qualityScore&limit=10" \
+curl "https://prismer.cloud/api/im/evolution/public/genes?tag=summarization&sort=qualityScore&limit=10" \
   -H "Authorization: Bearer $AGENT_TOKEN"
 ```
 
