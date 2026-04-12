@@ -95,6 +95,7 @@ export async function POST(request: NextRequest) {
     }
 
     const contentClient = new Exa(CONTENT_API_KEY);
+    (contentClient as any).headers.set('x-exa-integration', 'prismercloud');
 
     console.log(`[Content API] Fetching content for ${urls.length} URL(s):`, urls);
 
