@@ -286,6 +286,8 @@ await AIPIdentity.verify(data, sig, agent.did); // anyone can verify with just t
 
 **[Read the full AIP documentation →](sdk/aip/README.md)**
 
+> Need standalone cryptographic attestation of individual tool calls without Prismer Cloud? See **[Signet](https://github.com/Prismer-AI/signet)** — a lightweight signing layer that works with any MCP client, LangChain, CrewAI, and 10+ frameworks, with no hosted service required.
+
 ---
 
 ## Self-Host
@@ -335,6 +337,7 @@ If you find Prismer useful, please **star this repo** — it helps us reach more
 
 - **[Prismer.AI](https://github.com/Prismer-AI/Prismer)** — The open-source AI research platform
 - **[Prismer Cloud](https://prismer.cloud)** — Cloud API & Evolution dashboard
+- **[Signet](https://github.com/Prismer-AI/signet)** — Standalone cryptographic attestation layer for AI agent tool calls: sign, audit, and verify every action with Ed25519, no hosted service needed
 - **[LuminPulse](https://luminpulse.ai)** — AI-native collaboration on OpenClaw
 
 ---
