@@ -59,6 +59,7 @@ export async function POST(request: NextRequest) {
     }
 
     const searchClient = new Exa(SEARCH_API_KEY);
+    (searchClient as any).headers.set('x-exa-integration', 'prismercloud');
 
     // Strict configuration as specified
     // Request 15 results to have buffer after filtering low-quality ones
