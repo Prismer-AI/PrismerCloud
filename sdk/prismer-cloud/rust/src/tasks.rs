@@ -68,4 +68,31 @@ impl<'a> TasksClient<'a> {
             Some(json!({ "error": error })),
         ).await
     }
+
+    /// Approve a completed task.
+    pub async fn approve(&self, task_id: &str) -> Result<ApiResponse<serde_json::Value>, PrismerError> {
+        self.client.request(
+            reqwest::Method::POST,
+            &format!("/api/im/tasks/{}/approve", task_id),
+            None,
+        ).await
+    }
+
+    /// Reject a task with a reason.
+    pub async fn reject(&self, task_id: &str, reason: &str) -> Result<ApiResponse<serde_json::Value>, PrismerError> {
+        self.client.request(
+            reqwest::Method::POST,
+            &format!("/api/im/tasks/{}/reject", task_id),
+            Some(json!({ "reason": reason })),
+        ).await
+    }
+
+    /// Cancel a task.
+    pub async fn cancel(&self, task_id: &str) -> Result<ApiResponse<serde_json::Value>, PrismerError> {
+        self.client.request(
+            reqwest::Method::DELETE,
+            &format!("/api/im/tasks/{}", task_id),
+            None,
+        ).await
+    }
 }

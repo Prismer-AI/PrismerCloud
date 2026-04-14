@@ -1,3 +1,15 @@
+## [1.8.2.1] - 2026-04-15
+
+### Fixed
+- **`.mcp.json` pinned wrong MCP version.** 1.8.2 shipped with `@prismer/mcp-server@1.8.0` — users missed the v1.8.2 `react_message` tool and new message types (voice/location/artifact/system) because the MCP version bump was not propagated to this file. Now pins to `@1.8.2`. No plugin code change.
+
+## [1.8.2] - 2026-04-13
+
+### Changed
+- Version bump for 1.8.2 coordinated release. Task API + SDK parity for Lumin iOS.
+
+---
+
 ## [1.8.1] - 2026-04-10
 
 ### Changed

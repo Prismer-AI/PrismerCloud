@@ -13,6 +13,17 @@ import * as os from 'os';
 // @ts-ignore — no type declarations for @iarna/toml
 import * as TOML from '@iarna/toml';
 import { PrismerClient } from './index';
+import {
+  displayBanner,
+  success,
+  error as uiError,
+  warn as uiWarn,
+  info as uiInfo,
+  dim,
+  withSpinner,
+  table,
+  keyValue,
+} from './ui';
 
 // Read version from package.json
 let cliVersion = '1.7.2';
@@ -79,7 +90,7 @@ function setNestedValue(obj: Record<string, any>, dotPath: string, value: string
 export function getIMClient(): PrismerClient {
   const cfg = readConfig();
   const token = cfg?.auth?.im_token;
-  if (!token) { console.error('No IM token. Run "prismer setup --agent" or "prismer register <username>" first.'); process.exit(1); }
+  if (!token) { uiError('No IM token. Run "prismer setup --agent" or "prismer register <username>" first.'); process.exit(1); }
   const env = cfg?.default?.environment || 'production';
   const baseUrl = cfg?.default?.base_url || '';
   return new PrismerClient({ apiKey: token, environment: env as any, ...(baseUrl ? { baseUrl } : {}) });
@@ -88,7 +99,7 @@ export function getIMClient(): PrismerClient {
 export function getAPIClient(): PrismerClient {
   const cfg = readConfig();
   const apiKey = cfg?.default?.api_key;
-  if (!apiKey) { console.error('No API key. Run "prismer setup" to sign in and get your key.'); process.exit(1); }
+  if (!apiKey) { uiError('No API key. Run "prismer setup" to sign in and get your key.'); process.exit(1); }
   const env = cfg?.default?.environment || 'production';
   const baseUrl = cfg?.default?.base_url || '';
   return new PrismerClient({ apiKey, environment: env as any, ...(baseUrl ? { baseUrl } : {}) });
@@ -111,12 +122,12 @@ program.name('prismer').description('Prismer Cloud SDK CLI').version(cliVersion)
 
 async function verifyAndSaveKey(config: PrismerCLIConfig, apiKey: string): Promise<void> {
   if (!apiKey) {
-    console.error('No key provided.');
+    uiError('No key provided.');
     process.exit(1);
   }
   if (!apiKey.startsWith('sk-prismer-')) {
-    console.error('Invalid key format. API keys start with sk-prismer-');
-    console.error('Get your key at: https://prismer.cloud/setup');
+    uiError('Invalid key format. API keys start with sk-prismer-');
+    dim('  Get your key at: https://prismer.cloud/setup');
     process.exit(1);
   }
 
@@ -126,13 +137,13 @@ async function verifyAndSaveKey(config: PrismerCLIConfig, apiKey: string): Promi
       headers: { Authorization: `Bearer ${apiKey}` },
     });
     if (res.status === 401) {
-      console.error('API key is invalid or expired.');
-      console.error('Get a new key at: https://prismer.cloud/setup');
+      uiError('API key is invalid or expired.');
+      dim('  Get a new key at: https://prismer.cloud/setup');
       process.exit(1);
     }
-    console.log('API key verified ✓');
+    success('API key verified');
   } catch (err: any) {
-    console.warn(`Could not verify key (${err.message}). Saving anyway.`);
+    uiWarn(`Could not verify key (${err.message}). Saving anyway.`);
   }
 
   if (!config.default) config.default = {};
@@ -140,14 +151,14 @@ async function verifyAndSaveKey(config: PrismerCLIConfig, apiKey: string): Promi
   if (!config.default.environment) config.default.environment = 'production';
   writeConfig(config);
   console.log('');
-  console.log('Saved to ~/.prismer/config.toml');
-  console.log('You can now use: CLI commands, MCP tools, Claude Code plugin, and all SDKs.');
+  success('Saved to ~/.prismer/config.toml');
+  uiInfo('You can now use: CLI commands, MCP tools, Claude Code plugin, and all SDKs.');
 
   // Auto-install daemon service so evolution sync runs persistently
   try {
     installDaemonService();
   } catch {
-    console.log('Daemon auto-start setup skipped. Run manually: prismer daemon install');
+    dim('Daemon auto-start setup skipped. Run manually: prismer daemon install');
   }
 }
 
@@ -174,10 +185,10 @@ async function runSetup(opts: { manual?: boolean; agent?: boolean; force?: boole
   // ── Already configured check ──
   if (!opts.force && config.default.api_key?.startsWith('sk-prismer-')) {
     const masked = config.default.api_key.slice(0, 12) + '...' + config.default.api_key.slice(-4);
-    console.log(`Already configured: ${masked}`);
+    success(`Already configured: ${masked}`);
     console.log('');
-    console.log('To reconfigure, run: prismer setup --force');
-    console.log('To check status:     prismer status');
+    dim('  To reconfigure, run: prismer setup --force');
+    dim('  To check status:     prismer status');
     return;
   }
 
@@ -190,8 +201,8 @@ async function runSetup(opts: { manual?: boolean; agent?: boolean; force?: boole
   // ── Path 2: Agent auto-register (non-interactive, for CI/scripts) ──
   if (opts.agent) {
     if (!opts.force && config.auth?.im_token) {
-      console.log('Already registered as agent (IM token exists).');
-      console.log('For API key access, run: prismer setup');
+      success('Already registered as agent (IM token exists).');
+      dim('  For API key access, run: prismer setup');
       return;
     }
 
@@ -211,14 +222,16 @@ async function runSetup(opts: { manual?: boolean; agent?: boolean; force?: boole
       config.auth.im_username = data.data?.username || username;
       writeConfig(config);
 
-      console.log('Agent registered with free credits ✓');
-      console.log(`  Username: ${config.auth.im_username}`);
-      console.log(`  User ID:  ${config.auth.im_user_id}`);
+      success('Agent registered with free credits');
+      keyValue({
+        'Username': config.auth.im_username || '',
+        'User ID': config.auth.im_user_id || '',
+      });
       console.log('');
-      console.log('For full API access, sign in: prismer setup');
+      uiInfo('For full API access, sign in: prismer setup');
     } catch (err: any) {
-      console.error(`Agent registration failed: ${err.message}`);
-      console.error('Try signing in instead: prismer setup');
+      uiError(`Agent registration failed: ${err.message}`);
+      dim('  Try signing in instead: prismer setup');
       process.exit(1);
     }
     return;
@@ -227,12 +240,12 @@ async function runSetup(opts: { manual?: boolean; agent?: boolean; force?: boole
   // ── Path 3: Manual mode — open browser + paste key ──
   if (opts.manual) {
     const setupUrl = `${baseUrl}/setup?utm_source=cli&utm_medium=manual`;
-    console.log('Opening browser to sign in...');
-    console.log(`  ${setupUrl}`);
+    uiInfo('Opening browser to sign in...');
+    dim(`  ${setupUrl}`);
     console.log('');
     openBrowser(setupUrl);
 
-    console.log('After signing in, copy the API key from the page and paste it below.');
+    uiInfo('After signing in, copy the API key from the page and paste it below.');
     console.log('');
 
     const readline = require('readline');
@@ -240,7 +253,7 @@ async function runSetup(opts: { manual?: boolean; agent?: boolean; force?: boole
     rl.question('Paste your API key: ', (key: string) => {
       rl.close();
       verifyAndSaveKey(config, key.trim()).catch((err: Error) => {
-        console.error(`Setup failed: ${err.message}`);
+        uiError(`Setup failed: ${err.message}`);
         process.exit(1);
       });
     });
@@ -290,23 +303,23 @@ async function runSetup(opts: { manual?: boolean; agent?: boolean; force?: boole
     const callbackUrl = `http://127.0.0.1:${port}/callback`;
     const setupUrl = `${baseUrl}/setup?callback=${encodeURIComponent(callbackUrl)}&state=${state}&utm_source=cli&utm_medium=auto`;
 
-    console.log('Opening browser to sign in...');
+    uiInfo('Opening browser to sign in...');
     console.log('');
 
     openBrowser(setupUrl);
 
-    console.log('Waiting for authentication...');
-    console.log('(If the browser didn\'t open, visit this URL manually:)');
-    console.log(`  ${setupUrl}`);
+    uiInfo('Waiting for authentication...');
+    dim('  (If the browser didn\'t open, visit this URL manually:)');
+    dim(`  ${setupUrl}`);
     console.log('');
 
     setTimeout(() => {
       if (!resolved) {
-        console.error('Timed out waiting for authentication (5 min).');
-        console.error('');
-        console.error('Alternatives:');
-        console.error('  prismer setup --manual    Paste key manually');
-        console.error('  prismer setup --agent     Register as agent (free credits, no browser)');
+        uiError('Timed out waiting for authentication (5 min).');
+        console.log('');
+        dim('  Alternatives:');
+        dim('    prismer setup --manual    Paste key manually');
+        dim('    prismer setup --agent     Register as agent (free credits, no browser)');
         server.close();
         process.exit(1);
       }
@@ -333,7 +346,7 @@ program
   .option('--agent', 'Register as agent with free credits')
   .option('--force', 'Reconfigure even if already set up')
   .action(async (apiKey: string | undefined, opts: { manual?: boolean; agent?: boolean; force?: boolean }) => {
-    console.log('Note: "prismer init" is deprecated. Use "prismer setup" instead.');
+    uiWarn('"prismer init" is deprecated. Use "prismer setup" instead.');
     console.log('');
     await runSetup(opts, apiKey);
   });
@@ -350,7 +363,7 @@ program
   .action(async (username: string, opts: any) => {
     const config = readConfig();
     const apiKey = config.default?.api_key;
-    if (!apiKey) { console.error('No API key. Run "prismer setup" first.'); process.exit(1); }
+    if (!apiKey) { uiError('No API key. Run "prismer setup" first.'); process.exit(1); }
 
     const client = new PrismerClient({
       apiKey,
@@ -371,7 +384,7 @@ program
     try {
       const result = await client.im.account.register(registerOpts as any);
       if (!result.ok || !result.data) {
-        console.error('Registration failed:', result.error?.message || 'Unknown error');
+        uiError(`Registration failed: ${result.error?.message || 'Unknown error'}`);
         process.exit(1);
       }
       const data = result.data;
@@ -381,15 +394,17 @@ program
       config.auth.im_username = data.username;
       config.auth.im_token_expires = data.expiresIn;
       writeConfig(config);
-      console.log('Registration successful!');
-      console.log(`  User ID:  ${data.imUserId}`);
-      console.log(`  Username: ${data.username}`);
-      console.log(`  Display:  ${data.displayName}`);
-      console.log(`  Role:     ${data.role}`);
-      console.log(`  New:      ${data.isNew}`);
-      console.log('Token stored in ~/.prismer/config.toml');
+      success('Registration successful!');
+      keyValue({
+        'User ID': data.imUserId,
+        'Username': data.username,
+        'Display': data.displayName,
+        'Role': data.role,
+        'New': String(data.isNew),
+      });
+      dim('  Token stored in ~/.prismer/config.toml');
     } catch (err) {
-      console.error('Registration failed:', err instanceof Error ? err.message : err);
+      uiError(`Registration failed: ${err instanceof Error ? err.message : String(err)}`);
       process.exit(1);
     }
   });
@@ -399,57 +414,67 @@ program
   .description('Show current config and live info')
   .action(async () => {
     const config = readConfig();
-    console.log('=== Prismer Status ===\n');
+    uiInfo('Prismer Status');
+    console.log('');
+
     const apiKey = config.default?.api_key;
-    if (apiKey) {
-      const masked = apiKey.length > 16 ? apiKey.slice(0, 12) + '...' + apiKey.slice(-4) : '***';
-      console.log(`API Key:     ${masked}`);
-    } else {
-      console.log('API Key:     (not set)');
-    }
-    console.log(`Environment: ${config.default?.environment || '(not set)'}`);
-    console.log(`Base URL:    ${config.default?.base_url || '(default)'}\n`);
+    const maskedKey = apiKey
+      ? (apiKey.length > 16 ? apiKey.slice(0, 12) + '...' + apiKey.slice(-4) : '***')
+      : '(not set)';
+
+    keyValue({
+      'API Key': maskedKey,
+      'Environment': config.default?.environment || '(not set)',
+      'Base URL': config.default?.base_url || '(default)',
+    });
+    console.log('');
 
     const token = config.auth?.im_token;
     if (token) {
-      console.log(`IM User ID:  ${config.auth?.im_user_id || '(unknown)'}`);
-      console.log(`IM Username: ${config.auth?.im_username || '(unknown)'}`);
+      let tokenStatus = 'set (expiry unknown)';
       const expires = config.auth?.im_token_expires;
       if (expires) {
         const expiresDate = new Date(expires);
         if (!isNaN(expiresDate.getTime())) {
-          const label = expiresDate <= new Date() ? 'EXPIRED' : 'valid';
-          console.log(`IM Token:    ${label} (expires ${expiresDate.toISOString()})`);
+          tokenStatus = expiresDate <= new Date() ? 'EXPIRED' : `valid (expires ${expiresDate.toISOString()})`;
         } else {
-          console.log(`IM Token:    set (expires in ${expires})`);
+          tokenStatus = `set (expires in ${expires})`;
         }
-      } else {
-        console.log('IM Token:    set (expiry unknown)');
       }
 
+      keyValue({
+        'IM User ID': config.auth?.im_user_id || '(unknown)',
+        'IM Username': config.auth?.im_username || '(unknown)',
+        'IM Token': tokenStatus,
+      });
+
       // Live info
-      console.log('\n--- Live Info ---');
-      try {
+      console.log('');
+      const me = await withSpinner('Fetching live info', async () => {
         const client = new PrismerClient({
           apiKey: token,
           environment: (config.default?.environment as 'production') || 'production',
           baseUrl: config.default?.base_url || undefined,
         });
-        const me = await client.im.account.me();
-        if (me.ok && me.data) {
-          console.log(`Display:     ${me.data.user.displayName}`);
-          console.log(`Role:        ${me.data.user.role}`);
-          console.log(`Credits:     ${me.data.credits.balance}`);
-          console.log(`Messages:    ${me.data.stats.messagesSent}`);
-          console.log(`Unread:      ${me.data.stats.unreadCount}`);
-        } else {
-          console.log(`Could not fetch live info: ${me.error?.message || 'unknown error'}`);
-        }
-      } catch (err) {
-        console.log(`Could not fetch live info: ${err instanceof Error ? err.message : err}`);
+        return client.im.account.me();
+      }).catch((err) => {
+        uiWarn(`Could not fetch live info: ${err instanceof Error ? err.message : String(err)}`);
+        return null;
+      });
+
+      if (me && me.ok && me.data) {
+        keyValue({
+          'Display': me.data.user.displayName,
+          'Role': me.data.user.role,
+          'Credits': String(me.data.credits.balance),
+          'Messages': String(me.data.stats.messagesSent),
+          'Unread': String(me.data.stats.unreadCount),
+        });
+      } else if (me) {
+        uiWarn(`Could not fetch live info: ${me.error?.message || 'unknown error'}`);
       }
     } else {
-      console.log('IM Token:    (not registered)');
+      dim('  IM Token: (not registered)');
     }
   });
 
@@ -458,7 +483,7 @@ const configCmd = program.command('config').description('Manage config file');
 
 configCmd.command('show').description('Print config file').action(() => {
   if (!fs.existsSync(CONFIG_PATH)) {
-    console.log('No config file. Run "prismer setup" to create one.');
+    uiWarn('No config file. Run "prismer setup" to create one.');
     return;
   }
   console.log(fs.readFileSync(CONFIG_PATH, 'utf-8'));
@@ -468,7 +493,7 @@ configCmd.command('set <key> <value>').description('Set a config value (e.g. def
   const config = readConfig();
   setNestedValue(config as Record<string, any>, key, value);
   writeConfig(config);
-  console.log(`Set ${key} = ${value}`);
+  success(`Set ${key} = ${value}`);
 });
 
 // --- token ---
@@ -478,7 +503,7 @@ tokenCmd.command('refresh').description('Refresh IM JWT token').option('--json',
   const client = getIMClient();
   const res = await client.im.account.refreshToken();
   if (opts.json) { console.log(JSON.stringify(res, null, 2)); return; }
-  if (!res.ok) { console.error('Error:', res.error); process.exit(1); }
+  if (!res.ok) { uiError(`Token refresh failed: ${JSON.stringify(res.error)}`); process.exit(1); }
   const data = res.data as any;
   // Update stored token
   const config = readConfig();
@@ -487,9 +512,9 @@ tokenCmd.command('refresh').description('Refresh IM JWT token').option('--json',
     config.auth.im_token = data.token;
     if (data.expiresIn) config.auth.im_token_expires = data.expiresIn;
     writeConfig(config);
-    console.log('Token refreshed and saved.');
+    success('Token refreshed and saved.');
   } else {
-    console.log('Token refreshed (no new token in response).');
+    uiInfo('Token refreshed (no new token in response).');
   }
 });
 
@@ -538,10 +563,12 @@ program
     const sendOpts: Record<string, any> = {};
     if (opts.type && opts.type !== 'text') sendOpts.type = opts.type;
     if (opts.replyTo) sendOpts.parentId = opts.replyTo;
-    const res = await client.im.direct.send(userId, message, sendOpts);
+    const res = await withSpinner('Sending message', async () => {
+      return client.im.direct.send(userId, message, sendOpts);
+    });
     if (opts.json) { console.log(JSON.stringify(res, null, 2)); return; }
-    if (!res.ok) { console.error('Error:', res.error); process.exit(1); }
-    console.log(`Message sent (conversation: ${res.data?.conversationId})`);
+    if (!res.ok) { uiError(`Send failed: ${JSON.stringify(res.error)}`); process.exit(1); }
+    success(`Message sent (conversation: ${res.data?.conversationId})`);
   });
 
 // prismer load <url...>
@@ -556,13 +583,17 @@ program
     const input = urls.length === 1 ? urls[0] : urls;
     const loadOpts: Record<string, any> = {};
     if (opts.format) loadOpts.return = { format: opts.format };
-    const res = await client.load(input as any, loadOpts);
+    const res = await withSpinner(`Loading ${urls.length} URL(s)`, async () => {
+      return client.load(input as any, loadOpts);
+    });
     if (opts.json) { console.log(JSON.stringify(res, null, 2)); return; }
-    if (!res.success) { console.error('Error:', res.error?.message || 'Load failed'); process.exit(1); }
+    if (!res.success) { uiError(res.error?.message || 'Load failed'); process.exit(1); }
     const results = res.results || (res.result ? [res.result] : []);
     for (const r of results) {
-      console.log(`URL:    ${r.url || '?'}`);
-      console.log(`Status: ${r.cached ? 'cached' : 'loaded'}`);
+      keyValue({
+        'URL': r.url || '?',
+        'Status': r.cached ? 'cached' : 'loaded',
+      });
       if (r.hqcc) console.log(`\n--- HQCC ---\n${r.hqcc.substring(0, 2000)}`);
       if (r.raw) console.log(`\n--- Raw ---\n${r.raw.substring(0, 2000)}`);
       console.log('');
@@ -578,15 +609,26 @@ program
   .option('--json', 'JSON output')
   .action(async (query: string, opts: any) => {
     const client = getAPIClient();
-    const res = await client.search(query, { topK: parseInt(opts.topK || '5') });
+    const res = await withSpinner(`Searching: ${query}`, async () => {
+      return client.search(query, { topK: parseInt(opts.topK || '5') });
+    });
     if (opts.json) { console.log(JSON.stringify(res, null, 2)); return; }
-    if (!res.success) { console.error('Error:', res.error?.message || 'Search failed'); process.exit(1); }
+    if (!res.success) { uiError(res.error?.message || 'Search failed'); process.exit(1); }
     const results = res.results || [];
-    if (results.length === 0) { console.log('No results.'); return; }
+    if (results.length === 0) { uiWarn('No results.'); return; }
+    const rows = results.map((r: any, i: number) => [
+      String(i + 1),
+      r.url || '(no url)',
+      String(r.ranking?.score ?? '-'),
+    ]);
+    table(['#', 'URL', 'Score'], rows);
+    // Show snippets after the table
     for (let i = 0; i < results.length; i++) {
       const r = results[i];
-      console.log(`${i + 1}. ${r.url || '(no url)'}  score: ${r.ranking?.score ?? '-'}`);
-      if (r.hqcc) console.log(`   ${r.hqcc.substring(0, 200)}`);
+      if (r.hqcc) {
+        console.log('');
+        dim(`  ${i + 1}. ${r.hqcc.substring(0, 200)}`);
+      }
     }
   });
 
@@ -600,15 +642,20 @@ program
   .option('--json', 'JSON output')
   .action(async (url: string, opts: any) => {
     const client = getAPIClient();
-    const res = await client.parsePdf(url, opts.mode);
+    const res = await withSpinner(`Parsing: ${url}`, async () => {
+      return client.parsePdf(url, opts.mode);
+    });
     if (opts.json) { console.log(JSON.stringify(res, null, 2)); return; }
-    if (!res.success) { console.error('Error:', res.error?.message || 'Parse failed'); process.exit(1); }
+    if (!res.success) { uiError(res.error?.message || 'Parse failed'); process.exit(1); }
     if (res.taskId) {
-      console.log(`Task ID: ${res.taskId}`);
-      console.log(`Status:  ${res.status || 'processing'}`);
-      console.log(`\nCheck: prismer parse status ${res.taskId}`);
+      keyValue({
+        'Task ID': res.taskId,
+        'Status': res.status || 'processing',
+      });
+      console.log('');
+      dim(`  Check: prismer parse-status ${res.taskId}`);
     } else if (res.document) {
-      console.log('Status: complete');
+      success('Parse complete');
       const content = res.document.markdown || res.document.text || JSON.stringify(res.document, null, 2);
       console.log(content.substring(0, 5000));
     }
@@ -631,8 +678,10 @@ program
     const client = getAPIClient();
     const res = await client.parseStatus(taskId);
     if (opts.json) { console.log(JSON.stringify(res, null, 2)); return; }
-    console.log(`Task:   ${taskId}`);
-    console.log(`Status: ${res.status || (res.success ? 'complete' : 'unknown')}`);
+    keyValue({
+      'Task': taskId,
+      'Status': res.status || (res.success ? 'complete' : 'unknown'),
+    });
   });
 
 program
@@ -644,7 +693,8 @@ program
     const client = getAPIClient();
     const res = await client.parseResult(taskId);
     if (opts.json) { console.log(JSON.stringify(res, null, 2)); return; }
-    if (!res.success) { console.error('Error:', res.error?.message || 'Not ready'); process.exit(1); }
+    if (!res.success) { uiError(res.error?.message || 'Not ready'); process.exit(1); }
+    success('Parse result ready');
     const content = res.document?.markdown || res.document?.text || JSON.stringify(res.document, null, 2);
     console.log(content);
   });
@@ -663,14 +713,24 @@ program
     if (opts.scope) params.scope = opts.scope;
     if (opts.limit) params.limit = opts.limit;
     // recall uses raw request since not all SDKs expose it as a method
-    const res = await (client.im as any).memory._r('GET', '/api/im/recall', undefined, params);
+    const res = await withSpinner(`Recalling: ${query}`, async () => {
+      return (client.im as any).memory._r('GET', '/api/im/recall', undefined, params);
+    });
     if (opts.json) { console.log(JSON.stringify(res, null, 2)); return; }
-    if (!res.ok) { console.error('Error:', res.error); process.exit(1); }
+    if (!res.ok) { uiError(`Recall failed: ${JSON.stringify(res.error)}`); process.exit(1); }
     const data = res.data || [];
-    if (data.length === 0) { console.log(`No results for "${query}".`); return; }
+    if (data.length === 0) { uiWarn(`No results for "${query}".`); return; }
+    const rows = (data as any[]).map((item: any) => [
+      (item.source || '').toUpperCase(),
+      item.title || '?',
+      (item.score || 0).toFixed(2),
+    ]);
+    table(['Source', 'Title', 'Score'], rows);
+    // Show snippets
     for (const item of data as any[]) {
-      console.log(`[${(item.source || '').toUpperCase()}] ${item.title || '?'}  (score: ${(item.score || 0).toFixed(2)})`);
-      if (item.snippet) console.log(`  ${item.snippet.substring(0, 200)}`);
+      if (item.snippet) {
+        dim(`  ${item.snippet.substring(0, 200)}`);
+      }
     }
   });
 
@@ -686,15 +746,20 @@ program
     const discoverOpts: Record<string, string> = {};
     if (opts.type) discoverOpts.type = opts.type;
     if (opts.capability) discoverOpts.capability = opts.capability;
-    const res = await client.im.contacts.discover(discoverOpts);
+    const res = await withSpinner('Discovering agents', async () => {
+      return client.im.contacts.discover(discoverOpts);
+    });
     if (opts.json) { console.log(JSON.stringify(res, null, 2)); return; }
-    if (!res.ok) { console.error('Error:', res.error); process.exit(1); }
+    if (!res.ok) { uiError(`Discovery failed: ${JSON.stringify(res.error)}`); process.exit(1); }
     const agents = res.data || [];
-    if (agents.length === 0) { console.log('No agents found.'); return; }
-    console.log('Username'.padEnd(20) + 'Type'.padEnd(14) + 'Status'.padEnd(10) + 'Display Name');
-    for (const a of agents) {
-      console.log(`${(a.username || '').padEnd(20)}${(a.agentType || '').padEnd(14)}${(a.status || '').padEnd(10)}${a.displayName || ''}`);
-    }
+    if (agents.length === 0) { uiWarn('No agents found.'); return; }
+    const rows = agents.map((a: any) => [
+      a.username || '',
+      a.agentType || '',
+      a.status || '',
+      a.displayName || '',
+    ]);
+    table(['Username', 'Type', 'Status', 'Display Name'], rows);
   });
 
 // ============================================================================
@@ -722,7 +787,7 @@ program
         uninstallDaemonService();
         break;
       default:
-        console.error(`Unknown daemon action: ${action}. Use: start, stop, status, install, uninstall`);
+        uiError(`Unknown daemon action: ${action}. Use: start, stop, status, install, uninstall`);
         process.exit(1);
     }
   });
@@ -731,4 +796,5 @@ program
 // Parse and run
 // ============================================================================
 
+displayBanner();
 program.parse(process.argv);

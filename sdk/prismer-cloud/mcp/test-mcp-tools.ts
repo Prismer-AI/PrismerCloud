@@ -14,11 +14,11 @@ const ENV = process.argv.includes('--env')
 const CONFIG: Record<string, { baseUrl: string; apiKey: string }> = {
   local: {
     baseUrl: 'http://localhost:3000',
-    apiKey: process.env.PRISMER_API_KEY || 'sk-prismer-live-d567c1a0e6421c6d8fb2d44276d34d8b98a45fc8e69c9dfe09ba35d1847e85a2',
+    apiKey: process.env.PRISMER_API_KEY || 'sk-prismer-live-dea50222cb9aec9eca33f2e947d9f49dbb4a719cae8b58ce9e197290302e5f06',
   },
   prod: {
     baseUrl: 'https://prismer.cloud',
-    apiKey: process.env.PRISMER_API_KEY || 'sk-prismer-live-d567c1a0e6421c6d8fb2d44276d34d8b98a45fc8e69c9dfe09ba35d1847e85a2',
+    apiKey: process.env.PRISMER_API_KEY || 'sk-prismer-live-dea50222cb9aec9eca33f2e947d9f49dbb4a719cae8b58ce9e197290302e5f06',
   },
   test: {
     baseUrl: 'https://cloud.prismer.dev',

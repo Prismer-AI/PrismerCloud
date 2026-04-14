@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "prismer"
-version = "1.8.1"
+version = "1.8.2"
 description = "Official Python SDK for Prismer Cloud API"
 readme = "README.md"
 license = {text = "MIT"}
@@ -28,6 +28,7 @@ dependencies = [
     "pydantic>=2.0.0",
     "websockets>=12.0",
     "click>=8.0.0",
+    "rich>=13.0",
     "tomli>=1.1.0;python_version<'3.11'",
     "tomli-w>=1.0.0",
 ]
@@ -39,12 +40,16 @@ prismer = "prismer.cli:main"
 signing = [
     "PyNaCl>=1.5.0",
 ]
+qr = [
+    "qrcode>=7.0",
+]
 dev = [
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",
     "ruff>=0.1.0",
     "mypy>=1.0.0",
     "PyNaCl>=1.5.0",
+    "qrcode>=7.0",
 ]
 
 [project.urls]
@@ -54,6 +59,9 @@ Repository = "https://github.com/Prismer-AI/PrismerCloud/tree/main/sdk/python"
 
 [tool.setuptools.packages.find]
 where = ["."]
+
+[tool.setuptools.package-data]
+prismer = ["icon"]
 
 [tool.ruff]
 line-length = 100

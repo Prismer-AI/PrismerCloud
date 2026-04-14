@@ -84,7 +84,7 @@ impl<'a> IMClient<'a> {
         ).await
     }
 
-    /// Send a direct message with options (type, metadata, parentId).
+    /// Send a direct message with options (type, metadata, parentId, quotedMessageId).
     pub async fn send_message_with_options(&self, user_id: &str, content: &str, options: SendMessageOptions) -> Result<ApiResponse<serde_json::Value>, PrismerError> {
         let mut body = json!({ "content": content });
         if let Some(t) = &options.msg_type {
@@ -95,6 +95,9 @@ impl<'a> IMClient<'a> {
         }
         if let Some(p) = &options.parent_id {
             body["parentId"] = json!(p);
+        }
+        if let Some(q) = &options.quoted_message_id {
+            body["quotedMessageId"] = json!(q);
         }
         self.im_request(
             reqwest::Method::POST,
@@ -144,6 +147,9 @@ impl<'a> IMClient<'a> {
         }
         if let Some(p) = &options.parent_id {
             body["parentId"] = json!(p);
+        }
+        if let Some(q) = &options.quoted_message_id {
+            body["quotedMessageId"] = json!(q);
         }
         self.im_request(
             reqwest::Method::POST,
@@ -207,6 +213,9 @@ impl<'a> IMClient<'a> {
         if let Some(p) = &options.parent_id {
             body["parentId"] = json!(p);
         }
+        if let Some(q) = &options.quoted_message_id {
+            body["quotedMessageId"] = json!(q);
+        }
         self.im_request(
             reqwest::Method::POST,
             &format!("/api/im/messages/{}", conversation_id),
@@ -249,6 +258,28 @@ impl<'a> IMClient<'a> {
             reqwest::Method::DELETE,
             &format!("/api/im/messages/{}/{}", conversation_id, message_id),
             None,
+        ).await
+    }
+
+    /// Add or remove an emoji reaction on a message (v1.8.2).
+    ///
+    /// Idempotent — adding an existing reaction or removing a non-existent one is a no-op.
+    /// Response `data.reactions` has shape `{ "👍": ["userId-a", ...], ... }`.
+    pub async fn react_message(
+        &self,
+        conversation_id: &str,
+        message_id: &str,
+        emoji: &str,
+        remove: bool,
+    ) -> Result<ApiResponse<serde_json::Value>, PrismerError> {
+        let mut body = serde_json::json!({ "emoji": emoji });
+        if remove {
+            body["remove"] = serde_json::Value::Bool(true);
+        }
+        self.im_request(
+            reqwest::Method::POST,
+            &format!("/api/im/messages/{}/{}/reactions", conversation_id, message_id),
+            Some(body),
         ).await
     }
 
@@ -460,4 +491,5 @@ pub struct SendMessageOptions {
     pub msg_type: Option<String>,
     pub metadata: Option<serde_json::Value>,
     pub parent_id: Option<String>,
+    pub quoted_message_id: Option<String>,
 }

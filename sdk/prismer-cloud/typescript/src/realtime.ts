@@ -52,6 +52,17 @@ export interface MessageDeletedPayload {
   conversationId: string;
 }
 
+/** v1.8.2 — dedicated reaction event. Distinct from message.edit (which signals content change). */
+export interface MessageReactionPayload {
+  messageId: string;
+  conversationId: string;
+  emoji: string;
+  userId: string;
+  action: 'add' | 'remove';
+  /** Full reaction snapshot after the change: `{ "👍": ["userId-a", ...], ... }` */
+  reactions: Record<string, string[]>;
+}
+
 export interface TypingIndicatorPayload {
   conversationId: string;
   userId: string;
@@ -89,6 +100,7 @@ export interface RealtimeEventMap {
   'authenticated': AuthenticatedPayload;
   'message.new': MessageNewPayload;
   'message.edit': MessageEditPayload;
+  'message.reaction': MessageReactionPayload;
   'message.deleted': MessageDeletedPayload;
   'typing.indicator': TypingIndicatorPayload;
   'presence.changed': PresenceChangedPayload;

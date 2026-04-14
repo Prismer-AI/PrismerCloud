@@ -39,11 +39,11 @@ export function register(parent: Command, getIMClient: ClientFactory, _getAPICli
           ? opts.agentCapabilities.split(',').map((s) => s.trim())
           : undefined;
         const res = await client.im.workspace.init({
-          name,
+          workspaceId: name,
           userId: opts.userId,
-          userName: opts.userName,
-          agentId: opts.agentId,
-          agentName: opts.agentName,
+          userDisplayName: opts.userName,
+          agentName: opts.agentId,
+          agentDisplayName: opts.agentName,
           agentType: opts.agentType,
           ...(capabilities !== undefined && { agentCapabilities: capabilities }),
         });
@@ -73,14 +73,16 @@ export function register(parent: Command, getIMClient: ClientFactory, _getAPICli
     .action(async (name: string, opts: { members: string; json: boolean }) => {
       const client = getIMClient();
       try {
-        let members: unknown;
+        let users: Array<{ userId: string; displayName: string }>;
         try {
-          members = JSON.parse(opts.members);
+          const parsed = JSON.parse(opts.members);
+          if (!Array.isArray(parsed)) throw new Error('not an array');
+          users = parsed;
         } catch {
-          process.stderr.write('Error: --members must be a valid JSON array\n');
+          process.stderr.write('Error: --members must be a valid JSON array of {userId, displayName}\n');
           process.exit(1);
         }
-        const res = await client.im.workspace.initGroup({ name, members });
+        const res = await client.im.workspace.initGroup({ workspaceId: name, title: name, users });
         if (!res.ok) {
           process.stderr.write(`Error: ${res.error?.message || JSON.stringify(res.error)}\n`);
           process.exit(1);

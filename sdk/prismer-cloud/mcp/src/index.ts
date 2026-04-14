@@ -7,6 +7,7 @@ import { registerDiscover } from './tools/discover.js';
 import { registerSendMessage } from './tools/send-message.js';
 import { registerEditMessage } from './tools/edit-message.js';
 import { registerDeleteMessage } from './tools/delete-message.js';
+import { registerReactMessage } from './tools/react-message.js';
 import { registerEvolveAnalyze } from './tools/evolve-analyze.js';
 import { registerEvolveRecord } from './tools/evolve-record.js';
 import { registerEvolveCreateGene } from './tools/evolve-create-gene.js';
@@ -24,6 +25,13 @@ import { registerMemoryWrite } from './tools/memory-write.js';
 import { registerMemoryRead } from './tools/memory-read.js';
 import { registerRecall } from './tools/recall.js';
 import { registerCreateTask } from './tools/create-task.js';
+import { registerListTasks } from './tools/list-tasks.js';
+import { registerGetTask } from './tools/get-task.js';
+import { registerUpdateTask } from './tools/update-task.js';
+import { registerCompleteTask } from './tools/complete-task.js';
+import { registerApproveTask } from './tools/approve-task.js';
+import { registerRejectTask } from './tools/reject-task.js';
+import { registerCancelTask } from './tools/cancel-task.js';
 import { registerSkillInstall } from './tools/skill-install.js';
 import { registerSkillUninstall } from './tools/skill-uninstall.js';
 import { registerSkillInstalled } from './tools/skill-installed.js';
@@ -84,7 +92,7 @@ if (process.argv.includes('--setup')) {
 
 const server = new McpServer({
   name: 'prismer',
-  version: '1.8.1',
+  version: '1.8.2',
   instructions: `Prismer provides cross-agent evolution learning and a community knowledge forum. Key workflows:
 
 **Evolution (learn from errors):**
@@ -111,6 +119,7 @@ registerDiscover(server);
 registerSendMessage(server);
 registerEditMessage(server);
 registerDeleteMessage(server);
+registerReactMessage(server);
 registerEvolveAnalyze(server);
 registerEvolveRecord(server);
 registerEvolveCreateGene(server);
@@ -127,6 +136,13 @@ registerMemoryWrite(server);
 registerMemoryRead(server);
 registerRecall(server);
 registerCreateTask(server);
+registerListTasks(server);
+registerGetTask(server);
+registerUpdateTask(server);
+registerCompleteTask(server);
+registerApproveTask(server);
+registerRejectTask(server);
+registerCancelTask(server);
 registerSkillInstall(server);
 registerSkillUninstall(server);
 registerSkillInstalled(server);

@@ -207,7 +207,7 @@ sdk/aip/golang/go.mod           (module path)
 sdk/aip/rust/Cargo.toml
 ```
 
-### Prismer Cloud 版本文件 (10 个)
+### Prismer Cloud 版本文件 (11 个)
 
 ```
 sdk/prismer-cloud/typescript/package.json
@@ -216,11 +216,14 @@ sdk/prismer-cloud/mcp/src/index.ts              (hardcoded version string)
 sdk/prismer-cloud/opencode-plugin/package.json
 sdk/prismer-cloud/claude-code-plugin/package.json
 sdk/prismer-cloud/claude-code-plugin/.claude-plugin/plugin.json
+sdk/prismer-cloud/claude-code-plugin/.claude-plugin/marketplace.json  ⚠️ CRITICAL for CC update detection
 sdk/prismer-cloud/openclaw-channel/package.json
 sdk/prismer-cloud/python/pyproject.toml
 sdk/prismer-cloud/python/prismer/__init__.py    (__version__)
 sdk/prismer-cloud/rust/Cargo.toml
 ```
+
+> **⚠️ marketplace.json version 字段：** Claude Code 用 `marketplace.json` 里 plugin entry 的 `version` 字段做更新检测。如果不 bump 这个字段，用户的 `/plugin update` 会报 "already at latest"。这是 v1.8.1 发版时踩过的坑 — `plugin.json` 有 1.8.1 但 `marketplace.json` 没写 version，导致 CC 无法检测到更新。
 
 ## 注册表
 
@@ -323,6 +326,110 @@ artifacts/
 └── crates/
     └── prismer-sdk-1.8.0.crate            86K
 ```
+
+## Documentation Sync (prismer-docs)
+
+API / Schema / SDK / Plugin 文档统一发布到 `prismer-docs` 站点 (`~/workspace/prismer-docs`)。
+
+**原则:** prismer-docs 是面向用户的规范文档，prismer-cloud-next/docs 是内部工程文档。两者不重复 — prismer-docs 按规范重写，不是 copy。
+
+### 文风规范
+
+- 英文，专业，简洁
+- Nextra 4 mdx 格式，必须有 frontmatter (title/description/ai_summary/status/keywords)
+- API 页面结构: Overview → Endpoints table → 逐端点 (TS interface + params table + 四语言示例 curl/Python/TS/Go + Response JSON)
+- 范本: `prismer-docs/content/cloud/api/im-tasks.mdx`
+
+### 目录结构
+
+```
+prismer-docs/content/cloud/
+├── api/          REST API reference (per-domain pages)
+├── schema/       Data models (grouped by domain)
+├── sdk/          SDK reference (per-language pages)
+├── plugin/       Plugin & MCP tools
+└── aip/          AIP identity protocol
+```
+
+### 发版时 doc sync checklist
+
+每次 prismer-cloud-next 发版 (version bump) 时：
+
+1. 检查本版是否有 API 新增/变更 → 更新对应 `prismer-docs/content/cloud/api/*.mdx`
+2. 检查是否有 schema 变更 (migration) → 更新 `prismer-docs/content/cloud/schema/*.mdx`
+3. 检查 SDK 是否有新方法/类型 → 更新 `prismer-docs/content/cloud/sdk/*.mdx`
+4. 检查 Plugin/MCP 是否有新 tool/hook → 更新 `prismer-docs/content/cloud/plugin/*.mdx`
+5. `cd ~/workspace/prismer-docs && npm run build` 验证
+6. Commit + push prismer-docs
+
+### 迁移进度 (prismer-cloud-next → prismer-docs 重写)
+
+**API Reference** (`content/cloud/api/`)
+
+| Page | Source | Status |
+|------|--------|--------|
+| Context (Load/Save) | `docs/api/context.md` | ✅ 已有 (cloud-context-api.mdx) |
+| Parse (OCR) | `docs/api/parse.md` | ❌ 待重写 |
+| Messaging | `docs/api/im-messaging.md` | ❌ 待重写 |
+| Conversations | `docs/api/im-conversations.md` | ❌ 待重写 |
+| Agents | `docs/api/im-agents.md` | ❌ 待重写 |
+| Tasks | `docs/api/im-tasks.md` | ✅ 范本完成 |
+| Memory | `docs/api/im-memory.md` | ❌ 待重写 |
+| Evolution | `docs/api/evolution.md` | ❌ 待重写 |
+| Leaderboard | `docs/api/evolution-leaderboard.md` | ❌ 待重写 |
+| Community | `docs/api/im-community.md` | ❌ 待重写 |
+| Contact | `docs/api/im-contact.md` | ❌ 待重写 |
+| Identity & Signing | `docs/api/im-identity.md` + `im-signing.md` | ❌ 待重写 |
+| Workspace | `docs/api/im-workspace.md` | ❌ 待重写 |
+| Skills | `docs/api/skills.md` | ❌ 待重写 |
+| Realtime (WS/SSE) | `docs/api/realtime.md` | ❌ 待重写 |
+| Webhooks | `docs/api/webhooks.md` | ❌ 待重写 |
+
+**Schema** (`content/cloud/schema/`)
+
+| Page | Source | Status |
+|------|--------|--------|
+| Overview | `prisma/schema.mysql.prisma` | ❌ 待写 |
+| Core | IMUser, IMConversation, IMMessage | ❌ 待写 |
+| Agents | IMAgentCard, credentials, DID | ❌ 待写 |
+| Evolution | IMGene, signals, edges, capsules | ❌ 待写 |
+| Tasks | IMTask, IMTaskLog | ❌ 待写 |
+| Memory | IMMemoryFile, knowledge links | ❌ 待写 |
+| Community | Posts, comments, votes | ❌ 待写 |
+| Security | Identity keys, audit logs | ❌ 待写 |
+
+**SDK** (`content/cloud/sdk/`)
+
+| Page | Source | Status |
+|------|--------|--------|
+| Overview | `docs/SDK.md` + `sdk/build/WORKFLOW.md` | ❌ 待写 |
+| TypeScript | `sdk/prismer-cloud/typescript/` | ❌ 待写 |
+| Python | `sdk/prismer-cloud/python/` | ❌ 待写 |
+| Go | `sdk/prismer-cloud/golang/` | ❌ 待写 |
+| Rust | `sdk/prismer-cloud/rust/` | ❌ 待写 |
+| CLI | `sdk/prismer-cloud/typescript/src/cli.ts` | ❌ 待写 |
+
+**Plugin** (`content/cloud/plugin/`)
+
+| Page | Source | Status |
+|------|--------|--------|
+| Overview | `docs/api/mcp.md` + `docs/api/openclaw.md` | ❌ 待写 |
+| Claude Code | `sdk/prismer-cloud/claude-code-plugin/` | ❌ 待写 |
+| MCP Server | `sdk/prismer-cloud/mcp/` | ❌ 待写 |
+| OpenClaw | `sdk/prismer-cloud/openclaw-channel/` | ❌ 待写 |
+| OpenCode | `sdk/prismer-cloud/opencode-plugin/` | ❌ 待写 |
+
+**AIP** (`content/cloud/aip/`)
+
+| Page | Source | Status |
+|------|--------|--------|
+| Overview | `docs/encryption/AIP-WHITEPAPER-CN.md` | ❌ 待写 |
+| Spec | `docs/encryption/AIP-SPEC-CN.md` | ❌ 待写 |
+| DID:key | `sdk/aip/typescript/src/did.ts` | ❌ 待写 |
+| Delegation | `sdk/aip/typescript/src/delegation.ts` | ❌ 待写 |
+| Credentials | `sdk/aip/typescript/src/credentials.ts` | ❌ 待写 |
+
+---
 
 ## Anthropic Marketplace 上架清单
 

@@ -61,6 +61,20 @@ class MessageNewPayload(BaseModel):
         populate_by_name = True
 
 
+class MessageReactionPayload(BaseModel):
+    """v1.8.2 — emoji reaction add/remove event. Distinct from message.edit."""
+
+    message_id: str = Field(alias="messageId")
+    conversation_id: str = Field(alias="conversationId")
+    emoji: str
+    user_id: str = Field(alias="userId")
+    action: str  # 'add' | 'remove'
+    reactions: Dict[str, list]  # { emoji: [userId, ...] }
+
+    class Config:
+        populate_by_name = True
+
+
 class TypingIndicatorPayload(BaseModel):
     conversation_id: str = Field(alias="conversationId")
     user_id: str = Field(alias="userId")

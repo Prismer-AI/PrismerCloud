@@ -66,7 +66,15 @@ confirm_prompt() {
   [[ "$answer" =~ ^[Yy] ]]
 }
 
+# Root /VERSION is the single source of truth. Fallback to TS package.json for
+# legacy compatibility if VERSION file is missing.
 get_version() {
+  local version_file="$PROJECT_ROOT/VERSION"
+  if [[ -f "$version_file" ]]; then
+    local v
+    v="$(tr -d '[:space:]' < "$version_file")"
+    if [[ -n "$v" ]]; then echo "$v"; return; fi
+  fi
   local pkg="$PRISMER_CLOUD/typescript/package.json"
   if [[ -f "$pkg" ]]; then
     grep '"version"' "$pkg" | head -1 | sed 's/.*"version": *"\([^"]*\)".*/\1/'
@@ -75,14 +83,8 @@ get_version() {
   fi
 }
 
-get_aip_version() {
-  local pkg="$AIP_SDK/typescript/package.json"
-  if [[ -f "$pkg" ]]; then
-    grep '"version"' "$pkg" | head -1 | sed 's/.*"version": *"\([^"]*\)".*/\1/'
-  else
-    echo "unknown"
-  fi
-}
+# AIP shares the same root VERSION (monorepo single source of truth).
+get_aip_version() { get_version; }
 
 # ── Result Tracking ────────────────────────────────────────────────
 declare -a RESULT_NAMES=()

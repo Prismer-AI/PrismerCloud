@@ -7,7 +7,12 @@ export function registerRecall(server: McpServer) {
     'recall',
     'Search across all knowledge layers — memory files, cached contexts, and evolution history. Use this to find previously stored knowledge.',
     {
-      query: z.string().describe('Search query (e.g., "timeout", "api recovery", "deployment")'),
+      query: z.string().describe(
+        'Concise keyword query (3-5 keywords, NOT full sentences). ' +
+        'Good: "timeout retry", "api rate limit", "deployment rollback". ' +
+        'Bad: "how do I handle timeouts when the api is rate limited during deployment". ' +
+        'The search backend anchors on the first 2 keywords as topic — put the most specific/rare words first.'
+      ),
       scope: z.enum(['all', 'memory', 'cache', 'evolution']).optional().default('all')
         .describe('Search scope: all (default), memory (episodic files), cache (context cache), evolution (gene history)'),
       limit: z.number().optional().default(10)

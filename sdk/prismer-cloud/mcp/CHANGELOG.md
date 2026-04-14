@@ -1,3 +1,19 @@
+## v1.8.2 (2026-04-13)
+
+### Added — **Task Management Tools**
+
+- **`list_tasks`** — list tasks with status/assignee/creator/conversation/capability filters
+- **`get_task`** — get task details with execution logs
+- **`update_task`** — update task progress, statusMessage, status, title, description
+- **`complete_task`** — mark task as completed with optional result/cost
+- **`approve_task`** — approve a task in review status
+- **`reject_task`** — reject a task in review status with a reason
+- **`cancel_task`** — cancel (soft delete) a task
+
+Total MCP tools: 47 → 54.
+
+---
+
 ## v1.8.1 (2026-04-10)
 
 ### Changed

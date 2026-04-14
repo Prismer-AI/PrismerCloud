@@ -58,6 +58,43 @@ const (
 	DefaultTimeout = 30 * time.Second
 )
 
+// MessageType enumerates IM message content types. Distinct string type —
+// Go coerces untyped string literals (e.g. `"text"`), so existing call sites
+// keep compiling while typed callers get autocomplete and catch typos.
+type MessageType string
+
+const (
+	MessageTypeText        MessageType = "text"
+	MessageTypeMarkdown    MessageType = "markdown"
+	MessageTypeCode        MessageType = "code"
+	MessageTypeImage       MessageType = "image"
+	MessageTypeFile        MessageType = "file"
+	MessageTypeVoice       MessageType = "voice"    // v1.8.2
+	MessageTypeLocation    MessageType = "location" // v1.8.2
+	MessageTypeArtifact    MessageType = "artifact" // v1.8.2 (sub-type via metadata.artifactType)
+	MessageTypeToolCall    MessageType = "tool_call"
+	MessageTypeToolResult  MessageType = "tool_result"
+	MessageTypeSystemEvent MessageType = "system_event" // deprecated — use MessageTypeSystem + metadata.action
+	MessageTypeSystem      MessageType = "system"       // v1.8.2
+	MessageTypeThinking    MessageType = "thinking"
+)
+
+// ArtifactType is the sub-type for MessageTypeArtifact messages.
+// Set via metadata["artifactType"]. Distinct string type for the same
+// reason as MessageType above.
+type ArtifactType string
+
+const (
+	ArtifactTypePDF      ArtifactType = "pdf"
+	ArtifactTypeCode     ArtifactType = "code"
+	ArtifactTypeDocument ArtifactType = "document"
+	ArtifactTypeDataset  ArtifactType = "dataset"
+	ArtifactTypeChart    ArtifactType = "chart"
+	ArtifactTypeNotebook ArtifactType = "notebook"
+	ArtifactTypeLatex    ArtifactType = "latex"
+	ArtifactTypeOther    ArtifactType = "other"
+)
+
 // ============================================================================
 // Client
 // ============================================================================
@@ -662,6 +699,9 @@ func sendPayload(content string, opts *IMSendOptions) map[string]interface{} {
 		if opts.ParentID != "" {
 			payload["parentId"] = opts.ParentID
 		}
+		if opts.QuotedMessageID != "" {
+			payload["quotedMessageId"] = opts.QuotedMessageID
+		}
 	}
 	return payload
 }
@@ -777,6 +817,17 @@ func (m *MessagesClient) Edit(ctx context.Context, conversationID, messageID, co
 
 func (m *MessagesClient) Delete(ctx context.Context, conversationID, messageID string) (*IMResult, error) {
 	return m.im.do(ctx, "DELETE", "/api/im/messages/"+conversationID+"/"+messageID, nil, nil)
+}
+
+// React adds or removes an emoji reaction on a message (v1.8.2).
+// Idempotent — adding an existing reaction or removing a non-existent one is a no-op.
+// Response data.reactions has shape: {"👍": ["userId-a", ...], ...}.
+func (m *MessagesClient) React(ctx context.Context, conversationID, messageID, emoji string, remove bool) (*IMResult, error) {
+	body := map[string]interface{}{"emoji": emoji}
+	if remove {
+		body["remove"] = true
+	}
+	return m.im.do(ctx, "POST", "/api/im/messages/"+conversationID+"/"+messageID+"/reactions", body, nil)
 }
 
 // ContactsClient handles contacts and agent discovery.
@@ -1268,6 +1319,19 @@ func (t *TasksClient) Fail(ctx context.Context, taskID string, errMsg string, me
 		body["metadata"] = metadata
 	}
 	return t.im.do(ctx, "POST", "/api/im/tasks/"+taskID+"/fail", body, nil)
+}
+
+func (t *TasksClient) Approve(ctx context.Context, taskID string) (*IMResult, error) {
+	return t.im.do(ctx, "POST", "/api/im/tasks/"+taskID+"/approve", nil, nil)
+}
+
+func (t *TasksClient) Reject(ctx context.Context, taskID string, reason string) (*IMResult, error) {
+	body := map[string]interface{}{"reason": reason}
+	return t.im.do(ctx, "POST", "/api/im/tasks/"+taskID+"/reject", body, nil)
+}
+
+func (t *TasksClient) Cancel(ctx context.Context, taskID string) (*IMResult, error) {
+	return t.im.do(ctx, "DELETE", "/api/im/tasks/"+taskID, nil, nil)
 }
 
 // MemoryClient handles agent memory file management.

@@ -38,8 +38,9 @@ export function registerCreateTask(server: McpServer) {
         })) as Record<string, unknown>;
 
         if (!result.ok) {
-          const err = result.error as string | undefined;
-          return { content: [{ type: 'text' as const, text: `Error: ${err || 'Task creation failed'}` }] };
+          const err = result.error;
+          const msg = typeof err === 'object' && err ? (err as any).message : err;
+          return { content: [{ type: 'text' as const, text: `Error: ${msg || 'Task creation failed'}` }] };
         }
 
         const data = result.data as Record<string, unknown> | undefined;
