@@ -29,6 +29,7 @@ from .realtime import (
     # Event payloads
     AuthenticatedPayload,
     MessageNewPayload,
+    MessageReactionPayload,
     TypingIndicatorPayload,
     PresenceChangedPayload,
     PongPayload,
@@ -62,6 +63,8 @@ from .types import (
     ParseUsage,
     ParseCost,
     # IM API
+    MessageType,
+    ArtifactType,
     IMResult,
     IMRegisterOptions,
     IMRegisterData,
@@ -120,6 +123,7 @@ __all__ = [
     # Real-Time Event Payloads
     "AuthenticatedPayload",
     "MessageNewPayload",
+    "MessageReactionPayload",
     "TypingIndicatorPayload",
     "PresenceChangedPayload",
     "PongPayload",

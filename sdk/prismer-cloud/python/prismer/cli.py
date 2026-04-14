@@ -75,7 +75,8 @@ def _get_im_client():
     cfg = _load_config()
     token = cfg.get("auth", {}).get("im_token", "")
     if not token:
-        click.echo("No IM token. Run 'prismer register' first.", err=True)
+        from .cli_ui import error as _err
+        _err("No IM token. Run 'prismer register' first.")
         sys.exit(1)
     env = cfg.get("default", {}).get("environment", "production")
     base_url = cfg.get("default", {}).get("base_url", "")
@@ -87,7 +88,8 @@ def _get_api_client():
     cfg = _load_config()
     api_key = cfg.get("default", {}).get("api_key", "")
     if not api_key:
-        click.echo("No API key. Run 'prismer init <api-key>' first.", err=True)
+        from .cli_ui import error as _err
+        _err("No API key. Run 'prismer init <api-key>' first.")
         sys.exit(1)
     env = cfg.get("default", {}).get("environment", "production")
     base_url = cfg.get("default", {}).get("base_url", "")
@@ -194,9 +196,10 @@ def init(api_key, browser):
             f"&utm_source=python-sdk"
         )
 
-        click.echo("Opening browser for Prismer authentication...")
+        from .cli_ui import info, Spinner as _Spinner
+        info("Opening browser for Prismer authentication...")
         click.echo(f"  URL: {auth_url}")
-        click.echo("Waiting for callback (timeout: 5 minutes)...")
+        info("Waiting for callback (timeout: 5 minutes)...")
 
         webbrowser.open(auth_url)
 
@@ -210,51 +213,58 @@ def init(api_key, browser):
 
         api_key_received = received.get("key", "")
         if not api_key_received:
-            click.echo("Authentication timed out or no key received.")
+            from .cli_ui import error as _err
+            _err("Authentication timed out or no key received.")
             click.echo(f"Get your key at: {base_url}/dashboard")
             raise SystemExit(1)
 
         cfg["default"]["api_key"] = api_key_received
         cfg["default"].setdefault("base_url", "https://prismer.cloud")
         _save_config(cfg)
-        click.echo(f"API key saved to {CONFIG_FILE}")
-        click.echo("You can now use all Prismer CLI, plugin, and MCP features.")
+        from .cli_ui import success as _succ
+        _succ(f"API key saved to {CONFIG_FILE}")
+        info("You can now use all Prismer CLI, plugin, and MCP features.")
         return
 
     if api_key:
         # ── Path B: Human provides API key ──
+        from .cli_ui import success as _succ, error as _err, warn as _warn, info as _info, Spinner as _Spinner
         if not api_key.startswith("sk-prismer-"):
-            click.echo("Invalid key format. API keys start with sk-prismer-")
+            _err("Invalid key format. API keys start with sk-prismer-")
             click.echo("Get your key at: https://prismer.cloud/dashboard")
             raise SystemExit(1)
 
         base_url = cfg["default"].get("base_url", "") or "https://prismer.cloud"
         try:
             import httpx
-            r = httpx.get(f"{base_url}/api/version", headers={"Authorization": f"Bearer {api_key}"}, timeout=5)
+            with _Spinner("Verifying API key..."):
+                r = httpx.get(f"{base_url}/api/version", headers={"Authorization": f"Bearer {api_key}"}, timeout=5)
             if r.status_code == 401:
-                click.echo("API key is invalid or expired.")
+                _err("API key is invalid or expired.")
                 click.echo("Get a new key at: https://prismer.cloud/dashboard")
                 raise SystemExit(1)
-            click.echo("API key verified.")
+            _succ("API key verified.")
         except ImportError:
-            click.echo("Could not verify key (httpx not installed). Saving anyway.")
+            _warn("Could not verify key (httpx not installed). Saving anyway.")
+        except SystemExit:
+            raise
         except Exception as e:
-            click.echo(f"Could not verify key ({e}). Saving anyway.")
+            _warn(f"Could not verify key ({e}). Saving anyway.")
 
         cfg["default"]["api_key"] = api_key
         cfg["default"].setdefault("environment", "production")
         _save_config(cfg)
-        click.echo(f"Saved to {CONFIG_FILE}")
-        click.echo("You can now use all Prismer CLI, plugin, and MCP features.")
+        _succ(f"Saved to {CONFIG_FILE}")
+        _info("You can now use all Prismer CLI, plugin, and MCP features.")
     else:
         # ── Path A: Auto-register with free agent credits ──
+        from .cli_ui import success as _succ, error as _err, info as _info, key_value as _kv, Spinner as _Spinner
         existing_key = cfg["default"].get("api_key", "")
         if existing_key.startswith("sk-prismer-"):
-            click.echo(f"Already configured ({existing_key[:20]}...)")
+            _info(f"Already configured ({existing_key[:20]}...)")
             return
         if cfg.get("auth", {}).get("im_token"):
-            click.echo("Already registered as agent (IM token exists).")
+            _info("Already registered as agent (IM token exists).")
             click.echo("For more credits, get API key: https://prismer.cloud/dashboard")
             return
 
@@ -262,10 +272,11 @@ def init(api_key, browser):
         username = f"py-cli-{int(_time.time())}"
         try:
             import httpx
-            r = httpx.post(f"{base_url}/api/im/register", json={
-                "username": username, "displayName": username, "type": "agent"
-            }, timeout=10)
-            data = r.json()
+            with _Spinner("Registering with free agent credits..."):
+                r = httpx.post(f"{base_url}/api/im/register", json={
+                    "username": username, "displayName": username, "type": "agent"
+                }, timeout=10)
+                data = r.json()
             if not data.get("ok"):
                 raise Exception(data.get("error", {}).get("message", "Registration failed"))
 
@@ -274,16 +285,18 @@ def init(api_key, browser):
             cfg["auth"]["im_user_id"] = data["data"].get("imUserId") or data["data"].get("userId", "")
             cfg["auth"]["im_username"] = data["data"].get("username", username)
             _save_config(cfg)
-            click.echo("Registered with free agent credits.")
-            click.echo(f"  Username: {cfg['auth']['im_username']}")
-            click.echo(f"  User ID:  {cfg['auth']['im_user_id']}")
+            _succ("Registered with free agent credits.")
+            _kv({
+                "Username": cfg["auth"]["im_username"],
+                "User ID": cfg["auth"]["im_user_id"],
+            })
             click.echo("")
-            click.echo("For more credits, get API key: https://prismer.cloud/dashboard")
+            _info("For more credits, get API key: https://prismer.cloud/dashboard")
         except ImportError:
-            click.echo("httpx not installed. Run: pip install prismer")
+            _err("httpx not installed. Run: pip install prismer")
             raise SystemExit(1)
         except Exception as e:
-            click.echo(f"Auto-registration failed: {e}")
+            _err(f"Auto-registration failed: {e}")
             click.echo("Get API key manually: https://prismer.cloud/dashboard")
             raise SystemExit(1)
 
@@ -332,10 +345,12 @@ def register(username: str, user_type: str, display_name: Optional[str],
     finally:
         client.close()
 
+    from .cli_ui import success as _succ, error as _err, key_value as _kv
+
     if not result.get("ok"):
         err = result.get("error", {})
         msg = err.get("message", "Unknown error") if isinstance(err, dict) else str(err)
-        click.echo(f"Registration failed: {msg}", err=True)
+        _err(f"Registration failed: {msg}")
         sys.exit(1)
 
     data = result.get("data", {})
@@ -346,92 +361,101 @@ def register(username: str, user_type: str, display_name: Optional[str],
     cfg["auth"]["im_token_expires"] = data.get("expiresIn", "")
     _save_config(cfg)
 
-    click.echo("Registration successful!")
-    click.echo(f"  User ID:  {data.get('imUserId', 'N/A')}")
-    click.echo(f"  Username: {data.get('username', username)}")
-    click.echo(f"  Display:  {data.get('displayName', username)}")
-    click.echo(f"  Role:     {data.get('role', 'N/A')}")
-    click.echo(f"  New:      {data.get('isNew', False)}")
-    click.echo(f"Token stored in {CONFIG_FILE}")
+    _succ("Registration successful!")
+    _kv({
+        "User ID": data.get("imUserId", "N/A"),
+        "Username": data.get("username", username),
+        "Display": data.get("displayName", username),
+        "Role": data.get("role", "N/A"),
+        "New": str(data.get("isNew", False)),
+    })
+    _succ(f"Token stored in {CONFIG_FILE}")
 
 
 @cli.command()
 def status():
     """Show current config and token status."""
+    from .cli_ui import info as _info, warn as _warn, error as _err, success as _succ, key_value as _kv, print_panel, Spinner as _Spinner
     cfg = _load_config()
     if not cfg:
-        click.echo("No config found. Run 'prismer init <api-key>' first.")
+        _warn("No config found. Run 'prismer init <api-key>' first.")
         return
 
     default = cfg.get("default", {})
-    click.echo("[default]")
-    click.echo(f"  api_key     = {_mask_key(default.get('api_key', ''))}")
-    click.echo(f"  environment = {default.get('environment', 'production')}")
-    click.echo(f"  base_url    = {default.get('base_url', '') or '(default)'}")
+    print_panel(
+        f"api_key     = {_mask_key(default.get('api_key', ''))}\n"
+        f"environment = {default.get('environment', 'production')}\n"
+        f"base_url    = {default.get('base_url', '') or '(default)'}",
+        title="default",
+        border_style="cyan",
+    )
 
     auth = cfg.get("auth", {})
-    click.echo("")
-    click.echo("[auth]")
     if auth:
-        click.echo(f"  im_user_id  = {auth.get('im_user_id', '')}")
-        click.echo(f"  im_username = {auth.get('im_username', '')}")
         token = auth.get("im_token", "")
-        if token:
-            click.echo(f"  im_token    = {token[:20]}...")
-        else:
-            click.echo("  im_token    = (not set)")
-
+        token_display = f"{token[:20]}..." if token else "(not set)"
+        status_line = ""
         expires_str = auth.get("im_token_expires", "")
         if expires_str:
-            click.echo(f"  expires     = {expires_str}")
             try:
                 exp = datetime.fromisoformat(expires_str.replace("Z", "+00:00"))
                 now = datetime.now(timezone.utc)
                 if exp < now:
-                    click.echo("  status      = EXPIRED")
+                    status_line = "[red]EXPIRED[/red]"
                 else:
                     delta = exp - now
                     hours = delta.total_seconds() / 3600
                     if hours < 1:
-                        click.echo(f"  status      = valid ({int(delta.total_seconds() / 60)}m remaining)")
+                        status_line = f"[green]valid[/green] ({int(delta.total_seconds() / 60)}m remaining)"
                     elif hours < 24:
-                        click.echo(f"  status      = valid ({hours:.1f}h remaining)")
+                        status_line = f"[green]valid[/green] ({hours:.1f}h remaining)"
                     else:
-                        click.echo(f"  status      = valid ({delta.days}d remaining)")
+                        status_line = f"[green]valid[/green] ({delta.days}d remaining)"
             except (ValueError, TypeError):
-                click.echo(f"  status      = set (expires in {expires_str})")
+                status_line = f"set (expires in {expires_str})"
+
+        auth_content = (
+            f"im_user_id  = {auth.get('im_user_id', '')}\n"
+            f"im_username = {auth.get('im_username', '')}\n"
+            f"im_token    = {token_display}"
+        )
+        if status_line:
+            auth_content += f"\nstatus      = {status_line}"
+        print_panel(auth_content, title="auth", border_style="green")
     else:
-        click.echo("  (not registered — run 'prismer register <username>')")
+        _warn("Not registered — run 'prismer register <username>'")
 
     im_token = auth.get("im_token", "") if auth else ""
     if im_token:
         click.echo("")
-        click.echo("Fetching live status...")
         try:
             from .client import PrismerClient
             env = default.get("environment", "production")
             base_url = default.get("base_url", "") or None
             client = PrismerClient(im_token, environment=env, base_url=base_url)
-            try:
-                me_result = client.im.account.me()
-            finally:
-                client.close()
+            with _Spinner("Fetching live status..."):
+                try:
+                    me_result = client.im.account.me()
+                finally:
+                    client.close()
             if me_result.get("ok"):
                 me_data = me_result.get("data", {})
                 user = me_data.get("user", {})
                 credits_info = me_data.get("credits", {})
                 stats = me_data.get("stats", {})
-                click.echo(f"  Display   : {user.get('displayName', 'N/A')}")
-                click.echo(f"  Role      : {user.get('role', 'N/A')}")
-                click.echo(f"  Credits   : {credits_info.get('balance', 'N/A')}")
-                click.echo(f"  Messages  : {stats.get('messagesSent', 'N/A')}")
-                click.echo(f"  Unread    : {stats.get('unreadCount', 'N/A')}")
+                _kv({
+                    "Display": user.get("displayName", "N/A"),
+                    "Role": user.get("role", "N/A"),
+                    "Credits": str(credits_info.get("balance", "N/A")),
+                    "Messages": str(stats.get("messagesSent", "N/A")),
+                    "Unread": str(stats.get("unreadCount", "N/A")),
+                })
             else:
                 err = me_result.get("error", {})
                 msg = err.get("message", "Unknown error") if isinstance(err, dict) else str(err)
-                click.echo(f"  Could not fetch live status: {msg}")
+                _warn(f"Could not fetch live status: {msg}")
         except Exception as e:
-            click.echo(f"  Could not fetch live status: {e}")
+            _warn(f"Could not fetch live status: {e}")
 
 
 # ============================================================================
@@ -3045,6 +3069,8 @@ def daemon_uninstall():
 # ============================================================================
 
 def main():
+    from .cli_ui import display_banner
+    display_banner()
     cli()
 
 

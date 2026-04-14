@@ -498,18 +498,33 @@ if (eventType === 'startup') {
       timeout: 3000, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'],
     }).trim();
     if (result && result !== currentVersion) {
-      // Auto-clear stale npm cache so next install pulls fresh
+      // Auto-clear stale npm/CC cache so next install pulls fresh
       const { rmSync } = await import('fs');
       const npmCachePaths = [
         join(homedir(), '.claude', 'plugins', 'npm-cache', 'node_modules', '@prismer'),
         join(homedir(), '.claude', 'plugins', 'cache', 'prismer-cloud'),
+        // CC marketplace plugin cache
+        join(homedir(), '.claude', 'plugins', 'prismer'),
       ];
       for (const p of npmCachePaths) {
         try { rmSync(p, { recursive: true, force: true }); } catch {}
       }
+
+      // Also update marketplace.json in-place so CC's /plugin detects the new version
+      try {
+        const marketplacePath = join(__dirname, '..', '.claude-plugin', 'marketplace.json');
+        if (existsSync(marketplacePath)) {
+          const mkt = JSON.parse(readFileSync(marketplacePath, 'utf8'));
+          if (mkt.plugins?.[0]) {
+            mkt.plugins[0].version = result;
+            writeFileSync(marketplacePath, JSON.stringify(mkt, null, 2) + '\n');
+          }
+        }
+      } catch {}
+
       process.stdout.write(
         `\n[Prismer] \u26A0 Update available: ${currentVersion} \u2192 ${result}. ` +
-        `Cache cleared \u2014 run: /plugin install prismer@prismer-cloud\n`
+        `Cache cleared \u2014 run: /plugin install prismer\n`
       );
       log.info('update-available', { current: currentVersion, latest: result, cacheCleared: true });
     }

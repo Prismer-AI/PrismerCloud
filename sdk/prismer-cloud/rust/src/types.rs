@@ -1,5 +1,39 @@
 use serde::{Deserialize, Serialize};
 
+/// IM message content types (v1.8.2).
+///
+/// The wire protocol uses strings; this module exposes them as `&'static str`
+/// constants so Rust users get autocomplete and catch typos at compile time.
+pub mod message_type {
+    pub const TEXT: &str = "text";
+    pub const MARKDOWN: &str = "markdown";
+    pub const CODE: &str = "code";
+    pub const IMAGE: &str = "image";
+    pub const FILE: &str = "file";
+    pub const VOICE: &str = "voice"; // v1.8.2
+    pub const LOCATION: &str = "location"; // v1.8.2
+    pub const ARTIFACT: &str = "artifact"; // v1.8.2
+    pub const TOOL_CALL: &str = "tool_call";
+    pub const TOOL_RESULT: &str = "tool_result";
+    /// Deprecated — use `SYSTEM` with `metadata.action`.
+    pub const SYSTEM_EVENT: &str = "system_event";
+    pub const SYSTEM: &str = "system"; // v1.8.2
+    pub const THINKING: &str = "thinking";
+}
+
+/// Artifact sub-types for `message_type::ARTIFACT` (v1.8.2).
+/// Passed via `metadata.artifactType`.
+pub mod artifact_type {
+    pub const PDF: &str = "pdf";
+    pub const CODE: &str = "code";
+    pub const DOCUMENT: &str = "document";
+    pub const DATASET: &str = "dataset";
+    pub const CHART: &str = "chart";
+    pub const NOTEBOOK: &str = "notebook";
+    pub const LATEX: &str = "latex";
+    pub const OTHER: &str = "other";
+}
+
 /// Standard API response wrapper.
 #[derive(Debug, Deserialize)]
 pub struct ApiResponse<T> {
@@ -101,6 +135,100 @@ pub struct EvolutionMetrics {
     pub standard: Option<serde_json::Value>,
     pub hypergraph: Option<serde_json::Value>,
     pub verdict: Option<String>,
+}
+
+// ============================================================================
+// IM Task Types
+// ============================================================================
+
+/// A task returned from the API.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IMTask {
+    pub id: String,
+    pub title: String,
+    pub description: Option<String>,
+    pub capability: Option<String>,
+    pub input: Option<serde_json::Value>,
+    #[serde(rename = "contextUri")]
+    pub context_uri: Option<String>,
+    #[serde(rename = "creatorId")]
+    pub creator_id: String,
+    #[serde(rename = "assigneeId")]
+    pub assignee_id: Option<String>,
+    pub status: String,
+    pub progress: Option<f64>,
+    #[serde(rename = "statusMessage")]
+    pub status_message: Option<String>,
+    #[serde(rename = "conversationId")]
+    pub conversation_id: Option<String>,
+    #[serde(rename = "completedAt")]
+    pub completed_at: Option<String>,
+    #[serde(rename = "ownerId")]
+    pub owner_id: String,
+    #[serde(rename = "ownerType")]
+    pub owner_type: Option<String>,
+    #[serde(rename = "ownerName")]
+    pub owner_name: Option<String>,
+    #[serde(rename = "assigneeType")]
+    pub assignee_type: Option<String>,
+    #[serde(rename = "assigneeName")]
+    pub assignee_name: Option<String>,
+    #[serde(rename = "scheduleType")]
+    pub schedule_type: Option<String>,
+    #[serde(rename = "scheduleCron")]
+    pub schedule_cron: Option<String>,
+    #[serde(rename = "intervalMs")]
+    pub interval_ms: Option<i64>,
+    #[serde(rename = "nextRunAt")]
+    pub next_run_at: Option<String>,
+    #[serde(rename = "lastRunAt")]
+    pub last_run_at: Option<String>,
+    #[serde(rename = "runCount")]
+    pub run_count: Option<i64>,
+    #[serde(rename = "maxRuns")]
+    pub max_runs: Option<i64>,
+    pub result: Option<serde_json::Value>,
+    #[serde(rename = "resultUri")]
+    pub result_uri: Option<String>,
+    pub error: Option<String>,
+    pub budget: Option<f64>,
+    pub cost: Option<f64>,
+    #[serde(rename = "timeoutMs")]
+    pub timeout_ms: Option<i64>,
+    pub deadline: Option<String>,
+    #[serde(rename = "maxRetries")]
+    pub max_retries: Option<i64>,
+    #[serde(rename = "retryDelayMs")]
+    pub retry_delay_ms: Option<i64>,
+    #[serde(rename = "retryCount")]
+    pub retry_count: Option<i64>,
+    pub metadata: Option<serde_json::Value>,
+    #[serde(rename = "createdAt")]
+    pub created_at: String,
+    #[serde(rename = "updatedAt")]
+    pub updated_at: String,
+}
+
+/// A single log entry for a task.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IMTaskLog {
+    pub id: String,
+    #[serde(rename = "taskId")]
+    pub task_id: String,
+    #[serde(rename = "actorId")]
+    pub actor_id: Option<String>,
+    pub action: String,
+    pub message: Option<String>,
+    pub metadata: Option<serde_json::Value>,
+    #[serde(rename = "createdAt")]
+    pub created_at: String,
+}
+
+/// A task with its logs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IMTaskDetail {
+    pub task: IMTask,
+    pub logs: Vec<IMTaskLog>,
 }
 
 // ============================================================================

@@ -401,12 +401,20 @@ export interface IMWorkspaceInitOptions {
   workspaceId: string;
   userId: string;
   userDisplayName: string;
+  agentName?: string;
+  agentDisplayName?: string;
+  agentType?: string;
+  agentCapabilities?: string[];
+  force?: boolean;
 }
 
 export interface IMWorkspaceInitGroupOptions {
   workspaceId: string;
   title: string;
-  users: Array<{ userId: string; displayName: string }>;
+  description?: string;
+  users?: Array<{ userId: string; displayName: string }>;
+  agents?: Array<{ name: string; displayName?: string; type?: string; capabilities?: string[] }>;
+  force?: boolean;
 }
 
 export interface IMAutocompleteResult {
@@ -431,9 +439,11 @@ export interface IMCreateBindingOptions {
 }
 
 export interface IMSendOptions {
-  type?: 'text' | 'markdown' | 'code' | 'image' | 'file' | 'tool_call' | 'tool_result' | 'system_event' | 'thinking';
+  type?: 'text' | 'markdown' | 'code' | 'image' | 'file' | 'voice' | 'location' | 'artifact' | 'tool_call' | 'tool_result' | 'system_event' | 'system' | 'thinking';
   metadata?: Record<string, any>;
   parentId?: string;
+  /** Quote-reply reference (v1.8.2). Distinct from parentId threading. */
+  quotedMessageId?: string;
   /** Override auto-signing for this message (e.g., skip signing for system_event) */
   skipSigning?: boolean;
 }
@@ -573,7 +583,7 @@ export interface OfflineConfig {
 // Tasks API Types
 // ============================================================================
 
-export type TaskStatus = 'pending' | 'assigned' | 'running' | 'completed' | 'failed' | 'cancelled';
+export type TaskStatus = 'pending' | 'assigned' | 'running' | 'review' | 'completed' | 'failed' | 'cancelled';
 export type ScheduleType = 'once' | 'interval' | 'cron';
 
 export interface IMCreateTaskOptions {
@@ -597,8 +607,12 @@ export interface IMCreateTaskOptions {
 }
 
 export interface IMUpdateTaskOptions {
-  assigneeId?: string;
+  title?: string;
+  description?: string;
   status?: TaskStatus;
+  progress?: number;
+  statusMessage?: string;
+  assigneeId?: string;
   metadata?: Record<string, unknown>;
 }
 
@@ -628,6 +642,15 @@ export interface IMTask {
   creatorId: string;
   assigneeId: string | null;
   status: TaskStatus;
+  progress: number | null;
+  statusMessage: string | null;
+  conversationId: string | null;
+  completedAt: string | null;
+  ownerId: string;
+  ownerType: string | null;
+  ownerName: string | null;
+  assigneeType: string | null;
+  assigneeName: string | null;
   scheduleType: ScheduleType | null;
   scheduleCron: string | null;
   intervalMs: number | null;

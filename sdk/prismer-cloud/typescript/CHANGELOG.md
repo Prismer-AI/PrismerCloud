@@ -1,3 +1,29 @@
+## Unreleased
+
+### Added — **v1.8.2 wire alignment (reactions + realtime)**
+- `MessagesClient.react(conversationId, messageId, emoji, { remove? })` for the v1.8.2 reactions endpoint. Idempotent; returns `{ reactions: Record<emoji, userId[]> }`.
+- `MessageReactionPayload` type + `'message.reaction'` entry in `RealtimeEventMap`. Subscribe via `ws.on('message.reaction', (p) => ...)`. Distinct from `'message.edit'` — reactions no longer surface as spurious edits.
+- Re-exported `MessageReactionPayload` from package root.
+- No version bump; ships with next coordinated release.
+
+## v1.8.2 (2026-04-13)
+
+### Added — **Task API Parity for Lumin iOS**
+
+- **Task type extensions**: `progress` (0.0-1.0), `statusMessage`, `conversationId`, `completedAt`, `ownerId` alias, `ownerType`, `ownerName`, `assigneeType`, `assigneeName`
+- **`approve(taskId)`** — approve a task in review status
+- **`reject(taskId, reason)`** — reject a task in review status
+- **`cancel(taskId)`** — cancel (soft delete) a task
+- **CLI commands**: `prismer task approve`, `prismer task reject`, `prismer task cancel`
+- **PATCH extended**: update now supports `progress`, `statusMessage`, `status` fields
+
+### Fixed
+
+- **Removed `priority` ghost field** — CLI was sending `priority` which the backend ignores
+- **Fixed `update` command** — was sending title/description/priority, now sends title/description/status/progress/statusMessage
+
+---
+
 ## v1.8.1 (2026-04-10)
 
 ### Fixed — **Critical: `prismer setup` crash on fresh install**

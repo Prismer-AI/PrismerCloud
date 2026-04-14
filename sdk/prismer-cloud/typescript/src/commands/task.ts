@@ -14,14 +14,12 @@ export function register(parent: Command, getIMClient: ClientFactory, _getAPICli
     .description('Create a new task')
     .requiredOption('--title <title>', 'task title')
     .option('--description <description>', 'task description')
-    .option('--priority <priority>', 'priority: low, normal, high, urgent')
     .option('--capability <capability>', 'required agent capability')
     .option('--budget <budget>', 'budget in credits', parseFloat)
     .option('--json', 'output raw JSON response')
     .action(async (opts: {
       title: string;
       description?: string;
-      priority?: string;
       capability?: string;
       budget?: number;
       json: boolean;
@@ -31,8 +29,7 @@ export function register(parent: Command, getIMClient: ClientFactory, _getAPICli
         const res = await client.im.tasks.create({
           title: opts.title,
           description: opts.description,
-          priority: opts.priority,
-          requiredCapability: opts.capability,
+          capability: opts.capability,
           budget: opts.budget,
         });
 
@@ -46,14 +43,13 @@ export function register(parent: Command, getIMClient: ClientFactory, _getAPICli
           process.exit(1);
         }
 
-        const t = res.data;
+        const t = res.data!;
         process.stdout.write(`Task created successfully\n\n`);
         process.stdout.write(`ID:          ${t.id}\n`);
         process.stdout.write(`Title:       ${t.title}\n`);
         process.stdout.write(`Status:      ${t.status}\n`);
-        process.stdout.write(`Priority:    ${t.priority}\n`);
         if (t.description) process.stdout.write(`Description: ${t.description}\n`);
-        if (t.requiredCapability) process.stdout.write(`Capability:  ${t.requiredCapability}\n`);
+        if (t.capability) process.stdout.write(`Capability:  ${t.capability}\n`);
         if (t.budget !== undefined) process.stdout.write(`Budget:      ${t.budget}\n`);
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
@@ -102,15 +98,13 @@ export function register(parent: Command, getIMClient: ClientFactory, _getAPICli
 
         // Table header
         const idW = 24;
-        const statusW = 10;
-        const priorityW = 10;
+        const statusW = 12;
         const titleW = 40;
         const header =
           'ID'.padEnd(idW) +
           'STATUS'.padEnd(statusW) +
-          'PRIORITY'.padEnd(priorityW) +
           'TITLE';
-        const sep = '-'.repeat(idW + statusW + priorityW + titleW);
+        const sep = '-'.repeat(idW + statusW + titleW);
 
         process.stdout.write(header + '\n');
         process.stdout.write(sep + '\n');
@@ -120,7 +114,6 @@ export function register(parent: Command, getIMClient: ClientFactory, _getAPICli
           process.stdout.write(
             String(t.id).padEnd(idW) +
             String(t.status).padEnd(statusW) +
-            String(t.priority).padEnd(priorityW) +
             title + '\n'
           );
         }
@@ -153,18 +146,20 @@ export function register(parent: Command, getIMClient: ClientFactory, _getAPICli
           process.exit(1);
         }
 
-        const t = res.data;
+        const t = res.data!;
         process.stdout.write(`ID:           ${t.id}\n`);
         process.stdout.write(`Title:        ${t.title}\n`);
         process.stdout.write(`Status:       ${t.status}\n`);
-        process.stdout.write(`Priority:     ${t.priority}\n`);
         if (t.description) process.stdout.write(`Description:  ${t.description}\n`);
-        if (t.requiredCapability) process.stdout.write(`Capability:   ${t.requiredCapability}\n`);
+        if (t.capability) process.stdout.write(`Capability:   ${t.capability}\n`);
         if (t.budget !== undefined) process.stdout.write(`Budget:       ${t.budget}\n`);
+        if (t.progress != null) process.stdout.write(`Progress:     ${t.progress}\n`);
+        if (t.statusMessage) process.stdout.write(`Status Msg:   ${t.statusMessage}\n`);
         if (t.creatorId) process.stdout.write(`Creator:      ${t.creatorId}\n`);
         if (t.assigneeId) process.stdout.write(`Assignee:     ${t.assigneeId}\n`);
         if (t.createdAt) process.stdout.write(`Created:      ${t.createdAt}\n`);
         if (t.updatedAt) process.stdout.write(`Updated:      ${t.updatedAt}\n`);
+        if (t.completedAt) process.stdout.write(`Completed:    ${t.completedAt}\n`);
         if (t.result) process.stdout.write(`Result:       ${t.result}\n`);
         if (t.error) process.stdout.write(`Error:        ${t.error}\n`);
 
@@ -204,12 +199,11 @@ export function register(parent: Command, getIMClient: ClientFactory, _getAPICli
           process.exit(1);
         }
 
-        const t = res.data;
+        const t = res.data!;
         process.stdout.write(`Task claimed successfully\n\n`);
         process.stdout.write(`ID:       ${t.id}\n`);
         process.stdout.write(`Title:    ${t.title}\n`);
         process.stdout.write(`Status:   ${t.status}\n`);
-        process.stdout.write(`Priority: ${t.priority}\n`);
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
         process.stderr.write(`Error: ${message}\n`);
@@ -223,12 +217,16 @@ export function register(parent: Command, getIMClient: ClientFactory, _getAPICli
     .description('Update a task')
     .option('--title <title>', 'new title')
     .option('--description <description>', 'new description')
-    .option('--priority <priority>', 'new priority: low, normal, high, urgent')
+    .option('--status <status>', 'new status')
+    .option('--progress <progress>', 'progress (0.0 to 1.0)', parseFloat)
+    .option('--status-message <statusMessage>', 'status message')
     .option('--json', 'output raw JSON response')
     .action(async (taskId: string, opts: {
       title?: string;
       description?: string;
-      priority?: string;
+      status?: string;
+      progress?: number;
+      statusMessage?: string;
       json: boolean;
     }) => {
       const client = getIMClient();
@@ -236,7 +234,9 @@ export function register(parent: Command, getIMClient: ClientFactory, _getAPICli
         const res = await client.im.tasks.update(taskId, {
           title: opts.title,
           description: opts.description,
-          priority: opts.priority,
+          status: opts.status as any,
+          progress: opts.progress,
+          statusMessage: opts.statusMessage,
         });
 
         if (opts.json) {
@@ -249,12 +249,13 @@ export function register(parent: Command, getIMClient: ClientFactory, _getAPICli
           process.exit(1);
         }
 
-        const t = res.data;
+        const t = res.data!;
         process.stdout.write(`Task updated successfully\n\n`);
         process.stdout.write(`ID:       ${t.id}\n`);
         process.stdout.write(`Title:    ${t.title}\n`);
         process.stdout.write(`Status:   ${t.status}\n`);
-        process.stdout.write(`Priority: ${t.priority}\n`);
+        if (t.progress != null) process.stdout.write(`Progress: ${t.progress}\n`);
+        if (t.statusMessage) process.stdout.write(`Message:  ${t.statusMessage}\n`);
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
         process.stderr.write(`Error: ${message}\n`);
@@ -285,7 +286,7 @@ export function register(parent: Command, getIMClient: ClientFactory, _getAPICli
           process.exit(1);
         }
 
-        const t = res.data;
+        const t = res.data!;
         process.stdout.write(`Task completed successfully\n\n`);
         process.stdout.write(`ID:     ${t.id}\n`);
         process.stdout.write(`Title:  ${t.title}\n`);
@@ -319,12 +320,109 @@ export function register(parent: Command, getIMClient: ClientFactory, _getAPICli
           process.exit(1);
         }
 
-        const t = res.data;
+        const t = res.data!;
         process.stdout.write(`Task marked as failed\n\n`);
         process.stdout.write(`ID:     ${t.id}\n`);
         process.stdout.write(`Title:  ${t.title}\n`);
         process.stdout.write(`Status: ${t.status}\n`);
         if (t.error) process.stdout.write(`Error:  ${t.error}\n`);
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        process.stderr.write(`Error: ${message}\n`);
+        process.exit(1);
+      }
+    });
+
+  // task approve <task-id>
+  task
+    .command('approve <task-id>')
+    .description('Approve a completed task')
+    .option('--json', 'output raw JSON response')
+    .action(async (taskId: string, opts: { json: boolean }) => {
+      const client = getIMClient();
+      try {
+        const res = await client.im.tasks.approve(taskId);
+
+        if (opts.json) {
+          process.stdout.write(JSON.stringify(res, null, 2) + '\n');
+          return;
+        }
+
+        if (!res.ok) {
+          process.stderr.write(`Error: ${res.error?.message || 'Unknown error'}\n`);
+          process.exit(1);
+        }
+
+        const t = res.data!;
+        process.stdout.write(`Task approved successfully\n\n`);
+        process.stdout.write(`ID:     ${t.id}\n`);
+        process.stdout.write(`Title:  ${t.title}\n`);
+        process.stdout.write(`Status: ${t.status}\n`);
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        process.stderr.write(`Error: ${message}\n`);
+        process.exit(1);
+      }
+    });
+
+  // task reject <task-id>
+  task
+    .command('reject <task-id>')
+    .description('Reject a task')
+    .requiredOption('--reason <reason>', 'reason for rejection')
+    .option('--json', 'output raw JSON response')
+    .action(async (taskId: string, opts: { reason: string; json: boolean }) => {
+      const client = getIMClient();
+      try {
+        const res = await client.im.tasks.reject(taskId, opts.reason);
+
+        if (opts.json) {
+          process.stdout.write(JSON.stringify(res, null, 2) + '\n');
+          return;
+        }
+
+        if (!res.ok) {
+          process.stderr.write(`Error: ${res.error?.message || 'Unknown error'}\n`);
+          process.exit(1);
+        }
+
+        const t = res.data!;
+        process.stdout.write(`Task rejected\n\n`);
+        process.stdout.write(`ID:     ${t.id}\n`);
+        process.stdout.write(`Title:  ${t.title}\n`);
+        process.stdout.write(`Status: ${t.status}\n`);
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        process.stderr.write(`Error: ${message}\n`);
+        process.exit(1);
+      }
+    });
+
+  // task cancel <task-id>
+  task
+    .command('cancel <task-id>')
+    .description('Cancel a task')
+    .option('--json', 'output raw JSON response')
+    .action(async (taskId: string, opts: { json: boolean }) => {
+      const client = getIMClient();
+      try {
+        const res = await client.im.tasks.cancel(taskId);
+
+        if (opts.json) {
+          process.stdout.write(JSON.stringify(res, null, 2) + '\n');
+          return;
+        }
+
+        if (!res.ok) {
+          process.stderr.write(`Error: ${res.error?.message || 'Unknown error'}\n`);
+          process.exit(1);
+        }
+
+        const t = res.data!;
+        process.stdout.write(`Task cancelled\n\n`);
+        process.stdout.write(`ID:     ${t.id}\n`);
+        process.stdout.write(`Title:  ${t.title}\n`);
+        process.stdout.write(`Status: ${t.status}\n`);
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
         process.stderr.write(`Error: ${message}\n`);

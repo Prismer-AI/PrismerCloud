@@ -71,6 +71,7 @@ from .types import (
     ParseResult,
     IMResult,
     PrismerError,
+    MessageType,
 )
 
 
@@ -107,9 +108,10 @@ class DirectClient:
         self._request = request_fn
 
     def send(
-        self, user_id: str, content: str, *, type: str = "text",
+        self, user_id: str, content: str, *, type: MessageType = "text",
         metadata: Optional[Dict[str, Any]] = None,
         parent_id: Optional[str] = None,
+        quoted_message_id: Optional[str] = None,
     ) -> IMResult:
         """Send a direct message to a user."""
         payload: Dict[str, Any] = {"content": content, "type": type}
@@ -117,6 +119,8 @@ class DirectClient:
             payload["metadata"] = metadata
         if parent_id:
             payload["parentId"] = parent_id
+        if quoted_message_id:
+            payload["quotedMessageId"] = quoted_message_id
         return self._request("POST", f"/api/im/direct/{user_id}/messages", json=payload)
 
     def get_messages(
@@ -155,9 +159,10 @@ class GroupsClient:
         return self._request("GET", f"/api/im/groups/{group_id}")
 
     def send(
-        self, group_id: str, content: str, *, type: str = "text",
+        self, group_id: str, content: str, *, type: MessageType = "text",
         metadata: Optional[Dict[str, Any]] = None,
         parent_id: Optional[str] = None,
+        quoted_message_id: Optional[str] = None,
     ) -> IMResult:
         """Send a message to a group."""
         payload: Dict[str, Any] = {"content": content, "type": type}
@@ -165,6 +170,8 @@ class GroupsClient:
             payload["metadata"] = metadata
         if parent_id:
             payload["parentId"] = parent_id
+        if quoted_message_id:
+            payload["quotedMessageId"] = quoted_message_id
         return self._request("POST", f"/api/im/groups/{group_id}/messages", json=payload)
 
     def get_messages(
@@ -222,9 +229,10 @@ class MessagesClient:
         self._request = request_fn
 
     def send(
-        self, conversation_id: str, content: str, *, type: str = "text",
+        self, conversation_id: str, content: str, *, type: MessageType = "text",
         metadata: Optional[Dict[str, Any]] = None,
         parent_id: Optional[str] = None,
+        quoted_message_id: Optional[str] = None,
     ) -> IMResult:
         """Send a message to a conversation."""
         payload: Dict[str, Any] = {"content": content, "type": type}
@@ -232,6 +240,8 @@ class MessagesClient:
             payload["metadata"] = metadata
         if parent_id:
             payload["parentId"] = parent_id
+        if quoted_message_id:
+            payload["quotedMessageId"] = quoted_message_id
         return self._request("POST", f"/api/im/messages/{conversation_id}", json=payload)
 
     def get_history(
@@ -257,6 +267,23 @@ class MessagesClient:
     def delete(self, conversation_id: str, message_id: str) -> IMResult:
         """Delete a message."""
         return self._request("DELETE", f"/api/im/messages/{conversation_id}/{message_id}")
+
+    def react(
+        self, conversation_id: str, message_id: str, emoji: str, *, remove: bool = False,
+    ) -> IMResult:
+        """Add or remove an emoji reaction on a message (v1.8.2).
+
+        Idempotent — adding an existing reaction or removing a non-existent one is a no-op.
+        Returns the full reactions snapshot: ``{"👍": ["userId-a", ...], ...}``.
+        """
+        payload: Dict[str, Any] = {"emoji": emoji}
+        if remove:
+            payload["remove"] = True
+        return self._request(
+            "POST",
+            f"/api/im/messages/{conversation_id}/{message_id}/reactions",
+            json=payload,
+        )
 
 
 class ContactsClient:
@@ -361,7 +388,7 @@ class WorkspaceClient:
 
 
 class TasksClient:
-    """Task management: create, list, claim, complete, fail."""
+    """Task management: create, list, claim, complete, fail, approve, reject, cancel."""
 
     def __init__(self, request_fn):
         self._request = request_fn
@@ -373,7 +400,7 @@ class TasksClient:
 
     def list(
         self, *, status=None, capability=None, assignee_id=None, creator_id=None,
-        schedule_type=None, limit=None, cursor=None,
+        schedule_type=None, conversation_id=None, limit=None, cursor=None,
     ) -> IMResult:
         """List tasks with optional filters."""
         params: Dict[str, Any] = {}
@@ -387,6 +414,8 @@ class TasksClient:
             params["creatorId"] = creator_id
         if schedule_type:
             params["scheduleType"] = schedule_type
+        if conversation_id:
+            params["conversationId"] = conversation_id
         if limit is not None:
             params["limit"] = limit
         if cursor:
@@ -432,6 +461,19 @@ class TasksClient:
         if metadata:
             payload["metadata"] = metadata
         return self._request("POST", f"/api/im/tasks/{task_id}/fail", json=payload)
+
+    def approve(self, task_id: str) -> IMResult:
+        """Approve a completed task (creator only)."""
+        return self._request("POST", f"/api/im/tasks/{task_id}/approve")
+
+    def reject(self, task_id: str, reason: str) -> IMResult:
+        """Reject a completed task (creator only)."""
+        payload: Dict[str, Any] = {"reason": reason}
+        return self._request("POST", f"/api/im/tasks/{task_id}/reject", json=payload)
+
+    def cancel(self, task_id: str) -> IMResult:
+        """Cancel a task (soft delete)."""
+        return self._request("DELETE", f"/api/im/tasks/{task_id}")
 
 
 class MemoryClient:
@@ -1602,7 +1644,7 @@ class AsyncDirectClient:
         self._request = request_fn
 
     async def send(
-        self, user_id: str, content: str, *, type: str = "text",
+        self, user_id: str, content: str, *, type: MessageType = "text",
         metadata: Optional[Dict[str, Any]] = None,
         parent_id: Optional[str] = None,
     ) -> IMResult:
@@ -1643,7 +1685,7 @@ class AsyncGroupsClient:
         return await self._request("GET", f"/api/im/groups/{group_id}")
 
     async def send(
-        self, group_id: str, content: str, *, type: str = "text",
+        self, group_id: str, content: str, *, type: MessageType = "text",
         metadata: Optional[Dict[str, Any]] = None,
         parent_id: Optional[str] = None,
     ) -> IMResult:
@@ -1702,7 +1744,7 @@ class AsyncMessagesClient:
         self._request = request_fn
 
     async def send(
-        self, conversation_id: str, content: str, *, type: str = "text",
+        self, conversation_id: str, content: str, *, type: MessageType = "text",
         metadata: Optional[Dict[str, Any]] = None,
         parent_id: Optional[str] = None,
     ) -> IMResult:
@@ -1733,6 +1775,19 @@ class AsyncMessagesClient:
 
     async def delete(self, conversation_id: str, message_id: str) -> IMResult:
         return await self._request("DELETE", f"/api/im/messages/{conversation_id}/{message_id}")
+
+    async def react(
+        self, conversation_id: str, message_id: str, emoji: str, *, remove: bool = False,
+    ) -> IMResult:
+        """Add or remove an emoji reaction on a message (v1.8.2). See sync counterpart."""
+        payload: Dict[str, Any] = {"emoji": emoji}
+        if remove:
+            payload["remove"] = True
+        return await self._request(
+            "POST",
+            f"/api/im/messages/{conversation_id}/{message_id}/reactions",
+            json=payload,
+        )
 
 
 class AsyncContactsClient:
@@ -1820,7 +1875,7 @@ class AsyncWorkspaceClient:
 
 
 class AsyncTasksClient:
-    """Async task management: create, list, claim, complete, fail."""
+    """Async task management: create, list, claim, complete, fail, approve, reject, cancel."""
 
     def __init__(self, request_fn):
         self._request = request_fn
@@ -1832,7 +1887,7 @@ class AsyncTasksClient:
 
     async def list(
         self, *, status=None, capability=None, assignee_id=None, creator_id=None,
-        schedule_type=None, limit=None, cursor=None,
+        schedule_type=None, conversation_id=None, limit=None, cursor=None,
     ) -> IMResult:
         """List tasks with optional filters."""
         params: Dict[str, Any] = {}
@@ -1846,6 +1901,8 @@ class AsyncTasksClient:
             params["creatorId"] = creator_id
         if schedule_type:
             params["scheduleType"] = schedule_type
+        if conversation_id:
+            params["conversationId"] = conversation_id
         if limit is not None:
             params["limit"] = limit
         if cursor:
@@ -1890,6 +1947,19 @@ class AsyncTasksClient:
         if metadata:
             payload["metadata"] = metadata
         return await self._request("POST", f"/api/im/tasks/{task_id}/fail", json=payload)
+
+    async def approve(self, task_id: str) -> IMResult:
+        """Approve a completed task (creator only)."""
+        return await self._request("POST", f"/api/im/tasks/{task_id}/approve")
+
+    async def reject(self, task_id: str, reason: str) -> IMResult:
+        """Reject a completed task (creator only)."""
+        payload: Dict[str, Any] = {"reason": reason}
+        return await self._request("POST", f"/api/im/tasks/{task_id}/reject", json=payload)
+
+    async def cancel(self, task_id: str) -> IMResult:
+        """Cancel a task (soft delete)."""
+        return await self._request("DELETE", f"/api/im/tasks/{task_id}")
 
 
 class AsyncMemoryClient:

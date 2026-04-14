@@ -56,7 +56,7 @@ type WebhookConversation struct {
 // WebhookReply is an optional reply from a webhook handler.
 type WebhookReply struct {
 	Content string `json:"content"`
-	Type    string `json:"type,omitempty"` // "text", "markdown", or "code"
+	Type    string `json:"type,omitempty"` // MessageType* constant (see prismer.go); defaults to "text"
 }
 
 // WebhookHandlerFunc is the callback signature for handling webhook payloads.

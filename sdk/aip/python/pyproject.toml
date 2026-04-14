@@ -3,8 +3,8 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "aip"
-version = "1.8.1"
+name = "prismer-aip"
+version = "1.8.2"
 description = "Agent Identity Protocol SDK — DID-based identity for AI Agents"
 readme = "README.md"
 license = {text = "MIT"}

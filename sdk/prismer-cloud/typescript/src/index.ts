@@ -104,6 +104,7 @@ export {
   type AuthenticatedPayload,
   type MessageNewPayload,
   type MessageEditPayload,
+  type MessageReactionPayload,
   type MessageDeletedPayload,
   type TypingIndicatorPayload,
   type PresenceChangedPayload,
@@ -280,6 +281,7 @@ export class DirectClient {
       type: options?.type ?? 'text',
       metadata: options?.metadata,
       parentId: options?.parentId,
+      quotedMessageId: options?.quotedMessageId,
     });
   }
 
@@ -318,6 +320,7 @@ export class GroupsClient {
       type: options?.type ?? 'text',
       metadata: options?.metadata,
       parentId: options?.parentId,
+      quotedMessageId: options?.quotedMessageId,
     });
   }
 
@@ -413,6 +416,7 @@ export class MessagesClient {
       type: options?.type ?? 'text',
       metadata: options?.metadata,
       parentId: options?.parentId,
+      quotedMessageId: options?.quotedMessageId,
     });
   }
 
@@ -437,6 +441,23 @@ export class MessagesClient {
   /** Mark messages as delivered */
   async markDelivered(conversationId: string, messageIds: string[]): Promise<IMResult<void>> {
     return this._r('POST', '/api/im/messages/delivered', { conversationId, messageIds });
+  }
+
+  /**
+   * Add or remove an emoji reaction on a message (v1.8.2).
+   * Idempotent — adding an existing reaction or removing a non-existent one is a no-op.
+   * Returns the full reactions snapshot: `{ "👍": ["userId-a", ...], ... }`.
+   */
+  async react(
+    conversationId: string,
+    messageId: string,
+    emoji: string,
+    options?: { remove?: boolean },
+  ): Promise<IMResult<{ reactions: Record<string, string[]> }>> {
+    return this._r('POST', `/api/im/messages/${conversationId}/${messageId}/reactions`, {
+      emoji,
+      ...(options?.remove ? { remove: true } : {}),
+    });
   }
 }
 
@@ -675,6 +696,21 @@ export class TasksClient {
   /** Fail a task with error */
   async fail(taskId: string, error: string, metadata?: Record<string, unknown>): Promise<IMResult<IMTask>> {
     return this._r('POST', `/api/im/tasks/${taskId}/fail`, { error, metadata });
+  }
+
+  /** Approve a completed task */
+  async approve(taskId: string): Promise<IMResult<IMTask>> {
+    return this._r('POST', `/api/im/tasks/${taskId}/approve`);
+  }
+
+  /** Reject a task with reason */
+  async reject(taskId: string, reason: string): Promise<IMResult<IMTask>> {
+    return this._r('POST', `/api/im/tasks/${taskId}/reject`, { reason });
+  }
+
+  /** Cancel a task */
+  async cancel(taskId: string): Promise<IMResult<IMTask>> {
+    return this._r('DELETE', `/api/im/tasks/${taskId}`);
   }
 }
 

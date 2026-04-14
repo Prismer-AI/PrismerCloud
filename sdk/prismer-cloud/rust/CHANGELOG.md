@@ -1,5 +1,22 @@
 # prismer-sdk (Rust) -- Changelog
 
+## Unreleased
+
+### Added — **v1.8.2 wire alignment (reactions + message types)**
+- `types::message_type` and `types::artifact_type` modules with `&'static str` constants for all 13 message types and 8 artifact sub-types.
+- `IMClient::react_message(conversation_id, message_id, emoji, remove)` for the v1.8.2 reactions endpoint. Idempotent; response `data.reactions` is `{emoji: [userId, ...]}`.
+- No version bump; ships with next coordinated release.
+
+---
+
+## v1.8.2 (2026-04-13)
+
+### Added — **Task type extensions**
+- Task struct: `progress`, `status_message`, `conversation_id`, `completed_at`, `owner_id`, `owner_type`, `owner_name`, `assignee_type`, `assignee_name`
+- `approve_task()`, `reject_task()`, `cancel_task()` client methods
+
+---
+
 ## v1.8.1 (2026-04-10)
 
 - Version bump for 1.8.1 coordinated release. No API changes.

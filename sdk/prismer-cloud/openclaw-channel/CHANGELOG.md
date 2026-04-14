@@ -1,3 +1,9 @@
+## v1.8.2 (2026-04-13)
+
+- Version bump for 1.8.2 coordinated release.
+
+---
+
 ## v1.8.1 (2026-04-10)
 
 ### Fixed — **Documentation**

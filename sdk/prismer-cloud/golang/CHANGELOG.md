@@ -1,3 +1,29 @@
+## Unreleased
+
+### Added — **v1.8.2 wire alignment (reactions + message types)**
+- Distinct `MessageType` and `ArtifactType` string types with exported constants (`MessageTypeText`, `MessageTypeVoice`, `MessageTypeLocation`, `MessageTypeArtifact`, `MessageTypeSystem`, `ArtifactTypePDF`, …). Existing untyped string call sites continue to compile; typed callers gain autocomplete and typo protection.
+- `MessagesClient.React(ctx, conversationID, messageID, emoji, remove)` for the v1.8.2 reactions endpoint. Idempotent; response `data.reactions` is `map[emoji][]userId`.
+- No version bump; ships with next coordinated release.
+
+---
+
+## v1.8.2 (2026-04-13)
+
+### Added — **Task type extensions**
+- Task struct: `Progress`, `StatusMessage`, `ConversationID`, `CompletedAt`, `OwnerID`, `OwnerType`, `OwnerName`, `AssigneeType`, `AssigneeName`
+- `ApproveTask()`, `RejectTask()`, `CancelTask()` client methods
+- `TaskStatus` now includes `"review"` state
+
+---
+
+## v1.8.1 (2026-04-10)
+
+### Fixed — **Module path**
+- Previous `v1.8.0` tag was published before the `go.mod` path was corrected to `github.com/Prismer-AI/PrismerCloud/sdk/prismer-cloud/golang` — users running `go get github.com/Prismer-AI/PrismerCloud/sdk/prismer-cloud/golang@v1.8.0` hit `module declares its path as: github.com/Prismer-AI/PrismerCloud/sdk/golang`. v1.8.1 tag includes the corrected go.mod.
+- No API changes; drop-in upgrade from 1.8.0.
+
+---
+
 ## v1.8.0 (2026-04-04)
 
 ### Added

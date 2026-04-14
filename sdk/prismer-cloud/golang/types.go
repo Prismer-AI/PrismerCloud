@@ -298,16 +298,17 @@ type IMTokenData struct {
 }
 
 type IMMessage struct {
-	ID             string          `json:"id"`
-	ConversationID string          `json:"conversationId,omitempty"`
-	Content        string          `json:"content"`
-	Type           string          `json:"type"`
-	SenderID       string          `json:"senderId"`
-	ParentID       *string         `json:"parentId,omitempty"`
-	Status         string          `json:"status,omitempty"`
-	CreatedAt      string          `json:"createdAt"`
-	UpdatedAt      string          `json:"updatedAt,omitempty"`
-	Metadata       json.RawMessage `json:"metadata,omitempty"`
+	ID               string          `json:"id"`
+	ConversationID   string          `json:"conversationId,omitempty"`
+	Content          string          `json:"content"`
+	Type             string          `json:"type"`
+	SenderID         string          `json:"senderId"`
+	ParentID         *string         `json:"parentId,omitempty"`
+	QuotedMessageID  *string         `json:"quotedMessageId,omitempty"`
+	Status           string          `json:"status,omitempty"`
+	CreatedAt        string          `json:"createdAt"`
+	UpdatedAt        string          `json:"updatedAt,omitempty"`
+	Metadata         json.RawMessage `json:"metadata,omitempty"`
 }
 
 type IMRoutingTarget struct {
@@ -441,9 +442,10 @@ type IMCreateBindingOptions struct {
 }
 
 type IMSendOptions struct {
-	Type     string         `json:"type,omitempty"`
-	Metadata map[string]any `json:"metadata,omitempty"`
-	ParentID string         `json:"parentId,omitempty"`
+	Type            string         `json:"type,omitempty"`
+	Metadata        map[string]any `json:"metadata,omitempty"`
+	ParentID        string         `json:"parentId,omitempty"`
+	QuotedMessageID string         `json:"quotedMessageId,omitempty"`
 }
 
 type IMPaginationOptions struct {
@@ -552,6 +554,7 @@ const (
 	TaskCompleted TaskStatus = "completed"
 	TaskFailed    TaskStatus = "failed"
 	TaskCancelled TaskStatus = "cancelled"
+	TaskReview    TaskStatus = "review"
 )
 
 type ScheduleType string
@@ -561,6 +564,65 @@ const (
 	ScheduleInterval ScheduleType = "interval"
 	ScheduleCron     ScheduleType = "cron"
 )
+
+// IMTask represents a task returned from the API.
+type IMTask struct {
+	ID             string                 `json:"id"`
+	Title          string                 `json:"title"`
+	Description    *string                `json:"description,omitempty"`
+	Capability     *string                `json:"capability,omitempty"`
+	Input          map[string]interface{} `json:"input,omitempty"`
+	ContextUri     *string                `json:"contextUri,omitempty"`
+	CreatorID      string                 `json:"creatorId"`
+	AssigneeID     *string                `json:"assigneeId,omitempty"`
+	Status         TaskStatus             `json:"status"`
+	Progress       *float64               `json:"progress,omitempty"`
+	StatusMessage  *string                `json:"statusMessage,omitempty"`
+	ConversationID *string                `json:"conversationId,omitempty"`
+	CompletedAt    *string                `json:"completedAt,omitempty"`
+	OwnerID        string                 `json:"ownerId"`
+	OwnerType      *string                `json:"ownerType,omitempty"`
+	OwnerName      *string                `json:"ownerName,omitempty"`
+	AssigneeType   *string                `json:"assigneeType,omitempty"`
+	AssigneeName   *string                `json:"assigneeName,omitempty"`
+	ScheduleType   *ScheduleType          `json:"scheduleType,omitempty"`
+	ScheduleCron   *string                `json:"scheduleCron,omitempty"`
+	IntervalMs     *int                   `json:"intervalMs,omitempty"`
+	NextRunAt      *string                `json:"nextRunAt,omitempty"`
+	LastRunAt      *string                `json:"lastRunAt,omitempty"`
+	RunCount       int                    `json:"runCount"`
+	MaxRuns        *int                   `json:"maxRuns,omitempty"`
+	Result         interface{}            `json:"result,omitempty"`
+	ResultUri      *string                `json:"resultUri,omitempty"`
+	Error          *string                `json:"error,omitempty"`
+	Budget         *float64               `json:"budget,omitempty"`
+	Cost           float64                `json:"cost"`
+	TimeoutMs      int                    `json:"timeoutMs"`
+	Deadline       *string                `json:"deadline,omitempty"`
+	MaxRetries     int                    `json:"maxRetries"`
+	RetryDelayMs   int                    `json:"retryDelayMs"`
+	RetryCount     int                    `json:"retryCount"`
+	Metadata       map[string]interface{} `json:"metadata,omitempty"`
+	CreatedAt      string                 `json:"createdAt"`
+	UpdatedAt      string                 `json:"updatedAt"`
+}
+
+// IMTaskLog represents a single log entry for a task.
+type IMTaskLog struct {
+	ID        string                 `json:"id"`
+	TaskID    string                 `json:"taskId"`
+	ActorID   *string                `json:"actorId,omitempty"`
+	Action    string                 `json:"action"`
+	Message   *string                `json:"message,omitempty"`
+	Metadata  map[string]interface{} `json:"metadata,omitempty"`
+	CreatedAt string                 `json:"createdAt"`
+}
+
+// IMTaskDetail combines a task with its logs.
+type IMTaskDetail struct {
+	Task IMTask      `json:"task"`
+	Logs []IMTaskLog `json:"logs"`
+}
 
 type CreateTaskOptions struct {
 	Title        string                 `json:"title"`

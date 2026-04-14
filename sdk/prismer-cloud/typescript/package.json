@@ -1,6 +1,6 @@
 {
   "name": "@prismer/sdk",
-  "version": "1.8.1",
+  "version": "1.8.2",
   "description": "Official TypeScript SDK for Prismer Cloud API",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
@@ -9,7 +9,8 @@
     "prismer": "./dist/cli.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "icon"
   ],
   "scripts": {
     "build": "tsup",
@@ -33,12 +34,16 @@
     "directory": "sdk/typescript"
   },
   "dependencies": {
+    "@clack/prompts": "^0.9.1",
     "@iarna/toml": "^2.2.5",
     "@prismer/aip-sdk": "^1.8.1",
-    "commander": "^12.1.0"
+    "commander": "^12.1.0",
+    "picocolors": "^1.1.1",
+    "qrcode": "^1.5.4"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
+    "@types/qrcode": "^1.5.5",
     "tsup": "^8.0.0",
     "typescript": "^5.0.0",
     "vitest": "^1.0.0"

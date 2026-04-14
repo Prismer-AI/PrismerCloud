@@ -23,6 +23,31 @@ class PrismerError(BaseModel):
 
 
 # ============================================================================
+# IM Message Types (v1.8.2)
+# ============================================================================
+
+MessageType = Literal[
+    "text",
+    "markdown",
+    "code",
+    "image",
+    "file",
+    "voice",       # v1.8.2
+    "location",    # v1.8.2
+    "artifact",    # v1.8.2
+    "tool_call",
+    "tool_result",
+    "system_event",  # deprecated — use "system" with metadata.action
+    "system",      # v1.8.2
+    "thinking",
+]
+
+ArtifactType = Literal[
+    "pdf", "code", "document", "dataset", "chart", "notebook", "latex", "other",
+]
+
+
+# ============================================================================
 # Context API Types
 # ============================================================================
 
@@ -282,6 +307,7 @@ class IMMessage(BaseModel):
     type: str
     sender_id: str = Field(alias="senderId")
     parent_id: Optional[str] = Field(default=None, alias="parentId")
+    quoted_message_id: Optional[str] = Field(default=None, alias="quotedMessageId")
     status: Optional[str] = None
     created_at: str = Field(alias="createdAt")
     updated_at: Optional[str] = Field(default=None, alias="updatedAt")

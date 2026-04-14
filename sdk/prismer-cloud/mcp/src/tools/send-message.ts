@@ -10,9 +10,25 @@ export function registerSendMessage(server: McpServer) {
       userId: z.string().describe('Target user/agent ID (from discover_agents results)'),
       content: z.string().describe('Message content to send'),
       type: z
-        .enum(['text', 'markdown', 'code', 'tool_call', 'tool_result', 'system_event', 'thinking'])
+        .enum([
+          'text',
+          'markdown',
+          'code',
+          'image',
+          'file',
+          'voice',
+          'location',
+          'artifact',
+          'tool_call',
+          'tool_result',
+          'system_event',
+          'system',
+          'thinking',
+        ])
         .optional()
-        .describe('Message type: text (default), markdown, code, tool_call, tool_result, system_event, or thinking'),
+        .describe(
+          'Message type: text (default), markdown, code, image, file, voice, location, artifact, tool_call, tool_result, system_event, system, or thinking'
+        ),
       metadata: z.record(z.any()).optional().describe('Optional metadata to attach to the message'),
     },
     async ({ userId, content, type, metadata }) => {

@@ -288,6 +288,94 @@ var taskFailCmd = &cobra.Command{
 	},
 }
 
+// ── task approve ───────────────────────────────────────
+
+var taskApproveJSON bool
+var taskApproveCmd = &cobra.Command{
+	Use:   "approve <task-id>",
+	Short: "Approve a completed task",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		client := getIMClient().IM()
+		ctx := cmd.Context()
+		res, err := client.Tasks.Approve(ctx, args[0])
+		if err != nil {
+			return err
+		}
+		if taskApproveJSON {
+			return printJSON(res)
+		}
+		if !res.OK {
+			return fmt.Errorf("API error: %v", res.Error)
+		}
+		data := asMap(res.Data)
+		fmt.Printf("Task approved\n\n")
+		fmt.Printf("ID:     %v\n", data["id"])
+		fmt.Printf("Title:  %v\n", data["title"])
+		fmt.Printf("Status: %v\n", data["status"])
+		return nil
+	},
+}
+
+// ── task reject ────────────────────────────────────────
+
+var taskRejectReason string
+var taskRejectJSON bool
+var taskRejectCmd = &cobra.Command{
+	Use:   "reject <task-id>",
+	Short: "Reject a task with a reason",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		client := getIMClient().IM()
+		ctx := cmd.Context()
+		res, err := client.Tasks.Reject(ctx, args[0], taskRejectReason)
+		if err != nil {
+			return err
+		}
+		if taskRejectJSON {
+			return printJSON(res)
+		}
+		if !res.OK {
+			return fmt.Errorf("API error: %v", res.Error)
+		}
+		data := asMap(res.Data)
+		fmt.Printf("Task rejected\n\n")
+		fmt.Printf("ID:     %v\n", data["id"])
+		fmt.Printf("Title:  %v\n", data["title"])
+		fmt.Printf("Status: %v\n", data["status"])
+		return nil
+	},
+}
+
+// ── task cancel ────────────────────────────────────────
+
+var taskCancelJSON bool
+var taskCancelCmd = &cobra.Command{
+	Use:   "cancel <task-id>",
+	Short: "Cancel a task",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		client := getIMClient().IM()
+		ctx := cmd.Context()
+		res, err := client.Tasks.Cancel(ctx, args[0])
+		if err != nil {
+			return err
+		}
+		if taskCancelJSON {
+			return printJSON(res)
+		}
+		if !res.OK {
+			return fmt.Errorf("API error: %v", res.Error)
+		}
+		data := asMap(res.Data)
+		fmt.Printf("Task cancelled\n\n")
+		fmt.Printf("ID:     %v\n", data["id"])
+		fmt.Printf("Title:  %v\n", data["title"])
+		fmt.Printf("Status: %v\n", data["status"])
+		return nil
+	},
+}
+
 // ── helpers ─────────────────────────────────────────────
 
 func pad(s string, n int) string {
@@ -333,6 +421,14 @@ func init() {
 	taskFailCmd.Flags().BoolVar(&taskFailJSON, "json", false, "Output raw JSON")
 	_ = taskFailCmd.MarkFlagRequired("error")
 
+	taskApproveCmd.Flags().BoolVar(&taskApproveJSON, "json", false, "Output raw JSON")
+
+	taskRejectCmd.Flags().StringVar(&taskRejectReason, "reason", "", "Reason for rejection")
+	taskRejectCmd.Flags().BoolVar(&taskRejectJSON, "json", false, "Output raw JSON")
+	_ = taskRejectCmd.MarkFlagRequired("reason")
+
+	taskCancelCmd.Flags().BoolVar(&taskCancelJSON, "json", false, "Output raw JSON")
+
 	taskCmd.AddCommand(taskCreateCmd)
 	taskCmd.AddCommand(taskListCmd)
 	taskCmd.AddCommand(taskGetCmd)
@@ -340,5 +436,8 @@ func init() {
 	taskCmd.AddCommand(taskUpdateCmd)
 	taskCmd.AddCommand(taskCompleteCmd)
 	taskCmd.AddCommand(taskFailCmd)
+	taskCmd.AddCommand(taskApproveCmd)
+	taskCmd.AddCommand(taskRejectCmd)
+	taskCmd.AddCommand(taskCancelCmd)
 	rootCmd.AddCommand(taskCmd)
 }

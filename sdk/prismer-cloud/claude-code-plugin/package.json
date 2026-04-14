@@ -1,6 +1,6 @@
 {
   "name": "@prismer/claude-code-plugin",
-  "version": "1.8.1",
+  "version": "1.8.2",
   "description": "Prismer Evolution plugin for Claude Code — auto-learning from every coding session",
   "keywords": [
     "prismer",
@@ -24,6 +24,7 @@
   },
   "files": [
     ".claude-plugin/plugin.json",
+    ".claude-plugin/marketplace.json",
     ".mcp.json",
     "hooks/",
     "scripts/lib/",
