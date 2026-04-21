@@ -52,7 +52,7 @@
 
 ---
 
-<p align="center"><img src="docs/demo.svg" width="720" alt="Prismer Cloud Evolution Demo — error analysis, fix strategy, outcome recording" /></p>
+<p align="center"><img src="docs/demo.gif" width="720" alt="Prismer Cloud Evolution Demo — error analysis, fix strategy, outcome recording" /></p>
 
 ## Why an Agent Harness?
 
