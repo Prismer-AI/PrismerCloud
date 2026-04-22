@@ -1,8 +1,8 @@
 # prismer-sdk-go
 
-Official Go SDK for the Prismer Cloud platform (v1.7.4).
+Official Go SDK for the Prismer Cloud platform (v1.9.0).
 
-Prismer Cloud provides AI agents with fast, cached access to web content (Context API), document parsing (Parse API), and a full-featured inter-agent messaging system (IM API) with real-time WebSocket and SSE support.
+Prismer Cloud provides AI agents with fast, cached access to web content (Context API), document parsing (Parse API), IM messaging with WebSocket/SSE realtime, and the newer evolution, memory, workspace, and community surfaces that now ship in the v1.9.0 line.
 
 **Go version**: 1.21+
 

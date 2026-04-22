@@ -1,6 +1,8 @@
-# @prismer/openclaw-channel (v1.8.0)
+# @prismer/openclaw-channel (v1.9.0)
 
 OpenClaw channel plugin for [Prismer Cloud](https://prismer.cloud) — 15 tools for agent messaging, discovery, evolution, memory, and workspace sync.
+
+> **Contributors:** `@prismer/*` deps resolve from the npm registry. `npm install` in this dir fails until upstream packages are published — use `sdk/build/pack.sh --scope all` + `install.sh --local-artifacts` for local dev.
 
 ## Install
 
@@ -181,6 +183,30 @@ Support multiple Prismer accounts for different agent identities:
 - [GitHub](https://github.com/Prismer-AI/Prismer) — Source code
 - [MCP Server](https://www.npmjs.com/package/@prismer/mcp-server) — For Claude Code / Cursor / Windsurf
 - [TypeScript SDK](https://www.npmjs.com/package/@prismer/sdk) — Standalone SDK
+
+## PARA Adapter (v1.9.0)
+
+Starting from v1.9.0, the plugin includes a **PARA (Prismer Agent Runtime ABI) adapter** that passively observes OpenClaw events and writes them to `~/.prismer/para/events.jsonl`. This enables the Prismer daemon to receive structured telemetry about your agent's activity.
+
+The PARA adapter is **observation-only** — it does not intercept, block, or modify any channel messages, tool calls, or agent behaviour.
+
+### What gets observed
+
+| OpenClaw Hook | PARA Event |
+|---|---|
+| `gateway:startup` | `agent.register` |
+| `agent:bootstrap` | `agent.bootstrap.injected` |
+| `command:new/reset/stop` | `agent.command` |
+| `session:patch` | `agent.config.changed` |
+| `message:received` | `agent.channel.inbound` |
+| `message:transcribed` | `agent.channel.transcribed` |
+| `message:preprocessed` | `agent.channel.preprocessed` |
+| `message:sent` | `agent.channel.outbound.sent` |
+
+Set `PRISMER_PARA_STDOUT=1` to also stream events to stdout.
+
+**Tiers supported:** L1 Discovery, L2 Message I/O, L3 Tool Call Observation.  
+**PARA version:** 0.1.0 (see `docs/version190/03-para-spec.md`).
 
 ## License
 

@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { execFileSync, execFile } from 'child_process';
+import { execFileSync, execFile, spawnSync } from 'child_process';
 import { mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -40,9 +40,10 @@ function freshCacheDir() {
  * Run a hook script as a child process with controlled stdin and environment.
  * Returns { stdout, stderr, exitCode }.
  */
-function runHook(scriptName, stdinData = '{}', env = {}) {
+function runHook(scriptName, stdinData = '{}', env = {}, options = {}) {
   const scriptPath = join(SCRIPTS_DIR, scriptName);
   const input = typeof stdinData === 'string' ? stdinData : JSON.stringify(stdinData);
+  const timeout = options.timeout || 10000;
 
   const fullEnv = {
     ...process.env,
@@ -53,24 +54,22 @@ function runHook(scriptName, stdinData = '{}', env = {}) {
     // Prevent config.toml fallback from interfering
     HOME: TEST_CACHE_DIR,
     _PRISMER_SETUP_SHOWN: '1',
+    // Skip npm view auto-update check (slow network call)
+    _PRISMER_SKIP_UPDATE: '1',
     ...env,
   };
 
-  try {
-    const stdout = execFileSync('node', [scriptPath], {
-      input,
-      env: fullEnv,
-      encoding: 'utf8',
-      timeout: 10000,
-    });
-    return { stdout, stderr: '', exitCode: 0 };
-  } catch (err) {
-    return {
-      stdout: err.stdout || '',
-      stderr: err.stderr || '',
-      exitCode: err.status ?? 1,
-    };
-  }
+  const result = spawnSync('node', [scriptPath], {
+    input,
+    env: fullEnv,
+    encoding: 'utf8',
+    timeout,
+  });
+  return {
+    stdout: result.stdout || '',
+    stderr: result.stderr || '',
+    exitCode: result.status ?? 1,
+  };
 }
 
 // ============================================================
@@ -404,6 +403,47 @@ describe('Hook Scripts', () => {
       const result = runHook('session-start.mjs', '');
       expect(result.exitCode).toBe(0);
     });
+
+    it('should surface pending-review hint on stderr when ~/.prismer/pending-review.json exists (Fix B follow-up)', () => {
+      // HOME is set to TEST_CACHE_DIR in runHook — so ~/.prismer maps there.
+      const prismerDir = join(TEST_CACHE_DIR, '.prismer');
+      mkdirSync(prismerDir, { recursive: true });
+      const pendingFile = join(prismerDir, 'pending-review.json');
+      writeFileSync(pendingFile, JSON.stringify({
+        ts: Date.now(),
+        scope: 'my-proj',
+        summary: 'Repeated signals: error:timeout(3x)\n\nReview: evolve_record ...',
+        hasGeneFeedback: false,
+        hasRepeatedSignals: true,
+        signalTypes: ['error:timeout'],
+      }));
+
+      const result = runHook('session-start.mjs', JSON.stringify({ type: 'startup' }));
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toContain('Pending evolution review');
+      expect(result.stderr).toContain('my-proj');
+      // File must NOT be deleted — session-end (or explicit review) consumes it.
+      expect(existsSync(pendingFile)).toBe(true);
+    });
+
+    it('should silently delete stale pending-review.json (older than 7 days)', () => {
+      const prismerDir = join(TEST_CACHE_DIR, '.prismer');
+      mkdirSync(prismerDir, { recursive: true });
+      const pendingFile = join(prismerDir, 'pending-review.json');
+      writeFileSync(pendingFile, JSON.stringify({
+        ts: Date.now() - 8 * 86400_000, // 8 days ago
+        scope: 'abandoned-proj',
+        summary: 'Old abandoned review',
+        hasGeneFeedback: false,
+        hasRepeatedSignals: false,
+        signalTypes: [],
+      }));
+
+      const result = runHook('session-start.mjs', JSON.stringify({ type: 'startup' }));
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).not.toContain('Pending evolution review');
+      expect(existsSync(pendingFile)).toBe(false);
+    });
   });
 
   // --- post-bash-journal.mjs ---
@@ -542,6 +582,33 @@ describe('Hook Scripts', () => {
       // Command should be truncated to 120 chars
       const cmdInJournal = journal.match(/`([^`]+)`/)?.[1] || '';
       expect(cmdInJournal.length).toBeLessThanOrEqual(120);
+    });
+
+    it('should truncate huge bash output before analysis (~1MB stdout)', () => {
+      // Simulate a command like `find /` or `docker logs` producing ~1MB
+      // of padding with an error token at the tail. Hook must not hang,
+      // must still detect the error, and the journal must not balloon.
+      const padding = 'a'.repeat(1024 * 1024); // ~1MB
+      const hugeOutput = padding + '\nError: EACCES permission denied\n';
+      const input = {
+        tool_name: 'Bash',
+        tool_input: { command: 'find / -name foo' },
+        tool_result: hugeOutput,
+      };
+
+      const startedAt = Date.now();
+      const result = runHook('post-bash-journal.mjs', input);
+      const elapsedMs = Date.now() - startedAt;
+
+      expect(result.exitCode).toBe(0);
+      // Sanity: hook should not hang — well under a few seconds.
+      expect(elapsedMs).toBeLessThan(5000);
+
+      const journal = readFileSync(join(TEST_CACHE_DIR, 'session-journal.md'), 'utf8');
+      // Error at the tail must still be detected after truncation.
+      expect(journal).toContain('signal:error:permission_error');
+      // Journal must not contain the raw 1MB payload.
+      expect(journal.length).toBeLessThan(100 * 1024);
     });
   });
 
@@ -732,7 +799,7 @@ describe('Hook Scripts', () => {
       expect(result.stdout).toBe('');
     });
 
-    it('should block when journal has evolution value (error signals)', () => {
+    it('should write pending-review hint (not block) when journal has evolution value (error signals)', () => {
       mkdirSync(TEST_CACHE_DIR, { recursive: true });
       writeFileSync(join(TEST_CACHE_DIR, 'session-journal.md'), [
         '# Session Journal',
@@ -748,12 +815,20 @@ describe('Hook Scripts', () => {
       const result = runHook('session-stop.mjs', '{}', {
         PRISMER_API_KEY: 'sk-prismer-test-key-123',
       });
+      // v4: never emits decision:'block' — silent stdout, exit 0
       expect(result.exitCode).toBe(0);
-      const output = JSON.parse(result.stdout);
-      expect(output.decision).toBe('block');
+      expect(result.stdout).toBe('');
+      // pending-review.json should be written under the fake HOME (TEST_CACHE_DIR)
+      const pending = join(TEST_CACHE_DIR, '.prismer', 'pending-review.json');
+      expect(existsSync(pending)).toBe(true);
+      const data = JSON.parse(readFileSync(pending, 'utf8'));
+      expect(data.summary).toContain('memory_write');
+      // Journal marker still appended so session-end knows this was triggered
+      const journal = readFileSync(join(TEST_CACHE_DIR, 'session-journal.md'), 'utf8');
+      expect(journal).toContain('[evolution-review-triggered]');
     });
 
-    it('should block when journal has enough bash commands (>= 5)', () => {
+    it('should write pending-review hint (not block) when journal has enough bash commands (>= 5) with signals', () => {
       mkdirSync(TEST_CACHE_DIR, { recursive: true });
       writeFileSync(join(TEST_CACHE_DIR, 'session-journal.md'), [
         '# Session Journal',
@@ -761,6 +836,7 @@ describe('Hook Scripts', () => {
         'Started: 2025-01-01',
         '',
         '- bash: `cmd1` (10:00)',
+        '  - signal:info:run (count: 1)',
         '- bash: `cmd2` (10:01)',
         '- bash: `cmd3` (10:02)',
         '- bash: `cmd4` (10:03)',
@@ -771,8 +847,9 @@ describe('Hook Scripts', () => {
         PRISMER_API_KEY: 'sk-prismer-test-key-123',
       });
       expect(result.exitCode).toBe(0);
-      const output = JSON.parse(result.stdout);
-      expect(output.decision).toBe('block');
+      expect(result.stdout).toBe('');
+      const pending = join(TEST_CACHE_DIR, '.prismer', 'pending-review.json');
+      expect(existsSync(pending)).toBe(true);
     });
 
     it('should not block if already triggered recently in this session', () => {
@@ -860,7 +937,11 @@ describe('Hook Scripts', () => {
       expect(result.exitCode).toBe(0);
     });
 
-    it('should exit silently when evolution review was already triggered', () => {
+    it('should still exit 0 (not skip) when evolution review marker is present', () => {
+      // v4 semantics: session-end no longer skips on the Stop-hook marker.
+      // Stop hook no longer blocks to force inline MCP calls, so session-end
+      // becomes the canonical delivery path. Exit 0 is still expected because
+      // the target server is unreachable (localhost:19999) → push fails silently.
       mkdirSync(TEST_CACHE_DIR, { recursive: true });
       writeFileSync(join(TEST_CACHE_DIR, 'session-journal.md'), [
         '# Session Journal',
@@ -906,6 +987,46 @@ describe('Hook Scripts', () => {
       // Should not crash even though server is unreachable
       expect(result.exitCode).toBe(0);
     });
+
+    // --- Fix D: skill auto-push is opt-in via PRISMER_AUTO_PUSH_SKILLS ---
+
+    it('should NOT attempt skill push by default (privacy opt-in)', () => {
+      // Create ~/.claude/skills/<slug>/SKILL.md WITHOUT .prismer-meta.json
+      // (exactly the pattern the legacy auto-push targeted).
+      const skillsDir = join(TEST_CACHE_DIR, '.claude', 'skills', 'my-local-skill');
+      mkdirSync(skillsDir, { recursive: true });
+      writeFileSync(join(skillsDir, 'SKILL.md'), '# My Local Skill\n\nCustom content.\n');
+
+      // Point the hook at a deliberately unreachable URL so any attempted
+      // upload would surface as a warning log or non-zero exit. With the
+      // flag OFF, the scan block is skipped entirely.
+      const result = runHook('session-end.mjs', '{}', {
+        PRISMER_API_KEY: 'sk-prismer-test-key-123',
+        PRISMER_BASE_URL: 'http://127.0.0.1:19999',
+        // HOME already points at TEST_CACHE_DIR via runHook() default
+        // PRISMER_AUTO_PUSH_SKILLS NOT set
+      });
+      expect(result.exitCode).toBe(0);
+      // The hook's log.info('local-skill-push', ...) only fires when the
+      // block runs. Assert the stderr never mentions the skill-push codepath.
+      expect(result.stderr).not.toMatch(/local-skill-push/);
+    });
+
+    it('should run skill push codepath when PRISMER_AUTO_PUSH_SKILLS=1', () => {
+      const skillsDir = join(TEST_CACHE_DIR, '.claude', 'skills', 'my-local-skill');
+      mkdirSync(skillsDir, { recursive: true });
+      writeFileSync(join(skillsDir, 'SKILL.md'), '# My Local Skill\n\nCustom content.\n');
+
+      const result = runHook('session-end.mjs', '{}', {
+        PRISMER_API_KEY: 'sk-prismer-test-key-123',
+        PRISMER_BASE_URL: 'http://127.0.0.1:19999',
+        PRISMER_AUTO_PUSH_SKILLS: '1',
+      });
+      // Server is unreachable — upload attempts fail silently (wrapped in
+      // try/catch). The hook must still exit 0. This proves the block
+      // executes (no crash) rather than being skipped.
+      expect(result.exitCode).toBe(0);
+    });
   });
 });
 
@@ -924,7 +1045,7 @@ describe('Graceful Degradation', () => {
     } catch {}
   });
 
-  it('all hooks should handle no API key without crashing', () => {
+  it('all hooks should handle no API key without crashing', { timeout: 30000 }, () => {
     const hooks = [
       'session-start.mjs',
       'pre-bash-suggest.mjs',
@@ -947,7 +1068,7 @@ describe('Graceful Degradation', () => {
     }
   });
 
-  it('all hooks should handle invalid API key format without crashing', () => {
+  it('all hooks should handle invalid API key format without crashing', { timeout: 30000 }, () => {
     const hooks = [
       'session-start.mjs',
       'pre-bash-suggest.mjs',
@@ -973,7 +1094,7 @@ describe('Graceful Degradation', () => {
     }
   });
 
-  it('all hooks should handle network timeout without crashing', () => {
+  it('all hooks should handle network timeout without crashing', { timeout: 30000 }, () => {
     // Use an unreachable address to trigger timeout
     const hooks = [
       'session-start.mjs',
@@ -1007,7 +1128,7 @@ describe('Graceful Degradation', () => {
     }
   });
 
-  it('hooks should handle empty JSON stdin', () => {
+  it('hooks should handle empty JSON stdin', { timeout: 30000 }, () => {
     const hooks = [
       'session-start.mjs',
       'pre-bash-suggest.mjs',
@@ -1040,11 +1161,12 @@ describe('Environment Variable Injection', () => {
   });
 
   it('PRISMER_API_KEY should control evolution feature activation', () => {
-    // Without key: session-stop produces no output
+    // Without key: session-stop produces no output and no pending-review file
     const noKey = runHook('session-stop.mjs', '{}', { PRISMER_API_KEY: '' });
     expect(noKey.stdout).toBe('');
+    expect(existsSync(join(TEST_CACHE_DIR, '.prismer', 'pending-review.json'))).toBe(false);
 
-    // With key + journal value: session-stop blocks
+    // With key + journal value: session-stop writes pending-review hint (never blocks)
     mkdirSync(TEST_CACHE_DIR, { recursive: true });
     writeFileSync(join(TEST_CACHE_DIR, 'session-journal.md'), [
       '# Session Journal',
@@ -1056,16 +1178,21 @@ describe('Environment Variable Injection', () => {
     const withKey = runHook('session-stop.mjs', '{}', {
       PRISMER_API_KEY: 'sk-prismer-test-key-123',
     });
-    expect(withKey.stdout).toContain('"decision":"block"');
+    expect(withKey.exitCode).toBe(0);
+    // v4: stdout must be empty — never abuse decision:'block' channel
+    expect(withKey.stdout).toBe('');
+    expect(withKey.stdout).not.toContain('"decision":"block"');
+    expect(existsSync(join(TEST_CACHE_DIR, '.prismer', 'pending-review.json'))).toBe(true);
   });
 
-  it('PRISMER_BASE_URL should default to https://prismer.cloud', () => {
+  it('PRISMER_BASE_URL should default to https://prismer.cloud', { timeout: 30000 }, () => {
     // With default URL and unreachable server, session should still complete
     // (verifies resolve-config defaults work without crash)
+    // Use longer process timeout because real prismer.cloud network calls may be slow
     const result = runHook('session-start.mjs', JSON.stringify({ type: 'startup' }), {
       PRISMER_API_KEY: 'sk-prismer-test-key-abc',
       PRISMER_BASE_URL: '', // Empty = use default (https://prismer.cloud)
-    });
+    }, { timeout: 25000 });
     expect(result.exitCode).toBe(0);
     // Health report should be present regardless of server reachability
     expect(result.stdout).toContain('[Prismer]');

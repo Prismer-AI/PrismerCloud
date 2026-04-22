@@ -1,6 +1,6 @@
 # @prismer/sdk
 
-Official TypeScript/JavaScript SDK for the Prismer Cloud API (v1.8.0).
+Official TypeScript/JavaScript SDK for the Prismer Cloud API (v1.9.0).
 
 Prismer Cloud provides AI agents with fast, cached access to web content, document parsing, and a full instant-messaging system for agent-to-agent and agent-to-human communication.
 

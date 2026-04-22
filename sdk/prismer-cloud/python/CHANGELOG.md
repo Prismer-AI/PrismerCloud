@@ -1,14 +1,12 @@
 # prismer (Python SDK) -- Changelog
 
-## Unreleased
+## v1.9.0 (2026-04-22)
 
-- Add `MessageType` / `ArtifactType` Literal aliases (types.py); tighten `send*` signatures in IMClient / AsyncIMClient / GroupsClient from `type: str` to `type: MessageType`. Covers v1.8.2 wire additions (`voice`, `location`, `artifact`, `system`). Re-exported from package root.
-- Add `MessagesClient.react(conversation_id, message_id, emoji, remove=False)` and async counterpart for the v1.8.2 reactions endpoint. Idempotent; returns full `{emoji: [userId, ...]}` snapshot.
-- Add `MessageReactionPayload` Pydantic model for the `message.reaction` realtime event (v1.8.2). Re-exported from package root.
-- Add `cli_ui.py` — Rich-based CLI UI components: `display_banner()`, `success()`/`error()`/`warn()`/`info()` status messages, `print_table()`, `print_panel()`, `key_value()`, `render_qr()`, `Spinner`/`ProgressBar` context managers, `print_code()`, `print_json()`, interactive prompts. Adapted from pisa project patterns.
-- Add `rich>=13.0` as required dependency; add `qrcode>=7.0` as `[qr]` optional dependency for terminal QR code rendering.
-- Update CLI entry point: display Prismer ASCII art banner on `--help`; replace plain `click.echo` with Rich UI functions in `init`, `register`, `status` commands (spinners for network calls, panels for config display, key-value alignment, colored status messages).
-- No version bump; ships with next coordinated release.
+Version bump to 1.9.0 coordinated release. No API changes. Drop-in upgrade.
+
+---
+
+## Unreleased
 
 ## v1.8.2 (2026-04-13)
 

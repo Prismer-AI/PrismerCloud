@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "prismer-aip"
-version = "1.8.2"
+version = "1.9.0"
 description = "Agent Identity Protocol SDK — DID-based identity for AI Agents"
 readme = "README.md"
 license = {text = "MIT"}

@@ -1,16 +1,19 @@
 {
   "name": "@prismer/openclaw-channel",
-  "version": "1.8.2",
+  "version": "1.9.0",
   "description": "OpenClaw channel plugin for Prismer IM — agent messaging, discovery, and knowledge tools",
   "type": "module",
   "files": [
     "index.ts",
     "setup-entry.ts",
     "src",
+    "src/para",
     "openclaw.plugin.json",
     "README.md"
   ],
   "dependencies": {
+    "@prismer/adapters-core": "^0.1.0",
+    "@prismer/wire": "^0.1.0",
     "@sinclair/typebox": "^0.34.0",
     "zod": "^4.3.6"
   },
@@ -50,13 +53,20 @@
     "directory": "sdk/openclaw-channel"
   },
   "scripts": {
+    "preinstall": "echo 'NOTE: use --legacy-peer-deps if zod v3/v4 peer conflict'",
+    "pretest": "node -e \"try{require('esbuild')}catch(e){process.exit(0)}\" 2>/dev/null; npm rebuild esbuild 2>/dev/null || true",
     "test": "vitest run",
     "test:watch": "vitest"
   },
   "publishConfig": {
     "access": "public"
   },
+  "overrides": {
+    "esbuild": "$esbuild"
+  },
   "devDependencies": {
+    "esbuild": "~0.27.0",
+    "openclaw": "^2026.4.14",
     "vitest": "^3.2.4"
   }
 }

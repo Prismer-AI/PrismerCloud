@@ -1,7 +1,7 @@
 {
   "name": "@prismer/claude-code-plugin",
-  "version": "1.8.2",
-  "description": "Prismer Evolution plugin for Claude Code — auto-learning from every coding session",
+  "version": "1.9.0",
+  "description": "[DEPRECATED — use @prismer/adapters-core] Prismer Evolution plugin for Claude Code — auto-learning from every coding session",
   "keywords": [
     "prismer",
     "claude-code",
@@ -9,7 +9,8 @@
     "evolution",
     "ai-agent",
     "mcp",
-    "hooks"
+    "hooks",
+    "deprecated"
   ],
   "homepage": "https://github.com/prismer-io/prismercloud/tree/main/sdk/claude-code-plugin",
   "repository": {
@@ -35,6 +36,7 @@
     "scripts/pre-bash-suggest.mjs",
     "scripts/pre-web-cache.mjs",
     "scripts/post-bash-journal.mjs",
+    "scripts/post-memory-observe.mjs",
     "scripts/post-web-save.mjs",
     "scripts/post-tool-failure.mjs",
     "scripts/subagent-start.mjs",
@@ -42,17 +44,22 @@
     "scripts/setup.sh",
     "scripts/dev.sh",
     "scripts/test-hook.mjs",
+    "scripts/deprecation-notice.mjs",
     "skills/",
     "templates/",
+    "tests/",
     "LICENSE",
     "CHANGELOG.md",
     "README.md"
   ],
   "scripts": {
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "postinstall": "node ./scripts/deprecation-notice.mjs || true"
   },
   "dependencies": {
+    "@prismer/adapters-core": "^0.1.0",
+    "@prismer/wire": "^0.1.0",
     "turndown": "^7.2.2"
   },
   "devDependencies": {

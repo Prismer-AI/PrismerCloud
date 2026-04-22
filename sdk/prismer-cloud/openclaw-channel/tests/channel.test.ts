@@ -1247,6 +1247,46 @@ describe("Plugin index (index.ts)", () => {
       expect.objectContaining({ plugin: expect.any(Object) }),
     );
   });
+
+  // ---------------------------------------------------------------------
+  // N2 regression — the openclaw 2026.3.x+ plugin loader unwraps ESM
+  // default export then falls back through .register / .activate. Make
+  // sure BOTH reach a function so the loader accepts us regardless of
+  // which interop path it uses.
+  // ---------------------------------------------------------------------
+
+  it("module export is compatible with openclaw resolvePluginModuleExport", async () => {
+    const mod = await import("../index.js");
+    // 1) Named `register` export — used by some CJS-interop variants.
+    expect(typeof (mod as { register?: unknown }).register).toBe("function");
+    // 2) Default export has `.register` method — the main path used by
+    //    openclaw/dist/plugins/loader.js resolvePluginModuleExport().
+    expect(typeof mod.default.register).toBe("function");
+    // 3) `activate` is a supported alias per the loader's fallback chain
+    //    (`def.register ?? def.activate`).
+    expect(typeof mod.default.activate).toBe("function");
+    expect(typeof (mod as { activate?: unknown }).activate).toBe("function");
+  });
+
+  it("PARA and Mode-B imports do not block module evaluation", async () => {
+    // Even if PARA / Mode-B submodules fail to resolve, importing the
+    // entry file must succeed — the fix makes those imports dynamic and
+    // fire-and-forget so the channel always registers. This test passes
+    // simply because the dynamic `import('../index.js')` above didn't
+    // throw; we assert structural shape to lock in the invariant.
+    const plugin = (await import("../index.js")).default;
+    expect(plugin).toBeDefined();
+    expect(plugin.id).toBe("prismer");
+    // Synchronous register() must return without awaiting the
+    // fire-and-forget PARA/Mode-B promises.
+    const registerChannel = vi.fn();
+    const fakeApi = { runtime: { log: vi.fn() }, registerChannel };
+    const ret = plugin.register(fakeApi as any);
+    // register() should be void (sync), not a Promise — openclaw's
+    // loader warns when register returns a promise.
+    expect(ret).toBeUndefined();
+    expect(registerChannel).toHaveBeenCalledTimes(1);
+  });
 });
 
 // ---------------------------------------------------------------------------

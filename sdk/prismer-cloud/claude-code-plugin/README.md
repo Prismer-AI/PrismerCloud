@@ -1,6 +1,59 @@
-# @prismer/claude-code-plugin (v1.8.0)
+# @prismer/claude-code-plugin (v1.9.0)
+
+> Built on top of [`@prismer/adapters-core`](https://www.npmjs.com/package/@prismer/adapters-core) and [`@prismer/wire`](https://www.npmjs.com/package/@prismer/wire) as the Claude Code-facing adapter package in the v1.9.0 runtime line.
+
+> **Contributors:** `@prismer/*` deps resolve from the npm registry. `npm install` in this dir fails until upstream packages are published — use `sdk/build/pack.sh --scope all` + `install.sh --local-artifacts` for local dev.
 
 Prismer Evolution plugin for Claude Code (v3). Implements a **9-hook + 12-skill evolution architecture** that turns coding sessions into transferable knowledge — errors become learning strategies, successful fixes become shared recommendations across all agents.
+
+**v1.9.0 adds a PARA adapter layer** — all v1.8.x Evolution hooks remain unchanged and fully functional.
+
+## PARA Adapter (v1.9.0)
+
+The PARA (Prismer Agent Runtime ABI) adapter translates all 26 Claude Code hook events into the 42-event PARA wire protocol, enabling cross-agent observability, leaderboard tracking, and future daemon integration.
+
+**Tier support:** L1 (Discovery), L2 (Message I/O), L3 (Tool observation), L7 (FS delegation).
+
+For full protocol spec see: [`docs/version190/03-para-spec.md`](../../../../docs/version190/03-para-spec.md)
+
+### Enable PARA hooks
+
+Run `prismer-plugin setup --para` to merge PARA hooks into `~/.claude/hooks.json`:
+
+```bash
+# Install plugin (if not already done)
+npx -y @prismer/claude-code-plugin setup
+
+# Enable PARA adapter hooks (additive — Evolution hooks preserved)
+npx -y @prismer/claude-code-plugin setup --para
+```
+
+This merges `hooks/hooks.para.json` into your existing `~/.claude/hooks.json`:
+- Existing Prismer Evolution hooks: removed and replaced by PARA equivalents
+- User custom hooks: preserved
+- Third-party hooks: preserved
+- A backup is saved to `hooks.json.bak`
+
+### PARA event output
+
+PARA events are written as JSONL to `~/.prismer/para/events.jsonl` (append-only).
+
+```bash
+# Watch PARA events in real time
+tail -f ~/.prismer/para/events.jsonl | jq .
+
+# Enable stdout output (for daemon attach, Track 2)
+export PRISMER_PARA_STDOUT=1
+```
+
+### AgentDescriptor registration
+
+On first `SessionStart`, the adapter:
+1. Emits `agent.register` with stable ID (derived from `sha256(cwd+hostname)`)
+2. Caches the descriptor to `~/.prismer/para/agent-descriptor.json`
+3. Emits `agent.session.started`
+
+Subsequent sessions skip registration and emit only `agent.session.started`.
 
 ## Quick Start
 
@@ -18,7 +71,7 @@ On first session, the plugin auto-detects missing API key and runs `/prismer:pri
 Hooks (auto-learning, stuck detection, sync) work without MCP. To also enable active tools (`evolve_analyze`, `memory_write`, etc.):
 
 ```bash
-claude mcp add prismer -- npx -y @prismer/mcp-server@1.8.0
+claude mcp add prismer -- npx -y @prismer/mcp-server
 ```
 
 ### Configuration
@@ -40,6 +93,69 @@ cat > ~/.prismer/config.toml << 'EOF'
 api_key = "sk-prismer-..."
 base_url = "https://prismer.cloud"
 EOF
+```
+
+## CLI Commands
+
+The plugin includes a CLI for installation and diagnostics:
+
+```bash
+# Install hooks.json + MCP config + API key (browser auth)
+npx @prismer/claude-code-plugin setup
+
+# Re-run browser auth even if API key exists
+npx @prismer/claude-code-plugin setup --force
+
+# Check installation state
+npx @prismer/claude-code-plugin status
+
+# Run diagnostic checks (version, API key, hooks, cache, MCP, paths)
+npx @prismer/claude-code-plugin doctor
+```
+
+### Doctor Command
+
+The `doctor` command performs comprehensive health checks:
+
+| Check | Description |
+|-------|-------------|
+| **Plugin Version Match** | Compares `package.json` version vs `installed_plugins.json` |
+| **API Key Validity** | Verifies API key format + HTTP ping to `prismer.cloud` |
+| **Hooks Registration** | Checks if Prismer hooks are registered in `~/.claude/hooks.json` |
+| **Cache Directory** | Tests cache dir existence + readability + writability |
+| **MCP Server Config** | Validates `mcp_servers.json` has correct prismer entry |
+| **Plugin Root Path** | Verifies `CLAUDE_PLUGIN_ROOT` points to valid plugin directory |
+
+Output format: ✅ (pass), ⚠️ (warning), ❌ (fail) with detailed explanations.
+
+```bash
+$ npx @prismer/claude-code-plugin doctor
+
+Prismer Claude Code Plugin — Diagnostic Report
+───────────────────────────────────────────────
+
+✅ Plugin Version Match
+   v1.9.0 (matched)
+
+✅ API Key Validity
+   sk-prismer-l...7ae2 (reachable)
+
+✅ Hooks Registration
+   8 events registered (SessionStart, SessionEnd, Stop, ...)
+
+✅ Cache Directory
+   ~/.claude/cache (readable + writable)
+
+✅ MCP Server Config
+   Command: npx + API key set
+
+✅ Plugin Root Path
+   /path/to/plugin
+
+───────────────────────────────────────────────
+Summary: 6 passed, 0 warnings, 0 failed
+
+[prismer] ✓ All checks passed. Plugin is healthy.
 ```
 
 ### Feature Flags
@@ -260,8 +376,26 @@ claude-code-plugin/
 - Environment variables or secrets
 - Raw error output (kept in local journal only)
 - Private/localhost URLs
+- **Local skills in `~/.claude/skills/` are NEVER uploaded by default.** Skills you install from third-party marketplaces (gstack, custom, internal) stay local.
 
 All data is scoped to your API key. Evolution data propagates to other agents in the same scope.
+
+### Opt-in: Auto-push local skills (`PRISMER_AUTO_PUSH_SKILLS`)
+
+If you *want* to share skills you created locally with the Prismer community, set:
+
+```bash
+export PRISMER_AUTO_PUSH_SKILLS=1
+```
+
+When enabled, `session-end` scans `~/.claude/skills/` and uploads any skill folder
+that doesn't already carry a `.prismer-meta.json` marker (i.e. not pulled from
+Prismer Cloud) via `POST /api/im/skills/import`. Max 5 skills per session.
+
+**Default: OFF.** Prior to v1.9.0, this push happened unconditionally — v1.9.0
+makes it opt-in to protect users who install skills from third-party sources.
+If you have at least one local skill, `session-start` surfaces a single stderr
+tip about this flag (once per user, tracked via `~/.prismer/.auto-push-skills-notified`).
 
 ## Troubleshooting
 
@@ -276,7 +410,7 @@ rm -rf ~/.claude/plugins/npm-cache/node_modules/@prismer
 **MCP tools not available**: MCP is now installed separately. Run:
 
 ```bash
-claude mcp add prismer -- npx -y @prismer/mcp-server@1.8.0
+claude mcp add prismer -- npx -y @prismer/mcp-server
 ```
 
 **Hooks not working after upgrade**: Run `/reload-plugins` or restart Claude Code.

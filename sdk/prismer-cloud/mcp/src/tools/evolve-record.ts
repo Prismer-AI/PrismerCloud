@@ -62,6 +62,17 @@ export function registerEvolveRecord(server: McpServer) {
         text += `- Edge updated: ${data.edge_updated}\n`;
         text += `- Personality adjusted: ${data.personality_adjusted}\n`;
         text += `- Distillation ready: ${data.distill_ready}\n`;
+        if (data.recurrence) {
+          const rec = data.recurrence as Record<string, unknown>;
+          text += `- Recurring pattern: ${rec.is_recurring} (count: ${rec.recurrence_count})\n`;
+        }
+        if (data.promotion_suggestion) {
+          const promo = data.promotion_suggestion as Record<string, unknown>;
+          text += `\n### Promotion Suggestion\n`;
+          text += `- Action: ${promo.action}\n`;
+          text += `- Reason: ${promo.reason}\n`;
+          text += `- Suggested signals: ${JSON.stringify(promo.suggested_signals)}\n`;
+        }
 
         return { content: [{ type: 'text' as const, text }] };
       } catch (error: unknown) {

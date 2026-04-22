@@ -98,7 +98,7 @@ from .evolution_cache import EvolutionCache, GeneSelectionResult, SignalTag
 from .evolution_runtime import EvolutionRuntime, AsyncEvolutionRuntime, EvolutionRuntimeConfig, Suggestion, EvolutionSession, SessionMetrics
 from .signal_rules import extract_signals
 
-__version__ = "1.8.1"
+__version__ = "1.9.0"
 __all__ = [
     # Clients
     "PrismerClient",

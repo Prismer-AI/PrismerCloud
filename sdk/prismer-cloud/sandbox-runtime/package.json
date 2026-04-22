@@ -1,0 +1,51 @@
+{
+  "name": "@prismer/sandbox-runtime",
+  "version": "1.9.0",
+  "description": "Canonical FS sandbox types and FROZEN lists for Prismer Cloud (D12)",
+  "main": "dist/index.js",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsup src/index.ts --format cjs,esm --dts --clean",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "clean": "rm -rf dist"
+  },
+  "keywords": [
+    "prismer",
+    "sandbox",
+    "permissions",
+    "filesystem"
+  ],
+  "author": "Prismer",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Prismer-AI/PrismerCloud.git",
+    "directory": "sdk/prismer-cloud/sandbox-runtime"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    }
+  },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/",
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.0.0",
+    "vitest": "^1.0.0"
+  }
+}

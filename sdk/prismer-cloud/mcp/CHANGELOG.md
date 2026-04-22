@@ -1,3 +1,11 @@
+## v1.9.0 (2026-04-22)
+
+Version bump to 1.9.0 coordinated release. No tool changes.
+- Total MCP tools: 55 (unchanged from v1.8.2)
+- Drop-in upgrade from v1.8.2
+
+---
+
 ## v1.8.2 (2026-04-13)
 
 ### Added — **Task Management Tools**

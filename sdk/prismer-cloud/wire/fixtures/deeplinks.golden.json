@@ -1,0 +1,124 @@
+{
+  "valid": [
+    {
+      "uri": "prismer://u/abc123def456",
+      "expected": {
+        "scheme": "prismer",
+        "kind": "user",
+        "userId": "abc123def456"
+      },
+      "description": "User profile Universal Link"
+    },
+    {
+      "uri": "prismer://chat/conv-xyz789",
+      "expected": {
+        "scheme": "prismer",
+        "kind": "chat",
+        "convId": "conv-xyz789"
+      },
+      "description": "Conversation deep link"
+    },
+    {
+      "uri": "prismer://pair?offer=eyJ2IjoiMiI6Im1ZSI6Im9vIjogInAiLCAiY2I6ICJ9",
+      "expected": {
+        "scheme": "prismer",
+        "kind": "pair",
+        "offer": "eyJ2IjoiMiI6Im1ZSI6Im9vIjogInAiLCAiY2I6ICJ9"
+      },
+      "description": "Pairing QR with offer"
+    },
+    {
+      "uri": "prismer://pair?offer=eyJ2IjoiMiI6Im1ZSI6Im9vIjogInAiLCAiY2I6ICJ9&source=qr",
+      "expected": {
+        "scheme": "prismer",
+        "kind": "pair",
+        "offer": "eyJ2IjoiMiI6Im1ZSI6Im9vIjogInAiLCAiY2I6ICJ9",
+        "source": "qr"
+      },
+      "description": "Pairing QR with source"
+    },
+    {
+      "uri": "prismer://invoke?skill=code.write&args=%7B%7D",
+      "expected": {
+        "scheme": "prismer",
+        "action": "invoke",
+        "skill": "code.write",
+        "args": "{}"
+      },
+      "description": "Legacy: invoke skill with args"
+    },
+    {
+      "uri": "prismer://open?target=/workspace/src/index.ts&agentId=agent-123",
+      "expected": {
+        "scheme": "prismer",
+        "action": "open",
+        "target": "/workspace/src/index.ts",
+        "agentId": "agent-123"
+      },
+      "description": "Legacy: open path with agent context"
+    }
+  ],
+  "invalid": [
+    {
+      "uri": "http://prismer.com/u/123",
+      "expectedError": "Expected prismer:// scheme",
+      "description": "Wrong scheme (http not prismer)"
+    },
+    {
+      "uri": "prismer://",
+      "expectedError": "Missing action/kind",
+      "description": "Empty path"
+    },
+    {
+      "uri": "prismer://pair",
+      "expectedError": "Missing action/kind",
+      "description": "Missing query params for pairing"
+    },
+    {
+      "uri": "prismer://pair?token=abc",
+      "expectedError": "ZodError",
+      "description": "Invalid pairing param (token instead of offer)"
+    },
+    {
+      "uri": "prismer://pair?offer=",
+      "expectedError": "offer too short",
+      "description": "Empty offer"
+    },
+    {
+      "uri": "prismer://pair?offer=abc&source=invalid",
+      "expectedError": "ZodError",
+      "description": "Invalid source enum value"
+    }
+  ],
+  "edgeCases": [
+    {
+      "uri": "prismer://u/   ",
+      "expectedError": "userId too short",
+      "description": "Whitespace-only userId"
+    },
+    {
+      "uri": "prismer://chat/",
+      "expectedError": "convId too short",
+      "description": "Empty convId"
+    },
+    {
+      "uri": "prismer://pair?offer=YWJhYg%3D%3D&source=universal-link",
+      "expected": {
+        "scheme": "prismer",
+        "kind": "pair",
+        "offer": "YWJhYg==",
+        "source": "universal-link"
+      },
+      "description": "URL-encoded offer"
+    },
+    {
+      "uri": "prismer://pair?offer=test&extra=param",
+      "expected": {
+        "scheme": "prismer",
+        "kind": "pair",
+        "offer": "test"
+      },
+      "description": "Extra query params are ignored"
+    }
+  ]
+}

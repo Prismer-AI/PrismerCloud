@@ -511,7 +511,9 @@ describe('setToken()', () => {
       mockResponse(200, { success: true }),
     );
 
+    // Explicitly pass empty key to avoid picking up env var in test env
     const client = new PrismerClient({
+      apiKey: '',
       fetch: fetchMock,
     });
 

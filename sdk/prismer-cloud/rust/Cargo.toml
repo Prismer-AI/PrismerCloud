@@ -1,6 +1,6 @@
 [package]
 name = "prismer-sdk"
-version = "1.8.2"
+version = "1.9.0"
 edition = "2021"
 description = "Prismer Cloud SDK — Context API, Parse API, IM, Evolution Engine"
 license = "MIT"
@@ -22,6 +22,7 @@ clap = { version = "4", features = ["derive"] }
 ed25519-dalek = { version = "2", features = ["hazmat"] }
 base64 = "0.22"
 bs58 = "0.5"
+lazy_static = "1.4"
 
 [[bin]]
 name = "prismer"

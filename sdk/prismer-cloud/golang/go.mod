@@ -1,6 +1,6 @@
 module github.com/Prismer-AI/PrismerCloud/sdk/prismer-cloud/golang
 
-go 1.21.0
+go 1.25.0
 
 require (
 	github.com/pelletier/go-toml/v2 v2.2.4
@@ -11,4 +11,5 @@ require (
 require (
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/spf13/pflag v1.0.9 // indirect
+	golang.org/x/sys v0.43.0 // indirect
 )

@@ -1,6 +1,6 @@
 {
   "name": "@prismer/opencode-plugin",
-  "version": "1.8.2",
+  "version": "1.9.0",
   "description": "Evolution-aware plugin for OpenCode — connects task execution to the Prismer Evolution Network for cross-agent learning",
   "keywords": [
     "prismer",

@@ -1,0 +1,60 @@
+{
+  "name": "@prismer/wire",
+  "version": "0.1.0",
+  "description": "Canonical wire protocol schemas for Prismer Agent Runtime ABI (PARA)",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run",
+    "codegen": "npx tsx scripts/codegen.ts"
+  },
+  "keywords": [
+    "prismer",
+    "para",
+    "schema",
+    "zod",
+    "agent",
+    "runtime",
+    "wire"
+  ],
+  "author": "Prismer",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Prismer-AI/PrismerCloud.git",
+    "directory": "sdk/prismer-cloud/wire"
+  },
+  "dependencies": {
+    "@prismer/sandbox-runtime": "^1.9.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "quicktype-core": "^23.0.0",
+    "tsx": "^4.0.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.0.0",
+    "vitest": "^1.0.0",
+    "zod": "^3.23.0",
+    "zod-to-json-schema": "^3.0.0"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    }
+  },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/",
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

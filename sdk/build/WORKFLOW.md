@@ -1,442 +1,216 @@
 # SDK Build & Release Workflow
 
-> 本文件同时存在于闭源 (`prismer-cloud-next/sdk/build/`) 和开源 (`PrismerCloud/sdk/build/`) 仓库。
-> 两边脚本完全一致。闭源跑到 pack 为止，开源执行 release。
+> Source repo: `/Users/prismer/workspace/prismercloud`
+> Open-source release mirror: `/Users/prismer/workspace/opensource/PrismerCloud`
+> Always run `sdk/build/*.sh` from the source repo. `sync.sh` and `release.sh` must not be run inside the open-source clone.
 
----
-
-## 架构
+## Repo Roles
 
 ```
-prismer-cloud-next/sdk/     (闭源 — 开发 + 编译 + 打包 + 测试)
-├── aip/                    @prismer/aip-sdk (独立身份协议)
-│   ├── typescript/         npm
-│   ├── python/             PyPI
-│   ├── golang/             Go modules
-│   └── rust/               crates.io
-├── prismer-cloud/          @prismer/sdk (平台 SDK + 插件)
-│   ├── typescript/         npm (deps: @prismer/aip-sdk)
-│   ├── python/             PyPI (deps: aip)
-│   ├── golang/             Go modules
-│   ├── rust/               crates.io
-│   ├── mcp/                npm (@prismer/mcp-server, 47 tools)
-│   ├── claude-code-plugin/ npm (@prismer/claude-code-plugin, 9 hooks + 12 skills)
-│   ├── opencode-plugin/    npm (@prismer/opencode-plugin)
-│   └── openclaw-channel/   npm (@prismer/openclaw-channel)
-└── build/                  脚本（两边完全一致）
-    ├── lib/common.sh       共享函数 + --scope 支持
-    ├── sync.sh             闭源 → 开源同步
-    ├── test.sh             运行测试
-    ├── verify.sh           版本一致性 + 编译验证
-    ├── pack.sh             打包产物
-    ├── version.sh          版本号 bump
-    └── release.sh          发布到 npm/PyPI/crates.io/GitHub
+prismercloud/sdk/                      source of truth
+├── aip/                               AIP SDK family
+├── prismer-cloud/                     platform SDK + runtime + adapters
+└── build/                             build / verify / pack / release scripts
 
-        sync.sh 把整个 sdk/ 同步到 ↓
-
-PrismerCloud/sdk/           (开源 — release 专用)
-├── aip/                    完全镜像
-├── prismer-cloud/          完全镜像
-└── build/                  完全镜像
+opensource/PrismerCloud/sdk/           release mirror
+├── aip/
+├── prismer-cloud/
+└── build/
 ```
 
-### 发布目标仓库
-
-| 仓库 | 用途 | 地址 |
-|------|------|------|
-| `PrismerCloud` | SDK + Plugin 源码 + release | `github.com/Prismer-AI/PrismerCloud` |
-| `claude-code-plugin` | Plugin 独立仓库 (Anthropic marketplace 要求) | `github.com/Prismer-AI/claude-code-plugin` |
-| `anthropics/claude-plugins-official` | Anthropic 官方 marketplace (提 PR 合入) | `github.com/anthropics/claude-plugins-official` |
-
-**Plugin 双发布：** `claude-code-plugin/` 同时存在于 `PrismerCloud/sdk/prismer-cloud/claude-code-plugin/` (源码) 和独立 repo `Prismer-AI/claude-code-plugin` (marketplace 引用)。sync 脚本会自动同步两处。
-
----
-
-## 用户侧安装
-
-### Claude Code Plugin (推荐)
-
-**当前（自有 marketplace）：**
+- `sdk/build/sync.sh` mirrors the entire `sdk/` tree into the open-source clone with `rsync --delete`.
+- `sdk/build/release.sh` is the top-level orchestrator. It verifies, packs, runs install smoke checks, syncs to the open-source clone, then tags and publishes.
+- `PRISMERCLOUD_REPO` overrides the default mirror path:
 
 ```bash
-# In Claude Code:
-/plugin marketplace add Prismer-AI/PrismerCloud
-/plugin install prismer@prismer-cloud
+export PRISMERCLOUD_REPO=/path/to/PrismerCloud
 ```
 
-**目标（Anthropic 官方 marketplace 合入后）：**
+## Package Inventory
 
-```bash
-# In Claude Code — 无需 marketplace add，官方预装：
-/plugin install prismer@claude-plugins-official
+### AIP family
+
+| Surface | Registry | Version policy |
+|---|---|---|
+| `sdk/aip/typescript` → `@prismer/aip-sdk` | npm | follows root `/VERSION` |
+| `sdk/aip/python` → `prismer-aip` | PyPI | follows root `/VERSION` |
+| `sdk/aip/golang` | Go module | git tag driven |
+| `sdk/aip/rust` → `aip-sdk` | crates.io | follows root `/VERSION` |
+
+### Prismer Cloud family
+
+Current `sdk/prismer-cloud/` contains 14 publishable package surfaces:
+
+| Surface | Package | Registry | Version policy |
+|---|---|---|---|
+| `typescript` | `@prismer/sdk` | npm | follows root `/VERSION` |
+| `python` | `prismer` | PyPI | follows root `/VERSION` |
+| `golang` | `github.com/Prismer-AI/PrismerCloud/sdk/prismer-cloud/golang` | Go module | git tag driven |
+| `rust` | `prismer-sdk` | crates.io | follows root `/VERSION` |
+| `mcp` | `@prismer/mcp-server` | npm | follows root `/VERSION` |
+| `runtime` | `@prismer/runtime` | npm | follows root `/VERSION` |
+| `sandbox-runtime` | `@prismer/sandbox-runtime` | npm | follows root `/VERSION` |
+| `claude-code-plugin` | `@prismer/claude-code-plugin` | npm | follows root `/VERSION` |
+| `opencode-plugin` | `@prismer/opencode-plugin` | npm | follows root `/VERSION` |
+| `openclaw-channel` | `@prismer/openclaw-channel` | npm | follows root `/VERSION` |
+| `wire` | `@prismer/wire` | npm | independent `0.x` |
+| `adapters-core` | `@prismer/adapters-core` | npm | independent `0.x` |
+| `adapters/hermes-node` | `@prismer/adapter-hermes` | npm | independent `0.x` |
+| `adapters/hermes` | `prismer-adapter-hermes` | PyPI | independent `0.x` |
+
+### Dependency order inside `sdk/prismer-cloud`
+
+```text
+@prismer/sandbox-runtime
+  -> @prismer/wire
+  -> @prismer/adapters-core
+  -> @prismer/runtime
+
+@prismer/claude-code-plugin  -> @prismer/adapters-core, @prismer/wire
+@prismer/openclaw-channel    -> @prismer/adapters-core, @prismer/wire
+@prismer/adapter-hermes      -> peer @prismer/runtime
+@prismer/sdk                 -> @prismer/aip-sdk
 ```
 
-> **状态：** Submission 已通过 (Published 2026-04-01)，需向 `anthropics/claude-plugins-official` 提 PR 合入。
-> PR 内容：在 `external_plugins/prismer/` 加 plugin.json + 在 `marketplace.json` 加 source 条目指向 `Prismer-AI/claude-code-plugin`。
+## Script Reality
 
-### MCP Server (任意 AI 编辑器)
+| Script | What it actually does | Important note |
+|---|---|---|
+| `test.sh` | build / syntax smoke for SDK packages | not a full `pytest` / `go test` / `cargo test` matrix |
+| `verify.sh` | version checks + manifest checks + `test.sh` | this is the pre-release verification entrypoint |
+| `pack.sh` | builds tarballs / wheels / crates into `sdk/build/artifacts/` | use `--clean` for release |
+| `install-local.sh` | offline install smoke via `public/install.sh --local` | validates the installer path |
+| `smoke-test.sh` | Docker-based artifact install/import smoke | validates published-style artifacts in a clean Linux image |
+| `sync.sh` | destructive whole-directory mirror into the open-source clone | `--scope` does not narrow the sync surface |
+| `release.sh` | verify -> pack -> install-local -> smoke-test -> sync -> tag -> publish | run from source repo only |
+| `sync-plugin.sh` | helper that mirrors `claude-code-plugin/` into another tree | not part of the automated release commit/tag/push path |
+
+## Mandatory Gates Before Publish
+
+Release means all of these pass in order:
+
+1. `sdk/build/verify.sh`
+2. `sdk/build/pack.sh --clean`
+3. `sdk/build/install-local.sh --skip-pack`
+4. `sdk/build/smoke-test.sh --skip-pack`
+5. `sdk/build/sync.sh`
+6. `sdk/build/release.sh`
+
+`test.sh` alone is not enough. It proves the packages build. It does not prove that packed artifacts install cleanly or that the installer path still works.
+
+## Standard Flow
+
+### 1. Bump versions
+
+Coordinated release:
 
 ```bash
-# Claude Code
-claude mcp add prismer -- npx -y @prismer/mcp-server
-
-# Cursor / Windsurf / VS Code
-npx -y @prismer/mcp-server    # 47 tools, 自动读取 ~/.prismer/config
-
-# 手动设置 API Key
-PRISMER_API_KEY=sk-prismer-... npx -y @prismer/mcp-server
+cd /Users/prismer/workspace/prismercloud
+sdk/build/version.sh --scope all 1.9.0
 ```
 
-### SDK (编程集成)
+Independent-package hotfix:
 
 ```bash
-npm install @prismer/sdk                        # TypeScript
-pip install prismer                             # Python
-go get github.com/Prismer-AI/PrismerCloud/sdk/prismer-cloud/golang  # Go
-cargo add prismer-sdk                           # Rust
+cd /Users/prismer/workspace/prismercloud
+sdk/build/hotfix.sh @prismer/wire 0.1.1
 ```
 
-### 首次配置 (CLI)
+### 2. Verify and pack locally
 
 ```bash
-prismer setup           # 开浏览器 → 登录 → key 自动保存 (推荐)
-prismer setup --agent   # 无浏览器，自动注册 agent + 100 免费 credits (CI/脚本用)
-```
-
----
-
-## 日常流程
-
-### 开发（在闭源仓库）
-
-```bash
-cd prismer-cloud-next
-
-# 改代码
-vim sdk/aip/typescript/src/identity.ts
-vim sdk/prismer-cloud/typescript/src/index.ts
-
-# 测试
-sdk/build/test.sh --scope aip
-sdk/build/test.sh --scope prismer-cloud
-
-# 编译验证
-sdk/build/verify.sh --scope all --skip-build
-
-# 打包（不发布）
-sdk/build/pack.sh --scope all --clean
-```
-
-### 发布（在开源仓库）
-
-```bash
-cd PrismerCloud
-
-# 1. 同步
-sdk/build/sync.sh
-
-# 2. 版本号 bump
-sdk/build/version.sh --scope aip 1.8.0
-sdk/build/version.sh --scope prismer-cloud 1.8.0
-
-# 3. 验证
+cd /Users/prismer/workspace/prismercloud
 sdk/build/verify.sh --scope all
-
-# 4. 发布（AIP 先发，因为 prismer-cloud 依赖它）
-sdk/build/release.sh --scope aip
-sleep 30
-sdk/build/release.sh --scope prismer-cloud
+sdk/build/pack.sh --scope all --clean
+sdk/build/install-local.sh --skip-pack
+sdk/build/smoke-test.sh --scope all --skip-pack
 ```
 
-### Plugin 独立 Repo 同步
+For an AIP-only release, `install-local.sh` can be skipped because it validates the public Prismer installer path, not the standalone AIP surfaces.
 
-Plugin 发布后同步到独立 repo（Anthropic marketplace 引用此 repo）：
+### 3. Release
 
 ```bash
-# 5. 同步到独立 plugin repo
-sdk/build/sync-plugin.sh    # rsync claude-code-plugin → Prismer-AI/claude-code-plugin
+cd /Users/prismer/workspace/prismercloud
+sdk/build/release.sh --scope all
 ```
 
-#### sync-plugin.sh 行为
+`release.sh` will:
 
-```
-源: prismer-cloud-next/sdk/prismer-cloud/claude-code-plugin/
-目标: ~/workspace/claude-code-plugin/  (独立 repo)
+1. Re-run `verify.sh`
+2. Re-pack artifacts
+3. Run `install-local.sh --skip-pack` when `--scope` includes `prismer-cloud`
+4. Run `smoke-test.sh --skip-pack` when `--scope` includes `prismer-cloud`
+5. Sync `sdk/` into `$PRISMERCLOUD_REPO`
+6. Commit only `sdk/` changes in the open-source clone
+7. Tag `vX.Y.Z` and `sdk/prismer-cloud/golang/vX.Y.Z`
+8. Create a GitHub release
+9. Publish npm / PyPI / crates artifacts
 
-1. rsync --delete (排除 node_modules/.dev-cache 等)
-2. git add -A && git commit
-3. git tag v{VERSION}
-4. git push origin main v{VERSION}
-```
-
-#### Anthropic 官方 Marketplace
-
-`anthropics/claude-plugins-official` **不接受外部 PR**，只有 Anthropic 团队成员可以合入。
-
-**我们的操作：**
-1. 通过 [submission form](https://clau.de/plugin-directory-submission) 提交 plugin
-2. 保持独立 repo `Prismer-AI/claude-code-plugin` 更新
-3. 等 Anthropic 审核后自行合入到 `claude-plugins-official`
-
-**当前状态：** Submission 已 Published (2026-04-01)，等待 Anthropic 合入。
-
----
-
-## --scope 参数
-
-所有脚本支持 `--scope`：
-
-| 值 | 含义 |
-|---|------|
-| `aip` | 只操作 `sdk/aip/` 下的 4 个包 |
-| `prismer-cloud` | 只操作 `sdk/prismer-cloud/` 下的 8 个包 |
-| `all` | 两者都操作（默认） |
-
-## 版本管理
-
-- **AIP SDK 版本独立** — `sdk/aip/typescript/package.json` 单独管理
-- **Prismer Cloud 版本统一** — `sdk/prismer-cloud/*/package.json` 全部同一版本
-- **发布顺序: AIP 先 → Prismer Cloud 后**（依赖关系）
-
-### AIP 版本文件 (4 个)
-
-```
-sdk/aip/typescript/package.json
-sdk/aip/python/pyproject.toml
-sdk/aip/golang/go.mod           (module path)
-sdk/aip/rust/Cargo.toml
-```
-
-### Prismer Cloud 版本文件 (11 个)
-
-```
-sdk/prismer-cloud/typescript/package.json
-sdk/prismer-cloud/mcp/package.json
-sdk/prismer-cloud/mcp/src/index.ts              (hardcoded version string)
-sdk/prismer-cloud/opencode-plugin/package.json
-sdk/prismer-cloud/claude-code-plugin/package.json
-sdk/prismer-cloud/claude-code-plugin/.claude-plugin/plugin.json
-sdk/prismer-cloud/claude-code-plugin/.claude-plugin/marketplace.json  ⚠️ CRITICAL for CC update detection
-sdk/prismer-cloud/openclaw-channel/package.json
-sdk/prismer-cloud/python/pyproject.toml
-sdk/prismer-cloud/python/prismer/__init__.py    (__version__)
-sdk/prismer-cloud/rust/Cargo.toml
-```
-
-> **⚠️ marketplace.json version 字段：** Claude Code 用 `marketplace.json` 里 plugin entry 的 `version` 字段做更新检测。如果不 bump 这个字段，用户的 `/plugin update` 会报 "already at latest"。这是 v1.8.1 发版时踩过的坑 — `plugin.json` 有 1.8.1 但 `marketplace.json` 没写 version，导致 CC 无法检测到更新。
-
-## 注册表
-
-### AIP 包
-
-| 包 | 注册表 | 安装 |
-|---|--------|------|
-| `@prismer/aip-sdk` | npm | `npm i @prismer/aip-sdk` |
-| `aip` | PyPI | `pip install aip` |
-| `aip-sdk-go` | Go Proxy | `go get github.com/Prismer-AI/PrismerCloud/sdk/aip/golang` |
-| `aip-sdk` | crates.io | `cargo add aip-sdk` |
-
-### Prismer Cloud 包
-
-| 包 | 注册表 | 安装 |
-|---|--------|------|
-| `@prismer/sdk` | npm | `npm i @prismer/sdk` |
-| `prismer` | PyPI | `pip install prismer` |
-| `prismer-sdk-go` | Go Proxy | `go get github.com/Prismer-AI/PrismerCloud/sdk/prismer-cloud/golang` |
-| `prismer-sdk` | crates.io | `cargo add prismer-sdk` |
-| `@prismer/mcp-server` | npm | `npx -y @prismer/mcp-server` (47 tools) |
-| `@prismer/claude-code-plugin` | npm + GitHub repo | `/plugin install prismer@prismer-cloud` (自有) 或 `@claude-plugins-official` (官方) |
-| `@prismer/opencode-plugin` | npm | `opencode plugins install @prismer/opencode-plugin` |
-| `@prismer/openclaw-channel` | npm | `openclaw plugins install @prismer/openclaw-channel` |
-
-## Release 密钥
-
-**只放在开源仓库，已 gitignore：**
-
-| 文件 | 用途 |
-|------|------|
-| `.npmrc` | npm token (`//registry.npmjs.org/:_authToken=...`) |
-| `.pypirc` | PyPI credentials |
-| `.cargo-credentials` | crates.io token (`export CARGO_REGISTRY_TOKEN=...`) |
-| `gh auth` | GitHub CLI login |
-
-## 常见操作
+## Release Modes
 
 ```bash
-# 只改了 AIP
-sdk/build/test.sh --scope aip
-sdk/build/sync.sh --scope aip        # 在开源仓库
-sdk/build/release.sh --scope aip
+# All registries
+sdk/build/release.sh --scope all
 
-# 只改了平台 SDK
-sdk/build/test.sh --scope prismer-cloud
-sdk/build/sync.sh --scope prismer-cloud
-sdk/build/release.sh --scope prismer-cloud
+# npm only
+sdk/build/release.sh --scope prismer-cloud --npm-only
 
-# 全量发布
-sdk/build/sync.sh
-sdk/build/release.sh --scope aip
-sleep 30
-sdk/build/release.sh --scope prismer-cloud
+# PyPI only
+sdk/build/release.sh --scope prismer-cloud --pypi-only
 
-# Plugin 独立 repo 同步 (每次 release 后)
-sdk/build/sync-plugin.sh
+# crates.io only
+sdk/build/release.sh --scope prismer-cloud --crates-only
 
-# Dry run（预览不执行）
-sdk/build/release.sh --scope all --dry-run
-
-# 版本号 bump
-sdk/build/version.sh --scope aip --patch      # 1.7.3 → 1.7.4
-sdk/build/version.sh --scope prismer-cloud 1.8.0
-
-# 只打包，不发布
-sdk/build/pack.sh --scope prismer-cloud --clean
+# Git tags + GitHub release only
+sdk/build/release.sh --scope all --github-only
 ```
 
-## sync.sh 行为
+Notes:
 
-- 检测闭源 `sdk/` 目录结构（v2: `aip/` + `prismer-cloud/`）
-- rsync 排除: `node_modules`, `dist`, `target`, `.next`, `__pycache__`, `*.egg-info`, `*.tgz`, `package-lock.json`, `.venv`, `.cache`, `.pytest_cache`
-- `--scope` 控制只同步 aip 或 prismer-cloud
-- `--no-clean` 增量同步（默认先删后同步）
-- `--dry-run` 预览
+- `--scope` affects verify / pack / smoke steps.
+- `sync.sh` still mirrors the full `sdk/` tree.
+- `--skip-pack`, `--skip-install-local`, and `--skip-smoke` are escape hatches. Do not use them for a normal release.
 
-## sync-plugin.sh 行为
+## Credentials
 
-- 源: `sdk/prismer-cloud/claude-code-plugin/`
-- 目标: `~/workspace/claude-code-plugin/` (独立 GitHub repo `Prismer-AI/claude-code-plugin`)
-- rsync 排除: `node_modules`, `.dev-cache`, `*.tgz`, `.DS_Store`
-- 自动 commit + tag + push
-- Anthropic 官方 marketplace 的 source URL 指向此 repo
+Keep registry credentials in the open-source clone or export them as environment variables before release:
 
-## 产物清单 (v1.8.0)
+| Credential | Expected location | Used by |
+|---|---|---|
+| npm token | `$PRISMERCLOUD_REPO/.npmrc` | `npm publish` |
+| PyPI config | `$PRISMERCLOUD_REPO/.pypirc` or `TWINE_*` env | `twine upload` |
+| crates token | `$PRISMERCLOUD_REPO/.cargo-credentials` or `CARGO_REGISTRY_TOKEN` | `cargo publish` |
+| GitHub auth | `gh auth login` | git tags + GitHub release |
 
-```
-artifacts/
-├── npm/
-│   ├── prismer-aip-sdk-1.7.3.tgz          6.5K
-│   ├── prismer-sdk-1.8.0.tgz              187K
-│   ├── prismer-mcp-server-1.8.0.tgz       27K
-│   ├── prismer-claude-code-plugin-1.8.0.tgz 47K
-│   ├── prismer-opencode-plugin-1.8.0.tgz  17K
-│   └── prismer-openclaw-channel-1.8.0.tgz 22K
-├── pypi/
-│   ├── prismer-1.8.0-py3-none-any.whl     134K
-│   └── prismer-1.8.0.tar.gz               160K
-└── crates/
-    └── prismer-sdk-1.8.0.crate            86K
+`release.sh` now fails early if the required credentials are missing for the selected publish targets.
+
+## Artifacts
+
+`pack.sh --clean` writes to:
+
+```text
+sdk/build/artifacts/
+├── npm/*.tgz
+├── pypi/*.whl
+├── pypi/*.tar.gz
+└── crates/*.crate
 ```
 
-## Documentation Sync (prismer-docs)
+Required local-install smoke artifacts:
 
-API / Schema / SDK / Plugin 文档统一发布到 `prismer-docs` 站点 (`~/workspace/prismer-docs`)。
+- `prismer-aip-sdk-*.tgz`
+- `prismer-sdk-*.tgz`
+- `prismer-runtime-*.tgz`
+- `prismer-sandbox-runtime-*.tgz`
+- `prismer-wire-*.tgz`
+- `prismer-adapters-core-*.tgz`
+- `prismer-mcp-server-*.tgz`
 
-**原则:** prismer-docs 是面向用户的规范文档，prismer-cloud-next/docs 是内部工程文档。两者不重复 — prismer-docs 按规范重写，不是 copy。
+## Sharp Edges
 
-### 文风规范
-
-- 英文，专业，简洁
-- Nextra 4 mdx 格式，必须有 frontmatter (title/description/ai_summary/status/keywords)
-- API 页面结构: Overview → Endpoints table → 逐端点 (TS interface + params table + 四语言示例 curl/Python/TS/Go + Response JSON)
-- 范本: `prismer-docs/content/cloud/api/im-tasks.mdx`
-
-### 目录结构
-
-```
-prismer-docs/content/cloud/
-├── api/          REST API reference (per-domain pages)
-├── schema/       Data models (grouped by domain)
-├── sdk/          SDK reference (per-language pages)
-├── plugin/       Plugin & MCP tools
-└── aip/          AIP identity protocol
-```
-
-### 发版时 doc sync checklist
-
-每次 prismer-cloud-next 发版 (version bump) 时：
-
-1. 检查本版是否有 API 新增/变更 → 更新对应 `prismer-docs/content/cloud/api/*.mdx`
-2. 检查是否有 schema 变更 (migration) → 更新 `prismer-docs/content/cloud/schema/*.mdx`
-3. 检查 SDK 是否有新方法/类型 → 更新 `prismer-docs/content/cloud/sdk/*.mdx`
-4. 检查 Plugin/MCP 是否有新 tool/hook → 更新 `prismer-docs/content/cloud/plugin/*.mdx`
-5. `cd ~/workspace/prismer-docs && npm run build` 验证
-6. Commit + push prismer-docs
-
-### 迁移进度 (prismer-cloud-next → prismer-docs 重写)
-
-**API Reference** (`content/cloud/api/`)
-
-| Page | Source | Status |
-|------|--------|--------|
-| Context (Load/Save) | `docs/api/context.md` | ✅ 已有 (cloud-context-api.mdx) |
-| Parse (OCR) | `docs/api/parse.md` | ❌ 待重写 |
-| Messaging | `docs/api/im-messaging.md` | ❌ 待重写 |
-| Conversations | `docs/api/im-conversations.md` | ❌ 待重写 |
-| Agents | `docs/api/im-agents.md` | ❌ 待重写 |
-| Tasks | `docs/api/im-tasks.md` | ✅ 范本完成 |
-| Memory | `docs/api/im-memory.md` | ❌ 待重写 |
-| Evolution | `docs/api/evolution.md` | ❌ 待重写 |
-| Leaderboard | `docs/api/evolution-leaderboard.md` | ❌ 待重写 |
-| Community | `docs/api/im-community.md` | ❌ 待重写 |
-| Contact | `docs/api/im-contact.md` | ❌ 待重写 |
-| Identity & Signing | `docs/api/im-identity.md` + `im-signing.md` | ❌ 待重写 |
-| Workspace | `docs/api/im-workspace.md` | ❌ 待重写 |
-| Skills | `docs/api/skills.md` | ❌ 待重写 |
-| Realtime (WS/SSE) | `docs/api/realtime.md` | ❌ 待重写 |
-| Webhooks | `docs/api/webhooks.md` | ❌ 待重写 |
-
-**Schema** (`content/cloud/schema/`)
-
-| Page | Source | Status |
-|------|--------|--------|
-| Overview | `prisma/schema.mysql.prisma` | ❌ 待写 |
-| Core | IMUser, IMConversation, IMMessage | ❌ 待写 |
-| Agents | IMAgentCard, credentials, DID | ❌ 待写 |
-| Evolution | IMGene, signals, edges, capsules | ❌ 待写 |
-| Tasks | IMTask, IMTaskLog | ❌ 待写 |
-| Memory | IMMemoryFile, knowledge links | ❌ 待写 |
-| Community | Posts, comments, votes | ❌ 待写 |
-| Security | Identity keys, audit logs | ❌ 待写 |
-
-**SDK** (`content/cloud/sdk/`)
-
-| Page | Source | Status |
-|------|--------|--------|
-| Overview | `docs/SDK.md` + `sdk/build/WORKFLOW.md` | ❌ 待写 |
-| TypeScript | `sdk/prismer-cloud/typescript/` | ❌ 待写 |
-| Python | `sdk/prismer-cloud/python/` | ❌ 待写 |
-| Go | `sdk/prismer-cloud/golang/` | ❌ 待写 |
-| Rust | `sdk/prismer-cloud/rust/` | ❌ 待写 |
-| CLI | `sdk/prismer-cloud/typescript/src/cli.ts` | ❌ 待写 |
-
-**Plugin** (`content/cloud/plugin/`)
-
-| Page | Source | Status |
-|------|--------|--------|
-| Overview | `docs/api/mcp.md` + `docs/api/openclaw.md` | ❌ 待写 |
-| Claude Code | `sdk/prismer-cloud/claude-code-plugin/` | ❌ 待写 |
-| MCP Server | `sdk/prismer-cloud/mcp/` | ❌ 待写 |
-| OpenClaw | `sdk/prismer-cloud/openclaw-channel/` | ❌ 待写 |
-| OpenCode | `sdk/prismer-cloud/opencode-plugin/` | ❌ 待写 |
-
-**AIP** (`content/cloud/aip/`)
-
-| Page | Source | Status |
-|------|--------|--------|
-| Overview | `docs/encryption/AIP-WHITEPAPER-CN.md` | ❌ 待写 |
-| Spec | `docs/encryption/AIP-SPEC-CN.md` | ❌ 待写 |
-| DID:key | `sdk/aip/typescript/src/did.ts` | ❌ 待写 |
-| Delegation | `sdk/aip/typescript/src/delegation.ts` | ❌ 待写 |
-| Credentials | `sdk/aip/typescript/src/credentials.ts` | ❌ 待写 |
-
----
-
-## Anthropic Marketplace 上架清单
-
-| 步骤 | 状态 | 说明 |
-|------|------|------|
-| 1. Submission form 提交 | ✅ Published (2026-04-01) | `@prismer/claude-code-plugin` |
-| 2. 创建独立 plugin repo | ✅ 完成 | `Prismer-AI/claude-code-plugin` (v1.8.0) |
-| 3. sync-plugin.sh 同步 | ✅ 完成 | 闭源 → 独立 repo |
-| 4. Anthropic 审核合入 | ⏳ 等待 | Anthropic 内部操作，不接受外部 PR |
-| 5. 用户可 `/plugin install prismer@claude-plugins-official` | ⏳ 待合入 | |
+- Do not run `sync.sh` or `release.sh` from inside `/Users/prismer/workspace/opensource/PrismerCloud`.
+- `sync.sh` is destructive. It deletes the target `sdk/` tree before mirroring.
+- `release.sh` stages only `sdk/` in the open-source repo; unrelated root files are intentionally left alone.
+- `test.sh` is a build smoke gate, not a product regression suite. If the release also changes repo-level runtime or API behavior, run the broader repo tests separately.
+- `sync-plugin.sh` is not the main release path. Treat it as a follow-up helper, not as proof that a standalone plugin repo has been published.

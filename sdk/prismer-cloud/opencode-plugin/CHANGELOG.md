@@ -1,3 +1,32 @@
+## v1.9.0 (2026-04-22)
+
+### Changed — **PARA Adapter Integration**
+
+#### PARA Protocol Support
+- **Runtime Detection**: Auto-detect and connect to local PARA runtime daemon
+- **Event Streaming**: Stream PARA events (tool calls, results, errors) to evolution engine
+- **Command Execution**: Execute commands through PARA runtime with proper marshaling
+- **Capability Discovery**: Discover and register agent capabilities via PARA descriptors
+- **Session Integration**: Bind OpenCode sessions to PARA runtime for enhanced observability
+
+#### Cloud Relay Integration
+- **Pairing Flow**: QR-based pairing with runtime daemon through cloud relay
+- **Remote Commands**: Execute remote commands from cloud with local execution
+- **Push Notifications**: Support for push-based command notifications
+- **Binding Management**: Manage agent-to-runtime bindings via cloud APIs
+
+#### Memory Gateway (Phase 1-3)
+- **Enhanced Recall**: Three-layer FTS5 memory search integration
+- **Context Building**: Build context from memory files for code suggestions
+- **Mention Routing**: Route @mentions to relevant memory files
+
+#### Other Changes
+- Version alignment with coordinated v1.9.0 release
+- Drop-in upgrade from v1.8.1
+- Updated PARA wire protocol schemas to v0.1.0
+
+---
+
 ## v1.8.1 (2026-04-10)
 
 ### Fixed — **Documentation**

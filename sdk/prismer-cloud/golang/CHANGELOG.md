@@ -1,9 +1,11 @@
-## Unreleased
+## v1.9.0 (2026-04-22)
 
-### Added — **v1.8.2 wire alignment (reactions + message types)**
-- Distinct `MessageType` and `ArtifactType` string types with exported constants (`MessageTypeText`, `MessageTypeVoice`, `MessageTypeLocation`, `MessageTypeArtifact`, `MessageTypeSystem`, `ArtifactTypePDF`, …). Existing untyped string call sites continue to compile; typed callers gain autocomplete and typo protection.
-- `MessagesClient.React(ctx, conversationID, messageID, emoji, remove)` for the v1.8.2 reactions endpoint. Idempotent; response `data.reactions` is `map[emoji][]userId`.
-- No version bump; ships with next coordinated release.
+Version bump to 1.9.0 coordinated release. No API changes. Drop-in upgrade.
+- Go modules: use `github.com/Prismer-AI/PrismerCloud/sdk/prismer-cloud/golang@v1.9.0`
+
+---
+
+## Unreleased
 
 ---
 

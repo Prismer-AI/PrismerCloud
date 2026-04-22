@@ -14,12 +14,13 @@
  * Stdout: empty
  */
 
-import { readFileSync, writeFileSync } from 'fs';
+import { readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { homedir } from 'os';
 import { resolveConfig } from './lib/resolve-config.mjs';
 import { createLogger } from './lib/logger.mjs';
+import { createHash } from 'crypto';
 
 const log = createLogger('session-end');
 
@@ -64,16 +65,15 @@ try {
   }
 } catch {}
 
-// If Stop hook triggered AND Claude called MCP tools, skip journal push to avoid
-// duplicate recording (server has no dedup). But if Stop hook triggered and
-// Claude did NOT call any evolve_* MCP tool, we should still push journal feedback.
-// Heuristic: check if journal has the marker but no "[evolve_record" or "evolve_create"
-// evidence (Claude's MCP calls don't appear in the journal, so we can't detect them).
-// Conservative approach: skip if marker exists. The Stop hook's explicit MCP path is
-// higher quality than journal regex extraction, so prefer that path when available.
-if (journal.includes('[evolution-review-triggered]')) {
-  log.info('skip-stop-hook-marker');
-  process.exit(0);
+// v4: Stop hook no longer blocks to force Claude to call evolve_* MCP tools
+// inline. It only writes a marker + stderr hint. So session-end becomes the
+// canonical delivery path and must NOT skip on the marker — otherwise the
+// evolution signals captured this session would be dropped entirely.
+// We still clear the pending-review hint below to avoid SessionStart
+// re-surfacing the same review after we push.
+const hadStopMarker = journal.includes('[evolution-review-triggered]');
+if (hadStopMarker) {
+  log.info('stop-marker-present-will-push-anyway');
 }
 
 // --- Extract gene feedback outcomes ---
@@ -123,8 +123,13 @@ try {
   // No checklist or parse error — not critical
 }
 
-// Skip if nothing to sync
+// Skip if nothing to sync (but still clear pending-review hint — session is over)
 if (outcomes.length === 0 && Object.keys(signalCounts).length === 0) {
+  try {
+    const { unlinkSync, existsSync: exists } = await import('fs');
+    const pendingFile = join(homedir(), '.prismer', 'pending-review.json');
+    if (exists(pendingFile)) unlinkSync(pendingFile);
+  } catch {}
   process.exit(0);
 }
 
@@ -243,9 +248,28 @@ if (!daemonRunning) {
   }
 }
 
-// --- Local skill push: detect user-created skills → upload to cloud ---
+// --- Clear pending-review hint (if Stop hook wrote one this session) ---
+// After session-end has pushed signals, the review is handled — don't
+// re-notify on the next SessionStart.
+try {
+  const { unlinkSync, existsSync: exists } = await import('fs');
+  const pendingFile = join(homedir(), '.prismer', 'pending-review.json');
+  if (exists(pendingFile)) {
+    unlinkSync(pendingFile);
+    log.info('pending-review-cleared');
+  }
+} catch {}
 
-if (apiKey) {
+// --- Local skill push: detect user-created skills → upload to cloud ---
+// OPT-IN ONLY (privacy): users install skills from many marketplaces (gstack,
+// third-party, internal). Silently pushing every skill lacking our own marker
+// to Prismer's cloud leaks private user work. Gate behind an explicit env var;
+// users who want to share their custom skills set PRISMER_AUTO_PUSH_SKILLS=1.
+// session-start surfaces a one-time stderr tip so discoverability stays OK.
+
+const AUTO_PUSH_SKILLS = process.env.PRISMER_AUTO_PUSH_SKILLS === '1';
+
+if (apiKey && AUTO_PUSH_SKILLS) {
   try {
     const { readdirSync, existsSync: exists, readFileSync: readFile } = await import('fs');
     const home = homedir();
@@ -291,6 +315,53 @@ if (apiKey) {
           } catch {}
         }
         log.info('local-skill-push', { count: added.length });
+
+        // Emit PARA skill.installed events for successfully uploaded skills
+        try {
+          const { existsSync: exists, readFileSync: readFile } = await import('fs');
+          const PARA_DIR = join(homedir(), '.prismer', 'para');
+          const EVENTS_FILE = join(PARA_DIR, 'events.jsonl');
+          const { createRequire } = await import('module');
+
+          // Load @prismer/wire and @prismer/adapters-core
+          let ParaEventSchema, makeSkillInstalled;
+          try {
+            const pluginRoot = join(__dirname, '..');
+            const wireReq = createRequire(join(pluginRoot, 'package.json'));
+            const wire = wireReq('@prismer/wire');
+            const adaptersCore = wireReq('@prismer/adapters-core');
+            ParaEventSchema = wire.ParaEventSchema;
+            makeSkillInstalled = adaptersCore.makeSkillInstalled;
+          } catch (e) {
+            log.warn('para-load-failed', { error: e.message });
+          }
+
+          // Emit skill.installed event for each uploaded skill
+          if (makeSkillInstalled && ParaEventSchema) {
+            mkdirSync(PARA_DIR, { recursive: true, mode: 0o700 });
+
+            for (const { slug, content } of added) {
+              try {
+                // Calculate SHA256 for the skill content
+                const hash = createHash('sha256').update(content, 'utf8').digest('hex');
+                const event = ParaEventSchema.parse({
+                  type: 'agent.skill.installed',
+                  skillName: slug,
+                  source: { kind: 'user' },
+                  sha256: hash,
+                });
+                const line = JSON.stringify({ ...event, _ts: Date.now() }) + '\n';
+                const { appendFileSync: append } = await import('fs');
+                append(EVENTS_FILE, line, { encoding: 'utf8', mode: 0o600 });
+                log.info('skill-installed', { skillName: slug });
+              } catch (e) {
+                log.warn('skill-event-failed', { skillName: slug, error: e.message });
+              }
+            }
+          }
+        } catch (e) {
+          log.warn('para-emit-failed', { error: e.message });
+        }
       }
     }
   } catch (e) {

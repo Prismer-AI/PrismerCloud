@@ -26,6 +26,8 @@ import type { RealtimeConfig } from './realtime';
 import { OfflineManager } from './offline';
 import { CommunityHub } from './community-hub';
 import { AIPIdentity } from './aip';
+import { RemoteClient } from './remote';
+import { PermissionsClient } from './permissions';
 
 // Node.js built-ins — optional (not available in browser environments)
 let _fs: typeof import('fs') | null = null;
@@ -47,7 +49,7 @@ try {
  *   4. '' (empty)
  */
 function resolveApiKey(explicit?: string): string {
-  if (explicit) return explicit;
+  if (explicit !== undefined) return explicit;
   try {
     if (typeof process !== 'undefined' && process.env?.PRISMER_API_KEY) {
       return process.env.PRISMER_API_KEY;
@@ -72,7 +74,7 @@ function resolveApiKey(explicit?: string): string {
  *   4. undefined (caller uses environment default)
  */
 function resolveBaseUrl(explicit?: string): string | undefined {
-  if (explicit) return explicit;
+  if (explicit !== undefined) return explicit;
   try {
     if (typeof process !== 'undefined' && process.env?.PRISMER_BASE_URL) {
       return process.env.PRISMER_BASE_URL;
@@ -93,6 +95,19 @@ function resolveBaseUrl(explicit?: string): string | undefined {
 export * from './types';
 export { AIPIdentity } from './aip';
 export type { DIDDocument, SignedPayload } from './aip';
+
+// Re-export LAN probe module (v1.9.0)
+export {
+  LanProbeService,
+  type ConnectionType,
+  type ConnectionCandidate,
+  type ProbeResult,
+  type ConnectionSelection,
+  type LanProbeOptions,
+  probeAndSelectLan,
+  getLanStatus,
+} from './lan-probe';
+
 export {
   RealtimeWSClient,
   RealtimeSSEClient,
@@ -1796,6 +1811,10 @@ export class PrismerClient {
   /** IM API sub-client */
   readonly im: IMClient;
 
+  /** Remote Control API sub-client (Track 3) */
+  readonly remote: RemoteClient;
+  readonly permissions: PermissionsClient;
+
   constructor(config: PrismerConfig = {}) {
     // Resolve API key: explicit → env → config.toml → ''
     const resolvedApiKey = resolveApiKey(config.apiKey);
@@ -1876,6 +1895,20 @@ export class PrismerClient {
       this._offlineManager,
       config.community ?? null,
     );
+
+    // Initialize Remote Control API client
+    this.remote = new RemoteClient({
+      baseUrl: this.baseUrl,
+      apiKey: this.apiKey,
+      fetchFn: this.fetchFn,
+    });
+
+    // Initialize Permissions API client (v1.9.0 — approval gate for high-risk ops)
+    this.permissions = new PermissionsClient({
+      baseUrl: this.baseUrl,
+      apiKey: this.apiKey,
+      fetchFn: this.fetchFn,
+    });
   }
 
   /** Wait for identity to be ready (useful for tests or explicit await) */
@@ -2093,4 +2126,49 @@ export type {
   CacheManager,
   KeyManager,
   DaemonControlPlane, ControlCommand, CommandResult,
+  // Remote Control (Track 3)
+  DesktopBinding,
+  PairingOffer,
+  PairConfirmResult,
+  RemoteCommand,
+  SendCommandOptions,
+  PushTokenRegisterOptions,
 } from './daemon-interfaces';
+export { RemoteClient, PairingApi, FsApi } from './remote';
+export type {
+  OfferCandidate,
+  QrInitRequest,
+  QrInitResponse,
+  QrConfirmRequest,
+  QrConfirmResponse,
+  ApiKeyBindRequest,
+  ApiKeyBindResponse,
+  RemoteCommandStatus,
+  SendCommandRequest,
+  QuickDecisionRequest,
+  RegisterPushTokenRequest,
+  PushToken,
+  FsOp,
+  FsReadRequest,
+  FsReadResponse,
+  FsWriteRequest,
+  FsWriteResponse,
+  FsDeleteRequest,
+  FsDeleteResponse,
+  FsEditRequest,
+  FsEditResponse,
+  FsListRequest,
+  FsListResponse,
+  FsListEntry,
+  FsSearchRequest,
+  FsSearchResponse,
+  FsSearchMatch,
+} from './remote';
+export { PermissionsClient } from './permissions';
+export type {
+  PermissionRequestInput,
+  PermissionRequestResult,
+  ApprovalRequest,
+  ApprovalStatus,
+  RiskLevel,
+} from './permissions';

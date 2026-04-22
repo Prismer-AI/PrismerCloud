@@ -1,0 +1,62 @@
+{
+  "name": "@prismer/adapter-hermes",
+  "version": "0.1.0",
+  "description": "Prismer Mode B HTTP loopback adapter for NousResearch Hermes — daemon-side companion to prismer-adapter-hermes (Python, PyPI)",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "clean": "rm -rf dist"
+  },
+  "keywords": [
+    "prismer",
+    "para",
+    "hermes",
+    "nousresearch",
+    "adapter",
+    "mode-b",
+    "agent"
+  ],
+  "author": "Prismer",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Prismer-AI/PrismerCloud.git",
+    "directory": "sdk/prismer-cloud/adapters/hermes-node"
+  },
+  "peerDependencies": {
+    "@prismer/runtime": "^1.9.0"
+  },
+  "peerDependenciesMeta": {
+    "@prismer/runtime": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.0.0",
+    "vitest": "^1.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

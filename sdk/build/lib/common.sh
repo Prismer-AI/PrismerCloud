@@ -10,7 +10,7 @@ SDK_ROOT="$(cd "$BUILD_ROOT/.." && pwd)"
 PROJECT_ROOT="$(cd "$SDK_ROOT/.." && pwd)"
 PRISMER_CLOUD="$SDK_ROOT/prismer-cloud"
 AIP_SDK="$SDK_ROOT/aip"
-OPENSRC_ROOT="/Users/prismer/workspace/PrismerCloud"
+OPENSRC_ROOT="${PRISMERCLOUD_REPO:-/Users/prismer/workspace/opensource/PrismerCloud}"
 OPENSRC_SDK="$OPENSRC_ROOT/sdk"
 ARTIFACTS_DIR="$BUILD_ROOT/artifacts"
 
@@ -112,7 +112,14 @@ print_results() {
 }
 
 # ── Package Lists ──────────────────────────────────────────────────
-NPM_PACKAGES=("typescript" "mcp" "opencode-plugin" "claude-code-plugin" "openclaw-channel")
+# Ordered by dependency topology (pack.sh iterates in order so that if any
+# prepack step needs a transitive dep, it's already been packed locally).
+# sandbox-runtime → wire → adapters-core → runtime → consumers.
+NPM_PACKAGES=("sandbox-runtime" "wire" "adapters-core" "runtime" "typescript" "mcp" "opencode-plugin" "claude-code-plugin" "openclaw-channel" "adapters/hermes-node")
 AIP_NPM_PACKAGES=("typescript")
-ALL_PACKAGES=("typescript" "python" "golang" "rust" "mcp" "opencode-plugin" "claude-code-plugin" "openclaw-channel")
+ALL_PACKAGES=("sandbox-runtime" "wire" "adapters-core" "runtime" "typescript" "python" "golang" "rust" "mcp" "opencode-plugin" "claude-code-plugin" "openclaw-channel" "adapters/hermes-node")
 AIP_PACKAGES=("typescript" "python" "golang" "rust")
+
+# Adapter packages (independent 0.x versioning — NOT in unified 1.9.0 bump)
+ADAPTER_PY_PACKAGES=("adapters/hermes")
+ADAPTER_NPM_PACKAGES=("adapters/hermes-node")

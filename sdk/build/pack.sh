@@ -51,18 +51,24 @@ if scope_includes_aip; then
   log_step "AIP Python Package"
   cd "$AIP_SDK/python"
   if command -v python3 &>/dev/null; then
-    if [[ $DRY_RUN -eq 1 ]]; then
-      log_dry "Would python3 -m build → $ARTIFACTS_DIR/pypi/"
-      record_result "pack: pypi/aip" "pass"
-    else
-      python3 -m build -o "$ARTIFACTS_DIR/pypi" 2>&1 | tail -3
-      if ls "$ARTIFACTS_DIR/pypi/"aip-*.whl &>/dev/null; then
-        log_success "Packed: $(ls "$ARTIFACTS_DIR/pypi/"aip-*.whl | xargs -n1 basename)"
-        record_result "pack: pypi/aip" "pass"
-      else
-        record_result "pack: pypi/aip" "fail"
-      fi
-    fi
+	    if [[ $DRY_RUN -eq 1 ]]; then
+	      log_dry "Would python3 -m build → $ARTIFACTS_DIR/pypi/"
+	      record_result "pack: pypi/aip" "pass"
+	    else
+	      python3 -m build -o "$ARTIFACTS_DIR/pypi" 2>&1 | tail -3
+	      if ls "$ARTIFACTS_DIR/pypi/"prismer_aip-*.whl &>/dev/null; then
+	        log_success "Packed: $(ls "$ARTIFACTS_DIR/pypi/"prismer_aip-*.whl | xargs -n1 basename)"
+	        record_result "pack: pypi/aip" "pass"
+	      elif ls "$ARTIFACTS_DIR/pypi/"aip_sdk-*.whl &>/dev/null; then
+	        log_success "Packed: $(ls "$ARTIFACTS_DIR/pypi/"aip_sdk-*.whl | xargs -n1 basename)"
+	        record_result "pack: pypi/aip" "pass"
+	      elif ls "$ARTIFACTS_DIR/pypi/"aip-*.whl &>/dev/null; then
+	        log_success "Packed: $(ls "$ARTIFACTS_DIR/pypi/"aip-*.whl | xargs -n1 basename)"
+	        record_result "pack: pypi/aip" "pass"
+	      else
+	        record_result "pack: pypi/aip" "fail"
+	      fi
+	    fi
   else
     record_result "pack: pypi/aip" "skip"
   fi
@@ -120,6 +126,29 @@ if scope_includes_prismer; then
     fi
   else
     record_result "pack: pypi" "skip"
+  fi
+  cd "$PROJECT_ROOT"
+fi
+
+# ── Hermes Adapter (Python) ───────────────────────────────────────────
+if scope_includes_prismer; then
+  log_step "Hermes Adapter (Python)"
+  cd "$PRISMER_CLOUD/adapters/hermes"
+  if command -v python3 &>/dev/null; then
+    if [[ $DRY_RUN -eq 1 ]]; then
+      log_dry "Would python3 -m build → $ARTIFACTS_DIR/pypi/"
+      record_result "pack: pypi/hermes" "pass"
+    else
+      python3 -m build -o "$ARTIFACTS_DIR/pypi" 2>&1 | tail -3
+      if ls "$ARTIFACTS_DIR/pypi/"prismer_adapter_hermes-*.whl &>/dev/null; then
+        log_success "Packed: $(ls "$ARTIFACTS_DIR/pypi/"prismer_adapter_hermes-*.whl | xargs -n1 basename)"
+        record_result "pack: pypi/hermes" "pass"
+      else
+        record_result "pack: pypi/hermes" "fail"
+      fi
+    fi
+  else
+    record_result "pack: pypi/hermes" "skip"
   fi
   cd "$PROJECT_ROOT"
 fi

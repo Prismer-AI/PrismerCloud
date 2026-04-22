@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "prismer-adapter-hermes"
+version = "0.2.0"
+description = "Prismer PARA adapter for Hermes (NousResearch) agents"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.9"
+authors = [{ name = "Prismer", email = "dev@prismer.cloud" }]
+keywords = ["prismer", "hermes", "para", "agent", "nousresearch"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Topic :: Software Development :: Libraries",
+]
+dependencies = []  # Zero runtime deps — wire.py is pure dataclasses
+
+[project.optional-dependencies]
+dev = ["pytest>=7", "pytest-mock"]
+# Mode B dispatch server — keep fully optional. Core package must import
+# cleanly without aiohttp/hermes-agent installed; only `prismer-hermes-serve`
+# exercises these deps. The dispatch subpackage imports them lazily so
+# 0.1.x consumers (e.g. CLI users of the PARA event sink) see no new
+# install surface.
+dispatch = ["aiohttp>=3.9", "hermes-agent>=0.10"]
+
+[project.scripts]
+prismer-hermes-serve = "prismer_adapter_hermes.dispatch.__main__:main"
+
+[project.urls]
+Homepage = "https://prismer.cloud"
+Documentation = "https://docs.prismer.cloud"
+Repository = "https://github.com/Prismer-AI/PrismerCloud/tree/main/sdk/prismer-cloud/adapters/hermes"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+prismer_adapter_hermes = ["py.typed"]
+
+[tool.pytest.ini_options]
+# Dispatch tests (aiohttp-based) use async def test functions. Auto mode
+# means pytest-asyncio treats them as coroutine tests without requiring
+# an @pytest.mark.asyncio on each, matching how aiohttp_client flows.
+asyncio_mode = "auto"
+

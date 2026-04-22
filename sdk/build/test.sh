@@ -114,6 +114,38 @@ else
   record_result "python-syntax" "skip"
 fi
 
+# ── Hermes Adapter (Python) ───────────────────────────────────────────
+if scope_includes_prismer && should_run "hermes"; then
+  log_step "Hermes Adapter (Python)"
+  cd "$PRISMER_CLOUD/adapters/hermes"
+  if command -v python3 &>/dev/null; then
+    if run_or_dry python3 -m pytest -q; then
+      record_result "hermes-test" "pass"
+    else
+      record_result "hermes-test" "fail"
+    fi
+  else
+    record_result "hermes-test" "skip"
+  fi
+  cd "$PROJECT_ROOT"
+else
+  record_result "hermes-test" "skip"
+fi
+
+# ── Hermes-Node Adapter ───────────────────────────────────────────────
+if scope_includes_prismer && should_run "hermes-node"; then
+  log_step "Hermes-Node Adapter"
+  cd "$PRISMER_CLOUD/adapters/hermes-node"
+  if run_or_dry npm test; then
+    record_result "hermes-node-test" "pass"
+  else
+    record_result "hermes-node-test" "fail"
+  fi
+  cd "$PROJECT_ROOT"
+else
+  record_result "hermes-node-test" "skip"
+fi
+
 # ── Go SDK ─────────────────────────────────────────────────────────
 if scope_includes_prismer && (should_run "golang" || should_run "go"); then
   log_step "Go SDK"

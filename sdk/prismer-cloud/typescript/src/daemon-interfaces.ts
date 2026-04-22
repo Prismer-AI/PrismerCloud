@@ -118,3 +118,66 @@ export interface DaemonControlPlane {
   reportStatus(): Promise<void>;
   onCommand(handler: (cmd: ControlCommand) => Promise<CommandResult>): void;
 }
+
+// ============================================================================
+// Remote Control (Track 3 / v1.9.0)
+//
+// The canonical types live in `./remote.ts` and match the HTTP contract
+// exactly. Re-exported here so existing `from '@prismer/sdk'` imports keep
+// working, and legacy aliases are kept with @deprecated markers.
+// ============================================================================
+
+export type {
+  DesktopBinding,
+  OfferCandidate,
+  QrInitRequest,
+  QrInitResponse,
+  QrConfirmRequest,
+  QrConfirmResponse,
+  ApiKeyBindRequest,
+  ApiKeyBindResponse,
+  RemoteCommand,
+  RemoteCommandStatus,
+  SendCommandRequest,
+  QuickDecisionRequest,
+  RegisterPushTokenRequest,
+  PushToken,
+  FsOp,
+  FsReadRequest,
+  FsReadResponse,
+  FsWriteRequest,
+  FsWriteResponse,
+  FsDeleteRequest,
+  FsDeleteResponse,
+  FsEditRequest,
+  FsEditResponse,
+  FsListRequest,
+  FsListResponse,
+  FsListEntry,
+  FsSearchRequest,
+  FsSearchResponse,
+  FsSearchMatch,
+} from './remote';
+
+// Legacy aliases — pre-v1.9.0 names used by older callers. Keep as type
+// aliases so `import { PairingOffer } from '@prismer/sdk'` still type-checks,
+// but the actual runtime shape is the corrected one from `./remote.ts`.
+
+import type {
+  QrInitResponse as _QrInitResponse,
+  QrConfirmResponse as _QrConfirmResponse,
+  SendCommandRequest as _SendCommandRequest,
+  RegisterPushTokenRequest as _RegisterPushTokenRequest,
+} from './remote';
+
+/** @deprecated Use `QrInitResponse` (v1.9.0 shape: `{offerId, expiresAt}`). */
+export type PairingOffer = _QrInitResponse;
+
+/** @deprecated Use `QrConfirmResponse` (v1.9.0 shape: `{bindingId, daemonId}`). */
+export type PairConfirmResult = _QrConfirmResponse;
+
+/** @deprecated Use `SendCommandRequest` (field renamed `payload` → `envelope`). */
+export type SendCommandOptions = _SendCommandRequest;
+
+/** @deprecated Use `RegisterPushTokenRequest`. */
+export type PushTokenRegisterOptions = _RegisterPushTokenRequest;

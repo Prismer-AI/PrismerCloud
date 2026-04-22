@@ -30,6 +30,27 @@ const PENDING_TTL_MS = 10 * 60 * 1000;
 
 // --- Helpers ---
 
+/**
+ * Truncate large command output before regex/parse operations.
+ * Bash commands like `find /`, `docker logs`, or test runners can emit
+ * 10MB+ of stdout. Running regex over strings that large causes
+ * memory pressure and hook slowdown. Keep head + tail so error signals
+ * at either end still match.
+ */
+const MAX_OUTPUT_BYTES = 65536; // 64KB
+const HEAD_BYTES = 32768;       // 32KB
+const TAIL_BYTES = 32768;       // 32KB
+function truncateForAnalysis(output) {
+  if (typeof output !== 'string') return output;
+  if (output.length <= MAX_OUTPUT_BYTES) return output;
+  const dropped = output.length - (HEAD_BYTES + TAIL_BYTES);
+  return (
+    output.slice(0, HEAD_BYTES) +
+    '\n... [truncated ' + dropped + ' bytes] ...\n' +
+    output.slice(-TAIL_BYTES)
+  );
+}
+
 function readPending() {
   try {
     const raw = readFileSync(PENDING_FILE, 'utf8');
@@ -101,6 +122,11 @@ if (toolName === 'Bash') {
 } else {
   process.exit(0); // Unknown tool — skip
 }
+
+// Truncate large output before any regex / signal extraction / journal writes.
+// Bash commands (find /, docker logs, test output) can produce 10MB+ strings —
+// running regex over that stalls the hook and fills the journal.
+result = truncateForAnalysis(result);
 
 // Skip trivial commands (Bash only)
 if (toolName === 'Bash' && SKIP_RE.test(command)) {

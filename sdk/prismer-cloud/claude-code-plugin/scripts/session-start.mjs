@@ -29,6 +29,88 @@ const CURSOR_FILE = join(CACHE_DIR, 'sync-cursor.json');
 
 const { apiKey: API_KEY, baseUrl: BASE_URL } = resolveConfig();
 
+// --- Step 0a: Zombie-install detection (diagnostic only, never blocks) ---
+// Detects mismatch between Claude Code's installed_plugins.json and the running
+// plugin's package.json. A stale registration is the usual cause of Stop-hook
+// "Plugin directory does not exist" loops. We only notify — never auto-fix.
+try {
+  const registryPath = join(homedir(), '.claude', 'plugins', 'installed_plugins.json');
+  if (existsSync(registryPath)) {
+    const registry = JSON.parse(readFileSync(registryPath, 'utf8'));
+    // Registry shape varies across CC versions; probe a few common locations.
+    const candidates = [];
+    if (Array.isArray(registry?.plugins)) candidates.push(...registry.plugins);
+    if (registry && typeof registry === 'object') {
+      for (const v of Object.values(registry)) {
+        if (Array.isArray(v)) candidates.push(...v);
+        else if (v && typeof v === 'object') candidates.push(v);
+      }
+    }
+    const entry = candidates.find((p) => {
+      if (!p || typeof p !== 'object') return false;
+      const name = p.name || p.id || p.plugin || '';
+      return /prismer/.test(String(name));
+    });
+    if (entry) {
+      const pkg = JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf8'));
+      const registryVersion = entry.version || entry.installedVersion;
+      if (registryVersion && registryVersion !== pkg.version) {
+        process.stderr.write(
+          `[Prismer] Stale install registration detected: registry says v${registryVersion}, running v${pkg.version}. ` +
+          `Run: /plugin uninstall prismer && /plugin install prismer@prismer-cloud\n`
+        );
+      }
+      const registryPath2 = entry.installPath || entry.path;
+      if (registryPath2) {
+        const pluginRoot = dirname(__dirname);
+        const norm = (p) => String(p).replace(/\/+$/, '');
+        if (norm(registryPath2) !== norm(pluginRoot)) {
+          process.stderr.write(
+            `[Prismer] Stale install registration detected: registry path ${registryPath2} != running path ${pluginRoot}. ` +
+            `Run: /plugin uninstall prismer && /plugin install prismer@prismer-cloud\n`
+          );
+        }
+      }
+    }
+  }
+} catch (e) {
+  // Diagnostic must never block startup.
+  try { log.warn('zombie-check-failed', { error: e?.message }); } catch {}
+}
+
+// --- Step 0b: Surface pending evolution review (Fix B follow-up) ---
+// session-stop writes ~/.prismer/pending-review.json when a session accumulates
+// evolution-worthy context. session-end normally consumes + unlinks it during
+// clean shutdown. If CC was closed abruptly (or session-end's network push
+// failed), the hint persists — surface it here as a single gray stderr line.
+// We never delete it here; let session-end (or /prismer:review) consume it
+// properly. Stale files (>7d) are pruned silently.
+try {
+  const pendingFile = join(homedir(), '.prismer', 'pending-review.json');
+  if (existsSync(pendingFile)) {
+    let pending = null;
+    try { pending = JSON.parse(readFileSync(pendingFile, 'utf8')); } catch {}
+    if (pending && typeof pending === 'object' && pending.ts) {
+      const ageMs = Date.now() - Number(pending.ts);
+      if (ageMs > 7 * 86400_000) {
+        try { unlinkSync(pendingFile); } catch {}
+        try { log.info('pending-review-stale-pruned', { ageDays: Math.round(ageMs / 86400_000) }); } catch {}
+      } else {
+        const summary = String(pending.summary || '').replace(/\s+/g, ' ').trim();
+        const summarySnippet = summary.length > 80 ? summary.slice(0, 80) + '...' : summary;
+        const scope = pending.scope || 'global';
+        process.stderr.write(
+          `[Prismer] Pending evolution review from last session (${scope}, ${summarySnippet}) — /prismer:review to surface.\n`
+        );
+        try { log.info('pending-review-surfaced', { scope, ageMin: Math.round(ageMs / 60000) }); } catch {}
+      }
+    }
+  }
+} catch (e) {
+  // Never break session-start on malformed hint file.
+  try { log.warn('pending-review-check-failed', { error: e?.message }); } catch {}
+}
+
 // --- Step 0: Read stdin to determine event type ---
 
 let input = {};
@@ -283,6 +365,34 @@ if (API_KEY && eventType === 'startup') {
   }
 }
 
+// --- Step 3b3: One-time auto-push-skills tip (privacy opt-in) ---
+// session-end will NOT push local skills to cloud unless PRISMER_AUTO_PUSH_SKILLS=1.
+// Surface a single stderr tip so users who have at least one local skill know
+// the sharing mechanism exists. Marker prevents re-notifying.
+if (eventType === 'startup' && process.env.PRISMER_AUTO_PUSH_SKILLS !== '1') {
+  try {
+    const skillsDir = join(homedir(), '.claude', 'skills');
+    if (existsSync(skillsDir)) {
+      const hasAnySkill = readdirSync(skillsDir, { withFileTypes: true })
+        .some((e) => e.isDirectory() && existsSync(join(skillsDir, e.name, 'SKILL.md')));
+      if (hasAnySkill) {
+        const prismerDir = join(homedir(), '.prismer');
+        const notifiedFile = join(prismerDir, '.auto-push-skills-notified');
+        if (!existsSync(notifiedFile)) {
+          try { mkdirSync(prismerDir, { recursive: true }); } catch {}
+          try { writeFileSync(notifiedFile, Date.now().toString()); } catch {}
+          process.stderr.write(
+            '[Prismer] Tip: Share your skill ideas with the community by setting PRISMER_AUTO_PUSH_SKILLS=1 (off by default for privacy).\n'
+          );
+          log.info('auto-push-skills-tip-shown');
+        }
+      }
+    }
+  } catch (e) {
+    try { log.warn('auto-push-skills-tip-failed', { error: e?.message }); } catch {}
+  }
+}
+
 // --- Step 3b2: Memory recall (pull MEMORY.md + list available files) ---
 
 if (API_KEY && eventType === 'startup') {
@@ -488,9 +598,12 @@ if (eventType === 'startup') {
 }
 
 // --- Step 4b: Auto-update check (non-blocking, startup only) ---
-// Check if plugin is outdated. If so, clear stale npm cache so next /plugin install pulls fresh.
+// Notify-only: check if plugin is outdated and print a user-facing notice.
+// Do NOT touch ~/.claude/plugins/** — that's Claude Code's territory. Previous
+// versions called rmSync on the plugin's own cache dir, which caused Stop-hook
+// "Plugin directory does not exist" loops after self-destruction.
 
-if (eventType === 'startup') {
+if (eventType === 'startup' && !process.env._PRISMER_SKIP_UPDATE) {
   try {
     const pkgPath = join(__dirname, '..', 'package.json');
     const currentVersion = JSON.parse(readFileSync(pkgPath, 'utf-8')).version;
@@ -498,35 +611,22 @@ if (eventType === 'startup') {
       timeout: 3000, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'],
     }).trim();
     if (result && result !== currentVersion) {
-      // Auto-clear stale npm/CC cache so next install pulls fresh
-      const { rmSync } = await import('fs');
-      const npmCachePaths = [
-        join(homedir(), '.claude', 'plugins', 'npm-cache', 'node_modules', '@prismer'),
-        join(homedir(), '.claude', 'plugins', 'cache', 'prismer-cloud'),
-        // CC marketplace plugin cache
-        join(homedir(), '.claude', 'plugins', 'prismer'),
-      ];
-      for (const p of npmCachePaths) {
-        try { rmSync(p, { recursive: true, force: true }); } catch {}
+      // Track "user was notified" marker in ~/.prismer to avoid spamming on every startup.
+      const prismerDir = join(homedir(), '.prismer');
+      const notifiedFile = join(prismerDir, `.update-notified-${result}`);
+      let alreadyNotified = false;
+      try { alreadyNotified = existsSync(notifiedFile); } catch {}
+
+      if (!alreadyNotified) {
+        try {
+          mkdirSync(prismerDir, { recursive: true });
+          writeFileSync(notifiedFile, Date.now().toString());
+        } catch {}
+        process.stderr.write(
+          `[Prismer] New version ${result} available. Run: /plugin update prismer@prismer-cloud\n`
+        );
       }
-
-      // Also update marketplace.json in-place so CC's /plugin detects the new version
-      try {
-        const marketplacePath = join(__dirname, '..', '.claude-plugin', 'marketplace.json');
-        if (existsSync(marketplacePath)) {
-          const mkt = JSON.parse(readFileSync(marketplacePath, 'utf8'));
-          if (mkt.plugins?.[0]) {
-            mkt.plugins[0].version = result;
-            writeFileSync(marketplacePath, JSON.stringify(mkt, null, 2) + '\n');
-          }
-        }
-      } catch {}
-
-      process.stdout.write(
-        `\n[Prismer] \u26A0 Update available: ${currentVersion} \u2192 ${result}. ` +
-        `Cache cleared \u2014 run: /plugin install prismer\n`
-      );
-      log.info('update-available', { current: currentVersion, latest: result, cacheCleared: true });
+      log.info('update-available', { current: currentVersion, latest: result, notified: !alreadyNotified });
     }
   } catch {
     // npm view failed (offline, timeout) — skip silently

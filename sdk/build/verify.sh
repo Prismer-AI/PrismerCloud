@@ -34,6 +34,8 @@ check_version() {
 }
 
 if scope_includes_prismer; then
+  check_version "$PRISMER_CLOUD/runtime/package.json" "\"version\": \"$VERSION\"" "pc/runtime"
+  check_version "$PRISMER_CLOUD/sandbox-runtime/package.json" "\"version\": \"$VERSION\"" "pc/sandbox-runtime"
   check_version "$PRISMER_CLOUD/typescript/package.json" "\"version\": \"$VERSION\"" "pc/typescript"
   check_version "$PRISMER_CLOUD/mcp/package.json" "\"version\": \"$VERSION\"" "pc/mcp"
   check_version "$PRISMER_CLOUD/opencode-plugin/package.json" "\"version\": \"$VERSION\"" "pc/opencode"
@@ -43,6 +45,9 @@ if scope_includes_prismer; then
   check_version "$PRISMER_CLOUD/rust/Cargo.toml" "version = \"$VERSION\"" "pc/rust"
   check_version "$PRISMER_CLOUD/mcp/src/index.ts" "'$VERSION'" "pc/mcp-hardcoded"
   check_version "$PRISMER_CLOUD/claude-code-plugin/.claude-plugin/plugin.json" "\"version\": \"$VERSION\"" "pc/plugin.json"
+  check_version "$PRISMER_CLOUD/claude-code-plugin/.claude-plugin/marketplace.json" "\"version\": \"$VERSION\"" "pc/marketplace.json"
+  check_version "$PRISMER_CLOUD/adapters/hermes/pyproject.toml" "version = \"0.2.0\"" "pc/adapters/hermes"
+  check_version "$PRISMER_CLOUD/adapters/hermes-node/package.json" "\"version\": \"0.1.0\"" "pc/adapters/hermes-node"
 fi
 
 if scope_includes_aip; then

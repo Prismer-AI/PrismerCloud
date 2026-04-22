@@ -1,19 +1,28 @@
 #!/usr/bin/env node
 /**
- * Stop hook — Evolution Session Review trigger (v3)
+ * Stop hook — Evolution Session Review trigger (v4)
  *
- * v3 improvements over v2.1:
- * - Only blocks ONCE per session (tracks marker in journal)
- * - Cooldown: 1 hour between blocks across sessions
- * - SessionEnd hook handles async fallback when block is skipped
+ * v4 improvements over v3:
+ * - No longer abuses `decision:'block'` for UX. Claude Code renders that as
+ *   a red "Stop hook error:" modal, which surfaced scary text on every stop
+ *   even in healthy sessions.
+ * - Detection logic preserved (cooldown + journal marker + value heuristics).
+ * - Delivery moved to:
+ *     1. `~/.prismer/pending-review.json` — hint file the next SessionStart
+ *        surfaces as a gentle notice (non-red).
+ *     2. `session-end.mjs` — handles the async evolution sync push that
+ *        Claude used to do inline after the block.
+ *     3. stderr — single subtle line (Claude Code renders stderr gray, not
+ *        red) so the user sees a suggestion without a modal.
  *
  * Stdin JSON: { stop_hook_active, session_id, cwd, ... }
- * Stdout JSON: { decision: "block" } or nothing (exit 0 to allow stop)
+ * Stdout: empty (exit 0, never block)
  */
 
 import { readFileSync, writeFileSync, appendFileSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { homedir } from 'os';
 import { resolveConfig } from './lib/resolve-config.mjs';
 import { createLogger } from './lib/logger.mjs';
 
@@ -22,6 +31,8 @@ const log = createLogger('session-stop');
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CACHE_DIR = process.env.CLAUDE_PLUGIN_DATA || join(__dirname, '..', '.cache');
 const JOURNAL_FILE = join(CACHE_DIR, 'session-journal.md');
+const PRISMER_HOME = join(homedir(), '.prismer');
+const PENDING_REVIEW_FILE = join(PRISMER_HOME, 'pending-review.json');
 
 // Per-scope cooldown: project A blocking doesn't prevent project B from blocking
 function detectScopeForCooldown() {
@@ -162,46 +173,99 @@ function buildContext(text) {
   while ((sm = sigRe.exec(text)) !== null) {
     sigs[sm[1]] = (sigs[sm[1]] || 0) + 1;
   }
-  const sigList = Object.entries(sigs).filter(([, c]) => c >= 2).map(([s, c]) => `${s}(${c}x)`);
-  if (sigList.length > 0) {
-    parts.push('');
-    parts.push(`Repeated signals: ${sigList.join(', ')}`);
-  }
+  const sigList = Object.entries(sigs).filter(([, c]) => c >= 2).map(([s, c]) => ({ type: s, count: c }));
 
-  // Concise instructions: only suggest evolve_record/evolve_create_gene when there is
-  // gene feedback or repeated signals (evolution-relevant). Otherwise only memory_write.
+  // Targeted guidance based on specific patterns
   const hasGeneFeedback = feedbacks.length > 0;
   const hasRepeatedSignals = sigList.length > 0;
 
-  if (parts.length === 0) {
-    // No gene feedback and no repeated signals — only memory_write is relevant
-    parts.push('Session had activity. Review: memory_write (project-specific learnings). Max 1 call.');
-  } else if (hasGeneFeedback || hasRepeatedSignals) {
+  if (sigList.length > 0) {
     parts.push('');
-    parts.push('Review: evolve_record (gene feedback) / evolve_create_gene (general pattern) / memory_write (project-specific). Max 3 calls.');
-  } else {
-    parts.push('');
-    parts.push('Review: memory_write (project-specific learnings). Max 1 call.');
+    parts.push('Repeated signals detected:');
+    sigList.sort((a, b) => b.count - a.count).slice(0, 5).forEach(({ type, count }) => {
+      parts.push(`  - ${type} (${count}x)`);
+    });
+
+    // Suggest gene creation for error patterns
+    const errorSigs = sigList.filter(s => s.type.startsWith('error:'));
+    if (errorSigs.length > 0) {
+      parts.push('');
+      parts.push('Error pattern(s) suggest a gene may be needed:');
+      errorSigs.slice(0, 2).forEach(({ type, count }) => {
+        parts.push(`  - ${type} occurred ${count} times — consider evolve_create_gene if this is a recurring pattern`);
+      });
+    }
   }
 
-  return parts.join('\n');
+  // Concise instructions: prioritize gene feedback > error patterns > general signals > memory
+  if (hasGeneFeedback || hasRepeatedSignals) {
+    parts.push('');
+    if (hasGeneFeedback) {
+      parts.push('Priority: evolve_record for each gene feedback above (1 call each).');
+    }
+    if (sigList.some(s => s.type.startsWith('error:'))) {
+      parts.push('If error pattern is novel/recurring: evolve_create_gene to capture fix strategy.');
+    }
+    parts.push('Project-specific learnings: memory_write (max 1 call).');
+    parts.push('Total: max 3 evolution/memory calls.');
+  } else if (Object.keys(sigs).length > 0) {
+    parts.push('');
+    parts.push('Review: memory_write for project-specific learnings. Max 1 call.');
+  } else {
+    // Only activity, no signals
+    parts.push('Session had activity but no signals captured. Consider memory_write if you learned something project-specific.');
+  }
+
+  return {
+    summary: parts.join('\n'),
+    hasGeneFeedback,
+    hasRepeatedSignals,
+    signalTypes: Object.keys(sigs),
+  };
 }
 
-// --- Step 9: Mark journal + record block time ---
+// --- Step 9: Build review context ---
+
+const context = buildContext(journal);
+
+// --- Step 10: Mark journal + record trigger time ---
 
 try {
   mkdirSync(CACHE_DIR, { recursive: true });
   appendFileSync(JOURNAL_FILE, '\n[evolution-review-triggered] (at: ' + new Date().toISOString() + ')\n');
   writeFileSync(BLOCK_MARKER_FILE, JSON.stringify({ ts: Date.now() }));
 } catch {
-  // Write failed — still block (best-effort marking)
+  // Write failed — best-effort marking
 }
 
-// --- Step 10: Block with concise context ---
-// Note: Claude Code displays reason as "Stop hook error:" text.
-// We accept this UX tradeoff because the alternative (no reason) means
-// Claude doesn't know which genes to evaluate. The self-evaluation context
-// is essential for accurate Thompson Sampling feedback.
+// --- Step 11: Write pending-review hint for next SessionStart + session-end ---
 
-const context = buildContext(journal);
-process.stdout.write(JSON.stringify({ decision: 'block', reason: context }));
+try {
+  mkdirSync(PRISMER_HOME, { recursive: true });
+  writeFileSync(PENDING_REVIEW_FILE, JSON.stringify({
+    ts: Date.now(),
+    scope: cooldownScope,
+    summary: context.summary,
+    hasGeneFeedback: context.hasGeneFeedback,
+    hasRepeatedSignals: context.hasRepeatedSignals,
+    signalTypes: context.signalTypes,
+  }));
+} catch {
+  // Best-effort; if we cannot write, the stderr hint below still fires
+}
+
+// --- Step 12: Emit a subtle stderr hint (gray, not red) ---
+// Claude Code renders stderr from Stop hooks as a non-modal informational line.
+// Keep it single-line + actionable. NEVER emit decision:'block' here — that
+// channel is reserved for genuine errors and renders as a scary red modal.
+try {
+  const hint = context.hasGeneFeedback
+    ? '[Prismer] Gene feedback pending — review queued for session end.'
+    : context.hasRepeatedSignals
+      ? '[Prismer] Repeated signals detected — evolution review queued for session end.'
+      : '[Prismer] Session activity recorded — review queued for session end.';
+  process.stderr.write(hint + '\n');
+} catch {}
+
+// Exit 0 with no stdout — never block, never surface a red modal.
+process.exit(0);

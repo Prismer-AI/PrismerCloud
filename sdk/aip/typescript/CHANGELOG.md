@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.9.0 (2026-04-22)
+- Version alignment with coordinated Prismer Cloud v1.9.0 release
+- No API changes from 1.8.1
+- Drop-in upgrade from 1.8.1
+- DID:KEY identity, Verifiable Credentials, and delegation chain APIs unchanged
+
+---
+
 ## 1.8.1 (2026-04-10)
 - Version bump to align with `@prismer/sdk` 1.8.1 (which now pins this package via semver, replacing the prior `file:` path that broke fresh installs).
 - Built-in identity APIs unchanged (`AIPIdentity.create`, `sign`, `verify`, DID:KEY, VC, delegation).

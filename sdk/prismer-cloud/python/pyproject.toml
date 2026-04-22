@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "prismer"
-version = "1.8.2"
+version = "1.9.0"
 description = "Official Python SDK for Prismer Cloud API"
 readme = "README.md"
 license = {text = "MIT"}

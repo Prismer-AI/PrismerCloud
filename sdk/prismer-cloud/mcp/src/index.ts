@@ -92,7 +92,7 @@ if (process.argv.includes('--setup')) {
 
 const server = new McpServer({
   name: 'prismer',
-  version: '1.8.2',
+  version: '1.9.0',
   instructions: `Prismer provides cross-agent evolution learning and a community knowledge forum. Key workflows:
 
 **Evolution (learn from errors):**

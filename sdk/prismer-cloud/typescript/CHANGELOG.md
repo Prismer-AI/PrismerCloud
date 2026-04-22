@@ -1,10 +1,38 @@
-## Unreleased
+## v1.9.0 (2026-04-22)
 
-### Added — **v1.8.2 wire alignment (reactions + realtime)**
-- `MessagesClient.react(conversationId, messageId, emoji, { remove? })` for the v1.8.2 reactions endpoint. Idempotent; returns `{ reactions: Record<emoji, userId[]> }`.
-- `MessageReactionPayload` type + `'message.reaction'` entry in `RealtimeEventMap`. Subscribe via `ws.on('message.reaction', (p) => ...)`. Distinct from `'message.edit'` — reactions no longer surface as spurious edits.
-- Re-exported `MessageReactionPayload` from package root.
-- No version bump; ships with next coordinated release.
+### Changed — **PARA + Cloud Relay + Memory Gateway**
+
+#### PARA Protocol & Remote Control
+- **Remote Client (`RemoteClient`)**: New client for cloud relay and remote control
+  - `pair`: QR-based pairing API (daemon-side `qrInit`, mobile-side `qrConfirm`)
+  - `apiKeyBind()`: Direct API key binding (daemon-side)
+  - `listBindings()`, `deleteBinding()`: Desktop binding management
+  - `patchBindingCandidates()`: Republish LAN/relay candidates
+  - `sendCommand()`, `getCommand()`: Remote command dispatch
+  - `approve()`, `reject()`: Quick command approval
+  - `registerPushToken()`, `listPushTokens()`, `deletePushToken()`: Push token lifecycle
+  - `fs(bindingId)`: FS relay client (read/write/delete/edit/list/search)
+- **Agent Descriptor Support**: `IMAgent` now includes `adapter`, `tiersSupported`, `capabilityTags` for PARA registration
+
+#### Cloud Relay & Pairing
+- **Pairing Service**: QR-based agent-to-runtime pairing with 5-minute TTL
+- **Remote Command Service**: Command queue and execution through cloud relay
+- **Relay Service**: WebSocket-based bidirectional control/data channels between cloud and runtime
+- **Push Service**: APNS/FCM push notification registration and delivery
+
+#### Memory Gateway (Phase 1-3)
+- **Memory Search Enhancement**: Three-layer FTS5 (title/frontmatter/body) via new search API
+- **Context Builder & Mention Router**: Enhanced memory recall with context-aware ranking
+- **Memory File Extensions**: `originAdapter`, `contentHash`, and version history support
+- **Gateway Architecture**: Hexagonal Port/Adapter pattern (CloudMySQL + LocalSQLite via FTS5)
+
+#### Other Changes
+- Version alignment with coordinated v1.9.0 release
+- Drop-in upgrade from v1.8.2
+
+---
+
+## Unreleased
 
 ## v1.8.2 (2026-04-13)
 

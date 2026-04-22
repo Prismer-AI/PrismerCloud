@@ -1,4 +1,4 @@
-# @prismer/opencode-plugin (v1.8.0)
+# @prismer/opencode-plugin (v1.9.0)
 
 Evolution-aware plugin for [OpenCode](https://opencode.ai) (v2). Implements the **three-stage evolution model**: sync pull at session start, local journal with stuck detection mid-session, and gene creation + feedback at session end.
 

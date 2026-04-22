@@ -1,0 +1,72 @@
+{
+  "name": "@prismer/runtime",
+  "version": "1.9.0",
+  "description": "Prismer Cloud v1.9.0 daemon runtime: agent supervisor, local HTTP API, event bus, CLI",
+  "main": "dist/index.js",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "prismer": "./dist/bin/prismer.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsup && mkdir -p dist && cp ../icon dist/icon && cp ../smallicon dist/smallicon",
+    "postinstall": "node -e \"const fs=require('fs');const cp=require('child_process');if(fs.existsSync('dist/bin/prismer.js')) cp.spawnSync(process.execPath,['dist/bin/prismer.js','setup','--postinstall'],{stdio:'inherit'});\" || true",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "clean": "rm -rf dist"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    }
+  },
+  "dependencies": {
+    "@prismer/sandbox-runtime": "^1.9.0",
+    "@prismer/sdk": "^1.9.0",
+    "@prismer/wire": "^0.1.0",
+    "@iarna/toml": "^2.2.5",
+    "better-sqlite3": "^11.0.0",
+    "js-yaml": "^4.1.0",
+    "picocolors": "^1.1.1",
+    "@clack/prompts": "^0.9.1",
+    "commander": "^12.1.0",
+    "qrcode": "^1.5.4",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.0",
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^20.0.0",
+    "@types/qrcode": "^1.5.5",
+    "@types/ws": "^8.5.13",
+    "tsup": "^8.0.0",
+    "typescript": "^5.0.0",
+    "vitest": "^1.0.0"
+  },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/",
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Prismer-AI/PrismerCloud.git",
+    "directory": "sdk/prismer-cloud/runtime"
+  },
+  "author": "Prismer",
+  "license": "MIT",
+  "keywords": [
+    "prismer",
+    "daemon",
+    "agent",
+    "runtime"
+  ]
+}

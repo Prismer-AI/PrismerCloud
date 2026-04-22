@@ -71,11 +71,18 @@ find_tgz() {
 AIP_TGZ=$(find_tgz "prismer-aip-sdk-*.tgz")
 SDK_TGZ=$(find_tgz "prismer-sdk-*.tgz")
 MCP_TGZ=$(find_tgz "prismer-mcp-server-*.tgz")
+SANDBOX_TGZ=$(find_tgz "prismer-sandbox-runtime-*.tgz")
+WIRE_TGZ=$(find_tgz "prismer-wire-*.tgz")
+ADAPTERS_CORE_TGZ=$(find_tgz "prismer-adapters-core-*.tgz")
 CLAUDE_TGZ=$(find_tgz "prismer-claude-code-plugin-*.tgz")
 OPENCODE_TGZ=$(find_tgz "prismer-opencode-plugin-*.tgz")
 OPENCLAW_TGZ=$(find_tgz "prismer-openclaw-channel-*.tgz")
 
-AIP_WHL=$(ls "$ARTIFACT_DIR/pypi/"aip_sdk-*.whl 2>/dev/null | head -1)
+AIP_WHL=$(ls "$ARTIFACT_DIR/pypi/"prismer_aip-*.whl 2>/dev/null | head -1)
+# Fallback: legacy naming with _sdk
+if [[ -z "$AIP_WHL" ]]; then
+  AIP_WHL=$(ls "$ARTIFACT_DIR/pypi/"aip_sdk-*.whl 2>/dev/null | head -1)
+fi
 # Fallback: older naming without _sdk
 if [[ -z "$AIP_WHL" ]]; then
   AIP_WHL=$(ls "$ARTIFACT_DIR/pypi/"aip-*.whl 2>/dev/null | head -1)
@@ -83,7 +90,7 @@ fi
 PRISMER_WHL=$(ls "$ARTIFACT_DIR/pypi/"prismer-*.whl 2>/dev/null | head -1)
 
 echo -e "${BOLD}Found artifacts:${RESET}"
-for var in AIP_TGZ SDK_TGZ MCP_TGZ CLAUDE_TGZ OPENCODE_TGZ OPENCLAW_TGZ AIP_WHL PRISMER_WHL; do
+for var in AIP_TGZ SDK_TGZ MCP_TGZ SANDBOX_TGZ WIRE_TGZ ADAPTERS_CORE_TGZ CLAUDE_TGZ OPENCODE_TGZ OPENCLAW_TGZ AIP_WHL PRISMER_WHL; do
   val="${!var}"
   if [[ -n "$val" ]]; then
     echo -e "  $var = $(basename "$val")"
@@ -122,19 +129,19 @@ fi
 # 3. Install @prismer/sdk
 if [[ -n "$SDK_TGZ" ]]; then
   check "npm install @prismer/sdk from tgz" \
-    npm install "$SDK_TGZ" --no-save
+    npm install "$AIP_TGZ" "$SDK_TGZ" --no-save
 
   # 4. require('@prismer/sdk') — THIS was the v1.8.0 crash
   check "require('@prismer/sdk') succeeds (v1.8.0 regression test)" \
     node -e "require('@prismer/sdk')"
 
-  # 5. CLI --help
-  check_output "prismer CLI --help shows commands" "usage\|Usage\|Options\|Commands\|prismer" \
-    node node_modules/@prismer/sdk/dist/cli.js --help
+  # 5. CLI library export
+  check "require('@prismer/sdk/cli') succeeds" \
+    node -e "require('@prismer/sdk/cli')"
 
-  # 6. CLI setup --help
-  check_output "prismer CLI setup --help shows options" "setup\|Setup\|config\|key\|Options" \
-    node node_modules/@prismer/sdk/dist/cli.js setup --help
+  # 6. registerSdkCliCommands export
+  check "registerSdkCliCommands is exported" \
+    node -e "const cli=require('@prismer/sdk/cli'); if (typeof cli.registerSdkCliCommands !== 'function') process.exit(1)"
 
   # 7. CRITICAL: aip-sdk dep must be semver, NOT file: path
   AIP_DEP=$(node -e "const p=require('./node_modules/@prismer/sdk/package.json'); console.log(p.dependencies?.['@prismer/aip-sdk'] || 'MISSING')")
@@ -151,8 +158,8 @@ if [[ -n "$SDK_TGZ" ]]; then
 else
   skip "npm install @prismer/sdk (tgz not found)"
   skip "require('@prismer/sdk') succeeds"
-  skip "prismer CLI --help"
-  skip "prismer CLI setup --help"
+  skip "require('@prismer/sdk/cli') succeeds"
+  skip "registerSdkCliCommands is exported"
   skip "@prismer/sdk aip-sdk dep check"
 fi
 
@@ -164,18 +171,84 @@ else
   skip "npm install @prismer/mcp-server (tgz not found)"
 fi
 
+# 8b. Shared local tgz deps for adapter/plugin packages
+if [[ -n "$SANDBOX_TGZ" ]]; then
+  check "npm install @prismer/sandbox-runtime from tgz" \
+    npm install "$SANDBOX_TGZ" --no-save
+else
+  skip "npm install @prismer/sandbox-runtime (tgz not found)"
+fi
+
+if [[ -n "$WIRE_TGZ" ]]; then
+  check "npm install @prismer/wire from tgz" \
+    npm install "$SANDBOX_TGZ" "$WIRE_TGZ" --no-save
+else
+  skip "npm install @prismer/wire (tgz not found)"
+fi
+
+if [[ -n "$ADAPTERS_CORE_TGZ" ]]; then
+  check "npm install @prismer/adapters-core from tgz" \
+    npm install "$SANDBOX_TGZ" "$WIRE_TGZ" "$ADAPTERS_CORE_TGZ" --no-save
+else
+  skip "npm install @prismer/adapters-core (tgz not found)"
+fi
+
 # 9. Plugin tgz files (3 packages)
 for info in "CLAUDE_TGZ:@prismer/claude-code-plugin" "OPENCODE_TGZ:@prismer/opencode-plugin" "OPENCLAW_TGZ:@prismer/openclaw-channel"; do
   var="${info%%:*}"
   pkg="${info#*:}"
   tgz="${!var}"
   if [[ -n "$tgz" ]]; then
+    install_args=("$tgz")
+    install_flags=(--no-save)
+    if [[ "$pkg" == "@prismer/claude-code-plugin" || "$pkg" == "@prismer/openclaw-channel" ]]; then
+      install_args=("$SANDBOX_TGZ" "$WIRE_TGZ" "$ADAPTERS_CORE_TGZ" "$tgz")
+    fi
+    if [[ "$pkg" == "@prismer/openclaw-channel" ]]; then
+      install_flags+=(--legacy-peer-deps)
+    fi
     check "npm install $pkg from tgz" \
-      npm install "$tgz" --no-save
+      npm install "${install_args[@]}" "${install_flags[@]}"
   else
     skip "npm install $pkg (tgz not found)"
   fi
 done
+
+# 9b. CRITICAL: scan every installed @prismer/* package for file: deps.
+# A file: path in a published tarball guarantees `npm install <pkg>` failure
+# for end users (v1.8.0 shipped with this bug; see CLAUDE.md v1.8.1 notes).
+# Generalizes the single-package check #7 to cover ALL @prismer/* packages.
+if [[ -d "node_modules/@prismer" ]]; then
+  FILE_DEP_VIOLATIONS=$(node -e "
+    const fs = require('fs');
+    const path = require('path');
+    const root = 'node_modules/@prismer';
+    const viols = [];
+    for (const name of fs.readdirSync(root)) {
+      const pkgPath = path.join(root, name, 'package.json');
+      if (!fs.existsSync(pkgPath)) continue;
+      const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+      for (const section of ['dependencies', 'devDependencies', 'peerDependencies']) {
+        for (const [dep, ver] of Object.entries(pkg[section] || {})) {
+          if (typeof ver === 'string' && ver.startsWith('file:')) {
+            viols.push(pkg.name + ' ' + section + '.' + dep + ' = ' + ver);
+          }
+        }
+      }
+    }
+    console.log(viols.join('\n'));
+  ")
+  if [[ -z "$FILE_DEP_VIOLATIONS" ]]; then
+    echo -e "  ${GREEN}✓${RESET} No file: deps in any installed @prismer/* package"
+    ((PASS++))
+  else
+    echo -e "  ${RED}✗${RESET} file: deps found (will break 'npm install' for end users):"
+    echo "$FILE_DEP_VIOLATIONS" | sed 's/^/      /'
+    ((FAIL++))
+  fi
+else
+  skip "scan @prismer/* for file: deps (no packages installed)"
+fi
 
 # Clean up npm workdir
 cd /

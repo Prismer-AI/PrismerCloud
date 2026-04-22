@@ -4,6 +4,13 @@
     "module": "ES2022",
     "moduleResolution": "bundler",
     "strict": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    // noUnusedLocals/Parameters intentionally NOT enabled here:
+    // - adapter.ts `_lease` param is forward-reserved for L5/L10 scope
+    // - existing channel code (inbound.ts etc.) has unrelated unused locals;
+    //   those are tracked for Track 2 follow-up, not Track 1's concern
+    // Re-enable when the package cleans up its existing surface.
     "esModuleInterop": true,
     "skipLibCheck": true,
     "outDir": "dist",

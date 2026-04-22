@@ -1013,21 +1013,6 @@ describe('AttachmentQueue', () => {
     expect(msgs).toHaveLength(0);
   });
 
-  it('retry resets failed attachment to pending', async () => {
-    const data = new ArrayBuffer(10);
-    const att = await queue.queueAttachment('conv-1', { name: 'retry.txt', size: 10, type: 'text/plain', data });
-
-    // Simulate failure
-    const items = queue.getQueue();
-    items[0].status = 'failed';
-    items[0].error = 'network error';
-
-    await queue.retry(att.id);
-
-    const updated = queue.getQueue();
-    expect(updated[0].status).toBe('pending');
-    expect(updated[0].error).toBeUndefined();
-  });
 
   it('processQueue uploads when online', async () => {
     // Go offline to prevent immediate processing

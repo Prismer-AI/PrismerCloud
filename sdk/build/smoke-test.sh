@@ -23,6 +23,7 @@ for arg in "${REMAINING_ARGS[@]+"${REMAINING_ARGS[@]}"}"; do
 done
 
 SANDBOX_IMAGE="${SANDBOX_IMAGE:-docker.prismer.dev/prismer-academic:v5.1-lite}"
+SANDBOX_PLATFORM="${SANDBOX_PLATFORM:-linux/amd64}"
 
 log_step "SDK Smoke Test (scope: $SCOPE, skip-pack: $SKIP_PACK)"
 
@@ -81,7 +82,7 @@ else
     log_info "Pulling image: $SANDBOX_IMAGE"
     if ! docker pull --platform linux/amd64 "$SANDBOX_IMAGE"; then
       log_error "Failed to pull Docker image: $SANDBOX_IMAGE"
-      log_error "Set SANDBOX_IMAGE env var to override"
+      log_error "Set SANDBOX_IMAGE / SANDBOX_PLATFORM env vars to override"
       exit 1
     fi
     log_success "Image pulled: $SANDBOX_IMAGE"
@@ -97,9 +98,11 @@ if [[ ! -f "$VERIFY_SCRIPT" ]]; then
   exit 1
 fi
 
-DOCKER_CMD=(
-  docker run --rm
-  --platform linux/amd64
+DOCKER_CMD=(docker run --rm)
+if [[ -n "$SANDBOX_PLATFORM" ]]; then
+  DOCKER_CMD+=(--platform "$SANDBOX_PLATFORM")
+fi
+DOCKER_CMD+=(
   -v "$ARTIFACTS_DIR:/artifacts:ro"
   -v "$VERIFY_SCRIPT:/verify.sh:ro"
   "$SANDBOX_IMAGE"
@@ -113,7 +116,7 @@ if [[ $DRY_RUN -eq 1 ]]; then
   exit 0
 fi
 
-log_info "Running: docker run --rm --platform linux/amd64 \\"
+log_info "Running: docker run --rm ${SANDBOX_PLATFORM:+--platform $SANDBOX_PLATFORM }\\"
 log_info "  -v $ARTIFACTS_DIR:/artifacts:ro \\"
 log_info "  -v $VERIFY_SCRIPT:/verify.sh:ro \\"
 log_info "  $SANDBOX_IMAGE bash /verify.sh"
@@ -130,8 +133,8 @@ if [[ $CONTAINER_EXIT -eq 0 ]]; then
   log_success "All sandbox checks passed"
   echo ""
   log_info "Next steps:"
-  log_info "  1. sdk/build/sync.sh --scope $SCOPE    # sync to open-source repo"
-  log_info "  2. sdk/build/release.sh --scope $SCOPE  # publish to registries"
+  log_info "  1. sdk/build/install-local.sh --skip-pack   # optional installer re-check"
+  log_info "  2. sdk/build/release.sh --scope $SCOPE      # sync + publish"
 else
   log_error "Sandbox verification failed (exit code: $CONTAINER_EXIT)"
   log_error "Fix the issues above, then re-run:"

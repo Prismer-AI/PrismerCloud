@@ -1,3 +1,40 @@
+## [1.9.0] - 2026-04-15 — Deprecated
+
+### Deprecated — **Package rename to `@prismer/adapters-core`**
+- `@prismer/claude-code-plugin` is **deprecated starting with v1.9.0**. The PARA adapter line is renamed to [`@prismer/adapters-core`](https://www.npmjs.com/package/@prismer/adapters-core) per `docs/version190/11-context-references.md §11.1`.
+- **Maintenance window:** critical fixes only for **6 months**, until **2026-10-16**. No new features after v1.9.0.
+- **Signals added in this release:**
+  - `package.json` `description` now prefixed with `[DEPRECATED — use @prismer/adapters-core]`.
+  - New `keywords` entry `"deprecated"` so npm search surfaces the status.
+  - New `postinstall` script (`scripts/deprecation-notice.mjs`) prints an ANSI-colored migration banner to **stderr** on `npm install`. Non-blocking (always exits 0). Silenceable via `PRISMER_SILENCE_DEPRECATION=1` for CI.
+  - `README.md` header shows a prominent deprecation blockquote linking to the new package.
+- **Registry-side `npm deprecate`** is invoked by the open-source release pipeline (`PrismerCloud` repo) after publish — see `sdk/build/release.sh::deprecate_old_packages()` and `sdk/build/WORKFLOW.md`.
+- **Migration:**
+  ```bash
+  npm install @prismer/adapters-core
+  ```
+  Full migration guide: <https://prismer.cloud/docs/migrate-v190>.
+
+### Fixed — **Privacy: skill auto-push is now opt-in** (Fix D)
+- `session-end.mjs` previously scanned `~/.claude/skills/` and uploaded any skill folder lacking a `.prismer-meta.json` marker to Prismer Cloud unconditionally. This leaked skills installed from third-party marketplaces (gstack, internal, custom) to Prismer's servers without user consent.
+- **New behavior:** the scan + upload block runs only when `PRISMER_AUTO_PUSH_SKILLS=1` is set. Default is OFF. No scan, no log noise, no upload.
+- `session-start.mjs` surfaces a one-time stderr tip (once per user, marker at `~/.prismer/.auto-push-skills-notified`) when the user has at least one skill in `~/.claude/skills/` and the env var is unset — so discoverability of the sharing mechanism is preserved without spamming everyone.
+- README `Privacy & Security` section documents the opt-in.
+
+### Added — **PARA Adapter Layer**
+- Added PARA (Prismer Agent Runtime ABI) adapter layer as an additive upgrade — all Evolution v1.8.x hooks remain unchanged and fully functional.
+- **`@prismer/wire@0.1.0`** and **`@prismer/adapters-core@0.1.0`** added as runtime dependencies (bundled via tarballs).
+- **`hooks/para-emit.mjs`** — Universal PARA emitter hook. Translates all 26 CC hook events → 42 PARA events per §4.5 spec mapping. Writes validated JSONL to `~/.prismer/para/events.jsonl`. Exits 0 on any error (never breaks CC). Supports `PRISMER_PARA_STDOUT=1` for daemon attach (Track 2).
+- **`hooks/hooks.para.json`** — Separate hook registration manifest for all 26 CC hooks with `matcher: ".*"`. Does NOT replace `hooks.json` (Evolution hooks untouched).
+- **`scripts/lib/hooks-merge.mjs`** — Pure merge/rollback functions ported from EXP-13: `mergePara()`, `removePara()`, `backupAndWrite()`. Idempotent. Preserves user/third-party hooks and replaces legacy Evolution hooks.
+- **`scripts/setup.mjs --para`** — New flag: merges PARA hooks into `~/.claude/hooks.json`. `setup.mjs` without `--para` continues to work exactly as before (v1.8.x behavior preserved).
+- **AgentDescriptor registration**: SessionStart emits `agent.register` once (cached to `~/.prismer/para/agent-descriptor.json`); subsequent sessions emit only `agent.session.started`. Stable ID from `sha256(cwd+hostname)`.
+- **Tier declarations**: L1 (Discovery), L2 (Message I/O), L3 (Tool observation), L7 (FS delegation). Declared in `plugin.json` under `prismer.tiersSupported: [1,2,3,7]`.
+- **`tests/para/`** — 41 tests across 3 files: `para-emit.test.mjs` (15 tests, 10 CC hook types), `hooks-merge.test.mjs` (19 tests, 5 EXP-13 scenarios + idempotency), `agent-descriptor.test.mjs` (7 tests, cache and re-register behavior). All 41 pass.
+- `.claude-plugin/plugin.json`: version → `1.9.0`, added `"prismer": { "tiersSupported": [1,2,3,7], "paraVersion": "0.1.0" }`.
+
+---
+
 ## [1.8.2.1] - 2026-04-15
 
 ### Fixed

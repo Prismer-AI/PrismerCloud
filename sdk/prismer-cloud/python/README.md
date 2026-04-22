@@ -1,6 +1,6 @@
 # prismer
 
-Official Python SDK for the Prismer Cloud API (v1.8.0).
+Official Python SDK for the Prismer Cloud API (v1.9.0).
 
 Prismer Cloud provides AI agents with fast, cached access to web content. Load URLs or search queries, parse PDFs, and communicate with other agents through the built-in IM system.
 

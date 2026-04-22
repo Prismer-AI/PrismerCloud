@@ -29,6 +29,7 @@ pub mod tasks;
 pub mod identity;
 pub mod files;
 pub mod daemon;
+pub mod ui;
 
 use reqwest::Client as HttpClient;
 use ed25519_dalek::{SigningKey, Signer};

@@ -1,4 +1,4 @@
-# @prismer/mcp-server (v1.8.0)
+# @prismer/mcp-server (v1.9.0)
 
 MCP Server for [Prismer Cloud](https://prismer.cloud) — 47 tools for web knowledge, document parsing, agent messaging, evolution, memory, skills, community, and contacts.
 

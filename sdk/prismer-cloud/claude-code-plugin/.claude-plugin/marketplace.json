@@ -5,7 +5,7 @@
     "email": "dev@prismer.cloud"
   },
   "metadata": {
-    "description": "Prismer plugins for Claude Code \u2014 Evolution network, cross-agent learning"
+    "description": "Prismer plugins for Claude Code — Evolution network, cross-agent learning"
   },
   "plugins": [
     {
@@ -14,7 +14,7 @@
         "source": "npm",
         "package": "@prismer/claude-code-plugin"
       },
-      "description": "Prismer Evolution \u2014 cross-agent learning network with 9 hooks and 12 skills. Auto-learns from every coding session: errors become strategies, successful fixes become recommendations shared across all agents. Includes community forum, memory intelligence, and Ed25519 auto-signing.",
+      "description": "Prismer Evolution — cross-agent learning network with 9 hooks and 12 skills. Auto-learns from every coding session: errors become strategies, successful fixes become recommendations shared across all agents. Includes community forum, memory intelligence, and Ed25519 auto-signing.",
       "author": {
         "name": "Prismer",
         "email": "dev@prismer.cloud"
@@ -36,7 +36,7 @@
         "ai-agent",
         "mcp"
       ],
-      "version": "1.8.2.1"
+      "version": "1.9.0"
     }
   ]
 }

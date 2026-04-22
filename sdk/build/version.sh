@@ -82,6 +82,18 @@ bump_hardcoded() {
   fi
 }
 
+bump_marketplace() {
+  local file="$1"
+  if [[ ! -f "$file" ]]; then log_warn "Skip (not found): $file"; return; fi
+  if [[ $DRY_RUN -eq 1 ]]; then
+    log_dry "Would update $file"
+  else
+    # Bump plugins[].version in marketplace.json
+    sed -i '' "s/\"version\": *\"[^\"]*\"/\"version\": \"$TARGET\"/" "$file"
+    log_info "Updated: $file"
+  fi
+}
+
 bump_python_init() {
   local file="$1"
   if [[ ! -f "$file" ]]; then log_warn "Skip (not found): $file"; return; fi
@@ -94,16 +106,41 @@ bump_python_init() {
 }
 
 # ── prismer-cloud suite ────────────────────────────────────────────
+#
+# VERSION POLICY
+# --------------
+# Platform-coupled packages follow the root /VERSION:
+#   - sdk/prismer-cloud/typescript/
+#   - sdk/prismer-cloud/python/
+#   - sdk/prismer-cloud/rust/
+#   - sdk/prismer-cloud/mcp/
+#   - sdk/prismer-cloud/runtime/
+#   - sdk/prismer-cloud/sandbox-runtime/
+#   - sdk/prismer-cloud/claude-code-plugin/
+#   - sdk/prismer-cloud/opencode-plugin/
+#   - sdk/prismer-cloud/openclaw-channel/
+#
+# Independent packages stay on their own 0.x line and MUST NOT be bumped by
+# the coordinated platform release:
+#   - sdk/prismer-cloud/wire/
+#   - sdk/prismer-cloud/adapters-core/
+#   - sdk/prismer-cloud/adapters/hermes-node/
+#   - sdk/prismer-cloud/adapters/hermes/
+#
+# Use sdk/build/hotfix.sh for independent-package patch releases.
 if scope_includes_prismer; then
   log_step "prismer-cloud packages"
 
-  # JSON (package.json + plugin.json)
+  # JSON (package.json + plugin.json + marketplace.json)
+  bump_json "$PRISMER_CLOUD/runtime/package.json"
+  bump_json "$PRISMER_CLOUD/sandbox-runtime/package.json"
   bump_json "$PRISMER_CLOUD/typescript/package.json"
   bump_json "$PRISMER_CLOUD/mcp/package.json"
   bump_json "$PRISMER_CLOUD/opencode-plugin/package.json"
   bump_json "$PRISMER_CLOUD/claude-code-plugin/package.json"
   bump_json "$PRISMER_CLOUD/openclaw-channel/package.json"
   bump_json "$PRISMER_CLOUD/claude-code-plugin/.claude-plugin/plugin.json"
+  bump_marketplace "$PRISMER_CLOUD/claude-code-plugin/.claude-plugin/marketplace.json"
 
   # TOML
   bump_toml "$PRISMER_CLOUD/python/pyproject.toml"
@@ -114,6 +151,19 @@ if scope_includes_prismer; then
 
   # Python __init__.py
   bump_python_init "$PRISMER_CLOUD/python/prismer/__init__.py"
+
+  # Guard rail: fail loudly if the excluded packages somehow get touched
+  for INDEP in "$PRISMER_CLOUD/wire/package.json" \
+               "$PRISMER_CLOUD/adapters-core/package.json" \
+               "$PRISMER_CLOUD/adapters/hermes-node/package.json" \
+               "$PRISMER_CLOUD/adapters/hermes/pyproject.toml"; do
+    if [[ -f "$INDEP" ]]; then
+      INDEP_VER=$(grep -m1 -E '("version"|^version) *[:=]' "$INDEP" | sed -E 's/.*"([^"]+)".*/\1/')
+      if [[ "$INDEP_VER" == "$TARGET" ]]; then
+        log_warn "Independent package at $INDEP reports version $TARGET — this may be coincidental, but the exclusion policy expects 0.x. Verify intentional."
+      fi
+    fi
+  done
 fi
 
 # ── aip suite ──────────────────────────────────────────────────────

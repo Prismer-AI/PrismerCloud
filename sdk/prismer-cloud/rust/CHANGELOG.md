@@ -1,11 +1,12 @@
 # prismer-sdk (Rust) -- Changelog
 
-## Unreleased
+## v1.9.0 (2026-04-22)
 
-### Added — **v1.8.2 wire alignment (reactions + message types)**
-- `types::message_type` and `types::artifact_type` modules with `&'static str` constants for all 13 message types and 8 artifact sub-types.
-- `IMClient::react_message(conversation_id, message_id, emoji, remove)` for the v1.8.2 reactions endpoint. Idempotent; response `data.reactions` is `{emoji: [userId, ...]}`.
-- No version bump; ships with next coordinated release.
+Version bump to 1.9.0 coordinated release. No API changes. Drop-in upgrade.
+
+---
+
+## Unreleased
 
 ---
 

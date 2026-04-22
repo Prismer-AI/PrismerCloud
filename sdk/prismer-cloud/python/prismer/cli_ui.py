@@ -1,418 +1,505 @@
 """
-Prismer CLI UI Components (Rich-based)
+Prismer CLI UI — per §15 cli-design.md spec
 
-Provides:
-- Icon display with colorization
-- Status messages (success/error/warn/info)
-- Tables
-- Progress spinners
-- QR code display
-- Interactive prompts
-- Key-value pair display
-- Code and JSON rendering
+This module provides consistent, beautiful CLI output across Prismer SDKs.
+Design reference: docs/version190/15-cli-design.md
+
+Level hierarchy:
+- Level 1: Header (bold, section markers)
+- Level 2: Primary data (plain text)
+- Level 3: Secondary (dimmed, indented)
+- Level 4: Action tips (cyan "Tip:"/"Next:")
+- Level 5: Status indicators (✓ ✗ ● ○ ⟳ · with colors)
+- Level 6: Error block (Cause/Fix format)
 """
 
 from __future__ import annotations
-
 import json
+import os
 import sys
-from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Callable
 
-from rich.console import Console
-from rich.table import Table
-from rich.panel import Panel
-from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
-from rich.prompt import Prompt, Confirm
-from rich.syntax import Syntax
-from rich.json import JSON as RichJSON
-from rich.text import Text
-from rich import box
-
-# Global Console instance — graceful degradation for non-TTY
-console = Console(force_terminal=False if not sys.stdout.isatty() else None)
+try:
+    from rich.console import Console
+    from rich.text import Text
+    from rich.table import Table
+    from rich.panel import Panel
+    from rich.progress import Progress, SpinnerColumn, TextColumn
+    from rich.prompt import Prompt, Confirm
+    from rich.syntax import Syntax
+    from rich.json import JSON as RichJSON
+    from rich import box
+except ImportError:
+    # Rich is optional - fallback to plain output
+    Console = None
+    Text = None
+    Table = None
+    Panel = None
+    Progress = None
+    Prompt = None
+    Confirm = None
+    Syntax = None
+    RichJSON = None
+    box = None
 
 
 # ============================================================================
-# Banner / Icon
+# Constants
 # ============================================================================
 
-def display_banner() -> None:
-    """Display the Prismer ASCII art banner with colors.
+# Status indicators per §15
+STATUS_OK = "✓"
+STATUS_FAIL = "✗"
+STATUS_ONLINE = "●"
+STATUS_OFFLINE = "○"
+STATUS_PENDING = "⟳"
+STATUS_NOT_INSTALLED = "·"
 
-    Reads the icon file relative to this package, colorizes block characters:
-    - ▒ (icon shapes) → bright_cyan
-    - ▓ (text "PRISMER") → dim white
-    """
-    # icon is packaged inside prismer/ (same directory as this file)
-    icon_path = Path(__file__).resolve().parent / "icon"
-    if not icon_path.exists():
-        # Fallback: source tree layout (prismer-cloud/icon)
-        icon_path = Path(__file__).resolve().parent.parent.parent / "icon"
-    if not icon_path.exists():
-        # Last resort: plain text banner
-        console.print("[bold cyan]PRISMER[/bold cyan] Cloud SDK", highlight=False)
-        console.print()
-        return
+# Braille spinner frames per §15
+BRAILLE_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
-    icon_content = icon_path.read_text(encoding="utf-8")
-    term_width = console.width or 80
-    lines = icon_content.split("\n")
-    for line in lines:
-        # Strip trailing whitespace to prevent terminal wrapping
-        stripped = line.rstrip()
-        if not stripped:
-            console.print()
-            continue
-        # Truncate to terminal width
-        if len(stripped) > term_width - 1:
-            stripped = stripped[: term_width - 1]
-        text = Text(stripped)
-        # Find where ▓ text starts to split icon vs text regions
-        text_start = stripped.find("\u2593")  # ▓
-        if text_start == -1:
-            text_start = len(stripped)
-        for i, char in enumerate(stripped):
-            if char.isspace():
-                continue
-            elif i < text_start:
-                # Icon region (▒ characters) → bright cyan
-                text.stylize("bright_cyan", i, i + 1)
+# Forbidden brand voice patterns per §15
+FORBIDDEN_SUBSTRINGS = ["Sorry", "Unfortunately", "Oops"]
+FORBIDDEN_WORDS = ["Please"]
+
+# Brand icon - embedded from sdk/prismer-cloud/icon
+BRAND_ICON = """
+
+
+          ▒▒▒▒▒▒▒▒▒▒▒▒▒▒
+        ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
+      ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
+      ▒▒▒▒                 ▒▒▒▒▒
+     ▒▒▒▒    ▒▒▒▒▒▒▒▒▒      ▒▒▒▒         ▓▓▓▓▓▓▓       ▓▓▓▓▓▓▓       ▓▓▓▓      ▓▓▓▓▓▓      ▓▓▓            ▓▓   ▓▓▓▓▓▓▓  ▓▓▓▓▓▓▓▓▓
+    ▒▒▒   ▒▒▒▒▒▒▒▒▒▒▒    ▒▒▒       ▓▓▓▓▓▓▓▓    ▓▓▓▓▓▓▓    ▓▓▓    ▓▓▓▓▓▓▓    ▓▓▓           ▓▓   ▓▓▓▓▓▓  ▓▓▓▓▓▓▓▓▓
+    ▒▒▒  ▒▒▒▒▒▒▒▒▒▒▒▒    ▒▒▒      ▓▓▓▓▓▓▓   ▓▓▓▓▓▓   ▓▓▓   ▓▓▓▓ ▓▓▓▓▓▓  ▓▓▓▓         ▓▓   ▓▓▓▓▓▓▓▓▓▓  ▓▓▓▓▓▓▓▓
+   ▒▒▒   ▒▒▒        ▒▒▒    ▒▒▒      ▓▓▓▓    ▓▓▓▓  ▓▓▓      ▓▓▓   ▓▓▓▓▓   ▓▓▓     ▓▓    ▓▓▓▓        ▓▓▓   ▓▓▓           ▓▓▓     ▓▓▓
+   ▒▒▒  ▒▒▒          ▒▒▒   ▒▒▒      ▓▓▓▓    ▓▓▓▓   ▓▓▓     ▓▓▓▓   ▓▓▓▓            ▓▓▓▓▓      ▓▓▓▓▓   ▓▓▓▓           ▓▓▓     ▓▓▓
+  ▒▒▒   ▒▒▒     ▒▒▒▒▒▒    ▒▒▒      ▓▓▓▓▓▓▓   ▓▓▓▓▓▓▓   ▓▓▓    ▓▓▓▓▓▓    ▓▓▓▓▓▓▓   ▓▓▓▓▓▓▓▓▓▓
+  ▒▒▒  ▒▒▒▒  ▒▒▒▒▒▒▒    ▒▒▒       ▓▓▓▓▓▓    ▓▓▓▓▓▓▓     ▓▓▓     ▓▓▓▓▓▓▓▒▒  ▓▓▓▓   ▓▓▓▓▓▓   ▓▓▓▓▓▓▓▓▓  ▓▓▓▓▓▓▓▓▓▓▓
+ ▒▒▒   ▒▒▒  ▒▒▒▒▒▒     ▒▒▒        ▓▓▓▓▓▓       ▓▓▓▓▓▓      ▓▓▓             ▓▓  ▓▓▓ ▓▓▓ ▓▓ ▓▓   ▓▓▓▓           ▓▓▓▓▓▓▓▓
+ ▒▒▒  ▒▒▒   ▒▒▒        ▒▒▒▒▒        ▓▓▓            ▓▓▓   ▓▓▓▓     ▓▓▓▓  ▓▓▓▓       ▓▓▓  ▓▓▓  ▓▓▓▓▓  ▓▓▓   ▓▓▓▓           ▓▓▓   ▓▓▓▓
+ ▒▒▒  ▒▒▒   ▒▒▒        ▒▒▒▒▒        ▓▓▓            ▓▓▓   ▓▓▓▓     ▓▓▓▓  ▓▓▓       ▓▓▓  ▓▓▓  ▓▓▓▓▓▓  ▓▓▓   ▓▓▓           ▓▓▓   ▓▓▓▓
+▒▒▒   ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒          ▓▓▓            ▓▓▓    ▓▓▓▓    ▓▓▓▓  ▓▓▓▓     ▓▓▓  ▓▓▓   ▓▓▓▓▓▓▓  ▓▓▓   ▓▓▓           ▓▓▓   ▓▓▓▓▓
+▒▒▒   ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒            ▓▓▓            ▓▓▓     ▓▓▓▓   ▓▓▓▓   ▓▓▓▓▓▓▓    ▓▓▓    ▓▓▓▓    ▓▓▓   ▓▓▓▓▓▓  ▓▓▓    ▓▓▓▓▓     ▓▓▓
+▒▒▒     ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒               ▓▓▓            ▓▓▓      ▓▓▓▓  ▓▓▓▓     ▓▓▓▓▓▓▓    ▓▓▓    ▓▓▓▓    ▓▓▓▓  ▓▓▓▓   ▓▓▓▓▓▓  ▓▓▓     ▓▓▓
+  ▒▒▒▒▒      ▒▒▒▒
+  ▒▒▒▒▒▒▒▒▒▒▒
+    ▒▒▒▒▒▒▒▒▒▒
+      ▒▒▒▒▒▒
+"""
+
+COMPACT_BANNER = ["◇ PRISMER", "  Runtime CLI"]
+
+
+# ============================================================================
+# Output modes
+# ============================================================================
+
+class OutputMode:
+    PRETTY = "pretty"
+    JSON = "json"
+    QUIET = "quiet"
+
+
+# ============================================================================
+# UI class
+# ============================================================================
+
+class UI:
+    def __init__(self, mode: str = OutputMode.PRETTY, color: Optional[bool] = None):
+        self.mode = mode
+        self.color_enabled = color if color is not None else self._supports_color()
+        self.console = Console(force_terminal=False if not sys.stdout.isatty() else None) if Console else None
+        self.width = self._get_terminal_width()
+
+    def set_mode(self, mode: str) -> None:
+        self.mode = mode
+
+    def set_color(self, enabled: bool) -> None:
+        self.color_enabled = enabled
+
+    # ========================================================================
+    # Color helpers
+    # ========================================================================
+
+    def _color(self, code: str, text: str) -> str:
+        if not self.color_enabled:
+            return text
+        return f"\u001b[{code}m{text}\u001b[0m"
+
+    def _ansi(self, code: int, text: str) -> str:
+        if not self.color_enabled:
+            return text
+        return f"\u001b[{code}m{text}\u001b[0m"
+
+    def red(self, text: str) -> str:
+        return self._ansi(31, text)
+
+    def green(self, text: str) -> str:
+        return self._ansi(32, text)
+
+    def yellow(self, text: str) -> str:
+        return self._ansi(33, text)
+
+    def cyan(self, text: str) -> str:
+        return self._ansi(36, text)
+
+    def dim(self, text: str) -> str:
+        return self._ansi(2, text)
+
+    def bold(self, text: str) -> str:
+        return self._ansi(1, text)
+
+    def _color_brand_line(self, line: str) -> str:
+        out = []
+        for ch in line:
+            if ch == '▒':
+                out.append(self.cyan(ch))
+            elif ch == '▓':
+                out.append(self.dim(ch))
             else:
-                # Text region (▓ characters + label) → dim white
-                text.stylize("dim white", i, i + 1)
-        console.print(text)
-    console.print()  # trailing blank line
+                out.append(ch)
+        return "".join(out)
 
+    # ========================================================================
+    # Write helpers
+    # ========================================================================
 
-# ============================================================================
-# Status messages
-# ============================================================================
+    def _write(self, text: str) -> None:
+        print(text, end="", file=sys.stdout, flush=True)
 
-def success(msg: str) -> None:
-    """Print a green success message with check mark."""
-    console.print(f"[bold green]\u2713[/bold green] {msg}")
+    def _write_err(self, text: str) -> None:
+        print(text, end="", file=sys.stderr, flush=True)
 
+    # ========================================================================
+    # Level 1: Header
+    # ========================================================================
 
-def error(msg: str, details: Optional[str] = None) -> None:
-    """Print a red error message with X mark."""
-    console.print(f"[bold red]\u2717[/bold red] {msg}")
-    if details:
-        console.print(f"  [dim]{details}[/dim]")
-
-
-def warn(msg: str) -> None:
-    """Print a yellow warning message."""
-    console.print(f"[bold yellow]\u26a0[/bold yellow]  {msg}")
-
-
-def info(msg: str) -> None:
-    """Print a blue info message."""
-    console.print(f"[bold blue]\u2139[/bold blue]  {msg}")
-
-
-# ============================================================================
-# Tables
-# ============================================================================
-
-def print_table(
-    headers: List[str],
-    rows: List[List[str]],
-    title: Optional[str] = None,
-) -> None:
-    """Print a Rich table with rounded borders and cyan headers.
-
-    Args:
-        headers: Column header labels.
-        rows: List of row data (each row is a list of strings).
-        title: Optional table title.
-    """
-    table = Table(
-        title=title,
-        box=box.ROUNDED,
-        show_header=True,
-        header_style="bold cyan",
-    )
-    for header in headers:
-        table.add_column(header)
-    for row in rows:
-        table.add_row(*row)
-    console.print(table)
-
-
-# ============================================================================
-# Panel
-# ============================================================================
-
-def print_panel(
-    content: str,
-    title: Optional[str] = None,
-    border_style: str = "blue",
-) -> None:
-    """Print content inside a Rich panel.
-
-    Args:
-        content: Panel body text (supports Rich markup).
-        title: Optional panel title.
-        border_style: Border color/style.
-    """
-    panel = Panel(
-        content,
-        title=title,
-        border_style=border_style,
-        box=box.ROUNDED,
-        padding=(1, 2),
-    )
-    console.print(panel)
-
-
-# ============================================================================
-# Key-value display
-# ============================================================================
-
-def key_value(pairs: Dict[str, str]) -> None:
-    """Display key-value pairs in aligned format.
-
-    Keys are right-aligned and styled bold cyan, values are plain.
-
-    Args:
-        pairs: Dictionary of key-value pairs to display.
-    """
-    if not pairs:
-        return
-    max_key_len = max(len(k) for k in pairs)
-    for k, v in pairs.items():
-        padded_key = k.rjust(max_key_len)
-        console.print(f"  [bold cyan]{padded_key}[/bold cyan]  {v}")
-
-
-# ============================================================================
-# Code and JSON
-# ============================================================================
-
-def print_code(
-    code: str,
-    language: str = "python",
-    line_numbers: bool = True,
-) -> None:
-    """Print syntax-highlighted code.
-
-    Args:
-        code: Source code string.
-        language: Language for syntax highlighting.
-        line_numbers: Whether to show line numbers.
-    """
-    syntax = Syntax(
-        code,
-        language,
-        theme="monokai",
-        line_numbers=line_numbers,
-        word_wrap=True,
-    )
-    console.print(syntax)
-
-
-def print_json(data: Any) -> None:
-    """Print pretty-formatted JSON.
-
-    Args:
-        data: A dict/list or JSON string to render.
-    """
-    if isinstance(data, str):
-        try:
-            data = json.loads(data)
-        except json.JSONDecodeError:
-            console.print("[yellow]Invalid JSON string[/yellow]")
+    def header(self, text: str) -> None:
+        if self.mode == OutputMode.QUIET or self.mode == OutputMode.JSON:
             return
-    json_obj = RichJSON(json.dumps(data, indent=2, default=str))
-    console.print(json_obj)
+        self._write(f"{self.bold(text)}\n")
 
+    def banner(self, subtitle: Optional[str] = None, full: bool = False) -> None:
+        if self.mode == OutputMode.QUIET or self.mode == OutputMode.JSON:
+            return
 
-# ============================================================================
-# QR Code
-# ============================================================================
+        should_use_full = full or self.width >= 120
 
-def render_qr(data: str) -> None:
-    """Render a QR code in the terminal.
+        if should_use_full:
+            # Full icon
+            for line in BRAND_ICON.split("\n"):
+                stripped = line.strip()
+                if not stripped:
+                    self._write("\n")
+                    continue
+                clipped = stripped[:self.width - 1] if len(stripped) >= self.width else stripped
+                self._write(f"{self._color_brand_line(clipped)}\n")
+        else:
+            # Compact banner
+            self._write(f"{self.cyan('◇ PRISMER')}\n")
+            self._write(f"{self.dim('  Runtime CLI')}\n")
 
-    Uses the ``qrcode`` package (optional dependency) with ASCII art output.
-    If ``qrcode`` is not installed, falls back to displaying the data as text.
+        if subtitle:
+            self._write(f"  {self.dim(subtitle)}\n")
+        self.blank()
 
-    Args:
-        data: The string/URL to encode as a QR code.
-    """
-    try:
-        import qrcode  # type: ignore[import-untyped]
+    # ========================================================================
+    # Level 2: Primary data
+    # ========================================================================
 
-        qr = qrcode.QRCode(
-            version=1,
-            error_correction=qrcode.constants.ERROR_CORRECT_L,
-            box_size=1,
-            border=1,
+    def blank(self) -> None:
+        if self.mode == OutputMode.QUIET or self.mode == OutputMode.JSON:
+            return
+        self._write("\n")
+
+    def line(self, text: str) -> None:
+        if self.mode == OutputMode.QUIET or self.mode == OutputMode.JSON:
+            return
+        self._write(f"{text}\n")
+
+    def info(self, text: str) -> None:
+        self.line(text)
+
+    # ========================================================================
+    # Level 3: Secondary
+    # ========================================================================
+
+    def secondary(self, text: str, indent: int = 2) -> None:
+        if self.mode == OutputMode.QUIET or self.mode == OutputMode.JSON:
+            return
+        padding = " " * indent
+        self._write(f"{padding}{self.dim(text)}\n")
+
+    # ========================================================================
+    # Level 4: Action tips
+    # ========================================================================
+
+    def tip(self, text: str) -> None:
+        if self.mode == OutputMode.QUIET or self.mode == OutputMode.JSON:
+            return
+        self._write(f"{self.cyan('Tip:')} {text}\n")
+
+    def next(self, text: str) -> None:
+        if self.mode == OutputMode.QUIET or self.mode == OutputMode.JSON:
+            return
+        self._write(f"{self.cyan('Next:')} {text}\n")
+
+    # ========================================================================
+    # Level 5: Status indicators
+    # ========================================================================
+
+    def ok(self, text: str, detail: Optional[str] = None) -> None:
+        if self.mode == OutputMode.QUIET or self.mode == OutputMode.JSON:
+            return
+        suffix = f"  {self.dim(detail)}" if detail else ""
+        self._write(f"  {self.green(STATUS_OK)} {text}{suffix}\n")
+
+    def success(self, text: str, detail: Optional[str] = None) -> None:
+        self.ok(text, detail)
+
+    def fail(self, text: str, detail: Optional[str] = None) -> None:
+        if self.mode == OutputMode.QUIET or self.mode == OutputMode.JSON:
+            return
+        suffix = f"  {self.dim(detail)}" if detail else ""
+        self._write(f"  {self.red(STATUS_FAIL)} {text}{suffix}\n")
+
+    def online(self, text: str) -> None:
+        if self.mode == OutputMode.QUIET or self.mode == OutputMode.JSON:
+            return
+        self._write(f"  {self.green(STATUS_ONLINE)} {text}\n")
+
+    def offline(self, text: str) -> None:
+        if self.mode == OutputMode.QUIET or self.mode == OutputMode.JSON:
+            return
+        self._write(f"  {self.dim(STATUS_OFFLINE)} {text}\n")
+
+    def not_installed(self, text: str) -> None:
+        if self.mode == OutputMode.QUIET or self.mode == OutputMode.JSON:
+            return
+        self._write(f"  {self.dim(STATUS_NOT_INSTALLED)} {self.dim(text)}\n")
+
+    def pending(self, text: str) -> None:
+        if self.mode == OutputMode.QUIET or self.mode == OutputMode.JSON:
+            return
+        self._write(f"  {self.yellow(STATUS_PENDING)} {text}\n")
+
+    def warn(self, text: str, detail: Optional[str] = None) -> None:
+        if self.mode == OutputMode.QUIET or self.mode == OutputMode.JSON:
+            return
+        suffix = f"  {self.dim(detail)}" if detail else ""
+        self._write(f"  ! {text}{suffix}\n")
+
+    # ========================================================================
+    # Level 6: Error block
+    # ========================================================================
+
+    def error(self, what: str, cause: Optional[str] = None, fix: Optional[str] = None) -> None:
+        if self.mode == OutputMode.JSON:
+            self._write_json_error(what, cause, fix)
+            return
+
+        self._write_err(f"{self.red(STATUS_FAIL)} {what}\n")
+        if cause:
+            self._write_err(f"  {self.dim('Cause:')} {self.dim(cause)}\n")
+        if fix:
+            self._write_err(f"  {self.cyan('Fix:')} {fix}\u001b[0m\n")
+
+    def _write_json_error(self, what: str, cause: Optional[str], fix: Optional[str]) -> None:
+        err_obj = {"error": what}
+        if cause:
+            err_obj["cause"] = cause
+        if fix:
+            err_obj["fix"] = fix
+        print(json.dumps(err_obj, indent=2), file=sys.stderr)
+
+    # ========================================================================
+    # Tables
+    # ========================================================================
+
+    def table(self, rows: List[Dict[str, str]], columns: List[str]) -> None:
+        """Print a table with 80-char width fallback to list mode."""
+        self.blank()
+
+        # Check terminal width
+        total_width = sum(len(c) for c in columns) + len(columns) * 2 + 2
+
+        if total_width > self.width:
+            # List mode fallback
+            for row in rows:
+                for col in columns:
+                    self.secondary(f"{col}:", 2)
+                    self.secondary(str(row.get(col, "")), 4)
+                self.blank()
+            return
+
+        if not Console:
+            # Plain text fallback
+            header = "  ".join(c.upper().ljust(15) for c in columns)
+            self._write(f"  {self.dim(header)}\n")
+            for row in rows:
+                line = "  ".join(str(row.get(c, "")).ljust(15) for c in columns)
+                self._write(f"  {line}\n")
+            return
+
+        # Rich table mode
+        table = Table(
+            box=box.ROUNDED,
+            show_header=True,
+            header_style="bold cyan",
         )
-        qr.add_data(data)
-        qr.make(fit=True)
-        # print_ascii writes to stdout by default
-        qr.print_ascii(invert=True)
-    except ImportError:
-        print_panel(
-            f"[bold]{data}[/bold]\n\n"
-            "[dim]Install qrcode for QR rendering: pip install prismer[qr][/dim]",
-            title="Scan this URL",
-        )
+        for col in columns:
+            table.add_column(col, style="cyan" if col == columns[0] else None)
+        for row in rows:
+            table.add_row(*[str(row.get(c, "")) for c in columns])
+        self.console.print(table)
 
+    # ========================================================================
+    # Spinner
+    # ========================================================================
 
-# ============================================================================
-# Spinner (context manager)
-# ============================================================================
+    class Spinner:
+        def __init__(self, ui: "UI", message: str = "Working..."):
+            self.ui = ui
+            self.message = message
+            self.running = False
+            self.frame = 0
 
-class Spinner:
-    """Context manager that shows a spinner while work is in progress.
+        def start(self) -> None:
+            if self.running or self.ui.mode in (OutputMode.QUIET, OutputMode.JSON):
+                return
 
-    Usage::
+            # Non-TTY or non-color: just show pending status
+            if not self.ui.color_enabled or not sys.stdout.isatty():
+                self.ui.pending(self.message)
+                self.running = True
+                return
 
-        with Spinner("Connecting..."):
-            do_slow_thing()
-    """
+            self.running = True
 
-    def __init__(self, message: str = "Working...") -> None:
-        self.message = message
-        self._progress: Optional[Progress] = None
-        self._task_id: Optional[int] = None
+            # Animated braille spinner
+            import threading
+            import time
 
-    def __enter__(self) -> "Spinner":
-        self._progress = Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            console=console,
-            transient=True,
-        )
-        self._progress.start()
-        self._task_id = self._progress.add_task(self.message, total=None)
-        return self
+            self._stop_event = threading.Event()
 
-    def update(self, message: str) -> None:
-        """Update the spinner message while it is active."""
-        if self._progress is not None and self._task_id is not None:
-            self._progress.update(self._task_id, description=message)
+            def _spinner():
+                while not self._stop_event.is_set():
+                    frame = BRAILLE_FRAMES[self.frame % len(BRAILLE_FRAMES)]
+                    self.ui._write(f"\r{frame} {self.ui.yellow(self.message)}")
+                    self.frame += 1
+                    time.sleep(0.08)
 
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        if self._progress is not None:
-            self._progress.stop()
+            self._thread = threading.Thread(target=_spinner, daemon=True)
+            self._thread.start()
 
+        def update(self, message: str) -> None:
+            if not self.running:
+                return
+            self.message = message
 
-# ============================================================================
-# Progress bar (context manager)
-# ============================================================================
+        def stop(self, success_message: Optional[str] = None) -> None:
+            if not self.running:
+                return
 
-class ProgressBar:
-    """Context manager that shows a progress bar for multi-step tasks.
+            self.running = False
 
-    Usage::
+            if hasattr(self, "_stop_event"):
+                self._stop_event.set()
 
-        with ProgressBar(total=10, description="Processing") as pb:
-            for i in range(10):
-                do_step(i)
-                pb.advance()
-    """
+            if hasattr(self, "_thread"):
+                self._thread.join(timeout=1.0)
 
-    def __init__(self, total: int, description: str = "Processing") -> None:
-        self.total = total
-        self.description = description
-        self._progress: Optional[Progress] = None
-        self._task_id: Optional[int] = None
+            # Clear spinner line
+            if sys.stdout.isatty() and self.ui.color_enabled:
+                self.ui._write("\r\u001b[2K")
 
-    def __enter__(self) -> "ProgressBar":
-        self._progress = Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            TaskProgressColumn(),
-            console=console,
-        )
-        self._progress.start()
-        self._task_id = self._progress.add_task(self.description, total=self.total)
-        return self
+            if success_message:
+                self.ui.ok(success_message)
 
-    def advance(self, step: int = 1, message: Optional[str] = None) -> None:
-        """Advance the progress bar.
+    def spinner(self, message: str = "Working...") -> Spinner:
+        return self.Spinner(self, message)
 
-        Args:
-            step: Number of steps to advance.
-            message: Optional new description.
-        """
-        if self._progress is not None and self._task_id is not None:
-            kwargs: Dict[str, Any] = {"advance": step}
-            if message:
-                kwargs["description"] = message
-            self._progress.update(self._task_id, **kwargs)
+    # ========================================================================
+    # JSON output
+    # ========================================================================
 
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        if self._progress is not None:
-            self._progress.stop()
+    def json(self, payload: Any) -> None:
+        self._write(json.dumps(payload, indent=2, default=str) + "\n")
 
+    def result(self, pretty_func: Callable[[], None], json_payload: Any) -> None:
+        if self.mode == OutputMode.PRETTY:
+            pretty_func()
+        else:
+            self.json(json_payload)
 
-# ============================================================================
-# Separator
-# ============================================================================
+    # ========================================================================
+    # Brand voice checker
+    # ========================================================================
 
-def print_separator(char: str = "\u2500", style: str = "dim") -> None:
-    """Print a horizontal separator line.
+    @staticmethod
+    def check_brand_voice(text: str, field: str) -> None:
+        """Check for forbidden words and substrings. Raise ValueError if found."""
+        # Check for forbidden substrings
+        for fs in FORBIDDEN_SUBSTRINGS:
+            if fs in text:
+                raise ValueError(f"Brand voice error in {field}: found forbidden substring '{fs}'")
 
-    Args:
-        char: Character to repeat across the terminal width.
-        style: Rich style for the line.
-    """
-    width = console.width
-    console.print(f"[{style}]{char * width}[/{style}]")
+        # Check for forbidden words (whole word match)
+        for fw in FORBIDDEN_WORDS:
+            import re
+            if re.search(rf"\b{fw}\b", text):
+                raise ValueError(f"Brand voice error in {field}: found forbidden word '{fw}'")
 
+        # Check for trailing exclamation marks (not inside quotes)
+        for line in text.split("\n"):
+            stripped = line.strip()
+            if not stripped:
+                continue
 
-# ============================================================================
-# Interactive prompts
-# ============================================================================
+            # Check if inside quotes
+            in_double_quote = '"' in stripped
+            in_single_quote = "'" in stripped
+            if in_double_quote or in_single_quote:
+                # Skip quoted text
+                continue
 
-def ask(
-    question: str,
-    default: Optional[str] = None,
-    choices: Optional[List[str]] = None,
-) -> str:
-    """Ask the user for input.
+            # Check for trailing exclamation
+            if stripped.endswith('!') and not stripped.endswith('!!'):
+                raise ValueError(f"Brand voice error in {field}: trailing exclamation mark in '{line}'")
 
-    Args:
-        question: The question to display.
-        default: Default value if the user just presses Enter.
-        choices: If provided, show numbered choices.
+    # ========================================================================
+    # Terminal detection
+    # ========================================================================
 
-    Returns:
-        The user's answer.
-    """
-    if choices:
-        console.print(f"[bold blue]{question}[/bold blue]")
-        for i, choice in enumerate(choices, 1):
-            console.print(f"  {i}. {choice}")
-        while True:
+    @staticmethod
+    def _supports_color() -> bool:
+        return os.environ.get("NO_COLOR") is None
+
+    def _get_terminal_width(self) -> int:
+        if "COLUMNS" in os.environ:
             try:
-                response = Prompt.ask(
-                    "Enter choice number",
-                    default=str(default) if default else None,
-                )
-                idx = int(response) - 1
-                if 0 <= idx < len(choices):
-                    return choices[idx]
-                console.print("[red]Invalid choice, please try again[/red]")
+                return int(os.environ["COLUMNS"])
             except ValueError:
-                console.print("[red]Please enter a valid number[/red]")
-    return Prompt.ask(question, default=default)
+                pass
+        return 80
 
 
-def confirm(question: str, default: bool = False) -> bool:
-    """Ask the user for yes/no confirmation.
+# ============================================================================
+# Default UI instance
+# ============================================================================
 
-    Args:
-        question: The question to display.
-        default: Default value if the user just presses Enter.
+_ui: Optional[UI] = None
 
-    Returns:
-        True if confirmed, False otherwise.
-    """
-    return Confirm.ask(question, default=default)
+
+def get_ui() -> UI:
+    global _ui
+    if _ui is None:
+        _ui = UI()
+    return _ui
+
+
+def set_ui(ui: UI) -> None:
+    global _ui
+    _ui = ui

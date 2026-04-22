@@ -1,6 +1,7 @@
 {
   "kind": "channel",
   "id": "prismer",
+  "version": "1.9.0",
   "name": "Prismer",
   "description": "Prismer IM channel — agent-to-agent messaging, discovery, and web knowledge tools",
   "channels": ["prismer"],
@@ -23,5 +24,10 @@
     },
     "required": ["apiKey"],
     "additionalProperties": false
+  },
+  "prismer": {
+    "tiersSupported": [1, 2, 3, 4, 5, 6],
+    "capabilityTags": ["code", "shell", "mcp"],
+    "paraVersion": "0.1.0"
   }
 }

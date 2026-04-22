@@ -1,9 +1,18 @@
 /**
- * Prismer CLI — modular CLI for Prismer Cloud SDK.
+ * Prismer CLI — library-exported command registrations.
+ *
+ * As of v1.9.0 this module does NOT ship a `prismer` binary. Instead the
+ * runtime package (@prismer/runtime) owns the single `prismer` entry point
+ * and calls `registerSdkCliCommands(program, { skipConflicting: true })` to
+ * mount these commands onto its own commander tree.
  *
  * Top-level shortcuts: send, load, search, parse, recall, discover, skill
  * Grouped namespaces:  im, context, evolve, task, memory, file, workspace, security, identity
  * Utilities:           init, register, status, config, token
+ *
+ * `{ skipConflicting: true }` skips setup/init/status/daemon — those names
+ * are owned by the runtime CLI; `register` is always included (no runtime
+ * collision; covers the IM identity flow).
  */
 
 import { Command } from 'commander';
@@ -14,7 +23,6 @@ import * as os from 'os';
 import * as TOML from '@iarna/toml';
 import { PrismerClient } from './index';
 import {
-  displayBanner,
   success,
   error as uiError,
   warn as uiWarn,
@@ -24,6 +32,18 @@ import {
   table,
   keyValue,
 } from './ui';
+import { register as registerIM } from './commands/im';
+import { register as registerContext } from './commands/context';
+import { register as registerEvolve } from './commands/evolve';
+import { register as registerTask } from './commands/task';
+import { register as registerMemory } from './commands/memory';
+import { register as registerSkill } from './commands/skill';
+import { register as registerFiles } from './commands/files';
+import { register as registerWorkspace } from './commands/workspace';
+import { register as registerSecurity } from './commands/security';
+import { register as registerCommunity } from './commands/community';
+import { register as registerRemote } from './commands/remote';
+import { startDaemon, stopDaemon, daemonStatus, installDaemonService, uninstallDaemonService } from './daemon';
 
 // Read version from package.json
 let cliVersion = '1.7.2';
@@ -106,11 +126,25 @@ export function getAPIClient(): PrismerClient {
 }
 
 // ============================================================================
-// CLI program
+// CLI program — library mode
 // ============================================================================
+//
+// Prior to v1.9.0 this file owned a top-level `const program = new Command()`
+// and ran `program.parse(process.argv)` at import time. Both are gone: the
+// runtime CLI owns program construction + parse.
+//
+// We keep `cliVersion` as an informational export so consumers can sanity-
+// check the mounted SDK version at runtime.
 
-const program = new Command();
-program.name('prismer').description('Prismer Cloud SDK CLI').version(cliVersion);
+export interface SdkCliOptions {
+  /**
+   * Skip commands that the runtime CLI already owns (setup, init, status,
+   * daemon). `register` is always mounted — runtime does not provide it.
+   */
+  skipConflicting?: boolean;
+}
+
+export { cliVersion };
 
 // ============================================================================
 // Utility commands: setup, init (alias), register, status, config, token
@@ -154,12 +188,10 @@ async function verifyAndSaveKey(config: PrismerCLIConfig, apiKey: string): Promi
   success('Saved to ~/.prismer/config.toml');
   uiInfo('You can now use: CLI commands, MCP tools, Claude Code plugin, and all SDKs.');
 
-  // Auto-install daemon service so evolution sync runs persistently
-  try {
-    installDaemonService();
-  } catch {
-    dim('Daemon auto-start setup skipped. Run manually: prismer daemon install');
-  }
+  // v1.9.0: the legacy `npx @prismer/sdk daemon start` launchd/systemd service
+  // is retired — the runtime CLI (`prismer daemon start`) owns persistent sync.
+  // Users who want auto-start should run `prismer daemon start` (see v1.9.1
+  // follow-up for native service install wiring into the runtime bin).
 }
 
 function openBrowser(url: string): void {
@@ -327,32 +359,40 @@ async function runSetup(opts: { manual?: boolean; agent?: boolean; force?: boole
   });
 }
 
-// ── prismer setup ──
-program
-  .command('setup [api-key]')
-  .description('Set up Prismer — sign in via browser, register as agent, or provide your API key')
-  .option('--manual', 'Paste API key manually instead of browser auto-flow')
-  .option('--agent', 'Register as agent with free credits (no browser, for CI/scripts)')
-  .option('--force', 'Reconfigure even if already set up')
-  .action(async (apiKey: string | undefined, opts: { manual?: boolean; agent?: boolean; force?: boolean }) => {
-    await runSetup(opts, apiKey);
-  });
+export function registerSdkCliCommands(
+  program: Command,
+  opts: SdkCliOptions = {},
+): void {
+  const skipConflicting = opts.skipConflicting === true;
 
-// ── prismer init — backward-compatible alias for setup ──
-program
-  .command('init [api-key]')
-  .description('Alias for "prismer setup" (deprecated, use setup instead)')
-  .option('--manual', 'Paste API key manually')
-  .option('--agent', 'Register as agent with free credits')
-  .option('--force', 'Reconfigure even if already set up')
-  .action(async (apiKey: string | undefined, opts: { manual?: boolean; agent?: boolean; force?: boolean }) => {
-    uiWarn('"prismer init" is deprecated. Use "prismer setup" instead.');
-    console.log('');
-    await runSetup(opts, apiKey);
-  });
+  if (!skipConflicting) {
+    // ── prismer setup ──
+    program
+      .command('setup [api-key]')
+      .description('Set up Prismer — sign in via browser, register as agent, or provide your API key')
+      .option('--manual', 'Paste API key manually instead of browser auto-flow')
+      .option('--agent', 'Register as agent with free credits (no browser, for CI/scripts)')
+      .option('--force', 'Reconfigure even if already set up')
+      .action(async (apiKey: string | undefined, cmdOpts: { manual?: boolean; agent?: boolean; force?: boolean }) => {
+        await runSetup(cmdOpts, apiKey);
+      });
 
-program
-  .command('register <username>')
+    // ── prismer init — backward-compatible alias for setup ──
+    program
+      .command('init [api-key]')
+      .description('Alias for "prismer setup" (deprecated, use setup instead)')
+      .option('--manual', 'Paste API key manually')
+      .option('--agent', 'Register as agent with free credits')
+      .option('--force', 'Reconfigure even if already set up')
+      .action(async (apiKey: string | undefined, cmdOpts: { manual?: boolean; agent?: boolean; force?: boolean }) => {
+        uiWarn('"prismer init" is deprecated. Use "prismer setup" instead.');
+        console.log('');
+        await runSetup(cmdOpts, apiKey);
+      });
+  }
+
+  program
+    .command('register <username>')
   .description('Register an IM identity and store the token')
   .option('--type <type>', 'Identity type: agent or human', 'agent')
   .option('--display-name <name>', 'Display name')
@@ -409,7 +449,8 @@ program
     }
   });
 
-program
+if (!skipConflicting) {
+  program
   .command('status')
   .description('Show current config and live info')
   .action(async () => {
@@ -477,17 +518,93 @@ program
       dim('  IM Token: (not registered)');
     }
   });
+}
 
 // --- config ---
 const configCmd = program.command('config').description('Manage config file');
 
-configCmd.command('show').description('Print config file').action(() => {
-  if (!fs.existsSync(CONFIG_PATH)) {
-    uiWarn('No config file. Run "prismer setup" to create one.');
-    return;
+// Secret field names we always redact. `$KEYRING:...` values are already safe
+// references so we leave those intact — redacting them would lose information
+// the user needs to debug keychain issues.
+const SECRET_FIELD_PATTERN = /(api_key|_secret|_token|password)$/i;
+
+function isKeyringPlaceholder(value: string): boolean {
+  return value.startsWith('$KEYRING:');
+}
+
+function redactSecretValue(value: string): string {
+  if (isKeyringPlaceholder(value)) return value;
+  if (value.length <= 16) return '***';
+  return value.slice(0, 12) + '...' + value.slice(-4);
+}
+
+// Walk the parsed TOML tree and redact any field whose key matches
+// SECRET_FIELD_PATTERN. Non-string values pass through unchanged.
+function redactSecrets(node: any): any {
+  if (node === null || node === undefined) return node;
+  if (Array.isArray(node)) return node.map((n) => redactSecrets(n));
+  if (typeof node !== 'object') return node;
+  const out: Record<string, any> = {};
+  for (const [k, v] of Object.entries(node)) {
+    if (typeof v === 'string' && SECRET_FIELD_PATTERN.test(k)) {
+      out[k] = redactSecretValue(v);
+    } else if (v && typeof v === 'object') {
+      out[k] = redactSecrets(v);
+    } else {
+      out[k] = v;
+    }
   }
-  console.log(fs.readFileSync(CONFIG_PATH, 'utf-8'));
-});
+  return out;
+}
+
+configCmd
+  .command('show')
+  .description('Print config file (secrets redacted by default)')
+  .option('--show-secrets', 'Print secret values in full (API keys, tokens, passwords)')
+  .option('--json', 'JSON output')
+  .action((opts: { showSecrets?: boolean; json?: boolean }) => {
+    if (!fs.existsSync(CONFIG_PATH)) {
+      uiWarn('No config file. Run "prismer setup" to create one.');
+      return;
+    }
+    const raw = fs.readFileSync(CONFIG_PATH, 'utf-8');
+    if (opts.showSecrets) {
+      if (opts.json) {
+        try {
+          console.log(JSON.stringify(TOML.parse(raw), null, 2));
+        } catch {
+          console.log(raw);
+        }
+        return;
+      }
+      console.log(raw);
+      return;
+    }
+    let parsed: any;
+    try {
+      parsed = TOML.parse(raw);
+    } catch {
+      // Fall back to regex-based redaction on the raw text when TOML parse
+      // fails, so malformed configs still don't leak secrets.
+      const redactedRaw = raw.replace(
+        /^(\s*)(\w*(?:api_key|_secret|_token|password)\w*)\s*=\s*"([^"]*)"/gim,
+        (_m, indent: string, key: string, val: string) =>
+          `${indent}${key} = "${isKeyringPlaceholder(val) ? val : redactSecretValue(val)}"`,
+      );
+      console.log(redactedRaw);
+      return;
+    }
+    const redacted = redactSecrets(parsed);
+    if (opts.json) {
+      console.log(JSON.stringify(redacted, null, 2));
+      return;
+    }
+    try {
+      console.log(TOML.stringify(redacted));
+    } catch {
+      console.log(JSON.stringify(redacted, null, 2));
+    }
+  });
 
 configCmd.command('set <key> <value>').description('Set a config value (e.g. default.base_url)').action((key: string, value: string) => {
   const config = readConfig();
@@ -522,28 +639,36 @@ tokenCmd.command('refresh').description('Refresh IM JWT token').option('--json',
 // Register grouped command modules
 // ============================================================================
 
-import { register as registerIM } from './commands/im';
-import { register as registerContext } from './commands/context';
-import { register as registerEvolve } from './commands/evolve';
-import { register as registerTask } from './commands/task';
-import { register as registerMemory } from './commands/memory';
-import { register as registerSkill } from './commands/skill';
-import { register as registerFiles } from './commands/files';
-import { register as registerWorkspace } from './commands/workspace';
-import { register as registerSecurity } from './commands/security';
-import { register as registerCommunity } from './commands/community';
-import { startDaemon, stopDaemon, daemonStatus, installDaemonService, uninstallDaemonService } from './daemon';
-
-registerIM(program, getIMClient, getAPIClient);
-registerContext(program, getIMClient, getAPIClient);
-registerEvolve(program, getIMClient, getAPIClient);
-registerTask(program, getIMClient, getAPIClient);
-registerMemory(program, getIMClient, getAPIClient);
-registerSkill(program, getIMClient, getAPIClient);
-registerFiles(program, getIMClient, getAPIClient);
-registerWorkspace(program, getIMClient, getAPIClient);
-registerSecurity(program, getIMClient, getAPIClient);
-registerCommunity(program, getIMClient, getAPIClient);
+// v1.9.0 A.1: each SDK register* helper is isolated with try/catch so a single
+// module's commander-level issue (e.g. legacy space-separated subcommands that
+// collide on second registration) degrades to a noticed warning rather than
+// taking down the entire `prismer` CLI. Runtime-owned names (`task`, `memory`)
+// are skipped outright when skipConflicting=true.
+const registrars: Array<[string, () => void]> = [
+  ['im', () => registerIM(program, getIMClient, getAPIClient)],
+  ['context', () => registerContext(program, getIMClient, getAPIClient)],
+  ['evolve', () => registerEvolve(program, getIMClient, getAPIClient)],
+];
+if (!skipConflicting) {
+  registrars.push(['task', () => registerTask(program, getIMClient, getAPIClient)]);
+  registrars.push(['memory', () => registerMemory(program, getIMClient, getAPIClient)]);
+}
+registrars.push(
+  ['skill', () => registerSkill(program, getIMClient, getAPIClient)],
+  ['file', () => registerFiles(program, getIMClient, getAPIClient)],
+  ['workspace', () => registerWorkspace(program, getIMClient, getAPIClient)],
+  ['security', () => registerSecurity(program, getIMClient, getAPIClient)],
+  ['community', () => registerCommunity(program, getIMClient, getAPIClient)],
+  ['remote', () => registerRemote(program, getIMClient, getAPIClient)],
+);
+for (const [name, fn] of registrars) {
+  try {
+    fn();
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    process.stderr.write(`[prismer] warning: SDK '${name}' commands skipped (${msg})\n`);
+  }
+}
 
 // ============================================================================
 // Top-level shortcuts (zero-nesting for high-frequency ops)
@@ -763,38 +888,37 @@ program
   });
 
 // ============================================================================
-// Daemon command
+// Daemon command (runtime owns this namespace; SDK path retained for
+// back-compat when registerSdkCliCommands is called with skipConflicting=false)
 // ============================================================================
 
-program
-  .command('daemon <action>')
-  .description('Manage background sync daemon (start|stop|status|install|uninstall)')
-  .action(async (action: string) => {
-    switch (action) {
-      case 'start':
-        await startDaemon();
-        break;
-      case 'stop':
-        stopDaemon();
-        break;
-      case 'status':
-        daemonStatus();
-        break;
-      case 'install':
-        installDaemonService();
-        break;
-      case 'uninstall':
-        uninstallDaemonService();
-        break;
-      default:
-        uiError(`Unknown daemon action: ${action}. Use: start, stop, status, install, uninstall`);
-        process.exit(1);
-    }
-  });
+if (!skipConflicting) {
+  program
+    .command('daemon <action>')
+    .description('Manage background sync daemon (start|stop|status|install|uninstall)')
+    .action(async (action: string) => {
+      switch (action) {
+        case 'start':
+          await startDaemon();
+          break;
+        case 'stop':
+          stopDaemon();
+          break;
+        case 'status':
+          daemonStatus();
+          break;
+        case 'install':
+          installDaemonService();
+          break;
+        case 'uninstall':
+          uninstallDaemonService();
+          break;
+        default:
+          uiError(`Unknown daemon action: ${action}. Use: start, stop, status, install, uninstall`);
+          process.exit(1);
+      }
+    });
+}
 
-// ============================================================================
-// Parse and run
-// ============================================================================
-
-displayBanner();
-program.parse(process.argv);
+// End of registerSdkCliCommands
+}
