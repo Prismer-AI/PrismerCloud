@@ -179,11 +179,11 @@ Keep registry credentials in the open-source clone or export them as environment
 | Credential | Expected location | Used by |
 |---|---|---|
 | npm token | `$PRISMERCLOUD_REPO/.npmrc` | `npm publish` |
-| PyPI config | `$PRISMERCLOUD_REPO/.pypirc` or `TWINE_*` env | `twine upload` |
+| PyPI config | `$PRISMERCLOUD_REPO/.pypirc` or `TWINE_*` env | `python3 -m twine upload` |
 | crates token | `$PRISMERCLOUD_REPO/.cargo-credentials` or `CARGO_REGISTRY_TOKEN` | `cargo publish` |
 | GitHub auth | `gh auth login` | git tags + GitHub release |
 
-`release.sh` now fails early if the required credentials are missing for the selected publish targets.
+`release.sh` now fails early if the required credentials are missing for the selected publish targets. For PyPI upload it prefers `twine` on `PATH`, then falls back to `python3 -m twine`.
 
 ## Artifacts
 

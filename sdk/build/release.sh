@@ -130,6 +130,7 @@ if [[ $PYPI_ONLY -eq 1 ]]; then
   do_crates=0
 fi
 if [[ $CRATES_ONLY -eq 1 ]]; then
+  do_sync=0
   do_git=0
   do_github=0
   do_npm=0
@@ -272,12 +273,13 @@ else
 fi
 
 if [[ $do_pypi -eq 1 ]]; then
+  resolve_twine_command || exit 1
   if [[ -f "$CRED_DIR/.pypirc" ]]; then
     log_info "Using $CRED_DIR/.pypirc for PyPI auth"
     export TWINE_CONFIG_FILE="$CRED_DIR/.pypirc"
   fi
   confirm_prompt "Upload PyPI artifacts?"
-  run_or_dry twine upload "$ARTIFACTS_DIR"/pypi/*
+  run_or_dry "${TWINE_CMD[@]}" upload "$ARTIFACTS_DIR"/pypi/*
   record_result "pypi-upload" "pass"
 else
   record_result "pypi-upload" "skip"

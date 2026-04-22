@@ -55,6 +55,19 @@ check_tool() {
   fi
 }
 
+resolve_twine_command() {
+  if command -v twine &>/dev/null; then
+    TWINE_CMD=(twine)
+    return 0
+  fi
+  if command -v python3 &>/dev/null && python3 -m twine --version &>/dev/null; then
+    TWINE_CMD=(python3 -m twine)
+    return 0
+  fi
+  log_error "PyPI upload requires twine. Install it with: python3 -m pip install --user twine"
+  return 1
+}
+
 run_or_dry() {
   if [[ $DRY_RUN -eq 1 ]]; then log_dry "$*"; else "$@"; fi
 }
