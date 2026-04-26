@@ -17,18 +17,24 @@ export interface AuthResult {
 }
 
 /**
- * 解析 JWT payload（不验证签名，仅解码）
- * 
- * 注意：生产环境应该验证签名，但由于我们的 JWT 是后端签发的，
- * 这里简化处理，信任已经通过网关的请求
+ * 解析并验证 JWT
+ *
+ * FF_AUTH_LOCAL=true 时验证签名（self-host 无网关，必须本地验证）
+ * FF_AUTH_LOCAL=false 时仅解码（信任已经通过后端网关的请求）
  */
 function decodeJwtPayload(token: string): Record<string, unknown> | null {
   try {
-    // JWT 格式: header.payload.signature
+    if (process.env.FF_AUTH_LOCAL === 'true') {
+      // Self-host: verify signature locally
+      const secret = process.env.JWT_SECRET || process.env.NEXTAUTH_SECRET;
+      if (secret) {
+        const jwt = require('jsonwebtoken');
+        return jwt.verify(token, secret) as Record<string, unknown>;
+      }
+    }
+    // Cloud mode: decode only (trust gateway)
     const parts = token.split('.');
     if (parts.length !== 3) return null;
-    
-    // Base64Url 解码 payload
     const payload = parts[1];
     const decoded = Buffer.from(payload, 'base64url').toString('utf-8');
     return JSON.parse(decoded);
@@ -45,6 +51,14 @@ function decodeJwtPayload(token: string): Record<string, unknown> | null {
  * - Bearer sk-prismer-xxx (API Key)
  */
 export async function getUserFromAuth(authHeader: string | null): Promise<AuthResult> {
+  // Short-circuit: AUTH_DISABLED — return default admin user
+  if (process.env.AUTH_DISABLED === 'true') {
+    return {
+      success: true,
+      user: { id: 1, email: process.env.INIT_ADMIN_EMAIL || 'admin@localhost' },
+    };
+  }
+
   if (!authHeader) {
     return { success: false, error: 'Authorization header required' };
   }
