@@ -44,7 +44,6 @@ export interface SendMessageInput {
 export interface SendMessageResult {
   message: Awaited<ReturnType<MessageModel['create']>>;
   routing?: RoutingDecision;
-  keyRotationAdvised?: string;
 }
 
 export class MessageService {
@@ -310,26 +309,7 @@ export class MessageService {
         .catch((err) => console.warn('[MessageService] Sync event write failed:', (err as Error).message));
     }
 
-    // AIP: Check key rotation advisory for signed messages (fire-and-forget)
-    let keyRotationAdvised: string | undefined;
-    if (input.signature || input.senderKeyId) {
-      try {
-        const { IdentityService } = await import('./identity.service');
-        const identityService = new IdentityService();
-        const rotationCheck = await identityService.checkKeyRotation(input.senderId);
-        if (rotationCheck.needed) {
-          keyRotationAdvised = rotationCheck.reason;
-        }
-      } catch {
-        // Non-critical — skip if identity service unavailable
-      }
-    }
-
-    return {
-      message: msg,
-      routing: routing.mode !== 'none' ? routing : undefined,
-      keyRotationAdvised,
-    };
+    return { message: msg, routing: routing.mode !== 'none' ? routing : undefined };
   }
 
   /**
