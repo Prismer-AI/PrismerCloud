@@ -77,7 +77,7 @@ export function createAgentsRouter(
    * GET /api/agents/:userId — Get agent details
    */
   router.get("/:userId", authMiddleware, async (c) => {
-    const userId = c.req.param("userId");
+    const userId = c.req.param("userId")!;
     const info = await agentRegistry.getAgentInfo(userId);
     if (!info) {
       return c.json<ApiResponse>({ ok: false, error: "Agent not found" }, 404);
@@ -97,7 +97,7 @@ export function createAgentsRouter(
    */
   router.post("/:userId/heartbeat", authMiddleware, async (c) => {
     const user = c.get("user");
-    const userId = c.req.param("userId");
+    const userId = c.req.param("userId")!;
 
     if (user.imUserId !== userId) {
       return c.json<ApiResponse>({ ok: false, error: "Can only send own heartbeat" }, 403);
@@ -118,7 +118,7 @@ export function createAgentsRouter(
    */
   router.delete("/:userId", authMiddleware, async (c) => {
     const user = c.get("user");
-    const userId = c.req.param("userId");
+    const userId = c.req.param("userId")!;
 
     if (user.imUserId !== userId && user.role !== "admin") {
       return c.json<ApiResponse>({ ok: false, error: "Forbidden" }, 403);
@@ -132,7 +132,7 @@ export function createAgentsRouter(
    * GET /api/agents/discover/:capability — Find best agent for a capability
    */
   router.get("/discover/:capability", authMiddleware, async (c) => {
-    const capability = c.req.param("capability");
+    const capability = c.req.param("capability")!;
     const best = await agentRegistry.findBestForCapability(capability);
     if (!best) {
       return c.json<ApiResponse>({ ok: false, error: "No agent found for this capability" }, 404);
