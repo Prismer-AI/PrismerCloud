@@ -42,7 +42,7 @@ export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
   const specificDoc = searchParams.get('doc');
 
-  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://cloud.prismer.dev';
+  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
 
   // If requesting specific doc, return raw markdown
   if (specificDoc === 'skill') {
