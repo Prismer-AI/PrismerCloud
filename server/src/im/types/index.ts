@@ -617,6 +617,7 @@ export interface IdentityKeyInfo {
   imUserId: string;
   publicKey: string; // Base64 Ed25519 public key
   keyId: string; // SHA-256(publicKey)[0:8] hex (16 chars)
+  didKey?: string; // did:key:z... canonical DID derived from publicKey (AIP)
   attestation: string | null;
   derivationMode: DerivationMode;
   registeredAt: Date;
@@ -795,6 +796,7 @@ export interface PrismerGene {
   parentGeneId?: string | null;
   forkCount?: number;
   generation?: number;
+  qualityScore?: number; // 0..1 normalized quality score (anti-cheat / leaderboard)
 }
 
 export interface AgentPersonality {

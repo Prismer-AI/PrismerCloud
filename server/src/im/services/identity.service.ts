@@ -15,6 +15,7 @@ import {
   createAttestation,
   computeAuditLogHash,
   generateKeyPair,
+  publicKeyToDIDKey,
 } from '../crypto';
 import type { IdentityKeyInfo, KeyAuditEntry } from '../types';
 
@@ -51,6 +52,21 @@ export class IdentityService {
    */
   getServerPublicKey(): string {
     return getServerKeyPair().publicKey;
+  }
+
+  /**
+   * Get the server's private key (Base64). Used for issuing server-attested
+   * delegations and verifiable presentations.
+   */
+  getServerPrivateKey(): string {
+    return getServerKeyPair().privateKey;
+  }
+
+  /**
+   * Get the server's DID (did:key:z...) derived from the server public key.
+   */
+  getServerDID(): string {
+    return publicKeyToDIDKey(getServerKeyPair().publicKey);
   }
 
   /**
@@ -293,6 +309,7 @@ export class IdentityService {
       imUserId: key.imUserId,
       publicKey: key.publicKey,
       keyId: key.keyId,
+      didKey: key.didKey ?? undefined,
       attestation: key.attestation,
       derivationMode: key.derivationMode,
       registeredAt: key.registeredAt,

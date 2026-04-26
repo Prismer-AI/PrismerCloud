@@ -538,7 +538,7 @@ export class EvolutionService {
   async getPublicGenes(opts: {
     category?: string;
     search?: string;
-    sort: 'newest' | 'most_used' | 'highest_success';
+    sort: 'newest' | 'most_used' | 'highest_success' | 'recommended';
     page: number;
     limit: number;
   }) {

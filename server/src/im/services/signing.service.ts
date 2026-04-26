@@ -52,6 +52,8 @@ export class SigningService {
     contentHash: string;
     prevHash: string | null;
     signature: string;
+    senderDid?: string;
+    delegationProof?: string;
   }): Promise<VerifyResult> {
     // 0. Timestamp sanity check — reject messages with >5min clock skew
     const MAX_CLOCK_SKEW_MS = 5 * 60 * 1000;
