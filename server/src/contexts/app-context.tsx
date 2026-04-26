@@ -111,7 +111,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (isAuthLoading) {
       return;
     }
-
+    
     // Check if authenticated via JWT or has active API key
     const hasAuth = isAuthenticated || activeApiKey !== null;
     if (!hasAuth) {
@@ -149,19 +149,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setIsAuthenticated(false);
     setUser(null);
     setToken(null);
-    setActiveApiKeyState(null);
-    setActivities([]);
+    setActiveApiKeyState(null); // Clear API key on logout
     localStorage.removeItem(AUTH_STORAGE_KEY);
-    localStorage.removeItem(ACTIVE_API_KEY_STORAGE_KEY);
-    // Force reload to clear all in-memory component state (evolution data, etc.)
-    if (typeof window !== 'undefined') {
-      window.location.href = '/auth';
-    }
+    localStorage.removeItem(ACTIVE_API_KEY_STORAGE_KEY); // Clear stored API key
   }, []);
 
   // Activity Handler
   const addActivity = useCallback((activity: Activity) => {
-    setActivities((prev) => [activity, ...prev]);
+    setActivities(prev => [activity, ...prev]);
   }, []);
 
   // Active API Key Handler
@@ -177,16 +172,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   // Toast Handlers
   const addToast = useCallback((message: string, type: 'success' | 'error' | 'info' = 'success') => {
     const id = Date.now();
-    setToasts((prev) => [...prev, { id, type, message }]);
-
+    setToasts(prev => [...prev, { id, type, message }]);
+    
     // Auto-remove after 4 seconds
     setTimeout(() => {
-      setToasts((prev) => prev.filter((t) => t.id !== id));
+      setToasts(prev => prev.filter(t => t.id !== id));
     }, 4000);
   }, []);
 
   const removeToast = useCallback((id: number) => {
-    setToasts((prev) => prev.filter((t) => t.id !== id));
+    setToasts(prev => prev.filter(t => t.id !== id));
   }, []);
 
   return (
@@ -219,3 +214,4 @@ export function useApp() {
   }
   return context;
 }
+
