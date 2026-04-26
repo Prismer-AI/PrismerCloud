@@ -384,6 +384,8 @@ export class WorkspaceBridgeService {
     });
 
     return {
+      workspaceId,
+      scope: `ws_${workspaceId}`,
       conversationId: conversation!.id,
       user: {
         imUserId: userImUser.id,
@@ -575,6 +577,7 @@ export class WorkspaceBridgeService {
     }
 
     return {
+      workspaceId,
       conversationId: conversation.id,
       conversationType: 'group',
       title,

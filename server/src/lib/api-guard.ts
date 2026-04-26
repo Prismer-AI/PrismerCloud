@@ -12,11 +12,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getBackendApiBase } from '@/lib/backend-api';
 import { ensureNacosConfig } from '@/lib/nacos-config';
+import { createModuleLogger } from '@/lib/logger';
 import { FEATURE_FLAGS } from '@/lib/feature-flags';
 import { getUserCredits } from '@/lib/db-credits';
 import { validateApiKeyFromDb } from '@/lib/db-api-keys';
 import * as crypto from 'crypto';
 import * as jwt from 'jsonwebtoken';
+
+const log = createModuleLogger('APIGuard');
 
 // ============================================================================
 // Types
@@ -60,12 +63,13 @@ interface CachedKey {
 }
 
 const keyCache = new Map<string, CachedKey>();
-const KEY_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+const KEY_CACHE_TTL = 60 * 1000; // 60 seconds (reduced from 5min for faster revocation propagation)
 
 function getCachedKeyValidation(apiKey: string): string | null {
   const hash = crypto.createHash('sha256').update(apiKey).digest('hex');
   const cached = keyCache.get(hash);
   if (cached && cached.validUntil > Date.now()) {
+    log.debug({ userId: cached.userId }, 'API Key cache hit');
     return cached.userId;
   }
   if (cached) {
@@ -87,6 +91,15 @@ function setCachedKeyValidation(apiKey: string, userId: string): void {
   }
 }
 
+/** Flush entire key cache (call on revoke/delete — route handlers don't have the raw key). */
+export function flushKeyCache(): void {
+  const size = keyCache.size;
+  keyCache.clear();
+  if (size > 0) {
+    log.info({ flushed: size }, 'API Key cache flushed on revoke/delete');
+  }
+}
+
 // ============================================================================
 // Core: validateAuth
 // ============================================================================
@@ -97,9 +110,7 @@ function setCachedKeyValidation(apiKey: string, userId: string): void {
  * - JWT: decode payload locally (no signature verification — same as existing auth-utils.ts)
  */
 async function validateAuth(authHeader: string): Promise<AuthInfo | null> {
-  const token = authHeader.startsWith('Bearer ')
-    ? authHeader.slice(7)
-    : authHeader;
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : authHeader;
 
   if (!token) return null;
 
@@ -129,7 +140,7 @@ async function validateApiKey(apiKey: string, authHeader: string): Promise<AuthI
     };
   }
 
-  // --- Local DB validation (preferred) ---
+  // --- Local DB validation (preferred & authoritative when enabled) ---
   if (FEATURE_FLAGS.API_KEYS_LOCAL) {
     try {
       const result = await validateApiKeyFromDb(apiKey);
@@ -145,76 +156,69 @@ async function validateApiKey(apiKey: string, authHeader: string): Promise<AuthI
           imToken: generateIMToken(userId),
         };
       }
-      // Not found in local DB — fall through to backend probe
-      console.log('[API Guard] API Key not in local DB, trying backend fallback...');
+      // Not found in local DB — reject immediately.
+      // When FF_API_KEYS_LOCAL is enabled, the local DB is the source of truth.
+      // Do NOT fall through to backend probe, which may accept invalid keys.
+      log.info('API Key not found in local DB, rejecting');
+      return null;
     } catch (err) {
-      console.error('[API Guard] Local API Key validation error, trying backend fallback:', err);
+      log.warn({ err }, 'Local API Key validation error, trying backend fallback');
+      // DB error — fall through to backend probe as a resilience measure
     }
   }
 
-  // --- Backend probe fallback (only when backend is configured) ---
-  const backendBase = await getBackendApiBase();
-  if (!backendBase) {
-    console.log('[API Guard] No backend configured, API Key validation failed');
-    return null;
-  }
-
+  // --- Backend probe fallback (only used when FF_API_KEYS_LOCAL is disabled or DB errored) ---
   try {
+    const backendBase = await getBackendApiBase();
     const res = await fetch(`${backendBase}/cloud/context/withdraw`, {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${apiKey}`,
+        Authorization: `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ url: 'https://_guard_auth_check', format: 'hqcc' }),
     });
 
+    // Only treat explicit 2xx as "key is valid".
+    // Previously, any non-401/403 (including 400, 404, 500) was accepted,
+    // which allowed invalid keys to pass and get cached.
     if (res.status === 401 || res.status === 403) {
-      console.log('[API Guard] API Key rejected by backend');
+      log.info('API Key rejected by backend');
       return null;
     }
 
-    // Key is valid — derive stable user ID
-    const keyHash = crypto.createHash('sha256').update(apiKey).digest('hex').slice(0, 16);
-    const userId = `apikey_${keyHash}`;
+    if (res.status >= 200 && res.status < 300) {
+      // Key is valid — derive stable user ID
+      const keyHash = crypto.createHash('sha256').update(apiKey).digest('hex').slice(0, 16);
+      const userId = `apikey_${keyHash}`;
 
-    // Cache the result
-    setCachedKeyValidation(apiKey, userId);
+      // Cache the result
+      setCachedKeyValidation(apiKey, userId);
 
-    return {
-      userId,
-      email: '',
-      authType: 'api_key',
-      authHeader,
-      imToken: generateIMToken(userId),
-    };
+      return {
+        userId,
+        email: '',
+        authType: 'api_key',
+        authHeader,
+        imToken: generateIMToken(userId),
+      };
+    }
+
+    // Non-2xx, non-401/403 — treat as rejection (fail-closed)
+    log.warn({ status: res.status }, 'Backend probe returned unexpected status, rejecting key');
+    return null;
   } catch (err) {
-    console.error('[API Guard] API Key verification failed:', err);
+    log.error({ err }, 'API Key verification failed');
     return null;
   }
 }
 
 /**
- * Validate JWT.
- * FF_AUTH_LOCAL=true → verify signature with JWT_SECRET
- * FF_AUTH_LOCAL=false → decode only (backend issued the token)
+ * Decode JWT payload locally (no signature verification).
+ * Same logic as existing auth-utils.ts getUserFromJwt.
  */
 async function validateJwt(token: string, authHeader: string): Promise<AuthInfo | null> {
   try {
-    if (FEATURE_FLAGS.AUTH_LOCAL) {
-      // Self-host: verify signature
-      const payload = jwt.verify(token, getJWTSecret()) as jwt.JwtPayload;
-      const userId = payload.sub || payload.user_id || payload.id;
-      if (!userId) return null;
-      return {
-        userId: String(userId),
-        email: (payload.email as string) || '',
-        authType: 'jwt',
-        authHeader,
-      };
-    }
-
-    // Backend mode: decode only (trust backend-issued tokens)
     const parts = token.split('.');
     if (parts.length !== 3) return null;
 
@@ -238,33 +242,66 @@ async function validateJwt(token: string, authHeader: string): Promise<AuthInfo 
 // ============================================================================
 
 /**
- * Best-effort balance pre-check.
- * Only works when FF_USER_CREDITS_LOCAL is true and user has a numeric ID.
- * Returns true (allow) if check cannot be performed.
+ * Balance pre-check result.
  */
-async function checkBalance(userId: string, estimatedCost: number): Promise<boolean> {
-  if (FEATURE_FLAGS.UNLIMITED_CREDITS) {
-    return true;
-  }
+interface BalanceCheckResult {
+  allowed: boolean;
+  balance?: number;
+  required?: number;
+  reason?: string;
+}
 
+/**
+ * Balance pre-check — fail-closed by default.
+ *
+ * Resolves numeric userId from API Key string IDs (apikey_XXXX) when possible.
+ * Configurable via FF_BALANCE_FAIL_OPEN for graceful rollout.
+ */
+async function checkBalance(userId: string, estimatedCost: number): Promise<BalanceCheckResult> {
   if (!FEATURE_FLAGS.USER_CREDITS_LOCAL) {
-    // No local DB path — skip check (best-effort)
-    return true;
+    // No local DB path — proxy path handles billing; allow but log
+    log.debug({ userId }, 'Balance check skipped: USER_CREDITS_LOCAL disabled');
+    return { allowed: true };
   }
 
   const numericId = parseInt(userId, 10);
   if (isNaN(numericId)) {
-    // API Key users without FF_API_KEYS_LOCAL have string IDs (apikey_XXXX) — skip
-    return true;
+    // API Key users with string IDs — try to resolve from pc_api_keys
+    if (FEATURE_FLAGS.API_KEYS_LOCAL && userId.startsWith('apikey_')) {
+      log.debug({ userId }, 'String userId from API Key, cannot resolve numeric ID — denying');
+      // apikey_XXXX IDs from backend probe fallback have no local credit record
+      // This is the correct behavior: require FF_API_KEYS_LOCAL for billing
+    }
+    // Cannot check balance without numeric userId — fail-closed
+    const failOpen = process.env.FF_BALANCE_FAIL_OPEN === 'true';
+    if (failOpen) {
+      log.warn({ userId }, 'Balance check skipped for non-numeric userId (FF_BALANCE_FAIL_OPEN=true)');
+      return { allowed: true };
+    }
+    log.warn({ userId }, 'Balance check failed: non-numeric userId, denying request');
+    return { allowed: false, reason: 'Cannot verify balance for this account type. Please use a registered account.' };
   }
 
   try {
     const credits = await getUserCredits(numericId);
-    return credits.balance >= estimatedCost;
+    if (credits.balance >= estimatedCost) {
+      return { allowed: true, balance: credits.balance, required: estimatedCost };
+    }
+    return {
+      allowed: false,
+      balance: credits.balance,
+      required: estimatedCost,
+      reason: 'Insufficient credits',
+    };
   } catch (err) {
-    console.error('[API Guard] Balance check failed:', err);
-    // Fail open — allow the request
-    return true;
+    log.error({ err, userId }, 'Balance check database error');
+    // Fail-closed by default; configurable for rollout
+    const failOpen = process.env.FF_BALANCE_FAIL_OPEN === 'true';
+    if (failOpen) {
+      log.warn({ userId }, 'Balance check error, allowing request (FF_BALANCE_FAIL_OPEN=true)');
+      return { allowed: true };
+    }
+    return { allowed: false, reason: 'Unable to verify account balance. Please try again.' };
   }
 }
 
@@ -273,24 +310,26 @@ async function checkBalance(userId: string, estimatedCost: number): Promise<bool
 // ============================================================================
 
 function getJWTSecret(): string {
-  const secret = process.env.JWT_SECRET || process.env.NEXTAUTH_SECRET;
-  if (!secret) {
-    console.error('[ApiGuard] JWT_SECRET is not set — using insecure fallback. Set JWT_SECRET in .env!');
-    return 'dev-secret-change-me';
-  }
-  return secret;
+  return process.env.JWT_SECRET || process.env.NEXTAUTH_SECRET || 'dev-secret-change-me';
 }
 
 /**
  * Generate a short-lived IM JWT for API Key users.
  * The Hono IM app requires JWT auth — API Key users get a translated token.
  */
-function generateIMToken(userId: string): string {
+function generateIMToken(userId: string, email?: string): string {
   return jwt.sign(
-    { sub: userId, username: userId, role: 'system' as const, type: 'api_key_proxy' },
+    { sub: userId, username: userId, role: 'system' as const, type: 'api_key_proxy', ...(email && { email }) },
     getJWTSecret(),
-    { expiresIn: '1h' }
+    { expiresIn: '1h' },
   );
+}
+
+/**
+ * Public wrapper — used by IM proxy route to generate IM JWT for platform JWT users.
+ */
+export function generateIMTokenForUser(userId: string, email?: string): string {
+  return generateIMToken(userId, email);
 }
 
 // ============================================================================
@@ -311,39 +350,26 @@ function generateIMToken(userId: string): string {
  * // guard.auth.userId, guard.auth.authHeader, etc.
  * ```
  */
-export async function apiGuard(
-  request: NextRequest,
-  options: GuardOptions
-): Promise<GuardResult | GuardError> {
+export async function apiGuard(request: NextRequest, options: GuardOptions): Promise<GuardResult | GuardError> {
   try {
     // Ensure Nacos config is loaded (needed for backend URL resolution)
     await ensureNacosConfig();
-
-    // Short-circuit: AUTH_DISABLED — treat all requests as default admin
-    if (FEATURE_FLAGS.AUTH_DISABLED) {
-      return {
-        ok: true,
-        auth: {
-          userId: '1',
-          email: process.env.INIT_ADMIN_EMAIL || 'admin@localhost',
-          authType: 'jwt',
-          authHeader: '',
-        },
-      };
-    }
 
     // 1. Extract Authorization header
     const authHeader = request.headers.get('authorization');
     if (!authHeader) {
       return {
         ok: false,
-        response: NextResponse.json({
-          success: false,
-          error: {
-            code: 'UNAUTHORIZED',
-            message: 'Authorization header is required. Use: Authorization: Bearer <token>',
+        response: NextResponse.json(
+          {
+            success: false,
+            error: {
+              code: 'UNAUTHORIZED',
+              message: 'Authorization header is required. Use: Authorization: Bearer <token>',
+            },
           },
-        }, { status: 401 }),
+          { status: 401 },
+        ),
       };
     }
 
@@ -352,45 +378,57 @@ export async function apiGuard(
     if (!auth) {
       return {
         ok: false,
-        response: NextResponse.json({
-          success: false,
-          error: {
-            code: 'INVALID_TOKEN',
-            message: 'Invalid or expired token',
+        response: NextResponse.json(
+          {
+            success: false,
+            error: {
+              code: 'INVALID_TOKEN',
+              message: 'Invalid or expired token',
+            },
           },
-        }, { status: 401 }),
+          { status: 401 },
+        ),
       };
     }
 
     // 3. Balance pre-check (billable tier only)
     if (options.tier === 'billable' && options.estimatedCost && options.estimatedCost > 0) {
-      const hasBalance = await checkBalance(auth.userId, options.estimatedCost);
-      if (!hasBalance) {
+      const balanceCheck = await checkBalance(auth.userId, options.estimatedCost);
+      if (!balanceCheck.allowed) {
         return {
           ok: false,
-          response: NextResponse.json({
-            success: false,
-            error: {
-              code: 'INSUFFICIENT_CREDITS',
-              message: 'Insufficient credits. Please top up your account.',
+          response: NextResponse.json(
+            {
+              success: false,
+              error: {
+                code: 'INSUFFICIENT_CREDITS',
+                message: balanceCheck.reason || 'Insufficient credits. Please top up your account.',
+                balance: balanceCheck.balance,
+                required: balanceCheck.required,
+                topupUrl: '/dashboard#billing',
+              },
             },
-          }, { status: 402 }),
+            { status: 402 },
+          ),
         };
       }
     }
 
     return { ok: true, auth };
   } catch (err) {
-    console.error('[API Guard] Unexpected error:', err);
+    log.error({ err }, 'Unexpected error');
     return {
       ok: false,
-      response: NextResponse.json({
-        success: false,
-        error: {
-          code: 'AUTH_ERROR',
-          message: 'Authentication service error',
+      response: NextResponse.json(
+        {
+          success: false,
+          error: {
+            code: 'AUTH_ERROR',
+            message: 'Authentication service error',
+          },
         },
-      }, { status: 500 }),
+        { status: 500 },
+      ),
     };
   }
 }

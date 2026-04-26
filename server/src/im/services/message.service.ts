@@ -14,6 +14,7 @@ import type { WebhookService } from './webhook.service';
 import type { SyncService } from './sync.service';
 import type { ContextAccessService } from './context-access.service';
 import type { MessageType, MessageMetadata } from '../types/index';
+import type { SigningService } from './signing.service';
 import prisma from '../db';
 
 export interface SendMessageInput {
@@ -23,6 +24,7 @@ export interface SendMessageInput {
   content: string;
   metadata?: MessageMetadata;
   parentId?: string;
+  quotedMessageId?: string; // v1.8.2: Quote reply (distinct from parentId threading)
   // E2E Signing fields (Layer 2)
   secVersion?: number;
   senderKeyId?: string;
@@ -30,6 +32,13 @@ export interface SendMessageInput {
   contentHash?: string;
   prevHash?: string;
   signature?: string;
+  // AIP DID fields (v1.8.0 S2)
+  senderDid?: string;
+  delegationProof?: string;
+  signedAt?: number;
+  // Set to true when the caller (API route) has already verified the signature,
+  // so messageService skips redundant re-verification.
+  _signatureVerified?: boolean;
 }
 
 export interface SendMessageResult {
@@ -46,12 +55,14 @@ export class MessageService {
   private webhookService?: WebhookService;
   private syncService?: SyncService;
   private contextAccessService?: ContextAccessService;
+  private signingService?: SigningService;
 
   constructor(
     private redis: Redis,
     webhookService?: WebhookService,
     syncService?: SyncService,
     contextAccessService?: ContextAccessService,
+    signingService?: SigningService,
   ) {
     this.messageModel = new MessageModel();
     this.conversationModel = new ConversationModel();
@@ -61,12 +72,23 @@ export class MessageService {
     this.webhookService = webhookService;
     this.syncService = syncService;
     this.contextAccessService = contextAccessService;
+    this.signingService = signingService;
   }
 
   /**
    * Send a message with automatic @mention parsing and routing.
    */
   async send(input: SendMessageInput): Promise<SendMessageResult> {
+    // v1.8.2: Cap metadata payload size. MySQL `metadata` is @db.Text (64KB);
+    // 16KB leaves room for indices/overhead and prevents waveform/transcription
+    // floods from blowing up the column.
+    if (input.metadata) {
+      const metaSize = Buffer.byteLength(JSON.stringify(input.metadata), 'utf8');
+      if (metaSize > 16384) {
+        throw new Error(`metadata too large: ${metaSize} bytes (max 16384)`);
+      }
+    }
+
     // Idempotency check (for offline SDK retries)
     const idemKey = (input.metadata as any)?._idempotencyKey as string | undefined;
     if (idemKey) {
@@ -80,6 +102,27 @@ export class MessageService {
     const isParticipant = await this.participantModel.isParticipant(input.conversationId, input.senderId);
     if (!isParticipant) {
       throw new Error('User is not a participant in this conversation');
+    }
+
+    // P9: Block check — only for direct conversations
+    const conv = await prisma.iMConversation.findUnique({
+      where: { id: input.conversationId },
+      select: { type: true },
+    });
+    if (conv?.type === 'direct') {
+      const participants = await prisma.iMParticipant.findMany({
+        where: { conversationId: input.conversationId },
+        select: { imUserId: true },
+      });
+      const otherUserId = participants.find((p: any) => p.imUserId !== input.senderId)?.imUserId;
+      if (otherUserId) {
+        const { ContactService } = await import('./contact.service');
+        const contactSvc = new ContactService();
+        const blocked = await contactSvc.isBlockedForMessaging(input.senderId, otherUserId);
+        if (blocked) {
+          throw Object.assign(new Error('You are blocked by this user'), { status: 403, code: 'BLOCKED' });
+        }
+      }
     }
 
     // Validate file messages — must reference a confirmed upload
@@ -140,6 +183,48 @@ export class MessageService {
       }
     }
 
+    // v1.8.0 S2: Signature verification + signing policy enforcement
+    // Skip re-verification if the caller (API route) has already verified the signature.
+    if (this.signingService && input.signature && !input._signatureVerified) {
+      // Lite mode: SDK sends signedAt timestamp (used in payload instead of server time)
+      const signedAt = (input.metadata as any)?.signedAt ?? (input as any).signedAt ?? Date.now();
+      const verifyResult = await this.signingService.verifyMessage({
+        senderId: input.senderId,
+        conversationId: input.conversationId,
+        type: input.type ?? 'text',
+        content: input.content,
+        createdAt: signedAt,
+        secVersion: input.secVersion ?? 1,
+        senderKeyId: input.senderKeyId ?? '',
+        senderDid: input.senderDid,
+        delegationProof: input.delegationProof,
+        sequence: input.sequence ?? 0,
+        contentHash: input.contentHash ?? '',
+        prevHash: input.prevHash ?? null,
+        signature: input.signature,
+      });
+      if (!verifyResult.valid) {
+        const err = new Error(`Signature verification failed: ${verifyResult.reason}`) as any;
+        err.code = 'SIGNATURE_INVALID';
+        err.status = 400;
+        throw err;
+      }
+    } else if (this.signingService && !input.signature) {
+      // Enforce signing policy for unsigned messages
+      const policy = security?.signingPolicy ?? 'recommended';
+      if (policy === 'required' && input.type !== 'system_event') {
+        const err = new Error('This conversation requires signed messages') as any;
+        err.code = 'SIGNATURE_REQUIRED';
+        err.status = 400;
+        throw err;
+      }
+      if (policy === 'recommended' && input.type !== 'system_event') {
+        console.warn(
+          `[MessageService] Unsigned message in recommended-signing conv ${input.conversationId} from ${input.senderId}`,
+        );
+      }
+    }
+
     // Parse @mentions and determine routing
     const routing = await this.mentionService.determineRouting(input.content, input.conversationId, input.senderId);
 
@@ -166,6 +251,7 @@ export class MessageService {
       content: input.content,
       metadata: enhancedMetadata,
       parentId: input.parentId,
+      quotedMessageId: input.quotedMessageId,
       // E2E Signing fields (pass through if present)
       secVersion: input.secVersion,
       senderKeyId: input.senderKeyId,
@@ -173,6 +259,9 @@ export class MessageService {
       contentHash: input.contentHash,
       prevHash: input.prevHash,
       signature: input.signature,
+      // AIP DID fields (v1.8.0 S2)
+      senderDid: input.senderDid,
+      delegationProof: input.delegationProof,
     });
 
     // Update conversation last_message_at

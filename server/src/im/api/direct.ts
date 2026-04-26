@@ -85,8 +85,20 @@ export function createDirectRouter(
       return c.json<ApiResponse>({ ok: false, error: 'Invalid JSON body' }, 400);
     }
 
-    const { type, content, metadata, secVersion, senderKeyId, sequence, contentHash, prevHash, signature, timestamp } =
-      body;
+    const {
+      type,
+      content,
+      metadata,
+      secVersion,
+      senderKeyId,
+      senderDid,
+      signedAt,
+      sequence,
+      contentHash,
+      prevHash,
+      signature,
+      timestamp,
+    } = body;
 
     if (!content && type !== 'system_event') {
       return c.json<ApiResponse>({ ok: false, error: 'content is required' }, 400);
@@ -109,24 +121,14 @@ export function createDirectRouter(
       return c.json<ApiResponse>({ ok: false, error: 'Cannot send message to yourself' }, 400);
     }
 
-    // Deduct IM credits (skip for API Key proxy — cloud credits handle it)
-    if (user.type !== 'api_key_proxy') {
-      const deductResult = await creditService.deduct(user.imUserId, 0.001, `send: direct/${targetUserId}`, 'message');
-      if (!deductResult.success) {
-        return c.json<ApiResponse>({ ok: false, error: 'Insufficient IM credits' }, 402);
-      }
-    }
-
-    // Support idempotency for offline SDK retries
-    const idempotencyKey = c.req.header('X-Idempotency-Key');
-    const enrichedMetadata = idempotencyKey ? { ...metadata, _idempotencyKey: idempotencyKey } : metadata;
-
-    // Get or create direct conversation
+    // Get or create direct conversation (needed for signing verification)
     const conversationId = await getOrCreateDirectConversation(user.imUserId, targetImUserId);
 
-    // E2E Signing verification (Layer 2)
-    const isSigned = secVersion != null && senderKeyId && signature;
-    if (isSigned && (typeof sequence !== 'number' || !Number.isInteger(sequence) || sequence < 1)) {
+    // E2E Signing verification (Layer 2) — must happen BEFORE credit deduction
+    // Accept both full signing (senderKeyId) and lite signing (senderDid only)
+    const isSigned = secVersion != null && (senderKeyId || senderDid) && signature;
+    const isLiteMode = isSigned && senderDid && !senderKeyId;
+    if (isSigned && !isLiteMode && (typeof sequence !== 'number' || !Number.isInteger(sequence) || sequence < 1)) {
       return c.json<ApiResponse>({ ok: false, error: 'sequence must be a positive integer when signing' }, 400);
     }
     if (isSigned) {
@@ -135,9 +137,10 @@ export function createDirectRouter(
         conversationId,
         type: (type as string) ?? 'text',
         content: content ?? '',
-        createdAt: timestamp ?? Date.now(),
+        createdAt: signedAt ?? timestamp ?? Date.now(),
         secVersion,
         senderKeyId,
+        senderDid,
         sequence,
         contentHash,
         prevHash: prevHash ?? null,
@@ -165,6 +168,18 @@ export function createDirectRouter(
       }
     }
 
+    // Deduct IM credits (skip for API Key proxy — cloud credits handle it)
+    if (user.type !== 'api_key_proxy') {
+      const deductResult = await creditService.deduct(user.imUserId, 0.001, `send: direct/${targetUserId}`, 'message');
+      if (!deductResult.success) {
+        return c.json<ApiResponse>({ ok: false, error: 'Insufficient IM credits' }, 402);
+      }
+    }
+
+    // Support idempotency for offline SDK retries
+    const idempotencyKey = c.req.header('X-Idempotency-Key');
+    const enrichedMetadata = idempotencyKey ? { ...metadata, _idempotencyKey: idempotencyKey } : metadata;
+
     // Send message
     let result;
     try {
@@ -174,7 +189,19 @@ export function createDirectRouter(
         type: (type as MessageType) ?? 'text',
         content: content ?? '',
         metadata: enrichedMetadata,
-        ...(isSigned ? { secVersion, senderKeyId, sequence, contentHash, prevHash, signature } : {}),
+        ...(isSigned
+          ? {
+              secVersion,
+              senderKeyId,
+              senderDid,
+              sequence,
+              contentHash,
+              prevHash,
+              signature,
+              signedAt: signedAt ?? timestamp,
+              _signatureVerified: true,
+            }
+          : {}),
       });
     } catch (err) {
       const message = (err as Error).message;

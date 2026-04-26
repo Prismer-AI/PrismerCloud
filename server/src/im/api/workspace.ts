@@ -10,8 +10,13 @@
 import { Hono } from 'hono';
 import { authMiddleware } from '../auth/middleware';
 import { WorkspaceBridgeService } from '../services/workspace-bridge.service';
+import { WorkspaceViewService } from '../services/workspace-view.service';
 import { MentionService } from '../services/mention.service';
 import type { ApiResponse } from '../types/index';
+import type { WorkspaceSlot } from '../types/workspace';
+import { isValidScope } from '../utils/scope';
+import { getPersonAgentIds } from '../utils/person-agent-ids';
+import prisma from '../db';
 import type Redis from 'ioredis';
 
 export function createWorkspaceRouter(redis: Redis) {
@@ -32,22 +37,17 @@ export function createWorkspaceRouter(redis: Redis) {
     } catch {
       return c.json<ApiResponse>({ ok: false, error: 'Invalid or missing JSON body' }, 400);
     }
-    const {
-      workspaceId,
-      userId,
-      userDisplayName,
-      agentName,
-      agentDisplayName,
-      agentType,
-      agentCapabilities,
-      force,
-    } = body;
+    const { workspaceId, userId, userDisplayName, agentName, agentDisplayName, agentType, agentCapabilities, force } =
+      body;
 
     if (!workspaceId || !userId || !userDisplayName) {
-      return c.json<ApiResponse>({
-        ok: false,
-        error: 'workspaceId, userId, and userDisplayName are required',
-      }, 400);
+      return c.json<ApiResponse>(
+        {
+          ok: false,
+          error: 'workspaceId, userId, and userDisplayName are required',
+        },
+        400,
+      );
     }
 
     try {
@@ -62,15 +62,21 @@ export function createWorkspaceRouter(redis: Redis) {
         force: !!force,
       });
 
-      return c.json<ApiResponse>({
-        ok: true,
-        data: result,
-      }, 201);
+      return c.json<ApiResponse>(
+        {
+          ok: true,
+          data: result,
+        },
+        201,
+      );
     } catch (err) {
-      return c.json<ApiResponse>({
-        ok: false,
-        error: (err as Error).message,
-      }, 500);
+      return c.json<ApiResponse>(
+        {
+          ok: false,
+          error: (err as Error).message,
+        },
+        500,
+      );
     }
   });
 
@@ -86,36 +92,38 @@ export function createWorkspaceRouter(redis: Redis) {
     } catch {
       return c.json<ApiResponse>({ ok: false, error: 'Invalid or missing JSON body' }, 400);
     }
-    const {
-      workspaceId,
-      title,
-      description,
-      users,
-      agents,
-      force,
-    } = body;
+    const { workspaceId, title, description, users, agents, force } = body;
 
     if (!workspaceId || !title) {
-      return c.json<ApiResponse>({
-        ok: false,
-        error: 'workspaceId and title are required',
-      }, 400);
+      return c.json<ApiResponse>(
+        {
+          ok: false,
+          error: 'workspaceId and title are required',
+        },
+        400,
+      );
     }
 
     if (!users || !Array.isArray(users) || users.length === 0) {
-      return c.json<ApiResponse>({
-        ok: false,
-        error: 'users array is required and must have at least one user',
-      }, 400);
+      return c.json<ApiResponse>(
+        {
+          ok: false,
+          error: 'users array is required and must have at least one user',
+        },
+        400,
+      );
     }
 
     // Validate users have required fields
     for (const user of users) {
       if (!user.userId || !user.displayName) {
-        return c.json<ApiResponse>({
-          ok: false,
-          error: 'Each user must have userId and displayName',
-        }, 400);
+        return c.json<ApiResponse>(
+          {
+            ok: false,
+            error: 'Each user must have userId and displayName',
+          },
+          400,
+        );
       }
     }
 
@@ -123,10 +131,13 @@ export function createWorkspaceRouter(redis: Redis) {
     if (agents && Array.isArray(agents)) {
       for (const agent of agents) {
         if (!agent.name || !agent.displayName) {
-          return c.json<ApiResponse>({
-            ok: false,
-            error: 'Each agent must have name and displayName',
-          }, 400);
+          return c.json<ApiResponse>(
+            {
+              ok: false,
+              error: 'Each agent must have name and displayName',
+            },
+            400,
+          );
         }
       }
     }
@@ -141,15 +152,21 @@ export function createWorkspaceRouter(redis: Redis) {
         agents: agents ?? [],
       });
 
-      return c.json<ApiResponse>({
-        ok: true,
-        data: result,
-      }, 201);
+      return c.json<ApiResponse>(
+        {
+          ok: true,
+          data: result,
+        },
+        201,
+      );
     } catch (err) {
-      return c.json<ApiResponse>({
-        ok: false,
-        error: (err as Error).message,
-      }, 500);
+      return c.json<ApiResponse>(
+        {
+          ok: false,
+          error: (err as Error).message,
+        },
+        500,
+      );
     }
   });
 
@@ -162,10 +179,13 @@ export function createWorkspaceRouter(redis: Redis) {
     const { agentName, agentDisplayName, agentType, capabilities, metadata } = body;
 
     if (!agentName || !agentDisplayName) {
-      return c.json<ApiResponse>({
-        ok: false,
-        error: 'agentName and agentDisplayName are required',
-      }, 400);
+      return c.json<ApiResponse>(
+        {
+          ok: false,
+          error: 'agentName and agentDisplayName are required',
+        },
+        400,
+      );
     }
 
     try {
@@ -178,15 +198,21 @@ export function createWorkspaceRouter(redis: Redis) {
         metadata,
       });
 
-      return c.json<ApiResponse>({
-        ok: true,
-        data: result,
-      }, 201);
+      return c.json<ApiResponse>(
+        {
+          ok: true,
+          data: result,
+        },
+        201,
+      );
     } catch (err) {
-      return c.json<ApiResponse>({
-        ok: false,
-        error: (err as Error).message,
-      }, 500);
+      return c.json<ApiResponse>(
+        {
+          ok: false,
+          error: (err as Error).message,
+        },
+        500,
+      );
     }
   });
 
@@ -204,10 +230,13 @@ export function createWorkspaceRouter(redis: Redis) {
         data: agents,
       });
     } catch (err) {
-      return c.json<ApiResponse>({
-        ok: false,
-        error: (err as Error).message,
-      }, 500);
+      return c.json<ApiResponse>(
+        {
+          ok: false,
+          error: (err as Error).message,
+        },
+        500,
+      );
     }
   });
 
@@ -225,10 +254,13 @@ export function createWorkspaceRouter(redis: Redis) {
         data: { token, expiresIn: '7d' },
       });
     } catch (err) {
-      return c.json<ApiResponse>({
-        ok: false,
-        error: (err as Error).message,
-      }, 500);
+      return c.json<ApiResponse>(
+        {
+          ok: false,
+          error: (err as Error).message,
+        },
+        500,
+      );
     }
   });
 
@@ -242,10 +274,13 @@ export function createWorkspaceRouter(redis: Redis) {
       const conversation = await workspaceBridge.getWorkspaceConversation(workspaceId);
 
       if (!conversation) {
-        return c.json<ApiResponse>({
-          ok: false,
-          error: 'Workspace conversation not found',
-        }, 404);
+        return c.json<ApiResponse>(
+          {
+            ok: false,
+            error: 'Workspace conversation not found',
+          },
+          404,
+        );
       }
 
       return c.json<ApiResponse>({
@@ -253,10 +288,13 @@ export function createWorkspaceRouter(redis: Redis) {
         data: conversation,
       });
     } catch (err) {
-      return c.json<ApiResponse>({
-        ok: false,
-        error: (err as Error).message,
-      }, 500);
+      return c.json<ApiResponse>(
+        {
+          ok: false,
+          error: (err as Error).message,
+        },
+        500,
+      );
     }
   });
 
@@ -275,10 +313,13 @@ export function createWorkspaceRouter(redis: Redis) {
         data: messages,
       });
     } catch (err) {
-      return c.json<ApiResponse>({
-        ok: false,
-        error: (err as Error).message,
-      }, 500);
+      return c.json<ApiResponse>(
+        {
+          ok: false,
+          error: (err as Error).message,
+        },
+        500,
+      );
     }
   });
 
@@ -291,28 +332,79 @@ export function createWorkspaceRouter(redis: Redis) {
     const limit = parseInt(c.req.query('limit') ?? '5', 10);
 
     if (!conversationId) {
-      return c.json<ApiResponse>({
-        ok: false,
-        error: 'conversationId is required',
-      }, 400);
+      return c.json<ApiResponse>(
+        {
+          ok: false,
+          error: 'conversationId is required',
+        },
+        400,
+      );
     }
 
     try {
-      const suggestions = await mentionService.getAutocompleteSuggestions(
-        conversationId,
-        query,
-        limit
-      );
+      const suggestions = await mentionService.getAutocompleteSuggestions(conversationId, query, limit);
 
       return c.json<ApiResponse>({
         ok: true,
         data: suggestions,
       });
     } catch (err) {
-      return c.json<ApiResponse>({
-        ok: false,
-        error: (err as Error).message,
-      }, 500);
+      return c.json<ApiResponse>(
+        {
+          ok: false,
+          error: (err as Error).message,
+        },
+        500,
+      );
+    }
+  });
+
+  // ── Workspace Superset View ──────────────────────────────────────────
+
+  const workspaceView = new WorkspaceViewService();
+
+  /**
+   * GET /api/workspace — Superset aggregation view
+   *
+   * Query params:
+   *   scope     — workspace scope (default: 'global')
+   *   slots     — comma-separated slot names (default: all 8 slots)
+   *   includeContent — 'true' to include memory file content (default: false)
+   */
+  router.get('/', authMiddleware, async (c) => {
+    const user = c.get('user');
+    const scope = c.req.query('scope') || 'global';
+    if (!isValidScope(scope)) {
+      return c.json<ApiResponse>({ ok: false, error: 'Invalid scope format' }, 400);
+    }
+    const slotsParam = c.req.query('slots') || 'genes,memory,personality,identity,catalog,tasks,credits,extensions';
+    const slots = slotsParam.split(',').filter(Boolean) as WorkspaceSlot[];
+    const includeContent = c.req.query('includeContent') === 'true';
+
+    try {
+      // Scope access check: non-global scopes require the user's agents to belong to the scope
+      if (scope !== 'global') {
+        const personAgentIds = await getPersonAgentIds(user.imUserId);
+        const scopedAgent = await prisma.iMGene.findFirst({
+          where: { ownerAgentId: { in: personAgentIds }, scope },
+          select: { id: true },
+        });
+        const scopedSkill = !scopedAgent
+          ? await prisma.iMAgentSkill.findFirst({
+              where: { agentId: { in: personAgentIds }, scope },
+              select: { id: true },
+            })
+          : scopedAgent;
+        if (!scopedSkill) {
+          return c.json<ApiResponse>({ ok: false, error: 'Not authorized for this scope' }, 403);
+        }
+      }
+
+      const view = await workspaceView.getView(user.imUserId, scope, slots, includeContent);
+      return c.json<ApiResponse>({ ok: true, data: view });
+    } catch (err) {
+      console.error('[WorkspaceAPI] View error:', err);
+      return c.json<ApiResponse>({ ok: false, error: (err as Error).message }, 500);
     }
   });
 

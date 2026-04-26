@@ -4,7 +4,7 @@
 CREATE TABLE IF NOT EXISTS `im_signal_clusters` (
   `id` VARCHAR(30) NOT NULL,
   `clusterKey` VARCHAR(200) NOT NULL,
-  `memberSignals` TEXT NOT NULL,
+  `memberSignals` TEXT NOT NULL DEFAULT '[]',
   `frequency` INT NOT NULL DEFAULT 0,
   `agentCount` INT NOT NULL DEFAULT 0,
   `topGeneId` VARCHAR(100) DEFAULT NULL,

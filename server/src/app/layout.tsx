@@ -18,20 +18,26 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
+  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL || 'https://prismer.cloud'),
   title: 'Prismer Cloud | The Knowledge Drive for AI Agents',
-  description: 'Share High Quality Agent Context with World. Global caching, visual understanding, and developer-ready APIs for AI agents.',
+  description:
+    'Share High Quality Agent Context with World. Global caching, visual understanding, and developer-ready APIs for AI agents.',
   keywords: ['AI', 'agents', 'context', 'knowledge', 'API', 'machine learning', 'document processing'],
   authors: [{ name: 'Prismer' }],
   icons: {
-    icon: [
-      { url: '/small.svg', type: 'image/svg+xml' },
-    ],
+    icon: [{ url: '/small.svg', type: 'image/svg+xml' }],
     apple: '/logo-light.png',
   },
   openGraph: {
     title: 'Prismer Cloud',
     description: 'The Knowledge Drive for AI Agents',
     type: 'website',
+    images: ['/logo-light.png'],
+  },
+  twitter: {
+    card: 'summary',
+    title: 'Prismer Cloud',
+    description: 'The Knowledge Drive for AI Agents',
     images: ['/logo-light.png'],
   },
 };
@@ -43,9 +49,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className="dark" suppressHydrationWarning>
-      <body
-        className={`${inter.variable} ${jetbrainsMono.variable} font-sans antialiased`}
-      >
+      <body className={`${inter.variable} ${jetbrainsMono.variable} font-sans antialiased`}>
         <ThemeProvider>
           <AppProvider>
             <ClientLayout>{children}</ClientLayout>

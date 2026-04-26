@@ -12,12 +12,20 @@
 import { Hono } from 'hono';
 import { authMiddleware } from '../auth/middleware';
 import { IdentityService, IdentityError } from '../services/identity.service';
+import type { RateLimiterService } from '../services/rate-limiter.service';
+import { createRateLimitMiddleware } from '../middleware/rate-limit';
 import type { ApiResponse } from '../types';
 
-export function createIdentityRouter(identityService: IdentityService) {
+export function createIdentityRouter(identityService: IdentityService, rateLimiter?: RateLimiterService) {
   const router = new Hono();
 
   router.use('*', authMiddleware);
+
+  // ─── Rate Limiting (write operations) ────────────────────
+  if (rateLimiter) {
+    router.put('/identity', createRateLimitMiddleware(rateLimiter, 'api.write'));
+    router.post('/identity/revoke', createRateLimitMiddleware(rateLimiter, 'api.write'));
+  }
 
   /**
    * GET /keys/server — Get server's public key
@@ -48,11 +56,7 @@ export function createIdentityRouter(identityService: IdentityService) {
     }
 
     try {
-      const result = await identityService.registerKey(
-        user.imUserId,
-        publicKey,
-        derivationMode ?? 'generated',
-      );
+      const result = await identityService.registerKey(user.imUserId, publicKey, derivationMode ?? 'generated');
 
       return c.json<ApiResponse>({
         ok: true,
@@ -120,7 +124,7 @@ export function createIdentityRouter(identityService: IdentityService) {
 
     return c.json<ApiResponse>({
       ok: true,
-      data: logs.map(l => ({
+      data: logs.map((l) => ({
         ...l,
         createdAt: l.createdAt.toISOString(),
       })),

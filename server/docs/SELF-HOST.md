@@ -19,7 +19,7 @@ docker compose up -d
 
 The app will be available at `http://localhost:3000` in about 30 seconds.
 
-**Default admin account:** `admin@localhost` / `admin123` (change in `.env`)
+**Default admin account:** `admin@localhost` / `PASSWORD-NOT-SET` (change in `.env`)
 
 ## Configuration
 
@@ -29,7 +29,7 @@ The app will be available at `http://localhost:3000` in about 30 seconds.
 |----------|---------|-------------|
 | `JWT_SECRET` | `change-me-in-production` | **Must change!** Secret key for JWT token signing |
 | `INIT_ADMIN_EMAIL` | `admin@localhost` | Initial admin account email |
-| `INIT_ADMIN_PASSWORD` | `admin123` | Initial admin account password |
+| `INIT_ADMIN_PASSWORD` | `PASSWORD-NOT-SET` | Initial admin account password |
 
 ### Auth Bypass (Optional)
 

@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { readFileSync } from 'fs';
 import { join } from 'path';
+import { createModuleLogger } from '@/lib/logger';
+
+const log = createModuleLogger('DeveloperDocs');
 
 /**
  * Developer Documentation API
@@ -30,7 +33,7 @@ function loadDocFile(filename: string): string {
     const filePath = join(process.cwd(), 'public', 'docs', filename);
     return readFileSync(filePath, 'utf-8');
   } catch (error) {
-    console.error(`[Developer Docs] Failed to load ${filename}:`, error);
+    log.error({ err: error, filename }, 'Failed to load doc file');
     return `# Error\n\nFailed to load ${filename}`;
   }
 }

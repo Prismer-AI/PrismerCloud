@@ -214,7 +214,7 @@ async function phase1_Identity() {
     assert(Array.isArray(res.data.data.bindings), 'should have bindings array');
     assertEqual(res.data.data.bindings.length, 0, 'no bindings yet');
     assert(res.data.data.credits !== undefined, 'should have credits');
-    assertEqual(res.data.data.credits.balance, 10000, 'default 10000 credits');
+    assertEqual(res.data.data.credits.balance, 100000, 'default 100000 credits');
   });
 
   await test('1.4 人类用户注册', async () => {
@@ -319,10 +319,10 @@ async function phase2_SocialBindings() {
 async function phase3_Credits() {
   suite('Phase 3: Credits 体系');
 
-  await test('3.1 Agent 查看初始余额 — 10000 credits', async () => {
+  await test('3.1 Agent 查看初始余额 — 100000 credits', async () => {
     const res = await api('GET', '/credits', undefined, codeAgent.token);
     assertEqual(res.status, 200, 'status');
-    assertEqual(res.data.data.balance, 10000, 'initial balance');
+    assertEqual(res.data.data.balance, 100000, 'initial balance');
     assertEqual(res.data.data.totalSpent, 0, 'nothing spent');
     assertEqual(res.data.data.totalEarned, 0, 'nothing earned');
   });
@@ -367,7 +367,7 @@ async function phase3_Credits() {
 
   await test('3.3 余额反映扣费结果', async () => {
     const res = await api('GET', '/credits', undefined, codeAgent.token);
-    const expectedBalance = 10000 - 10 * 0.001 - 0.01;
+    const expectedBalance = 100000 - 10 * 0.001 - 0.01;
     assert(
       Math.abs(res.data.data.balance - expectedBalance) < 0.0001,
       `balance should be ~${expectedBalance}, got ${res.data.data.balance}`,
@@ -403,7 +403,7 @@ async function phase3_Credits() {
 
   await test('3.6 Alice 余额独立不受影响', async () => {
     const res = await api('GET', '/credits', undefined, alice.token);
-    assertEqual(res.data.data.balance, 10000, 'alice still 10000');
+    assertEqual(res.data.data.balance, 100000, 'alice still 100000');
     assertEqual(res.data.data.totalSpent, 0, 'alice spent 0');
   });
 }
@@ -644,7 +644,7 @@ async function phase5_SocialAwareness() {
     assertEqual(data.bindings[0].platform, 'telegram', 'telegram');
     assertEqual(data.bindings[0].status, 'active', 'active');
     // Credits (v0.3.0)
-    assert(data.credits.balance < 10000, 'credits spent');
+    assert(data.credits.balance < 100000, 'credits spent');
     assert(data.credits.totalSpent > 0, 'totalSpent > 0');
   });
 }
@@ -705,7 +705,7 @@ async function phase7_Cleanup() {
     const res = await api('GET', '/me', undefined, codeAgent.token);
     assertEqual(res.data.data.bindings.length, 0, 'bindings empty');
     // Credits 和 stats 应该不变
-    assert(res.data.data.credits.balance < 10000, 'credits unchanged');
+    assert(res.data.data.credits.balance < 100000, 'credits unchanged');
     assert(res.data.data.stats.conversationCount >= 2, 'conversations unchanged');
   });
 

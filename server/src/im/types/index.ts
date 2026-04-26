@@ -62,10 +62,18 @@ export type MessageType =
   | 'code'
   | 'image'
   | 'file'
+  | 'voice' // v1.8.2: Audio messages
+  | 'location' // v1.8.2: Geo-coordinates
+  | 'artifact' // v1.8.2: Multi-type container (pdf/code/dataset/chart/notebook/latex/document/other)
   | 'tool_call'
   | 'tool_result'
+  /** @deprecated v1.8.2 — use 'system' with metadata.action. Kept for backward compat. */
   | 'system_event'
+  | 'system' // v1.8.2: Generic system notifications (member_join, etc.)
   | 'thinking';
+
+// v1.8.2: Artifact sub-types for multi-type containers
+export type ArtifactType = 'pdf' | 'code' | 'document' | 'dataset' | 'chart' | 'notebook' | 'latex' | 'other';
 
 export type MessageStatus = 'sending' | 'sent' | 'delivered' | 'read' | 'failed';
 
@@ -85,18 +93,47 @@ export interface Message {
 export interface MessageMetadata {
   /** Code block language (when type = "code") */
   language?: string;
-  /** File attachment details */
+  /** File attachment details (type = "file" | "image") */
   fileName?: string;
   fileSize?: number;
   mimeType?: string;
   fileUrl?: string;
   /** Confirmed upload ID (required when type = "file") */
   uploadId?: string;
+  /** Image dimensions (type = "image") */
+  width?: number;
+  height?: number;
+  thumbnailUrl?: string;
+  /** Voice message (type = "voice") */
+  duration?: number; // seconds
+  waveform?: number[];
+  transcription?: string;
+  /** Location (type = "location") */
+  address?: string;
+  locationName?: string;
+  /** Artifact container (type = "artifact") */
+  title?: string;
+  artifactType?: ArtifactType;
+  pageCount?: number;
+  lines?: number;
+  wordCount?: number;
+  rowCount?: number;
+  columns?: string[];
+  chartType?: string;
+  cellCount?: number;
+  kernelType?: string;
+  compiled?: boolean;
+  dataPoints?: number;
+  format?: string;
+  /** System event (type = "system_event" | "system") */
+  action?: string; // member_join, member_leave, title_changed
+  userId?: string;
+  userName?: string;
   /** Tool call payload (when type = "tool_call") */
   toolCall?: ToolCallPayload;
   /** Tool result payload (when type = "tool_result") */
   toolResult?: ToolResultPayload;
-  /** System event details */
+  /** System event details (legacy, use action/userId for new system type) */
   systemEvent?: SystemEventPayload;
   /** Streaming indicator */
   isStreaming?: boolean;
@@ -140,7 +177,9 @@ export type WSClientEventType =
   | 'conversation.leave'
   | 'agent.heartbeat'
   | 'agent.capability.declare'
-  | 'ping';
+  | 'ping'
+  | 'ack'
+  | 'reconnect';
 
 export type WSServerEventType =
   | 'authenticated'
@@ -148,6 +187,8 @@ export type WSServerEventType =
   | 'message.new'
   | 'message.updated'
   | 'message.edit'
+  | 'message.reaction'
+  | 'message.delivered'
   | 'message.deleted'
   | 'message.stream.chunk'
   | 'message.stream.end'
@@ -160,6 +201,17 @@ export type WSServerEventType =
   | 'agent.status'
   | 'task.notification'
   | 'event.subscription'
+  | 'contact.request'
+  | 'contact.accepted'
+  | 'contact.rejected'
+  | 'contact.removed'
+  | 'contact.blocked'
+  | 'message.read'
+  | 'community.reply'
+  | 'community.vote'
+  | 'community.answer.accepted'
+  | 'community.mention'
+  | 'reconnect.ack'
   | 'pong';
 
 export interface WSMessage<T = unknown> {
@@ -245,10 +297,15 @@ export interface WebhookPayload {
 }
 
 // ─── API Response ────────────────────────────────────────────
+export interface ApiErrorObject {
+  code: string;
+  message: string;
+}
+
 export interface ApiResponse<T = unknown> {
   ok: boolean;
   data?: T;
-  error?: string;
+  error?: string | ApiErrorObject;
   meta?: Record<string, unknown>;
 }
 
@@ -439,7 +496,7 @@ export interface FileQuota {
 
 // ─── v1.7.2: Task Orchestration ─────────────────────────────
 
-export type TaskStatus = 'pending' | 'assigned' | 'running' | 'completed' | 'failed' | 'cancelled';
+export type TaskStatus = 'pending' | 'assigned' | 'running' | 'review' | 'completed' | 'failed' | 'cancelled';
 export type ScheduleType = 'once' | 'interval' | 'cron';
 export type TaskDelivery = 'message' | 'webhook' | 'none';
 export type SessionTarget = 'main' | 'isolated';
@@ -461,6 +518,8 @@ export interface CreateTaskInput {
   input?: Record<string, unknown>;
   contextUri?: string;
   assigneeId?: string; // Target agent (or "self")
+  scope?: string; // Workspace scope
+  conversationId?: string; // Associated conversation (v1.8.2)
   scheduleType?: ScheduleType;
   scheduleAt?: string; // ISO 8601 for "once"
   scheduleCron?: string; // Cron expression
@@ -483,7 +542,11 @@ export interface TaskInfo {
   contextUri: string | null;
   creatorId: string;
   assigneeId: string | null;
+  scope: string;
+  conversationId: string | null; // v1.8.2
   status: TaskStatus;
+  progress: number | null; // v1.8.2: 0.0-1.0
+  statusMessage: string | null; // v1.8.2
   scheduleType: ScheduleType | null;
   scheduleCron: string | null;
   intervalMs: number | null;
@@ -498,6 +561,7 @@ export interface TaskInfo {
   cost: number;
   timeoutMs: number;
   deadline: Date | null;
+  completedAt: Date | null; // v1.8.2
   maxRetries: number;
   retryDelayMs: number;
   retryCount: number;
@@ -537,6 +601,8 @@ export interface TaskListQuery {
   capability?: string;
   assigneeId?: string;
   creatorId?: string;
+  scope?: string;
+  conversationId?: string; // v1.8.2
   scheduleType?: ScheduleType;
   limit?: number;
   cursor?: string;
@@ -551,6 +617,7 @@ export interface IdentityKeyInfo {
   imUserId: string;
   publicKey: string; // Base64 Ed25519 public key
   keyId: string; // SHA-256(publicKey)[0:8] hex (16 chars)
+  didKey?: string; // did:key:z... canonical DID derived from publicKey (AIP)
   attestation: string | null;
   derivationMode: DerivationMode;
   registeredAt: Date;
@@ -606,6 +673,9 @@ export interface MemoryFileInfo {
   path: string;
   version: number;
   contentLength: number;
+  memoryType?: string | null;
+  description?: string | null;
+  stale?: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -665,6 +735,7 @@ export interface GeneSelectorInput {
   wGlobal: number;
   breakerCheck: (geneId: string) => { allowed: boolean; state: string };
   semanticCache?: Map<string, number>; // Layer 3: LLM signal-pair similarity cache
+  banThreshold?: number; // v1.8.0: override default BAN_THRESHOLD for fallback (default 0.18)
 }
 
 export interface ScoredGene {
@@ -725,6 +796,7 @@ export interface PrismerGene {
   parentGeneId?: string | null;
   forkCount?: number;
   generation?: number;
+  qualityScore?: number; // 0..1 normalized quality score (anti-cheat / leaderboard)
 }
 
 export interface AgentPersonality {
@@ -767,6 +839,14 @@ export interface EvolutionAdvice {
     confidence: number;
     reason: string;
   }>;
+  // v1.8.0: related memory files for cross-layer context
+  relatedMemories?: Array<{
+    id: string;
+    path: string;
+    snippet: string;
+    relevance: number;
+  }>;
+  fallback?: 'relaxed_ban' | 'hypergraph_neighbor' | 'baseline'; // v1.8.0: which fallback level was used
 }
 
 export interface EvolutionRecordInput {
@@ -779,6 +859,8 @@ export interface EvolutionRecordInput {
   metadata?: Record<string, unknown>;
   raw_context?: string; // v0.4.0: optional raw context for LLM enrichment (async)
   strategy_used?: string[]; // v0.4.0: actual steps agent executed (for attribution scoring)
+  transition_reason?: string; // v1.8.0: 'gene_applied' | 'fallback_relaxed' | 'fallback_neighbor' | 'baseline'
+  context_snapshot?: Record<string, unknown>; // v1.8.0: execution context (signals, memoryCount, etc.)
 }
 
 /** v0.4.0 — Evolution report input (async LLM aggregation) */
@@ -858,4 +940,72 @@ export interface CreateSubscriptionInput {
   timeoutMs?: number;
   expiresAt?: string;
   metadata?: Record<string, unknown>;
+}
+
+// ─── Contact System Events (v1.8.0 P9) ──────────────────
+export type ContactEventType =
+  | 'contact.request'
+  | 'contact.accepted'
+  | 'contact.rejected'
+  | 'contact.removed'
+  | 'contact.blocked';
+
+export interface ContactRequestPayload {
+  requestId: string;
+  fromUserId: string;
+  toUserId: string;
+  fromUsername?: string;
+  fromDisplayName?: string;
+  reason?: string;
+  source?: string;
+  createdAt: string;
+}
+
+export interface ContactAcceptedPayload {
+  fromUserId: string;
+  toUserId: string;
+  conversationId: string;
+  username?: string;
+  displayName?: string;
+  acceptedAt: string;
+}
+
+export interface ContactRejectedPayload {
+  fromUserId: string;
+  toUserId: string;
+  requestId: string;
+  rejectedAt: string;
+}
+
+export interface ContactRemovedPayload {
+  userId: string;
+  removedUserId: string;
+  removedAt: string;
+}
+
+export interface ContactBlockedPayload {
+  userId: string;
+  blockedUserId: string;
+  blockedAt: string;
+}
+
+export interface ConversationCreatedPayload {
+  conversationId: string;
+  type: string;
+  participants: string[];
+  createdAt: string;
+}
+
+export interface MessageDeliveredPayload {
+  conversationId: string;
+  messageIds: string[];
+  userId: string;
+  deliveredAt: string;
+}
+
+export interface MessageReadPayload {
+  conversationId: string;
+  messageIds: string[];
+  userId: string;
+  readAt: string;
 }

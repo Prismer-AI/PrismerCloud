@@ -19,6 +19,8 @@ export interface PublicGene {
   forkCount?: number;
   parentGeneId?: string | null;
   generation?: number;
+  qualityScore?: number;
+  createdAt?: string;
 }
 
 export interface FeedEvent {
@@ -49,6 +51,7 @@ export interface Skill {
   status: string;
   geneId?: string;
   signals?: string;
+  qualityScore?: number;
 }
 
 export interface SkillCategory {
@@ -130,6 +133,8 @@ export const SORT_OPTIONS = [
   { key: 'newest', label: 'Newest' },
   { key: 'most_used', label: 'Most Used' },
   { key: 'highest_success', label: 'Highest Success' },
+  { key: 'impact', label: 'Impact Score' },
+  { key: 'rising', label: 'Rising' },
 ] as const;
 
 export const FEED_ICONS: Record<string, { color: string }> = {
@@ -141,10 +146,54 @@ export const FEED_ICONS: Record<string, { color: string }> = {
 };
 
 // Helpers
-export const glass = (isDark: boolean) =>
-  isDark
-    ? 'backdrop-blur-xl bg-white/[0.03] border border-white/[0.06] shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)]'
-    : 'backdrop-blur-xl bg-white/70 border border-white/40 shadow-sm';
+export const glass = (isDark: boolean, level: 'subtle' | 'base' | 'elevated' | 'hero' = 'base') => {
+  if (!isDark) {
+    const map = {
+      subtle: 'bg-white/60 border border-zinc-200/60',
+      base: 'bg-white shadow-sm border border-zinc-200',
+      elevated: 'bg-white shadow-md border border-zinc-200',
+      hero: 'bg-gradient-to-br from-violet-50/80 to-cyan-50/50 border border-violet-100',
+    };
+    return map[level];
+  }
+  const map = {
+    subtle: 'backdrop-blur-md bg-white/[0.02] border border-white/[0.04]',
+    base: 'backdrop-blur-xl bg-white/[0.03] border border-white/[0.06] shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)]',
+    elevated:
+      'backdrop-blur-xl bg-white/[0.05] border border-white/[0.08] shadow-[inset_0_1px_0_0_rgba(255,255,255,0.05)]',
+    hero: 'backdrop-blur-2xl bg-white/[0.04] border border-white/[0.08] shadow-[0_0_80px_rgba(139,92,246,0.04)]',
+  };
+  return map[level];
+};
+
+export interface CreatedSkill {
+  id: string;
+  name: string;
+  category: string;
+  installs: number;
+  stars: number;
+  sourceUrl: string;
+}
+
+/** Source badge config for skill cards and detail modals. */
+export const SOURCE_BADGE: Record<string, { label: string; dark: string; light: string }> = {
+  clawhub: { label: 'ClawHub', dark: 'bg-blue-500/15 text-blue-300', light: 'bg-blue-100 text-blue-600' },
+  'awesome-openclaw': {
+    label: 'Verified',
+    dark: 'bg-emerald-500/15 text-emerald-300',
+    light: 'bg-emerald-100 text-emerald-600',
+  },
+  gstack: { label: 'gstack', dark: 'bg-amber-500/15 text-amber-300', light: 'bg-amber-100 text-amber-600' },
+};
+
+export function getSourceBadge(source: string, isDark: boolean): { label: string; className: string } | null {
+  const badge = SOURCE_BADGE[source];
+  if (!badge) {
+    if (source === 'community') return null; // don't badge community (default)
+    return { label: source, className: isDark ? 'bg-zinc-700/60 text-zinc-400' : 'bg-zinc-100 text-zinc-500' };
+  }
+  return { label: badge.label, className: isDark ? badge.dark : badge.light };
+}
 
 export function timeAgo(ts: string): string {
   const diff = Date.now() - new Date(ts).getTime();
@@ -182,3 +231,71 @@ export function getSteps(g: PublicGene): string[] {
     return (g.strategy as { steps: string[] }).steps;
   return [];
 }
+
+// ─── Leaderboard V2 Types ──────────────────────────────
+
+export interface LeaderboardAgentEntry {
+  rank: number;
+  prevRank: number | null;
+  rankChange: number | null;
+  agentId: string;
+  agentName: string;
+  ownerUsername: string;
+  err: number | null;
+  sessionCount: number;
+  successRate: number | null;
+  value: { tokenSaved: number; moneySaved: number; co2Reduced: number; devHoursSaved: number };
+  trend: number[];
+  badges: string[];
+  domain: string;
+  percentile: number | null;
+  growthRate: number | null;
+}
+
+export interface LeaderboardContributorEntry {
+  rank: number;
+  prevRank: number | null;
+  rankChange: number | null;
+  agentId: string;
+  agentName: string;
+  ownerUsername: string;
+  genesPublished: number;
+  genesAdopted: number;
+  agentsHelped: number;
+  agentCount?: number;
+  value: { tokenSaved: number; moneySaved: number; co2Reduced: number };
+  topGene: { id: string; title: string; adopters: number; successRate: number } | null;
+  percentile: number | null;
+}
+
+export interface LeaderboardRisingEntry {
+  rank: number;
+  entityType: string;
+  entityId: string;
+  entitySlug?: string;
+  entityName: string;
+  ownerUsername: string;
+  growthRate: number;
+  currentValue: number;
+  trend: number[];
+  daysActive: number;
+}
+
+export interface LeaderboardHeroData {
+  global: { totalTokenSaved: number; totalMoneySaved: number; totalCo2Reduced: number; totalDevHoursSaved: number };
+  network: { totalAgentsEvolving: number; totalGenesPublished: number; totalGeneTransfers: number };
+  period: { label: string; weeklyGrowth: number | null };
+}
+
+export const RANK_COLORS = {
+  1: { text: 'text-amber-400', bg: 'bg-amber-400/10', border: 'border-amber-400/30', glow: 'rgba(251,191,36,0.12)' },
+  2: { text: 'text-zinc-300', bg: 'bg-zinc-300/10', border: 'border-zinc-300/30', glow: 'rgba(212,212,216,0.12)' },
+  3: { text: 'text-orange-500', bg: 'bg-orange-500/10', border: 'border-orange-500/30', glow: 'rgba(234,88,12,0.12)' },
+} as const;
+
+export const VALUE_COLORS = {
+  tokenSaved: 'text-emerald-500',
+  co2Reduced: 'text-blue-500',
+  timeSaved: 'text-purple-500',
+  moneySaved: 'text-yellow-500',
+} as const;

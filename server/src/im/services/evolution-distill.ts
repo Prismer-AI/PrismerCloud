@@ -8,6 +8,7 @@ import prisma from '../db';
 import type { PrismerGene, SignalTag } from '../types/index';
 import { normalizeSignals, tagCoverageScore } from './evolution-signals';
 import { loadGenes, saveGene, createGene } from './evolution-lifecycle';
+import { KnowledgeLinkService } from './knowledge-link.service';
 
 // ─── Constants ──────────────────────────────────────────────
 
@@ -128,6 +129,25 @@ export async function triggerDistillation(agentId: string): Promise<{
     )
     .join('\n');
 
+  // v1.8.0 Phase 2c.3: Load related memory files for context-aware distillation
+  let memoryContextText = '';
+  try {
+    const kls = new KnowledgeLinkService();
+    const geneIds = [...new Set(capsules.map((c: any) => c.geneId))];
+    const linkedMemories = await kls.getLinkedMemories(geneIds);
+    if (linkedMemories.size > 0) {
+      const memoryLines: string[] = [];
+      for (const [geneId, memories] of linkedMemories) {
+        for (const m of memories.slice(0, 3)) {
+          memoryLines.push(`- Gene ${geneId} ↔ Memory "${m.path}": ${m.snippet.slice(0, 150)}`);
+        }
+      }
+      if (memoryLines.length > 0) {
+        memoryContextText = `\n## Related Agent Memories (domain knowledge):\n${memoryLines.join('\n')}\n`;
+      }
+    }
+  } catch { /* non-blocking */ }
+
   const prompt = `You are a skill evolution engine. Analyze the following successful execution capsules and synthesize a NEW Gene — a reusable strategy pattern.
 
 ## Successful Capsules (${capsules.length} recent):
@@ -135,7 +155,7 @@ ${capsulesText}
 
 ## Existing Genes (avoid duplicates):
 ${existingGenesText || '(none)'}
-
+${memoryContextText}
 ## Task
 Find a common pattern across multiple capsules that is NOT already covered by existing genes.
 Synthesize a new Gene JSON with this exact schema:

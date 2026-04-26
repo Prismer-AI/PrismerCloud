@@ -29,8 +29,10 @@ import type {
 } from '../types';
 import type { EvolutionService } from './evolution.service';
 import type { EventBusService } from './event-bus.service';
+import type { CreditService } from './credit.service';
+import { createModuleLogger } from '../../lib/logger';
 
-const LOG = '[TaskService]';
+const log = createModuleLogger('TaskService');
 
 // ─── Error Types ────────────────────────────────────────────
 
@@ -62,6 +64,13 @@ export class TaskAccessError extends Error {
   }
 }
 
+export class InsufficientBudgetError extends Error {
+  constructor(required: number, available: number) {
+    super(`Insufficient credits for task budget: required ${required}, available ${available}`);
+    this.name = 'InsufficientBudgetError';
+  }
+}
+
 // ─── Service ────────────────────────────────────────────────
 
 export interface TaskServiceDeps {
@@ -72,6 +81,7 @@ export interface TaskServiceDeps {
   syncService?: SyncService;
   evolutionService?: EvolutionService;
   eventBusService?: EventBusService;
+  creditService?: CreditService;
 }
 
 export class TaskService {
@@ -95,6 +105,39 @@ export class TaskService {
     // Resolve "self" assignee
     const assigneeId = input.assigneeId === 'self' ? creatorId : input.assigneeId;
 
+    // P9: Block check — assignee may have blocked the creator
+    if (assigneeId && assigneeId !== creatorId) {
+      const { ContactService } = await import('./contact.service');
+      const contactSvc = new ContactService();
+      const blocked = await contactSvc.isBlocked(assigneeId, creatorId);
+      if (blocked) {
+        throw Object.assign(new Error('Assignee has blocked the task creator'), {
+          status: 409,
+          code: 'ASSIGNEE_BLOCKED',
+        });
+      }
+    }
+
+    // Escrow: pre-deduct budget from creator's credits before creating the task.
+    // If deduction fails (insufficient balance), the task is NOT created.
+    const escrowed = input.budget && input.budget > 0;
+    if (escrowed) {
+      const credit = this.deps.creditService;
+      if (!credit) {
+        throw new Error('Credit service unavailable — cannot escrow budget');
+      }
+      const deductResult = await credit.deduct(
+        creatorId,
+        input.budget!,
+        `Escrow for task: ${input.title}`,
+        'task.escrow',
+      );
+      if (!deductResult.success) {
+        throw new InsufficientBudgetError(input.budget!, deductResult.balanceAfter);
+      }
+      log.info(`Escrowed ${input.budget} credits from ${creatorId} for task "${input.title}"`);
+    }
+
     // Compute initial status
     let status: TaskStatus = 'pending';
     if (assigneeId && !input.scheduleType) {
@@ -109,28 +152,50 @@ export class TaskService {
       status = 'pending';
     }
 
-    const task = await this.taskModel.create({
-      title: input.title,
-      description: input.description,
-      capability: input.capability,
-      input: input.input ? JSON.stringify(input.input) : '{}',
-      contextUri: input.contextUri,
-      creatorId,
-      assigneeId,
-      status,
-      scheduleType: input.scheduleType,
-      scheduleAt: this.parseISODate(input.scheduleAt, 'scheduleAt'),
-      scheduleCron: input.scheduleCron,
-      intervalMs: input.intervalMs,
-      nextRunAt,
-      maxRuns: input.maxRuns,
-      timeoutMs: input.timeoutMs,
-      deadline: this.parseISODate(input.deadline, 'deadline'),
-      maxRetries: input.maxRetries,
-      retryDelayMs: input.retryDelayMs,
-      budget: input.budget,
-      metadata: input.metadata ? JSON.stringify(input.metadata) : '{}',
-    });
+    let task;
+    try {
+      task = await this.taskModel.create({
+        title: input.title,
+        description: input.description,
+        capability: input.capability,
+        input: input.input ? JSON.stringify(input.input) : '{}',
+        contextUri: input.contextUri,
+        creatorId,
+        assigneeId,
+        scope: input.scope,
+        conversationId: input.conversationId,
+        status,
+        scheduleType: input.scheduleType,
+        scheduleAt: this.parseISODate(input.scheduleAt, 'scheduleAt'),
+        scheduleCron: input.scheduleCron,
+        intervalMs: input.intervalMs,
+        nextRunAt,
+        maxRuns: input.maxRuns,
+        timeoutMs: input.timeoutMs,
+        deadline: this.parseISODate(input.deadline, 'deadline'),
+        maxRetries: input.maxRetries,
+        retryDelayMs: input.retryDelayMs,
+        budget: input.budget,
+        metadata: input.metadata ? JSON.stringify(input.metadata) : '{}',
+      });
+    } catch (err) {
+      // Refund escrowed credits if task creation fails — prevents credit loss
+      if (escrowed) {
+        await this.deps
+          .creditService!.credit(
+            creatorId,
+            input.budget!,
+            'refund',
+            `Escrow refund: task creation failed for "${input.title}"`,
+          )
+          .catch((refundErr) => {
+            log.error(
+              `CRITICAL: Escrow refund failed after task creation error for "${input.title}": ${(refundErr as Error).message}`,
+            );
+          });
+      }
+      throw err;
+    }
 
     // Log creation
     await this.taskModel.createLog({
@@ -140,9 +205,7 @@ export class TaskService {
       message: `Task "${task.title}" created`,
     });
 
-    console.log(
-      `${LOG} Created: ${task.id} "${task.title}" (${status}, schedule=${input.scheduleType ?? 'immediate'})`,
-    );
+    log.info(`Created: ${task.id} "${task.title}" (${status}, schedule=${input.scheduleType ?? 'immediate'})`);
 
     // Publish event
     this.deps.eventBusService
@@ -156,7 +219,7 @@ export class TaskService {
     // Notify assigned agent (if not scheduled — scheduled tasks dispatch on schedule)
     if (assigneeId && !input.scheduleType) {
       this.notifyAgent(assigneeId, task, 'task.assigned').catch((err) =>
-        console.warn(`${LOG} Failed to notify assignee:`, err.message),
+        log.warn(`Failed to notify assignee: ${err.message}`),
       );
 
       // Publish assigned event
@@ -226,6 +289,8 @@ export class TaskService {
       capability: query.capability,
       assigneeId: query.assigneeId,
       creatorId: query.creatorId,
+      scope: query.scope,
+      conversationId: query.conversationId,
       scheduleType: query.scheduleType,
       limit: query.limit,
       cursor: query.cursor,
@@ -239,53 +304,262 @@ export class TaskService {
   async updateTask(
     id: string,
     actorId: string,
-    updates: { assigneeId?: string; status?: TaskStatus; metadata?: Record<string, unknown> },
+    updates: {
+      title?: string;
+      description?: string;
+      assigneeId?: string;
+      status?: TaskStatus;
+      progress?: number;
+      statusMessage?: string;
+      metadata?: Record<string, unknown>;
+    },
   ): Promise<TaskInfo> {
     const task = await this.taskModel.findById(id);
     if (!task) throw new TaskNotFoundError(id);
 
-    // Only the creator can update/cancel/assign a task
-    if (task.creatorId !== actorId) {
-      throw new TaskAccessError(id, 'only the task creator can update this task');
+    const isCreator = task.creatorId === actorId;
+    const isAssignee = task.assigneeId === actorId;
+
+    if (!isCreator && !isAssignee) {
+      throw new TaskAccessError(id, 'only the task creator or assignee can update this task');
     }
 
     const data: Record<string, unknown> = {};
 
-    if (updates.assigneeId !== undefined) {
-      data.assigneeId = updates.assigneeId;
-      if (task.status === 'pending') {
-        data.status = 'assigned';
+    // Creator-only fields: title, description, assigneeId
+    if (updates.title !== undefined || updates.description !== undefined || updates.assigneeId !== undefined) {
+      if (!isCreator) {
+        throw new TaskAccessError(id, 'only the task creator can update title, description, or assignee');
+      }
+      if (updates.title !== undefined) data.title = updates.title;
+      if (updates.description !== undefined) data.description = updates.description;
+      if (updates.assigneeId !== undefined) {
+        data.assigneeId = updates.assigneeId;
+        if (task.status === 'pending') {
+          data.status = 'assigned';
+        }
       }
     }
+
+    // Creator-only: cancel
     if (updates.status === 'cancelled') {
+      if (!isCreator) {
+        throw new TaskAccessError(id, 'only the task creator can cancel a task');
+      }
       data.status = 'cancelled';
     }
+
+    // Assignee-only fields: progress, statusMessage
+    if (updates.progress !== undefined || updates.statusMessage !== undefined) {
+      if (!isAssignee) {
+        throw new TaskAccessError(id, 'only the assigned agent can update progress or statusMessage');
+      }
+      if (updates.progress !== undefined) {
+        if (typeof updates.progress !== 'number' || updates.progress < 0 || updates.progress > 1) {
+          throw new TaskStateError(id, 'progress', 'a number between 0.0 and 1.0');
+        }
+        data.progress = updates.progress;
+      }
+      if (updates.statusMessage !== undefined) data.statusMessage = updates.statusMessage;
+      // Auto-transition assigned → running on first progress update
+      if (task.status === 'assigned') {
+        data.status = 'running';
+      }
+    }
+
+    // Assignee status transitions with state machine validation
+    const ASSIGNEE_TRANSITIONS: Record<string, string[]> = {
+      assigned: ['running'],
+      running: ['review', 'completed', 'failed'],
+      review: [], // only creator via approve/reject
+    };
+    if (
+      updates.status &&
+      ['running', 'review', 'completed', 'failed'].includes(updates.status) &&
+      updates.status !== 'cancelled'
+    ) {
+      if (!isAssignee) {
+        throw new TaskAccessError(id, 'only the assigned agent can change task execution status');
+      }
+      const currentStatus = (data.status as string) ?? task.status;
+      const allowed = ASSIGNEE_TRANSITIONS[currentStatus];
+      if (allowed && !allowed.includes(updates.status)) {
+        throw new TaskStateError(id, currentStatus, allowed.join(' or ') || 'no assignee transitions allowed');
+      }
+      data.status = updates.status;
+      if (updates.status === 'completed') {
+        data.completedAt = new Date();
+      }
+    }
+
     if (updates.metadata) {
       const existing = this.parseJson(task.metadata);
       data.metadata = JSON.stringify({ ...existing, ...updates.metadata });
+    }
+
+    if (Object.keys(data).length === 0) {
+      return this.toTaskInfo(task);
     }
 
     const updated = await this.taskModel.update(id, data);
     if (!updated) throw new TaskNotFoundError(id);
 
     // Log the update
-    const action = updates.status === 'cancelled' ? 'cancelled' : 'assigned';
-    await this.taskModel.createLog({
-      taskId: id,
-      actorId,
-      action,
-      message:
-        updates.status === 'cancelled' ? `Task cancelled by ${actorId}` : `Task assigned to ${updates.assigneeId}`,
-    });
+    const logAction = data.status === 'cancelled' ? 'cancelled' : data.assigneeId ? 'assigned' : 'progress';
+    const logMessage =
+      data.status === 'cancelled'
+        ? ((updates.metadata?.reason as string) ?? `Task cancelled by ${actorId}`)
+        : data.assigneeId
+          ? `Task assigned to ${updates.assigneeId}`
+          : (updates.statusMessage ?? `Task updated by ${actorId}`);
+    await this.taskModel.createLog({ taskId: id, actorId, action: logAction, message: logMessage });
+
+    // Cancel: refund escrowed budget + publish event + notify assignee
+    if (data.status === 'cancelled') {
+      await this._refundEscrow(task, 'cancelled');
+      this.deps.eventBusService
+        ?.publish({
+          type: 'task.cancelled',
+          timestamp: Date.now(),
+          data: {
+            taskId: id,
+            title: updated.title,
+            creatorId: task.creatorId,
+            assigneeId: task.assigneeId,
+            reason: logMessage,
+          },
+        })
+        .catch(() => {});
+      if (task.assigneeId) {
+        this.notifyAgent(task.assigneeId, updated, 'task.cancelled').catch(() => {});
+      }
+    }
+
+    // Publish task.updated event for progress/status changes
+    if (
+      data.progress !== undefined ||
+      data.statusMessage !== undefined ||
+      (data.status && data.status !== 'cancelled')
+    ) {
+      this.deps.eventBusService
+        ?.publish({
+          type: 'task.updated',
+          timestamp: Date.now(),
+          data: {
+            taskId: id,
+            title: updated.title,
+            status: updated.status,
+            progress: (updated as any).progress,
+            statusMessage: (updated as any).statusMessage,
+          },
+        })
+        .catch((err: any) => log.warn(`EventBus publish failed for task.updated: ${err.message}`));
+    }
 
     // Notify new assignee
     if (updates.assigneeId && data.status === 'assigned') {
-      this.notifyAgent(updates.assigneeId, updated, 'task.assigned').catch((err) =>
-        console.warn(`${LOG} Failed to notify assignee:`, err.message),
+      this.notifyAgent(updates.assigneeId, updated, 'task.assigned').catch((err: any) =>
+        log.warn(`Failed to notify assignee: ${err.message}`),
       );
     }
 
     return this.toTaskInfo(updated);
+  }
+
+  /**
+   * Creator approves a task in review status → completed.
+   * Idempotent: re-approving a completed task returns 200.
+   */
+  async approveTask(taskId: string, actorId: string): Promise<TaskInfo> {
+    const task = await this.taskModel.findById(taskId);
+    if (!task) throw new TaskNotFoundError(taskId);
+    if (task.creatorId !== actorId) {
+      throw new TaskAccessError(taskId, 'only the task creator can approve');
+    }
+    // Idempotent: already completed
+    if (task.status === 'completed') return this.toTaskInfo(task);
+    if (task.status !== 'review') throw new TaskStateError(taskId, task.status, 'review');
+
+    const updated = await this.taskModel.update(taskId, { status: 'completed', completedAt: new Date() });
+    if (!updated) throw new TaskNotFoundError(taskId);
+
+    await this.taskModel.createLog({ taskId, actorId, action: 'completed', message: 'Task approved by creator' });
+    this.deps.eventBusService
+      ?.publish({
+        type: 'task.completed',
+        timestamp: Date.now(),
+        data: { taskId, title: updated.title, creatorId: updated.creatorId, assigneeId: updated.assigneeId },
+      })
+      .catch((err: any) => log.warn(`EventBus publish failed for task.completed: ${err.message}`));
+    if (task.assigneeId) {
+      this.notifyAgent(task.assigneeId, updated, 'task.approved').catch((err: any) =>
+        log.warn(`Failed to notify assignee of approval: ${err.message}`),
+      );
+      this.recordEvolutionOutcome(task.assigneeId, task, 'success', null).catch((err: any) =>
+        log.error({ err }, `Evolution record FAILED for approved task ${taskId}`),
+      );
+    }
+    // Auto-reward on approve
+    const taskMeta = this.parseJson(task.metadata);
+    if (task.budget && task.budget > 0 && taskMeta.autoReward && !taskMeta.rewarded) {
+      this.rewardTask(task.id, task.creatorId).catch((err: any) =>
+        log.warn(`Auto-reward failed for task ${taskId}: ${(err as Error).message}`),
+      );
+    }
+    return this.toTaskInfo(updated);
+  }
+
+  /**
+   * Creator rejects a task in review status → failed.
+   * Idempotent: re-rejecting a failed task returns 200.
+   */
+  async rejectTask(taskId: string, actorId: string, reason: string): Promise<TaskInfo> {
+    const task = await this.taskModel.findById(taskId);
+    if (!task) throw new TaskNotFoundError(taskId);
+    if (task.creatorId !== actorId) throw new TaskAccessError(taskId, 'only the task creator can reject');
+    if (task.status === 'failed') return this.toTaskInfo(task);
+    if (task.status !== 'review') throw new TaskStateError(taskId, task.status, 'review');
+
+    const updated = await this.taskModel.update(taskId, { status: 'failed', error: reason });
+    if (!updated) throw new TaskNotFoundError(taskId);
+
+    await this.taskModel.createLog({ taskId, actorId, action: 'failed', message: `Task rejected: ${reason}` });
+
+    // Refund escrowed budget to creator (rejection = task not rewarded)
+    await this._refundEscrow(task, 'rejected');
+
+    this.deps.eventBusService
+      ?.publish({
+        type: 'task.failed',
+        timestamp: Date.now(),
+        data: { taskId, title: updated.title, creatorId: updated.creatorId, assigneeId: updated.assigneeId, reason },
+      })
+      .catch((err: any) => log.warn(`EventBus publish failed for task.failed: ${err.message}`));
+    if (task.assigneeId) {
+      this.notifyAgent(task.assigneeId, updated, 'task.rejected').catch((err: any) =>
+        log.warn(`Failed to notify assignee of rejection: ${err.message}`),
+      );
+      this.recordEvolutionOutcome(task.assigneeId, task, 'failed', undefined, reason).catch((err: any) =>
+        log.error(`Evolution record FAILED for rejected task ${taskId}: ${(err as Error).message}`),
+      );
+    }
+    return this.toTaskInfo(updated);
+  }
+
+  /**
+   * Cancel a task (soft delete). Creator only.
+   * Idempotent: re-cancelling returns 200.
+   * Cannot cancel completed or failed tasks.
+   */
+  async cancelTask(taskId: string, actorId: string): Promise<TaskInfo> {
+    const task = await this.taskModel.findById(taskId);
+    if (!task) throw new TaskNotFoundError(taskId);
+    if (task.creatorId !== actorId) throw new TaskAccessError(taskId, 'only the task creator can cancel');
+    if (task.status === 'cancelled') return this.toTaskInfo(task);
+    if (['completed', 'failed'].includes(task.status)) {
+      throw new TaskStateError(taskId, task.status, 'pending, assigned, running, or review');
+    }
+    return this.updateTask(taskId, actorId, { status: 'cancelled' as TaskStatus });
   }
 
   // ═══════════════════════════════════════════════════════════
@@ -297,6 +571,17 @@ export class TaskService {
    * Atomic: only succeeds if task is still pending.
    */
   async claimTask(taskId: string, agentId: string): Promise<TaskInfo> {
+    // P9: Block check — task creator may have blocked this agent
+    const taskForBlockCheck = await this.taskModel.findById(taskId);
+    if (taskForBlockCheck) {
+      const { ContactService } = await import('./contact.service');
+      const contactSvc = new ContactService();
+      const blocked = await contactSvc.isBlocked(taskForBlockCheck.creatorId, agentId);
+      if (blocked) {
+        throw Object.assign(new Error('Task creator has blocked this agent'), { status: 409, code: 'CLAIMER_BLOCKED' });
+      }
+    }
+
     const claimed = await this.taskModel.claim(taskId, agentId);
     if (!claimed) {
       const existing = await this.taskModel.findById(taskId);
@@ -311,7 +596,7 @@ export class TaskService {
       message: `Task claimed by agent ${agentId}`,
     });
 
-    console.log(`${LOG} Claimed: ${taskId} by ${agentId}`);
+    log.info(`Claimed: ${taskId} by ${agentId}`);
 
     // Publish event
     this.deps.eventBusService
@@ -363,7 +648,7 @@ export class TaskService {
       metadata: input.metadata ? JSON.stringify(input.metadata) : undefined,
     });
 
-    console.log(`${LOG} Progress: ${taskId} — ${input.message ?? '(no message)'}`);
+    log.info(`Progress: ${taskId} — ${input.message ?? '(no message)'}`);
   }
 
   /**
@@ -384,6 +669,7 @@ export class TaskService {
 
     const updated = await this.taskModel.update(taskId, {
       status: 'completed',
+      completedAt: new Date(),
       result: input.result !== undefined ? JSON.stringify(input.result) : null,
       resultUri: input.resultUri,
       cost: input.cost ?? task.cost,
@@ -398,7 +684,7 @@ export class TaskService {
       metadata: input.result ? JSON.stringify({ resultPreview: String(input.result).slice(0, 200) }) : undefined,
     });
 
-    console.log(`${LOG} Completed: ${taskId}`);
+    log.info(`Completed: ${taskId}`);
 
     // Publish event
     this.deps.eventBusService
@@ -420,8 +706,35 @@ export class TaskService {
 
     // Evolution hook: auto-record successful outcome
     this.recordEvolutionOutcome(agentId, task, 'success', input.result).catch((err) =>
-      console.error(`${LOG} ⚠️ Evolution record FAILED for completed task ${taskId}:`, (err as Error).message),
+      log.error(`Evolution record FAILED for completed task ${taskId}: ${(err as Error).message}`),
     );
+
+    // AIP: Auto-issue TaskCompletionCredential (fire-and-forget)
+    this.issueTaskCompletionVC(agentId, task).catch((err) =>
+      log.warn(`TaskCompletion VC issuance skipped: ${(err as Error).message}`),
+    );
+
+    // Auto-reward: if task has budget and metadata.autoReward is set
+    const taskMeta = this.parseJson(task.metadata);
+    if (task.budget && task.budget > 0 && taskMeta.autoReward && !taskMeta.rewarded) {
+      this.rewardTask(task.id, task.creatorId).catch((err) =>
+        log.warn(`Auto-reward failed for task ${taskId}: ${(err as Error).message}`),
+      );
+    }
+
+    // Team task: check if this is a subtask and all siblings are done
+    if (taskMeta.parentTaskId) {
+      this.checkTeamTaskCompletion(taskMeta.parentTaskId as string).catch((err) =>
+        log.warn(`Team task check failed: ${(err as Error).message}`),
+      );
+    }
+
+    // Verification trigger: after N consecutive completions of same capability
+    if (task.capability) {
+      this.maybeCreateVerificationTask(agentId, task.capability).catch((err) =>
+        log.warn(`Verification trigger failed: ${(err as Error).message}`),
+      );
+    }
 
     return this.toTaskInfo(updated);
   }
@@ -463,9 +776,7 @@ export class TaskService {
         metadata: input.metadata ? JSON.stringify(input.metadata) : undefined,
       });
 
-      console.log(
-        `${LOG} Retrying: ${taskId} (${task.retryCount + 1}/${task.maxRetries}, next at ${nextRetryAt.toISOString()})`,
-      );
+      log.info(`Retrying: ${taskId} (${task.retryCount + 1}/${task.maxRetries}, next at ${nextRetryAt.toISOString()})`);
 
       if (!updated) throw new TaskNotFoundError(taskId);
       return this.toTaskInfo(updated);
@@ -478,6 +789,9 @@ export class TaskService {
     });
     if (!updated) throw new TaskNotFoundError(taskId);
 
+    // Refund escrowed budget to creator on final failure
+    await this._refundEscrow(task, 'failed (retries exhausted)');
+
     await this.taskModel.createLog({
       taskId,
       actorId: agentId,
@@ -486,7 +800,7 @@ export class TaskService {
       metadata: input.metadata ? JSON.stringify(input.metadata) : undefined,
     });
 
-    console.log(`${LOG} Failed: ${taskId} — ${input.error}`);
+    log.info(`Failed: ${taskId} — ${input.error}`);
 
     // Publish event (only on true failure, not retry)
     this.deps.eventBusService
@@ -509,10 +823,143 @@ export class TaskService {
 
     // Evolution hook: auto-record failed outcome
     this.recordEvolutionOutcome(agentId, task, 'failed', undefined, input.error).catch((err) =>
-      console.error(`${LOG} ⚠️ Evolution record FAILED for failed task ${taskId}:`, (err as Error).message),
+      log.error(`Evolution record FAILED for failed task ${taskId}: ${(err as Error).message}`),
     );
 
     return this.toTaskInfo(updated);
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // Marketplace & Reward
+  // ═══════════════════════════════════════════════════════════
+
+  /**
+   * Browse available tasks in the marketplace.
+   * Returns pending tasks with no assignee (open for claiming).
+   */
+  async browseMarketplace(opts: {
+    capability?: string;
+    minReward?: number;
+    sort?: 'reward' | 'newest';
+    limit?: number;
+  }): Promise<TaskInfo[]> {
+    const tasks = await this.taskModel.browseMarketplace({
+      capability: opts.capability,
+      minReward: opts.minReward,
+      sort: opts.sort ?? 'newest',
+      limit: Math.min(opts.limit ?? 20, 50),
+    });
+    return tasks.map((t: any) => this.toTaskInfo(t));
+  }
+
+  /**
+   * Issue reward credits from task creator to assignee.
+   * Can be called manually by creator, or auto-triggered on completion.
+   */
+  async rewardTask(taskId: string, actorId: string): Promise<{ rewarded: number }> {
+    const task = await this.taskModel.findById(taskId);
+    if (!task) throw new TaskNotFoundError(taskId);
+    if (task.status !== 'completed') {
+      throw new TaskStateError(taskId, task.status, 'completed');
+    }
+    if (task.creatorId !== actorId) {
+      throw new TaskAccessError(taskId, 'only the task creator can issue reward');
+    }
+    if (!task.budget || task.budget <= 0) {
+      return { rewarded: 0 };
+    }
+    if (!task.assigneeId) {
+      throw new TaskStateError(taskId, 'no assignee', 'assigned');
+    }
+
+    // Atomic check-and-set: mark as rewarded ONLY if not already rewarded.
+    // This prevents double-payout from concurrent calls.
+    const metadata = this.parseJson(task.metadata);
+    if (metadata.rewarded) {
+      return { rewarded: 0 };
+    }
+
+    const updatedMeta = JSON.stringify({ ...metadata, rewarded: true, rewardedAt: new Date().toISOString() });
+    const atomicResult = await this.taskModel.atomicReward(taskId, updatedMeta);
+    if (!atomicResult) {
+      // Another concurrent call already rewarded — no-op
+      log.info(`Reward skipped (already rewarded): ${taskId}`);
+      return { rewarded: 0 };
+    }
+
+    // Release escrowed credits to assignee.
+    // Budget was already deducted from creator at task creation time (escrow),
+    // so we credit the assignee directly instead of transferring from creator.
+    const credit = this.deps.creditService;
+    if (!credit) {
+      log.warn(`creditService not available — reward recorded but no credits released for task ${taskId}`);
+      return { rewarded: 0 };
+    }
+
+    try {
+      await credit.credit(
+        task.assigneeId,
+        task.budget,
+        'task_reward',
+        `Task reward: ${task.title} (from ${task.creatorId})`,
+      );
+    } catch (err) {
+      // Rollback the rewarded flag on credit failure
+      await this.taskModel.update(taskId, { metadata: JSON.stringify(metadata) });
+      throw err;
+    }
+
+    await this.taskModel.createLog({
+      taskId,
+      actorId,
+      action: 'rewarded',
+      message: `Rewarded ${task.budget} credits to ${task.assigneeId}`,
+    });
+
+    log.info(`Rewarded: ${taskId} — ${task.budget} credits to ${task.assigneeId}`);
+    return { rewarded: task.budget };
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // Subtask / Team Task
+  // ═══════════════════════════════════════════════════════════
+
+  /**
+   * List subtasks of a parent task.
+   */
+  async listSubtasks(parentTaskId: string, requesterId?: string): Promise<TaskInfo[]> {
+    // Verify parent exists and requester has access
+    if (requesterId) {
+      await this.getTask(parentTaskId, requesterId);
+    }
+    const tasks = await this.taskModel.findByParentTaskId(parentTaskId);
+    return tasks.map((t: any) => this.toTaskInfo(t));
+  }
+
+  /**
+   * Get summary of a parent task's subtask progress.
+   */
+  async getSubtaskSummary(
+    parentTaskId: string,
+    requesterId?: string,
+  ): Promise<{
+    total: number;
+    completed: number;
+    failed: number;
+    pending: number;
+    running: number;
+    allDone: boolean;
+  }> {
+    if (requesterId) {
+      await this.getTask(parentTaskId, requesterId);
+    }
+    const subtasks = await this.taskModel.findByParentTaskId(parentTaskId);
+    const total = subtasks.length;
+    const completed = subtasks.filter((t: any) => t.status === 'completed').length;
+    const failed = subtasks.filter((t: any) => t.status === 'failed').length;
+    const pending = subtasks.filter((t: any) => t.status === 'pending').length;
+    const running = subtasks.filter((t: any) => ['assigned', 'running'].includes(t.status)).length;
+    return { total, completed, failed, pending, running, allDone: total > 0 && completed + failed === total };
   }
 
   // ═══════════════════════════════════════════════════════════
@@ -553,9 +1000,9 @@ export class TaskService {
         await this.notifyAgent(targetId, updated, 'task.dispatched');
 
         dispatched++;
-        console.log(`${LOG} Dispatched: ${task.id} "${task.title}" (run #${updated.runCount})`);
+        log.info(`Dispatched: ${task.id} "${task.title}" (run #${updated.runCount})`);
       } catch (err) {
-        console.error(`${LOG} Dispatch error for task ${task.id}:`, err);
+        log.error({ err }, `Dispatch error for task ${task.id}`);
       }
     }
 
@@ -591,6 +1038,9 @@ export class TaskService {
           status: 'failed',
           error: `Timed out after ${task.timeoutMs}ms (max retries exhausted)`,
         });
+
+        // Refund escrowed budget to creator on timeout failure
+        await this._refundEscrow(task, 'timed out');
 
         await this.taskModel.createLog({
           taskId: task.id,
@@ -656,7 +1106,37 @@ export class TaskService {
       metadata: { taskAutoRecord: true },
     });
 
-    console.log(`${LOG} Evolution recorded: ${outcome} for gene ${geneId} (agent ${agentId})`);
+    log.info(`Evolution recorded: ${outcome} for gene ${geneId} (agent ${agentId})`);
+  }
+
+  /**
+   * AIP: Issue a TaskCompletionCredential for a completed task.
+   * Only issues if the agent has a registered DID identity.
+   */
+  private async issueTaskCompletionVC(
+    agentId: string,
+    task: { capability?: string | null; status: string },
+  ): Promise<void> {
+    const { IdentityService } = await import('./identity.service');
+    const { CredentialService } = await import('./credential.service');
+
+    const identityService = new IdentityService();
+    const credentialService = new CredentialService();
+
+    // Check if agent has a DID identity
+    const agentKey = await identityService.lookupKey(agentId);
+    if (!agentKey?.didKey) return;
+
+    await credentialService.issueTaskCompletion({
+      agentDid: agentKey.didKey,
+      issuerDid: identityService.getServerDID(),
+      issuerPrivateKey: identityService.getServerPrivateKey(),
+      taskType: task.capability ?? 'unknown',
+      outcome: 'success',
+      score: 0.7,
+    });
+
+    log.info(`TaskCompletion VC issued for agent ${agentId} (did: ${agentKey.didKey})`);
   }
 
   /**
@@ -693,7 +1173,7 @@ export class TaskService {
         timestamp: Date.now(),
       });
     } catch (err) {
-      console.warn(`${LOG} WS/SSE push failed for ${targetId}:`, (err as Error).message);
+      log.warn(`WS/SSE push failed for ${targetId}: ${(err as Error).message}`);
     }
 
     // Write sync event for offline-first SDK pickup (with 5s timeout to prevent scheduler stall)
@@ -706,7 +1186,7 @@ export class TaskService {
           targetId,
         ),
         new Promise((_, reject) => setTimeout(() => reject(new Error('sync timeout')), 5000)),
-      ]).catch((err) => console.warn(`${LOG} Sync event write failed:`, (err as Error).message));
+      ]).catch((err) => log.warn(`Sync event write failed: ${(err as Error).message}`));
     }
   }
 
@@ -727,6 +1207,103 @@ export class TaskService {
     } catch {
       // Non-critical
     }
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // Team Task + Verification Helpers
+  // ═══════════════════════════════════════════════════════════
+
+  /**
+   * Check if all subtasks of a parent task are done.
+   * If so, publish team_task.all_subtasks_completed event.
+   */
+  private async checkTeamTaskCompletion(parentTaskId: string): Promise<void> {
+    const summary = await this.getSubtaskSummary(parentTaskId);
+    if (!summary.allDone) return;
+
+    const parent = await this.taskModel.findById(parentTaskId);
+    if (!parent) return;
+
+    this.deps.eventBusService
+      ?.publish({
+        type: 'team_task.all_subtasks_completed',
+        timestamp: Date.now(),
+        data: {
+          parentTaskId,
+          title: parent.title,
+          creatorId: parent.creatorId,
+          total: summary.total,
+          completed: summary.completed,
+          failed: summary.failed,
+        },
+      })
+      .catch(() => {});
+
+    // Notify parent task creator
+    this.notifyUser(parent.creatorId, parent, 'team_task.all_subtasks_completed').catch(() => {});
+    log.info(`Team task completed: ${parentTaskId} (${summary.completed}/${summary.total} subtasks)`);
+  }
+
+  /**
+   * After an agent completes N tasks of the same capability in 24h,
+   * auto-create a verification task + evolution signal.
+   */
+  private async maybeCreateVerificationTask(agentId: string, capability: string): Promise<void> {
+    const THRESHOLD = 3;
+    const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+
+    const recentCompleted = await this.taskModel.countRecentCompleted(agentId, capability, since);
+    if (recentCompleted < THRESHOLD || recentCompleted % THRESHOLD !== 0) return;
+
+    // Dedup: check if a verification task for this agent+capability already exists today
+    const existing = await this.taskModel.list({
+      creatorId: 'system',
+      capability: 'verification',
+      status: 'pending',
+      limit: 1,
+    });
+    const alreadyExists = existing.some((t: any) => {
+      try {
+        const meta = JSON.parse(t.metadata || '{}');
+        return meta.targetAgentId === agentId && meta.targetCapability === capability;
+      } catch {
+        return false;
+      }
+    });
+    if (alreadyExists) return;
+
+    // Create verification task
+    await this.createTask('system', {
+      title: `Verify recent ${capability} outputs`,
+      description: `Agent ${agentId} completed ${recentCompleted} ${capability} tasks in 24h. Verify output quality.`,
+      capability: 'verification',
+      metadata: {
+        verificationType: 'batch_quality_check',
+        targetAgentId: agentId,
+        targetCapability: capability,
+        sampleSize: Math.min(recentCompleted, 5),
+      },
+    });
+
+    // Evolution signal
+    const evo = this.deps.evolutionService;
+    if (evo) {
+      const signals = evo.extractSignals({ taskCapability: capability, taskStatus: 'verification_triggered' });
+      if (signals.length > 0) {
+        await evo
+          .recordOutcome(agentId, {
+            gene_id: '',
+            signals,
+            outcome: 'success',
+            score: 0.5,
+            summary: `Verification triggered: ${recentCompleted} ${capability} tasks in 24h`,
+            metadata: { verificationAutoTrigger: true },
+          })
+          .catch(() => {});
+      }
+    }
+
+    log.info(`Verification triggered: ${agentId} completed ${recentCompleted} ${capability} tasks`);
   }
 
   // ═══════════════════════════════════════════════════════════
@@ -773,7 +1350,7 @@ export class TaskService {
 
     // Validate parsed values
     if (isNaN(min) || min < 0 || min > 59 || isNaN(hour) || hour < 0 || hour > 23) {
-      console.warn(`${LOG} Invalid cron values: min=${minStr}, hour=${hourStr}, falling back to +1h`);
+      log.warn(`Invalid cron values: min=${minStr}, hour=${hourStr}, falling back to +1h`);
       return new Date(Date.now() + 3600_000);
     }
 
@@ -791,6 +1368,42 @@ export class TaskService {
   // ═══════════════════════════════════════════════════════════
   // Helpers
   // ═══════════════════════════════════════════════════════════
+
+  /**
+   * Refund escrowed budget to the task creator.
+   * Shared by cancel, fail, and timeout paths. Only refunds if
+   * the task has a positive budget and has not already been rewarded.
+   */
+  private async _refundEscrow(
+    task: { id: string; creatorId: string; budget: number; title: string; metadata?: string | null },
+    reason: string,
+  ): Promise<void> {
+    if (!task.budget || task.budget <= 0) return;
+    const taskMeta = this.parseJson(task.metadata);
+    if (taskMeta.rewarded || taskMeta.refunded) return;
+
+    const credit = this.deps.creditService;
+    if (!credit) return;
+
+    try {
+      // CAS: atomically mark refunded before issuing credit to prevent double-refund
+      const updatedMeta = JSON.stringify({
+        ...taskMeta,
+        refunded: true,
+        refundedAt: new Date().toISOString(),
+      });
+      const casResult = await this.taskModel.atomicRefund(task.id, updatedMeta);
+      if (!casResult) {
+        log.info(`Skipping refund for task ${task.id}: already refunded (concurrent call won)`);
+        return;
+      }
+
+      await credit.credit(task.creatorId, task.budget, 'refund', `Escrow refund: task "${task.title}" ${reason}`);
+      log.info(`Refunded ${task.budget} escrowed credits to ${task.creatorId} for task ${task.id} (${reason})`);
+    } catch (err) {
+      log.error(`Escrow refund failed for task ${task.id} (${reason}): ${(err as Error).message}`);
+    }
+  }
 
   private parseISODate(value: string | undefined, field: string): Date | undefined {
     if (!value) return undefined;
@@ -819,7 +1432,11 @@ export class TaskService {
     contextUri: string | null;
     creatorId: string;
     assigneeId: string | null;
+    scope: string;
+    conversationId?: string | null;
     status: string;
+    progress?: number | null;
+    statusMessage?: string | null;
     scheduleType: string | null;
     scheduleCron: string | null;
     intervalMs: number | null;
@@ -834,6 +1451,7 @@ export class TaskService {
     cost: number;
     timeoutMs: number;
     deadline: Date | null;
+    completedAt?: Date | null;
     maxRetries: number;
     retryDelayMs: number;
     retryCount: number;
@@ -850,7 +1468,11 @@ export class TaskService {
       contextUri: record.contextUri,
       creatorId: record.creatorId,
       assigneeId: record.assigneeId,
+      scope: record.scope,
+      conversationId: record.conversationId ?? null,
       status: record.status as TaskStatus,
+      progress: record.progress ?? null,
+      statusMessage: record.statusMessage ?? null,
       scheduleType: record.scheduleType as ScheduleType | null,
       scheduleCron: record.scheduleCron,
       intervalMs: record.intervalMs,
@@ -865,6 +1487,7 @@ export class TaskService {
       cost: record.cost,
       timeoutMs: record.timeoutMs,
       deadline: record.deadline,
+      completedAt: record.completedAt ?? null,
       maxRetries: record.maxRetries,
       retryDelayMs: record.retryDelayMs,
       retryCount: record.retryCount,

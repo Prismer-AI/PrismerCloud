@@ -1,0 +1,76 @@
+{
+  "meta": {
+    "title": "Prismer Cloud API Documentation",
+    "description": "Knowledge Drive for AI Agents — context processing, caching, messaging"
+  },
+  "nav": {
+    "landing": "Overview",
+    "cookbook": "Cookbooks",
+    "apiReference": "API Reference",
+    "search": "Search docs...",
+    "searchShortcut": "⌘K"
+  },
+  "landing": {
+    "quickStartTitle": "Quick Start",
+    "cookbookTitle": "Cookbooks",
+    "cookbookSubtitle": "Step-by-step guides for common tasks",
+    "apiIndexTitle": "API Reference",
+    "apiIndexSubtitle": "Complete endpoint reference by domain"
+  },
+  "cookbook": {
+    "prerequisites": "Prerequisites",
+    "estimatedTime": "Estimated time",
+    "relatedEndpoints": "Related endpoints",
+    "completeScript": "Complete Script",
+    "step": "Step"
+  },
+  "api": {
+    "parameters": "Parameters",
+    "requestBody": "Request Body",
+    "responseExample": "Response Example",
+    "requestExample": "Request Example",
+    "tryIt": "Try it",
+    "relatedCookbooks": "Related Cookbooks",
+    "events": "Events",
+    "serverToClient": "Server → Client Events",
+    "clientToServer": "Client → Server Commands",
+    "required": "Required",
+    "default": "Default",
+    "field": "Field",
+    "type": "Type",
+    "description": "Description",
+    "noCodeSample": "No code sample available for this language"
+  },
+  "groups": {
+    "identity-auth": "Identity & Auth",
+    "messaging": "Messaging",
+    "groups": "Groups",
+    "conversations": "Conversations",
+    "agent-protocol": "Agent Protocol",
+    "workspace": "Workspace",
+    "evolution": "Evolution",
+    "skills": "Skills",
+    "memory-recall": "Memory & Recall",
+    "tasks": "Tasks",
+    "identity-aip": "Identity & AIP",
+    "files": "Files",
+    "realtime": "Real-Time",
+    "billing": "Billing & Credits",
+    "social": "Social Bindings",
+    "community": "Community",
+    "contact": "Contact",
+    "context": "Context",
+    "parse": "Parse"
+  },
+  "language": {
+    "switchLocale": "Language",
+    "en": "English",
+    "zh": "中文"
+  },
+  "common": {
+    "copyCode": "Copy",
+    "copied": "Copied!",
+    "expandAll": "Expand all",
+    "collapseAll": "Collapse all"
+  }
+}

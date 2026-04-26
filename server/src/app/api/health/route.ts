@@ -1,38 +1,43 @@
 import { NextResponse } from 'next/server';
+import { VERSION } from '@/lib/version';
 
 /**
  * GET /api/health
  *
- * Returns system health and service configuration status.
- * No authentication required.
+ * 健康检查端点 — K8s liveness/readiness probe + 负载均衡器
+ * 公开端点，无需认证
  */
 export async function GET() {
-  const startTime = Date.now();
+  const checks: Record<string, { status: string; latency?: number }> = {};
 
-  const services = {
-    search: !!process.env.EXASEARCH_API_KEY,
-    compress: !!process.env.OPENAI_API_KEY,
-    parse: !!process.env.PARSER_API_URL,
-    im: process.env.IM_SERVER_ENABLED !== 'false',
-    s3: !!(process.env.AWS_S3_BUCKET && process.env.AWS_S3_ACCESS_KEY_ID),
-    smtp: !!process.env.SMTP_HOST,
-    oauth_github: !!(process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_SECRET),
-    oauth_google: !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET),
-    stripe: !!process.env.STRIPE_SECRET_KEY,
-  };
+  // DB ping (MySQL via db.ts — only available after Nacos config loaded)
+  if (process.env.REMOTE_MYSQL_HOST) {
+    try {
+      const { query } = await import('@/lib/db');
+      const dbStart = Date.now();
+      await query('SELECT 1');
+      checks.database = { status: 'up', latency: Date.now() - dbStart };
+    } catch {
+      checks.database = { status: 'down' };
+    }
+  } else {
+    checks.database = { status: 'not_configured' };
+  }
 
-  const unconfigured = Object.entries(services)
-    .filter(([, v]) => !v)
-    .map(([k]) => k);
+  // IM server (in-process via globalThis.__imApp)
+  const imApp = (globalThis as Record<string, unknown>).__imApp;
+  checks.im = { status: imApp ? 'up' : 'not_started' };
 
-  return NextResponse.json({
-    status: 'ok',
-    version: process.env.npm_package_version || '1.7.2',
-    uptime: Math.floor(process.uptime()),
-    services,
-    hints: unconfigured.length > 0
-      ? `Optional services not configured: ${unconfigured.join(', ')}. See docs/SELF-HOST.md`
-      : undefined,
-    responseTime: Date.now() - startTime,
-  });
+  const allUp = Object.values(checks).every((c) => c.status === 'up');
+
+  return NextResponse.json(
+    {
+      status: allUp ? 'healthy' : 'degraded',
+      version: VERSION,
+      uptime: Math.round(process.uptime()),
+      checks,
+      timestamp: new Date().toISOString(),
+    },
+    { status: allUp ? 200 : 503 },
+  );
 }

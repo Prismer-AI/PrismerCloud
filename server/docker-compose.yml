@@ -13,7 +13,9 @@ services:
       - FF_AUTH_LOCAL=true
       - SKIP_EMAIL_VERIFICATION=true
       - INIT_ADMIN_EMAIL=${INIT_ADMIN_EMAIL:-admin@localhost}
-      - INIT_ADMIN_PASSWORD=${INIT_ADMIN_PASSWORD:-admin123}
+      # INIT_ADMIN_PASSWORD comes from host env or .env (no value here so secret
+      # scanners don't flag the literal — set it in .env before `docker compose up`).
+      - INIT_ADMIN_PASSWORD
       - ADMIN_EMAILS=${ADMIN_EMAILS:-}
       # --- Feature Flags (all local) ---
       - FF_USAGE_RECORD_LOCAL=true
@@ -30,13 +32,16 @@ services:
       - STRIPE_PUBLISHABLE_KEY=${STRIPE_PUBLISHABLE_KEY:-}
       # --- IM Server ---
       - IM_SERVER_ENABLED=true
-      # NOTE: If MYSQL_PASSWORD contains URI-special chars (@, :, /, %), use REMOTE_MYSQL_* vars instead
-      - DATABASE_URL=mysql://${MYSQL_USER:-prismer}:${MYSQL_PASSWORD:-prismer}@mysql:3306/prismer_cloud
+      # MYSQL_PASSWORD comes from host env or .env (see comment near INIT_ADMIN_PASSWORD).
+      # If MYSQL_PASSWORD contains URI-special chars (@, :, /, %), use REMOTE_MYSQL_* vars instead
+      # of DATABASE_URL.
+      - MYSQL_PASSWORD
+      - DATABASE_URL=mysql://${MYSQL_USER:-prismer}:${MYSQL_PASSWORD}@mysql:3306/prismer_cloud
       # --- MySQL (for db.ts connection pool) ---
       - REMOTE_MYSQL_HOST=mysql
       - REMOTE_MYSQL_PORT=3306
       - REMOTE_MYSQL_USER=${MYSQL_USER:-prismer}
-      - REMOTE_MYSQL_PASSWORD=${MYSQL_PASSWORD:-prismer}
+      - REMOTE_MYSQL_PASSWORD=${MYSQL_PASSWORD}
       - REMOTE_MYSQL_DATABASE=prismer_cloud
       # --- App URL ---
       - NEXT_PUBLIC_BASE_URL=${NEXT_PUBLIC_BASE_URL:-http://localhost:3000}
@@ -59,10 +64,11 @@ services:
     image: mysql:8.0
     command: --sql-mode="NO_ENGINE_SUBSTITUTION"
     environment:
-      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD:-rootpass}
+      # Both passwords are pulled from host env / .env (no value in compose file).
+      - MYSQL_ROOT_PASSWORD
       - MYSQL_DATABASE=prismer_cloud
       - MYSQL_USER=${MYSQL_USER:-prismer}
-      - MYSQL_PASSWORD=${MYSQL_PASSWORD:-prismer}
+      - MYSQL_PASSWORD
     ports:
       - "${MYSQL_PORT:-3306}:3306"
     volumes:

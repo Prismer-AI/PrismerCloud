@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { ensureNacosConfig } from '@/lib/nacos-config';
 import { getUserFromAuth } from '@/lib/auth-utils';
 import { getAdminAnalytics } from '@/lib/db-admin';
+import { createModuleLogger } from '@/lib/logger';
+
+const log = createModuleLogger('AdminAnalytics');
 
 /** Read after Nacos config is loaded (env vars may not be set at import time) */
 function getAdminEmails(): string[] {
@@ -24,7 +27,7 @@ export async function GET(request: NextRequest) {
     if (!auth.success || !auth.user) {
       return NextResponse.json(
         { success: false, error: { code: 'UNAUTHORIZED', message: 'Login required' } },
-        { status: 401 }
+        { status: 401 },
       );
     }
     const adminEmails = getAdminEmails();
@@ -34,7 +37,7 @@ export async function GET(request: NextRequest) {
     if (!isAdmin) {
       return NextResponse.json(
         { success: false, error: { code: 'FORBIDDEN', message: 'Admin access only' } },
-        { status: 403 }
+        { status: 403 },
       );
     }
 
@@ -50,10 +53,10 @@ export async function GET(request: NextRequest) {
       generatedAt: new Date().toISOString(),
     });
   } catch (error) {
-    console.error('[Admin Analytics] Error:', error);
+    log.error({ err: error }, 'Admin analytics error');
     return NextResponse.json(
       { success: false, error: { code: 'INTERNAL_ERROR', message: String(error) } },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }

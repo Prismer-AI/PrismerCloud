@@ -13,6 +13,23 @@ import type { SigningService } from '../services/signing.service';
 import type { RateLimiterService } from '../services/rate-limiter.service';
 import { createRateLimitMiddleware } from '../middleware/rate-limit';
 import type { ApiResponse, MessageType } from '../types/index';
+import prisma from '../db';
+
+// v1.8.2: Resolve quoted message summary for quote replies
+async function resolveQuotedMessage(messageId: string | null | undefined) {
+  if (!messageId) return undefined;
+  const quoted = await prisma.iMMessage.findUnique({
+    where: { id: messageId },
+    select: { id: true, senderId: true, content: true, type: true },
+  });
+  if (!quoted) return undefined;
+  return {
+    id: quoted.id,
+    senderId: quoted.senderId,
+    type: quoted.type,
+    content: quoted.content?.slice(0, 200) ?? '',
+  };
+}
 
 export function createMessagesRouter(
   messageService: MessageService,
@@ -25,6 +42,51 @@ export function createMessagesRouter(
   const router = new Hono();
 
   router.use('*', authMiddleware);
+
+  /**
+   * POST /api/messages/delivered — Mark messages as delivered (delivery receipts)
+   */
+  router.post('/delivered', async (c) => {
+    const user = c.get('user');
+    const body = await c.req.json();
+    const { conversationId, messageIds } = body;
+
+    if (!conversationId || !Array.isArray(messageIds) || messageIds.length === 0) {
+      return c.json<ApiResponse>({ ok: false, error: 'conversationId and messageIds[] are required' }, 400);
+    }
+    if (messageIds.length > 200) {
+      return c.json<ApiResponse>({ ok: false, error: 'Maximum 200 messageIds per request' }, 400);
+    }
+
+    const isMember = await conversationService.isParticipant(conversationId, user.imUserId);
+    if (!isMember) {
+      return c.json<ApiResponse>({ ok: false, error: 'Not a participant' }, 403);
+    }
+
+    const now = new Date();
+    const updated = await prisma.iMMessage.updateMany({
+      where: {
+        id: { in: messageIds },
+        conversationId,
+        senderId: { not: user.imUserId },
+        status: { not: 'delivered' },
+      },
+      data: { status: 'delivered', updatedAt: now },
+    });
+
+    const event = ServerEvents.messageDelivered({
+      conversationId,
+      messageIds,
+      deliveredBy: user.imUserId,
+      deliveredAt: now.toISOString(),
+    });
+    const participants = await conversationService.getParticipantIds(conversationId);
+    for (const uid of participants) {
+      rooms.sendToUser(uid, event);
+    }
+
+    return c.json<ApiResponse>({ ok: true, data: { updated: updated.count } });
+  });
 
   /**
    * GET /api/messages/:conversationId — Get message history with cursor pagination
@@ -52,9 +114,31 @@ export function createMessagesRouter(
 
     const total = await messageService.getCount(conversationId);
 
+    // v1.8.2: Batch resolve quoted messages
+    const quotedIds = messages.map((m: any) => m.quotedMessageId).filter(Boolean) as string[];
+    let quotedMap = new Map<string, { id: string; senderId: string; type: string; content: string }>();
+    if (quotedIds.length > 0) {
+      const quoted = await prisma.iMMessage.findMany({
+        where: { id: { in: [...new Set(quotedIds)] } },
+        select: { id: true, senderId: true, type: true, content: true },
+      });
+      quotedMap = new Map(
+        quoted.map((q: any) => [
+          q.id,
+          { id: q.id, senderId: q.senderId, type: q.type, content: q.content?.slice(0, 200) ?? '' },
+        ]),
+      );
+    }
+    const enrichedMessages = messages.map((m: any) => ({
+      ...m,
+      ...(m.quotedMessageId && quotedMap.has(m.quotedMessageId)
+        ? { quotedMessage: quotedMap.get(m.quotedMessageId) }
+        : {}),
+    }));
+
     return c.json<ApiResponse>({
       ok: true,
-      data: messages,
+      data: enrichedMessages,
       meta: { total, pageSize: limit },
     });
   });
@@ -77,8 +161,11 @@ export function createMessagesRouter(
       content,
       metadata,
       parentId,
+      quotedMessageId,
       secVersion,
       senderKeyId,
+      senderDid,
+      signedAt,
       sequence,
       contentHash,
       prevHash,
@@ -91,8 +178,10 @@ export function createMessagesRouter(
     }
 
     // E2E Signing verification (Layer 2)
-    const isSigned = secVersion != null && senderKeyId && signature;
-    if (isSigned && (typeof sequence !== 'number' || !Number.isInteger(sequence) || sequence < 1)) {
+    // Accept both full signing (senderKeyId) and lite signing (senderDid only)
+    const isSigned = secVersion != null && (senderKeyId || senderDid) && signature;
+    const isLiteMode = isSigned && senderDid && !senderKeyId;
+    if (isSigned && !isLiteMode && (typeof sequence !== 'number' || !Number.isInteger(sequence) || sequence < 1)) {
       return c.json<ApiResponse>({ ok: false, error: 'sequence must be a positive integer when signing' }, 400);
     }
     if (isSigned) {
@@ -101,9 +190,10 @@ export function createMessagesRouter(
         conversationId,
         type: (type as string) ?? 'text',
         content: content ?? '',
-        createdAt: timestamp ?? Date.now(),
+        createdAt: signedAt ?? timestamp ?? Date.now(),
         secVersion,
         senderKeyId,
+        senderDid,
         sequence,
         contentHash,
         prevHash: prevHash ?? null,
@@ -157,8 +247,21 @@ export function createMessagesRouter(
         content: content ?? '',
         metadata: enrichedMetadata,
         parentId,
-        // E2E Signing fields (pass through if verified)
-        ...(isSigned ? { secVersion, senderKeyId, sequence, contentHash, prevHash, signature } : {}),
+        quotedMessageId,
+        // E2E Signing fields (pass through if verified by this route)
+        ...(isSigned
+          ? {
+              secVersion,
+              senderKeyId,
+              senderDid,
+              sequence,
+              contentHash,
+              prevHash,
+              signature,
+              signedAt: signedAt ?? timestamp,
+              _signatureVerified: true,
+            }
+          : {}),
       });
 
       // Push to all participants via sendToUser (works cross-pod via Redis)
@@ -187,11 +290,14 @@ export function createMessagesRouter(
         rooms.sendToUser(uid, event);
       }
 
+      // v1.8.2: Resolve quoted message summary if present
+      const quotedMessage = await resolveQuotedMessage((result.message as any).quotedMessageId);
+
       return c.json<ApiResponse>(
         {
           ok: true,
           data: {
-            message: result.message,
+            message: { ...result.message, ...(quotedMessage ? { quotedMessage } : {}) },
             routing: result.routing
               ? {
                   mode: result.routing.mode,
@@ -207,15 +313,18 @@ export function createMessagesRouter(
         201,
       );
     } catch (err) {
-      const message = (err as Error).message;
-      if (
-        message.includes('not a participant') ||
-        message.includes('requires encrypted messages') ||
-        message.includes('Context access denied')
-      ) {
-        return c.json<ApiResponse>({ ok: false, error: message }, 403);
+      const e = err as Error & { status?: number; code?: string };
+      if (e.code === 'BLOCKED') {
+        return c.json<ApiResponse>({ ok: false, error: e.message }, 403);
       }
-      return c.json<ApiResponse>({ ok: false, error: message }, 500);
+      if (
+        e.message.includes('not a participant') ||
+        e.message.includes('requires encrypted messages') ||
+        e.message.includes('Context access denied')
+      ) {
+        return c.json<ApiResponse>({ ok: false, error: e.message }, 403);
+      }
+      return c.json<ApiResponse>({ ok: false, error: e.message }, 500);
     }
   });
 
@@ -292,6 +401,91 @@ export function createMessagesRouter(
     }
 
     return c.json<ApiResponse>({ ok: true });
+  });
+
+  /**
+   * POST /api/messages/:conversationId/:messageId/reactions — Add/remove reaction (v1.8.2)
+   * Body: { emoji: "👍" } to add, { emoji: "👍", remove: true } to remove
+   *
+   * Reactions are stored in dedicated im_message_reactions table with composite
+   * unique key (messageId, userId, emoji). Add = upsert (idempotent), remove =
+   * deleteMany (idempotent), no read-modify-write race.
+   */
+  router.post('/:conversationId/:messageId/reactions', async (c) => {
+    const user = c.get('user');
+    const conversationId = c.req.param('conversationId');
+    const messageId = c.req.param('messageId');
+    const body = await c.req.json();
+
+    if (!body.emoji || typeof body.emoji !== 'string') {
+      return c.json<ApiResponse>({ ok: false, error: 'emoji is required' }, 400);
+    }
+    if (body.emoji.length > 32) {
+      return c.json<ApiResponse>({ ok: false, error: 'emoji too long (max 32 chars)' }, 400);
+    }
+
+    // Verify participant
+    const isMember = await conversationService.isParticipant(conversationId, user.imUserId);
+    if (!isMember) {
+      return c.json<ApiResponse>({ ok: false, error: 'Not a participant' }, 403);
+    }
+
+    // Verify message exists in this conversation
+    const msg = await messageService.getById(messageId);
+    if (!msg || msg.conversationId !== conversationId) {
+      return c.json<ApiResponse>({ ok: false, error: 'Message not found' }, 404);
+    }
+
+    const action: 'add' | 'remove' = body.remove ? 'remove' : 'add';
+
+    if (action === 'add') {
+      // Idempotent insert. Prefer `create` + swallow P2002 (unique violation)
+      // over `upsert`: Prisma's upsert does SELECT→INSERT/UPDATE which can
+      // deadlock on concurrent writes hitting the same composite unique key
+      // (observed on MySQL v1.8.2 regression: 1/5 parallel requests returned
+      // 500). Plain INSERT with catch is atomic and never deadlocks.
+      try {
+        await prisma.iMMessageReaction.create({
+          data: { messageId, userId: user.imUserId, emoji: body.emoji },
+        });
+      } catch (err: unknown) {
+        // P2002 = unique constraint violation → reaction already exists → treat as success
+        if (!(err && typeof err === 'object' && (err as { code?: string }).code === 'P2002')) {
+          throw err;
+        }
+      }
+    } else {
+      // Idempotent delete (deleteMany returns count, never throws on 0 matches)
+      await prisma.iMMessageReaction.deleteMany({
+        where: { messageId, userId: user.imUserId, emoji: body.emoji },
+      });
+    }
+
+    // Aggregate current reaction state for response + broadcast
+    const allReactions = await prisma.iMMessageReaction.findMany({
+      where: { messageId },
+      select: { emoji: true, userId: true },
+    });
+    const reactions: Record<string, string[]> = {};
+    for (const r of allReactions) {
+      (reactions[r.emoji] ??= []).push(r.userId);
+    }
+
+    // Broadcast dedicated message.reaction event (NOT message.edit — that lies about the content changing)
+    const event = ServerEvents.messageReaction({
+      messageId,
+      conversationId,
+      emoji: body.emoji,
+      userId: user.imUserId,
+      action,
+      reactions,
+    });
+    const participants = await conversationService.getParticipantIds(conversationId);
+    for (const uid of participants) {
+      rooms.sendToUser(uid, event);
+    }
+
+    return c.json<ApiResponse>({ ok: true, data: { reactions } });
   });
 
   return router;

@@ -262,6 +262,29 @@ export function createRegisterRouter(evolutionService?: EvolutionService, rateLi
         });
         // Seed evolution genes for new agent
         evolutionService?.seedGenesForNewAgent(newUser.id).catch(() => {});
+
+        // Auto-create human owner record if not exists (for owner profile / contributor board)
+        if (cloudUserId) {
+          const hasOwner = await prisma.iMUser.findFirst({
+            where: { userId: cloudUserId, role: 'human' },
+            select: { id: true },
+          });
+          if (!hasOwner) {
+            const ownerUsername = `user-${cloudUserId.slice(0, 8)}`;
+            const existing = await prisma.iMUser.findUnique({ where: { username: ownerUsername } });
+            if (!existing) {
+              await prisma.iMUser.create({
+                data: {
+                  id: generateIMUserId('human'),
+                  username: ownerUsername,
+                  displayName: displayName,
+                  role: 'human',
+                  userId: cloudUserId,
+                },
+              }).catch(() => {});
+            }
+          }
+        }
       }
     }
 

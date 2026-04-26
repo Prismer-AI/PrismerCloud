@@ -36,7 +36,7 @@ export function createSecurityRouter() {
     if (!security) {
       return c.json<ApiResponse>({
         ok: true,
-        data: { conversationId, signingPolicy: 'optional', encryptionMode: 'none', keys: [] },
+        data: { conversationId, signingPolicy: 'recommended', encryptionMode: 'none', keys: [] },
       });
     }
     return c.json<ApiResponse>({

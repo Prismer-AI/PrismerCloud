@@ -6,13 +6,18 @@
  */
 
 import { createHmac } from 'crypto';
+import type Redis from 'ioredis';
 import prisma from '../db';
 import type { RoomManager } from '../ws/rooms';
 import type { SyncService } from './sync.service';
 import type { PlatformEvent, CreateSubscriptionInput, SubscriptionFilter } from '../types';
+import { createModuleLogger } from '../../lib/logger';
 
-const LOG = '[EventBus]';
+const log = createModuleLogger('EventBus');
 const MAX_FAILURE_COUNT = 10;
+const COOLDOWN_PREFIX = 'sub:cooldown:';
+/** Max entries in the in-memory fallback map before eviction */
+const MAX_COOLDOWN_ENTRIES = 10_000;
 
 // SSRF protection: block private/loopback/link-local IPs and non-HTTPS in production
 const BLOCKED_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '0.0.0.0']);
@@ -52,15 +57,26 @@ function validateWebhookUrl(url: string): { valid: boolean; error?: string } {
 export interface EventBusServiceDeps {
   rooms: RoomManager;
   syncService?: SyncService;
+  redis?: Redis;
 }
 
 export class EventBusService {
   private deps: EventBusServiceDeps;
-  /** Cooldown tracker: `${subId}:${eventType}` → last trigger timestamp */
+  private _redis: Redis | null;
+  /**
+   * In-memory cooldown fallback — used when Redis is unavailable.
+   * Entries are evicted when the map exceeds MAX_COOLDOWN_ENTRIES.
+   */
   private cooldownMap = new Map<string, number>();
 
   constructor(deps: EventBusServiceDeps) {
     this.deps = deps;
+    this._redis = deps.redis ?? null;
+    if (this._redis) {
+      log.info('Using Redis-backed cooldown (cross-pod consistent)');
+    } else {
+      log.info('Using in-memory cooldown (single-pod only)');
+    }
   }
 
   // ═══════════════════════════════════════════════════════════
@@ -104,27 +120,27 @@ export class EventBusService {
         const filter = this.parseJson<SubscriptionFilter>(sub.filter, {});
         if (!this.matchFilter(event.data, filter)) continue;
 
-        // Cooldown check
+        // Cooldown check (Redis-backed for cross-pod consistency, in-memory fallback)
         if (sub.minIntervalMs > 0) {
-          const key = `${sub.id}:${event.type}`;
-          const lastTrigger = this.cooldownMap.get(key);
-          if (lastTrigger && Date.now() - lastTrigger < sub.minIntervalMs) {
+          const cooldownKey = `${sub.id}:${event.type}`;
+          const inCooldown = await this._checkCooldown(cooldownKey, sub.minIntervalMs);
+          if (inCooldown) {
             continue;
           }
         }
 
         // Deliver (fire-and-forget per subscription)
         this.deliver(sub, event).catch((err) =>
-          console.warn(`${LOG} Delivery failed for sub ${sub.id}:`, (err as Error).message),
+          log.warn(`Delivery failed for sub ${sub.id}: ${(err as Error).message}`),
         );
         matched++;
       }
 
       if (matched > 0) {
-        console.log(`${LOG} Published ${event.type} → ${matched} subscription(s)`);
+        log.info(`Published ${event.type} → ${matched} subscription(s)`);
       }
     } catch (err) {
-      console.error(`${LOG} Publish error:`, (err as Error).message);
+      log.error(`Publish error: ${(err as Error).message}`);
     }
   }
 
@@ -166,13 +182,13 @@ export class EventBusService {
           break;
 
         default:
-          console.warn(`${LOG} Unknown delivery type: ${sub.delivery}`);
+          log.warn(`Unknown delivery type: ${sub.delivery}`);
           return;
       }
 
       // Success — update cooldown and reset failure count
       const cooldownKey = `${sub.id}:${event.type}`;
-      this.cooldownMap.set(cooldownKey, Date.now());
+      await this._setCooldown(cooldownKey, sub.minIntervalMs);
 
       await prisma.iMSubscription.update({
         where: { id: sub.id },
@@ -182,7 +198,7 @@ export class EventBusService {
         },
       });
     } catch (err) {
-      console.error(`${LOG} Delivery error for sub ${sub.id}:`, (err as Error).message);
+      log.error(`Delivery error for sub ${sub.id}: ${(err as Error).message}`);
 
       if (sub.delivery === 'webhook') {
         await this.incrementFailure(sub.id);
@@ -238,7 +254,7 @@ export class EventBusService {
       throw new Error(`Webhook POST ${sub.webhookUrl} → ${response.status}`);
     }
 
-    console.log(`${LOG} Webhook POST ${sub.webhookUrl} → ${response.status}`);
+    log.info(`Webhook POST ${sub.webhookUrl} → ${response.status}`);
   }
 
   private async deliverSync(
@@ -246,7 +262,7 @@ export class EventBusService {
     payload: { source: string; event: string; timestamp: number; data: Record<string, unknown> },
   ): Promise<void> {
     if (!this.deps.syncService) {
-      console.warn(`${LOG} Sync delivery requested but syncService not available`);
+      log.warn('Sync delivery requested but syncService not available');
       return;
     }
 
@@ -265,10 +281,10 @@ export class EventBusService {
           where: { id: subId },
           data: { active: false },
         });
-        console.warn(`${LOG} Sub ${subId} auto-disabled after ${MAX_FAILURE_COUNT} consecutive failures`);
+        log.warn(`Sub ${subId} auto-disabled after ${MAX_FAILURE_COUNT} consecutive failures`);
       }
     } catch (err) {
-      console.error(`${LOG} Failed to increment failure count for sub ${subId}:`, (err as Error).message);
+      log.error(`Failed to increment failure count for sub ${subId}: ${(err as Error).message}`);
     }
   }
 
@@ -321,7 +337,7 @@ export class EventBusService {
       },
     });
     if (result.count > 0) {
-      console.log(`${LOG} Cleaned up ${result.count} expired subscription(s)`);
+      log.info(`Cleaned up ${result.count} expired subscription(s)`);
     }
     return result.count;
   }
@@ -402,6 +418,63 @@ export class EventBusService {
 
   async delete(id: string) {
     return prisma.iMSubscription.delete({ where: { id } });
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // Cooldown (Redis-backed with in-memory fallback)
+  // ═══════════════════════════════════════════════════════════
+
+  /**
+   * Check whether a cooldown key is still active.
+   * Redis: key existence check — cross-pod consistent.
+   * Fallback: in-memory Map comparison.
+   */
+  private async _checkCooldown(key: string, intervalMs: number): Promise<boolean> {
+    if (this._redis) {
+      try {
+        const val = await this._redis.get(`${COOLDOWN_PREFIX}${key}`);
+        if (val) {
+          const lastTrigger = parseInt(val, 10);
+          return Date.now() - lastTrigger < intervalMs;
+        }
+        return false;
+      } catch {
+        // Redis down — fall through to in-memory
+      }
+    }
+    const lastTrigger = this.cooldownMap.get(key);
+    return !!lastTrigger && Date.now() - lastTrigger < intervalMs;
+  }
+
+  /**
+   * Set cooldown after successful delivery.
+   * Redis: SET with TTL equal to intervalMs (auto-expires, no memory leak).
+   * Fallback: in-memory Map with LRU eviction at MAX_COOLDOWN_ENTRIES.
+   */
+  private async _setCooldown(key: string, intervalMs: number): Promise<void> {
+    const now = Date.now();
+
+    if (this._redis) {
+      try {
+        const ttlSec = Math.max(1, Math.ceil(intervalMs / 1000));
+        await this._redis.set(`${COOLDOWN_PREFIX}${key}`, String(now), 'EX', ttlSec);
+        return;
+      } catch {
+        // Redis down — fall through to in-memory
+      }
+    }
+
+    // In-memory fallback with eviction to prevent memory leak
+    if (this.cooldownMap.size >= MAX_COOLDOWN_ENTRIES) {
+      // Evict oldest entries (first 20% by insertion order)
+      const evictCount = Math.ceil(MAX_COOLDOWN_ENTRIES * 0.2);
+      const keysToEvict = Array.from(this.cooldownMap.keys()).slice(0, evictCount);
+      for (let i = 0; i < keysToEvict.length; i++) {
+        this.cooldownMap.delete(keysToEvict[i]);
+      }
+      log.warn(`Cooldown map evicted ${keysToEvict.length} entries (reached ${MAX_COOLDOWN_ENTRIES} limit)`);
+    }
+    this.cooldownMap.set(key, now);
   }
 
   // ═══════════════════════════════════════════════════════════

@@ -46,10 +46,16 @@ export default function DashboardPage() {
 
   const [activeTab, setActiveTab] = useState<DashboardTab>('overview');
   const [loading, setLoading] = useState(true);
+  const [chartPeriod, setChartPeriod] = useState<'7d' | '30d'>('7d');
 
   // Data State
   const [chartData, setChartData] = useState<ChartData[]>([]);
-  const [stats, setStats] = useState({ monthlyRequests: 0, cacheHitRate: 0, creditsRemaining: 0 });
+  const [stats, setStats] = useState({
+    monthlyRequests: 0,
+    cacheHitRate: 0,
+    creditsRemaining: 0,
+    savings: { monthlyTokensInput: 0, monthlyTokensOutput: 0, monthlyTokensSaved: 0, monthlyMoneySaved: 0 },
+  });
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [apiKeys, setApiKeys] = useState<ApiKeyData[]>([]);
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>([]);
@@ -99,6 +105,12 @@ export default function DashboardPage() {
           monthlyRequests: statsData.monthlyRequests,
           cacheHitRate: statsData.cacheHitRate,
           creditsRemaining: statsData.creditsRemaining,
+          savings: statsData.savings || {
+            monthlyTokensInput: 0,
+            monthlyTokensOutput: 0,
+            monthlyTokensSaved: 0,
+            monthlyMoneySaved: 0,
+          },
         });
         setApiKeys(keysData);
         setInvoices(invoiceData);
@@ -245,6 +257,12 @@ export default function DashboardPage() {
           monthlyRequests: statsData.monthlyRequests,
           cacheHitRate: statsData.cacheHitRate,
           creditsRemaining: statsData.creditsRemaining,
+          savings: statsData.savings || {
+            monthlyTokensInput: 0,
+            monthlyTokensOutput: 0,
+            monthlyTokensSaved: 0,
+            monthlyMoneySaved: 0,
+          },
         });
         setInvoices(invoiceData);
       } else {
@@ -320,6 +338,76 @@ export default function DashboardPage() {
 
       {activeTab === 'overview' && (
         <div className="space-y-4 sm:space-y-6 lg:space-y-8 animate-in fade-in slide-in-from-bottom-2 duration-300">
+          {/* Getting Started Banner — only for new users */}
+          {!loading && stats.monthlyRequests === 0 && apiKeys.length === 0 && (
+            <div
+              className={`p-4 sm:p-6 rounded-xl border ${isDark ? 'bg-zinc-900 border-violet-500/20' : 'bg-white border-violet-200 shadow-sm'}`}
+            >
+              <div className="flex items-center gap-3 mb-4">
+                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-violet-500/20 to-cyan-500/20 flex items-center justify-center">
+                  <Sparkles className={`w-5 h-5 ${isDark ? 'text-violet-400' : 'text-violet-500'}`} />
+                </div>
+                <div>
+                  <h3 className={`text-lg font-bold ${isDark ? 'text-white' : 'text-zinc-900'}`}>
+                    Welcome to Prismer Cloud!
+                  </h3>
+                  <p className={`text-sm ${isDark ? 'text-zinc-400' : 'text-zinc-600'}`}>
+                    1,000 free credits included. Three steps to start:
+                  </p>
+                </div>
+              </div>
+              <div className="space-y-2.5 mb-5">
+                <div className="flex items-center gap-3">
+                  <CheckCircle2 className="w-5 h-5 text-emerald-500 shrink-0" />
+                  <span className={`text-sm ${isDark ? 'text-zinc-300' : 'text-zinc-700'}`}>1. Account created</span>
+                </div>
+                <div className="flex items-center gap-3">
+                  {apiKeys.length > 0 ? (
+                    <CheckCircle2 className="w-5 h-5 text-emerald-500 shrink-0" />
+                  ) : (
+                    <div
+                      className={`w-5 h-5 rounded-full border-2 shrink-0 ${isDark ? 'border-zinc-600' : 'border-zinc-300'}`}
+                    />
+                  )}
+                  <span className={`text-sm ${isDark ? 'text-zinc-300' : 'text-zinc-700'}`}>2. Generate API Key</span>
+                  {apiKeys.length === 0 && (
+                    <button
+                      onClick={createApiKey}
+                      className="ml-1 text-xs font-medium text-violet-400 hover:text-violet-300 transition-colors"
+                    >
+                      Create Key &rarr;
+                    </button>
+                  )}
+                </div>
+                <div className="flex items-center gap-3">
+                  {stats.monthlyRequests > 0 ? (
+                    <CheckCircle2 className="w-5 h-5 text-emerald-500 shrink-0" />
+                  ) : (
+                    <div
+                      className={`w-5 h-5 rounded-full border-2 shrink-0 ${isDark ? 'border-zinc-600' : 'border-zinc-300'}`}
+                    />
+                  )}
+                  <span className={`text-sm ${isDark ? 'text-zinc-300' : 'text-zinc-700'}`}>
+                    3. Make your first API call
+                  </span>
+                </div>
+              </div>
+              <div
+                className={`p-3 rounded-lg font-mono text-xs leading-relaxed overflow-x-auto ${isDark ? 'bg-zinc-950 text-zinc-400' : 'bg-zinc-50 text-zinc-600'}`}
+              >
+                <div
+                  className={`mb-1 text-[10px] uppercase tracking-wider font-sans font-medium ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}
+                >
+                  Quick start
+                </div>
+                <pre className="whitespace-pre-wrap break-all">{`curl -X POST https://prismer.cloud/api/v1/context/load \\
+  -H "Authorization: Bearer YOUR_API_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{"input": "https://example.com"}'`}</pre>
+              </div>
+            </div>
+          )}
+
           {/* Stats Cards */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4 lg:gap-6">
             <div
@@ -345,21 +433,30 @@ export default function DashboardPage() {
             </div>
 
             <div
-              className={`p-4 sm:p-6 rounded-xl transition-colors ${isDark ? 'bg-zinc-900 border border-white/5 hover:border-cyan-500/20' : 'bg-white border border-zinc-200 hover:border-cyan-500/30 shadow-sm'}`}
+              className={`p-4 sm:p-6 rounded-xl relative overflow-hidden group transition-colors ${isDark ? 'bg-zinc-900 border border-white/5 hover:border-emerald-500/20' : 'bg-white border border-zinc-200 hover:border-emerald-500/30 shadow-sm'}`}
             >
-              <h3 className={`text-xs sm:text-sm font-medium mb-1 ${isDark ? 'text-zinc-500' : 'text-zinc-600'}`}>
-                Global Cache Hit Rate
-              </h3>
-              <p className={`text-2xl sm:text-3xl font-bold tracking-tight ${isDark ? 'text-white' : 'text-zinc-900'}`}>
-                {stats.cacheHitRate}%
-              </p>
-              <div
-                className={`mt-1.5 sm:mt-2 w-full h-1 sm:h-1.5 rounded-full overflow-hidden ${isDark ? 'bg-zinc-800' : 'bg-zinc-200'}`}
+              <div className="absolute inset-0 bg-gradient-to-br from-emerald-600/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity"></div>
+              <h3
+                className={`text-xs sm:text-sm font-medium mb-1 flex items-center gap-2 ${isDark ? 'text-zinc-500' : 'text-zinc-600'}`}
               >
-                <div
-                  className="bg-gradient-to-r from-cyan-600 to-cyan-400 h-full shadow-[0_0_10px_rgba(6,182,212,0.5)]"
-                  style={{ width: `${stats.cacheHitRate}%` }}
-                ></div>
+                Total Saved{' '}
+                <span
+                  className={`text-[8px] sm:text-[10px] px-1 sm:px-1.5 py-0.5 rounded ${isDark ? 'bg-emerald-500/10 text-emerald-400' : 'bg-emerald-100 text-emerald-600'}`}
+                >
+                  MONTHLY
+                </span>
+              </h3>
+              <p
+                className={`text-2xl sm:text-3xl font-bold tracking-tight ${isDark ? 'text-emerald-400' : 'text-emerald-600'}`}
+              >
+                ${stats.savings.monthlyMoneySaved.toFixed(2)}
+              </p>
+              <div className="mt-1.5 sm:mt-2 text-[10px] sm:text-xs text-zinc-400 font-mono">
+                {stats.savings.monthlyTokensSaved > 0 ? (
+                  <>{(stats.savings.monthlyTokensSaved / 1000).toFixed(1)}K tokens compressed</>
+                ) : (
+                  <>Start using the API to see savings</>
+                )}
               </div>
             </div>
 
@@ -390,10 +487,19 @@ export default function DashboardPage() {
                 Request Volume
               </h3>
               <select
+                value={chartPeriod}
+                onChange={(e) => {
+                  const period = e.target.value as '7d' | '30d';
+                  setChartPeriod(period);
+                  api
+                    .getDashboardStats(period)
+                    .then((d) => setChartData(d.chartData))
+                    .catch(() => {});
+                }}
                 className={`text-[10px] sm:text-xs rounded px-1.5 sm:px-2 py-1 ${isDark ? 'bg-zinc-950 border border-zinc-800 text-zinc-400' : 'bg-zinc-100 border border-zinc-300 text-zinc-600'}`}
               >
-                <option>Last 7 Days</option>
-                <option>Last 30 Days</option>
+                <option value="7d">Last 7 Days</option>
+                <option value="30d">Last 30 Days</option>
               </select>
             </div>
             <div className="h-[200px] sm:h-[250px] lg:h-[300px] w-full">

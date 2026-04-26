@@ -189,6 +189,7 @@ export async function sendVerificationCode(email: string, type: 'signup' | 'rese
   // Send via SMTP if configured
   if (process.env.SMTP_HOST) {
     try {
+      // nodemailer is loaded lazily — only required when SMTP_HOST is set.
       const nodemailer = await import('nodemailer');
       const transporter = nodemailer.createTransport({
         host: process.env.SMTP_HOST,

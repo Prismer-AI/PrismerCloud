@@ -73,7 +73,12 @@ interface GeneDetailDrawerProps {
 
 function getToken(): string | null {
   try {
-    return JSON.parse(localStorage.getItem('prismer_auth') || '{}')?.token ?? null;
+    // Try JWT first, then API key
+    const auth = JSON.parse(localStorage.getItem('prismer_auth') || '{}');
+    if (auth?.token) return auth.token;
+    const apiKey = localStorage.getItem('prismer_active_api_key');
+    if (apiKey) return apiKey;
+    return null;
   } catch {
     return null;
   }

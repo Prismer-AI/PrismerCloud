@@ -6,15 +6,17 @@ import {
   calculateParseCost,
   ParseOptions,
   ParseResult,
-  ParseMode
+  ParseMode,
 } from '@/lib/parser-client';
-import {
-  generateTaskId,
-  createParseUsageRecord,
-  recordUsageBackground
-} from '@/lib/usage-recorder';
+import { generateTaskId, createParseUsageRecord, recordUsageBackground } from '@/lib/usage-recorder';
 import { deposit } from '@/lib/context-api';
 import { apiGuard } from '@/lib/api-guard';
+import { metrics } from '@/lib/metrics';
+import { parserBreaker } from '@/lib/circuit-breaker';
+import { checkRateLimit, rateLimitResponse, rateLimitHeaders } from '@/lib/rate-limit';
+import { createModuleLogger } from '@/lib/logger';
+
+const log = createModuleLogger('Parse');
 
 /**
  * POST /api/parse
@@ -39,9 +41,12 @@ import { apiGuard } from '@/lib/api-guard';
  * 认证: 必需 (API Key 或 JWT) — billable
  */
 export async function POST(request: NextRequest) {
+  const reqStart = Date.now();
   // Auth + balance pre-check
   const guard = await apiGuard(request, { tier: 'billable', estimatedCost: 2 });
   if (!guard.ok) return guard.response;
+  const rl = checkRateLimit(guard.auth.userId, 'parse');
+  if (!rl.allowed) return rateLimitResponse(rl);
 
   const startTime = Date.now();
   const requestId = generateTaskId('parse');
@@ -66,22 +71,30 @@ export async function POST(request: NextRequest) {
       parseResult = result;
       inputDescription = description;
     } else {
-      return NextResponse.json({
-        success: false,
-        error: {
-          code: 'INVALID_CONTENT_TYPE',
-          message: 'Content-Type must be multipart/form-data or application/json'
-        }
-      }, { status: 400 });
+      metrics.recordRequest('/api/parse', Date.now() - reqStart, 400);
+      return NextResponse.json(
+        {
+          success: false,
+          error: {
+            code: 'INVALID_CONTENT_TYPE',
+            message: 'Content-Type must be multipart/form-data or application/json',
+          },
+        },
+        { status: 400 },
+      );
     }
 
     // 2. 处理解析结果
     if (!parseResult.success) {
-      return NextResponse.json({
-        success: false,
-        requestId,
-        error: parseResult.error
-      }, { status: 500 });
+      metrics.recordRequest('/api/parse', Date.now() - reqStart, 500);
+      return NextResponse.json(
+        {
+          success: false,
+          requestId,
+          error: parseResult.error,
+        },
+        { status: 500 },
+      );
     }
 
     // 3. 构建响应
@@ -103,9 +116,9 @@ export async function POST(request: NextRequest) {
         imageCount,
         mode: mode as 'fast' | 'hires' | 'auto',
         tokensOutput: parseResult.usage?.output_tokens,
-        processingTimeMs: processingTime
+        processingTimeMs: processingTime,
       }),
-      authHeader
+      authHeader,
     );
 
     // 5. Auto-deposit: 将解析结果存入 Context Cache (fire-and-forget)
@@ -125,27 +138,31 @@ export async function POST(request: NextRequest) {
             originalUrl: inputDescription,
             pageCount,
             imageCount,
-            parsed_at: new Date().toISOString()
-          }
+            parsed_at: new Date().toISOString(),
+          },
         },
         authHeader,
-        userId
-      ).catch(err => console.error('[Parse API] Auto-deposit failed:', err));
+        userId,
+      ).catch((err) => log.error({ err }, 'Auto-deposit failed'));
     }
 
-    console.log(`[Parse API] Success: ${pageCount} pages, mode=${mode}, async=${isAsync}`);
-    return NextResponse.json(response);
-
+    log.info({ pageCount, mode, async: isAsync }, 'Parse success');
+    metrics.recordRequest('/api/parse', Date.now() - reqStart, 200);
+    return NextResponse.json(response, { headers: rateLimitHeaders(rl) });
   } catch (error) {
-    console.error('[Parse API] Error:', error);
-    return NextResponse.json({
-      success: false,
-      requestId,
-      error: {
-        code: 'INTERNAL_ERROR',
-        message: error instanceof Error ? error.message : 'Failed to process request'
-      }
-    }, { status: 500 });
+    log.error({ err: error }, 'Parse error');
+    metrics.recordRequest('/api/parse', Date.now() - reqStart, 500);
+    return NextResponse.json(
+      {
+        success: false,
+        requestId,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: error instanceof Error ? error.message : 'Failed to process request',
+        },
+      },
+      { status: 500 },
+    );
   }
 }
 
@@ -154,7 +171,7 @@ export async function POST(request: NextRequest) {
  */
 async function handleFileUpload(
   request: NextRequest,
-  requestId: string
+  requestId: string,
 ): Promise<{ result: ParseResult; description: string }> {
   const formData = await request.formData();
   const file = formData.get('file') as File | null;
@@ -163,9 +180,9 @@ async function handleFileUpload(
     return {
       result: {
         success: false,
-        error: { code: 'MISSING_FILE', message: 'file field is required' }
+        error: { code: 'MISSING_FILE', message: 'file field is required' },
       },
-      description: 'unknown'
+      description: 'unknown',
     };
   }
 
@@ -175,13 +192,13 @@ async function handleFileUpload(
   // 读取文件内容
   const buffer = Buffer.from(await file.arrayBuffer());
 
-  console.log(`[Parse API] File upload: ${file.name} (${buffer.length} bytes)`);
+  log.debug({ fileName: file.name, size: buffer.length }, 'File upload');
 
-  const result = await parseFile(buffer, file.name, options);
+  const result = await parserBreaker.execute(() => parseFile(buffer, file.name, options));
 
   return {
     result,
-    description: file.name
+    description: file.name,
   };
 }
 
@@ -189,10 +206,7 @@ async function handleFileUpload(
  * 处理 JSON 输入 (URL 或 Base64)
  * 支持 snake_case 和 camelCase 参数名
  */
-async function handleJsonInput(
-  body: any,
-  requestId: string
-): Promise<{ result: ParseResult; description: string }> {
+async function handleJsonInput(body: any, requestId: string): Promise<{ result: ParseResult; description: string }> {
   const { url, base64, filename, ...optionsRaw } = body;
 
   const options: ParseOptions = {
@@ -202,13 +216,13 @@ async function handleJsonInput(
     promptType: optionsRaw.prompt_type || optionsRaw.promptType,
     wait: optionsRaw.wait,
     callbackUrl: optionsRaw.callback_url || optionsRaw.callbackUrl,
-    includeDetection: optionsRaw.include_detection
+    includeDetection: optionsRaw.include_detection,
   };
 
   if (url) {
     // URL 模式
-    console.log(`[Parse API] URL mode: ${url}`);
-    const result = await parseUrl(url, options);
+    log.debug({ url }, 'URL mode');
+    const result = await parserBreaker.execute(() => parseUrl(url, options));
     return { result, description: url };
   } else if (base64) {
     // Base64 模式
@@ -216,21 +230,21 @@ async function handleJsonInput(
       return {
         result: {
           success: false,
-          error: { code: 'MISSING_FILENAME', message: 'filename is required when using base64' }
+          error: { code: 'MISSING_FILENAME', message: 'filename is required when using base64' },
         },
-        description: 'unknown'
+        description: 'unknown',
       };
     }
-    console.log(`[Parse API] Base64 mode: ${filename}`);
-    const result = await parseBase64(base64, filename, options);
+    log.debug({ filename }, 'Base64 mode');
+    const result = await parserBreaker.execute(() => parseBase64(base64, filename, options));
     return { result, description: filename };
   } else {
     return {
       result: {
         success: false,
-        error: { code: 'INVALID_INPUT', message: 'Either url or base64 is required' }
+        error: { code: 'INVALID_INPUT', message: 'Either url or base64 is required' },
       },
-      description: 'unknown'
+      description: 'unknown',
     };
   }
 }
@@ -243,23 +257,18 @@ function extractOptionsFromFormData(formData: FormData): ParseOptions {
     mode: (formData.get('mode') as ParseMode) || undefined,
     output: (formData.get('output') as 'markdown' | 'json') || undefined,
     // 支持 snake_case 和 camelCase
-    imageMode: (formData.get('image_mode') || formData.get('imageMode')) as 'embedded' | 's3' || undefined,
-    promptType: (formData.get('prompt_type') || formData.get('promptType')) as any || undefined,
-    wait: formData.get('wait') === 'true' ? true : (formData.get('wait') === 'false' ? false : undefined),
-    callbackUrl: (formData.get('callback_url') || formData.get('callbackUrl')) as string || undefined,
-    includeDetection: formData.get('include_detection') === 'true' ? true : undefined
+    imageMode: ((formData.get('image_mode') || formData.get('imageMode')) as 'embedded' | 's3') || undefined,
+    promptType: ((formData.get('prompt_type') || formData.get('promptType')) as any) || undefined,
+    wait: formData.get('wait') === 'true' ? true : formData.get('wait') === 'false' ? false : undefined,
+    callbackUrl: ((formData.get('callback_url') || formData.get('callbackUrl')) as string) || undefined,
+    includeDetection: formData.get('include_detection') === 'true' ? true : undefined,
   };
 }
 
 /**
  * 格式化响应
  */
-function formatResponse(
-  parseResult: ParseResult,
-  requestId: string,
-  processingTime: number,
-  isAsync: boolean
-) {
+function formatResponse(parseResult: ParseResult, requestId: string, processingTime: number, isAsync: boolean) {
   const mode = parseResult.mode || 'fast';
   const pageCount = parseResult.total_pages || 0;
   const imageCount = parseResult.images?.length || 0;
@@ -276,15 +285,15 @@ function formatResponse(
       status: parseResult.status,
       document: {
         pageCount,
-        estimatedTime: pageCount * 3.6 // ~16-17 pages/min ≈ 3.6s/page
+        estimatedTime: pageCount * 3.6, // ~16-17 pages/min ≈ 3.6s/page
       },
       cost,
       endpoints: {
         status: `/api/parse/status/${parseResult.task_id}`,
         result: `/api/parse/result/${parseResult.task_id}`,
-        stream: `/api/parse/stream/${parseResult.task_id}`
+        stream: `/api/parse/stream/${parseResult.task_id}`,
       },
-      processingTime
+      processingTime,
     };
   } else {
     // 同步响应 (Fast 模式)
@@ -303,16 +312,16 @@ function formatResponse(
         detections: parseResult.detections,
         detectionSummary: parseResult.detection_summary,
         // v2.5: 双向索引信息
-        bidirectionalIndexing: parseResult.bidirectional_indexing
+        bidirectionalIndexing: parseResult.bidirectional_indexing,
       },
       usage: {
         inputPages: pageCount,
         inputImages: imageCount,
         outputChars: parseResult.usage?.output_chars || 0,
-        outputTokens: parseResult.usage?.output_tokens || 0
+        outputTokens: parseResult.usage?.output_tokens || 0,
       },
       cost,
-      processingTime
+      processingTime,
     };
   }
 }

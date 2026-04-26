@@ -22,12 +22,12 @@ import { FileService, FileServiceError } from '../services/file.service';
 import { config } from '../config';
 import { isS3Available } from '../services/s3.client';
 import { MIME_WHITELIST } from '../services/file-validator';
+import type { RateLimiterService } from '../services/rate-limiter.service';
+import { createRateLimitMiddleware } from '../middleware/rate-limit';
 import type { ApiResponse } from '../types';
 import * as fs from 'fs';
 
-export function createFilesRouter(
-  fileService: FileService,
-): Hono {
+export function createFilesRouter(fileService: FileService, rateLimiter?: RateLimiterService): Hono {
   const router = new Hono();
 
   // ── Public endpoints (before auth middleware) ───
@@ -63,6 +63,16 @@ export function createFilesRouter(
 
   // All remaining file endpoints require authentication
   router.use('*', authMiddleware);
+
+  // ─── Rate Limiting (write operations) ────────────────────
+  if (rateLimiter) {
+    router.post('/presign', createRateLimitMiddleware(rateLimiter, 'file.upload'));
+    router.post('/confirm', createRateLimitMiddleware(rateLimiter, 'api.write'));
+    router.post('/upload/init', createRateLimitMiddleware(rateLimiter, 'file.upload'));
+    router.post('/upload/complete', createRateLimitMiddleware(rateLimiter, 'api.write'));
+    router.delete('/:uploadId', createRateLimitMiddleware(rateLimiter, 'api.write'));
+    router.post('/dev-upload/:uploadId', createRateLimitMiddleware(rateLimiter, 'file.upload'));
+  }
 
   // ── POST /presign — Simple upload presign ─────────
 
@@ -158,17 +168,17 @@ export function createFilesRouter(
       // Validate each part has partNumber (number) and etag (string)
       for (const part of parts) {
         if (typeof part.partNumber !== 'number' || typeof part.etag !== 'string') {
-          return c.json<ApiResponse>({
-            ok: false,
-            error: 'Each part must have partNumber (number) and etag (string)',
-          }, 400);
+          return c.json<ApiResponse>(
+            {
+              ok: false,
+              error: 'Each part must have partNumber (number) and etag (string)',
+            },
+            400,
+          );
         }
       }
 
-      const result = await fileService.completeMultipart(
-        { uploadId, parts },
-        user.imUserId,
-      );
+      const result = await fileService.completeMultipart({ uploadId, parts }, user.imUserId);
 
       return c.json<ApiResponse>({ ok: true, data: result });
     } catch (err) {
@@ -233,10 +243,13 @@ export function createFilesRouter(
       }
 
       if (file.size > config.files.maxSimpleSize) {
-        return c.json<ApiResponse>({
-          ok: false,
-          error: `File exceeds maximum size (${Math.round(config.files.maxSimpleSize / 1024 / 1024)}MB)`,
-        }, 400);
+        return c.json<ApiResponse>(
+          {
+            ok: false,
+            error: `File exceeds maximum size (${Math.round(config.files.maxSimpleSize / 1024 / 1024)}MB)`,
+          },
+          400,
+        );
       }
 
       const buffer = Buffer.from(await file.arrayBuffer());
@@ -255,16 +268,22 @@ export function createFilesRouter(
 
 function handleError(c: Context, err: unknown) {
   if (err instanceof FileServiceError) {
-    return c.json<ApiResponse>({
-      ok: false,
-      error: err.message,
-      meta: { code: err.code },
-    }, err.status as ContentfulStatusCode);
+    return c.json<ApiResponse>(
+      {
+        ok: false,
+        error: err.message,
+        meta: { code: err.code },
+      },
+      err.status as ContentfulStatusCode,
+    );
   }
 
   console.error('[Files API] Unexpected error:', err);
-  return c.json<ApiResponse>({
-    ok: false,
-    error: 'Internal server error',
-  }, 500);
+  return c.json<ApiResponse>(
+    {
+      ok: false,
+      error: 'Internal server error',
+    },
+    500,
+  );
 }

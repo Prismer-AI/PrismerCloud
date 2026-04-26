@@ -17,7 +17,7 @@ function buildRedisUrl(): string {
   const db = process.env.REDIS_DB || '0';
 
   const auth = password ? `:${password}@` : '';
-  return `redis://${auth}${host}:${port}/${db}`;
+  return `redis://localhost:6379/${db}`;
 }
 
 export const config = {
@@ -40,6 +40,10 @@ export const config = {
   agent: {
     heartbeatIntervalMs: parseInt(process.env.AGENT_HEARTBEAT_INTERVAL_MS || '30000', 10),
     heartbeatTimeoutMs: parseInt(process.env.AGENT_HEARTBEAT_TIMEOUT_MS || '90000', 10),
+  },
+
+  ws: {
+    authTimeoutMs: parseInt(process.env.WS_AUTH_TIMEOUT_MS || '10000', 10),
   },
 
   cors: {

@@ -48,14 +48,9 @@ CALL add_column_if_not_exists('im_evolution_capsules', 'scope', "VARCHAR(60) NOT
 CALL add_column_if_not_exists('im_unmatched_signals', 'scope', "VARCHAR(60) NOT NULL DEFAULT 'global'");
 CALL add_column_if_not_exists('im_evolution_achievements', 'scope', "VARCHAR(60) NOT NULL DEFAULT 'global'");
 
--- Indexes for scope filtering (ignore duplicate key errors)
-SET @idx_exists = (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'im_genes' AND INDEX_NAME = 'idx_genes_scope_vis');
-SET @sql = IF(@idx_exists = 0, 'CREATE INDEX idx_genes_scope_vis ON im_genes(scope, visibility)', 'SELECT 1');
-PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
-
-SET @idx_exists = (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'im_evolution_capsules' AND INDEX_NAME = 'idx_capsules_scope');
-SET @sql = IF(@idx_exists = 0, 'CREATE INDEX idx_capsules_scope ON im_evolution_capsules(scope)', 'SELECT 1');
-PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+-- Indexes for scope filtering
+CREATE INDEX IF NOT EXISTS idx_genes_scope_vis ON im_genes(scope, visibility);
+CREATE INDEX IF NOT EXISTS idx_capsules_scope ON im_evolution_capsules(scope);
 
 -- Rebuild unique constraint on im_evolution_edges to include scope
 -- Must drop old unique + create new one

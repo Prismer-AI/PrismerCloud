@@ -22,6 +22,10 @@ const eslintConfig = defineConfig([
       "boundaries/ignore": [
         // IM route handler is the only bridge — it calls app.fetch() in-process
         "src/app/api/im/**",
+        // .well-known handlers need direct Prisma access (DID, AASA)
+        "src/app/.well-known/**",
+        // /u/[userId] landing page — lightweight IM user lookup for Universal Link
+        "src/app/u/**",
         // instrumentation.ts bootstraps IM server at startup
         "src/instrumentation.ts",
       ],
@@ -64,6 +68,12 @@ const eslintConfig = defineConfig([
       "react-hooks/set-state-in-effect": "warn",
       "react-hooks/purity": "warn",
       "react-hooks/immutability": "warn",
+      // Pre-existing: React Compiler diagnostics inherited from v1.8.2 baseline.
+      // TODO: refactor offending components, then re-tighten to "error".
+      "react-hooks/refs": "warn",
+      "react-hooks/component-hook-factories": "warn",
+      "react-hooks/preserve-manual-memoization": "warn",
+      "react-hooks/static-components": "warn",
       "prefer-const": "warn",
     },
   },

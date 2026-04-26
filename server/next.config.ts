@@ -1,10 +1,13 @@
-import type { NextConfig } from "next";
+import type { NextConfig } from 'next';
 
 const nextConfig: NextConfig = {
   /* config options here */
   reactCompiler: true,
-  output: "standalone", // Enable for Docker deployment
-  
+  output: 'standalone', // Enable for Docker deployment
+
+  // Native Node addons that must not be bundled
+  serverExternalPackages: ['@resvg/resvg-js', 'pino', 'pino-pretty'],
+
   // Turbopack configuration (Next.js 16+)
   turbopack: {},
 
@@ -21,6 +24,17 @@ const nextConfig: NextConfig = {
             value: 'public, s-maxage=60, stale-while-revalidate=300',
           },
         ],
+      },
+    ];
+  },
+
+  // Redirect /docs to /docs/en (default locale)
+  async redirects() {
+    return [
+      {
+        source: '/docs',
+        destination: '/docs/en',
+        permanent: true,
       },
     ];
   },

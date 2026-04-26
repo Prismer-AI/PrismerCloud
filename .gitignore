@@ -6,6 +6,9 @@ __pycache__/
 *.pyc
 package-lock.json
 !.test/package-lock.json
+# server/ ships a lockfile so CI installs reproducible versions that match
+# the v1.8.2 baseline (Next.js + Hono + Stripe types are version-sensitive).
+!server/package-lock.json
 
 # Build artifacts
 dist/

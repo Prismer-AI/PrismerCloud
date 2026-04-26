@@ -131,6 +131,7 @@ export class EvolutionService {
   private creditService?: CreditService;
   private achievementService?: AchievementService;
   private signalExtractor?: SignalExtractorService;
+  private memoryService?: import('./memory.service').MemoryService;
   private selector: GeneSelector;
   private reportQueue: Array<ReportQueueItem> = [];
   private processingReport = false;
@@ -139,10 +140,12 @@ export class EvolutionService {
     creditService?: CreditService,
     achievementService?: AchievementService,
     signalExtractor?: SignalExtractorService,
+    memoryService?: import('./memory.service').MemoryService,
   ) {
     this.creditService = creditService;
     this.achievementService = achievementService;
     this.signalExtractor = signalExtractor;
+    this.memoryService = memoryService;
     this.selector = createGeneSelector();
   }
 
@@ -315,6 +318,7 @@ export class EvolutionService {
         creditService: this.creditService,
         achievementService: this.achievementService,
         shouldDistill: (aid: string) => _shouldDistill(aid),
+        memoryService: this.memoryService,
       },
       scope,
     );
@@ -534,7 +538,7 @@ export class EvolutionService {
   async getPublicGenes(opts: {
     category?: string;
     search?: string;
-    sort: 'newest' | 'most_used' | 'highest_success';
+    sort: 'newest' | 'most_used' | 'highest_success' | 'recommended';
     page: number;
     limit: number;
   }) {

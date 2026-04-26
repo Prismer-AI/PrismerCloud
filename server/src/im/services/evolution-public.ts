@@ -31,7 +31,11 @@ export async function getAllPublicGenes(): Promise<PrismerGene[]> {
     return _publicGenesCache.genes;
   }
   const rows = await prisma.iMGene.findMany({
-    where: { visibility: { in: ['seed', 'published', 'canary'] }, scope: 'global' },
+    where: {
+      visibility: { in: ['seed', 'published', 'canary'] },
+      scope: 'global',
+      qualityScore: { gte: 0.005 },
+    },
     include: { signalLinks: true },
   });
   const genes = rows.map((r: any) => dbGeneToModel(r));
@@ -239,7 +243,7 @@ export async function getPublicHotGenes(limit: number): Promise<PrismerGene[]> {
 export async function getPublicGenes(opts: {
   category?: string;
   search?: string;
-  sort: 'newest' | 'most_used' | 'highest_success';
+  sort: 'newest' | 'most_used' | 'highest_success' | 'recommended';
   page: number;
   limit: number;
 }): Promise<{ genes: PrismerGene[]; total: number }> {
@@ -304,6 +308,32 @@ export async function getPublicGenes(opts: {
           return bRate - aRate;
         });
         break;
+      case 'recommended': {
+        const maxUsage = Math.max(...genes.map((g) => g.success_count + g.failure_count), 1);
+        const now = Date.now();
+        const DAY_90 = 90 * 24 * 60 * 60 * 1000;
+        const COLD_START = 5; // genes need ≥5 executions to reach full weight
+        genes.sort((a, b) => {
+          const rDiff = (relevanceMap.get(b.id) || 0) - (relevanceMap.get(a.id) || 0);
+          if (Math.abs(rDiff) > 2) return rDiff;
+          const usageA = a.success_count + a.failure_count;
+          const usageB = b.success_count + b.failure_count;
+          const dampenA = Math.min(1, (usageA + 0.5) / COLD_START);
+          const dampenB = Math.min(1, (usageB + 0.5) / COLD_START);
+          const scoreA =
+            (((a as any).qualityScore ?? 0.01) * 0.6 +
+              (usageA / maxUsage) * 0.3 +
+              Math.max(0, 1 - (now - new Date((a as any).createdAt || 0).getTime()) / DAY_90) * 0.1) *
+            dampenA;
+          const scoreB =
+            (((b as any).qualityScore ?? 0.01) * 0.6 +
+              (usageB / maxUsage) * 0.3 +
+              Math.max(0, 1 - (now - new Date((b as any).createdAt || 0).getTime()) / DAY_90) * 0.1) *
+            dampenB;
+          return scoreB - scoreA;
+        });
+        break;
+      }
       default: // newest with relevance
         genes.sort((a, b) => (relevanceMap.get(b.id) || 0) - (relevanceMap.get(a.id) || 0));
         break;
@@ -323,6 +353,30 @@ export async function getPublicGenes(opts: {
           return bRate - aRate;
         });
         break;
+      case 'recommended': {
+        const maxUsage = Math.max(...genes.map((g) => g.success_count + g.failure_count), 1);
+        const now = Date.now();
+        const DAY_90 = 90 * 24 * 60 * 60 * 1000;
+        const COLD_START = 5; // genes need ≥5 executions to reach full weight
+        genes.sort((a, b) => {
+          const usageA = a.success_count + a.failure_count;
+          const usageB = b.success_count + b.failure_count;
+          const dampenA = Math.min(1, (usageA + 0.5) / COLD_START);
+          const dampenB = Math.min(1, (usageB + 0.5) / COLD_START);
+          const scoreA =
+            (((a as any).qualityScore ?? 0.01) * 0.6 +
+              (usageA / maxUsage) * 0.3 +
+              Math.max(0, 1 - (now - new Date((a as any).createdAt || 0).getTime()) / DAY_90) * 0.1) *
+            dampenA;
+          const scoreB =
+            (((b as any).qualityScore ?? 0.01) * 0.6 +
+              (usageB / maxUsage) * 0.3 +
+              Math.max(0, 1 - (now - new Date((b as any).createdAt || 0).getTime()) / DAY_90) * 0.1) *
+            dampenB;
+          return scoreB - scoreA;
+        });
+        break;
+      }
       default:
         genes.sort((a, b) => {
           const aTime = (a as any).createdAt ? new Date((a as any).createdAt).getTime() : 0;
@@ -1161,7 +1215,8 @@ export async function getMapData(opts?: { topN?: number; includeGeneIds?: string
   try {
     const [hyperedgeAtoms, rawCausalLinks] = await Promise.all([
       prisma.iMHyperedgeAtom.findMany({
-        include: { atom: true },
+        include: { atom: true, hyperedge: true },
+        orderBy: { hyperedge: { createdAt: 'desc' } },
         take: 500,
       }),
       prisma.iMCausalLink.findMany({ take: 200 }),

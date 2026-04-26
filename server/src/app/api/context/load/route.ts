@@ -7,6 +7,28 @@ import { withdraw, withdrawBatch, deposit } from '@/lib/context-api';
 import { extractMeta } from '@/lib/context-meta';
 import { apiGuard } from '@/lib/api-guard';
 import { metrics } from '@/lib/metrics';
+import { createModuleLogger } from '@/lib/logger';
+
+const log = createModuleLogger('Load');
+
+// Token savings calculation — $0.009 per 1K tokens (Claude Sonnet pricing)
+const COST_PER_1K_TOKENS = 0.009;
+
+function calculateSavings(originalText: string | null, compressedText: string | null) {
+  if (!originalText || !compressedText) return undefined;
+  const originalTokens = Math.round(originalText.length / 4);
+  const compressedTokens = Math.round(compressedText.length / 4);
+  const tokensSaved = Math.max(0, originalTokens - compressedTokens);
+  const moneySaved = Math.round((tokensSaved / 1000) * COST_PER_1K_TOKENS * 10000) / 10000;
+  const ratio = compressedTokens > 0 ? Math.round((originalTokens / compressedTokens) * 10) / 10 : 0;
+  return {
+    originalTokens,
+    compressedTokens,
+    tokensSaved,
+    moneySaved,
+    compressionRatio: `${ratio}x`,
+  };
+}
 
 /** Internal base URL for service-to-service calls. Never derived from request headers. */
 function getInternalBaseUrl(): string {
@@ -48,16 +70,19 @@ export async function POST(request: NextRequest) {
       ranking,
     } = body;
 
-    console.log('[Load API] POST received:', {
-      input: typeof input === 'string' ? input.substring(0, 100) : input,
-      inputType: forceType,
-      isStream,
-    });
+    log.info(
+      {
+        input: typeof input === 'string' ? input.substring(0, 100) : input,
+        inputType: forceType,
+        isStream,
+      },
+      'POST received',
+    );
 
     // 1. 验证输入
     const validation = validateInput(input);
     if (!validation.valid) {
-      console.log('[Load API] Validation failed:', validation.error);
+      log.debug({ error: validation.error }, 'Validation failed');
       return NextResponse.json(
         {
           success: false,
@@ -69,7 +94,7 @@ export async function POST(request: NextRequest) {
 
     // 2. 检测输入类型
     const detection = detectInputType(input, forceType);
-    console.log('[Load API] Input detected as:', detection.type);
+    log.debug({ type: detection.type }, 'Input detected');
 
     // 3. 根据类型分流处理
     const userId = guard.auth.userId;
@@ -116,7 +141,7 @@ export async function POST(request: NextRequest) {
     return result;
   } catch (error) {
     metrics.recordRequest('/api/context/load', Date.now() - reqStart, 500);
-    console.error('[Load API] Error:', error);
+    log.error({ err: error }, 'Load error');
     return NextResponse.json(
       {
         success: false,
@@ -149,14 +174,17 @@ async function handleSingleUrl(
     // 如果用户要 both，我们先拿 hqcc，intr_content 从缓存中获取或返回 raw
     const cacheFormat =
       returnConfig?.format === 'both' || returnConfig?.format === 'raw' ? 'hqcc' : returnConfig?.format || 'hqcc';
-    console.log(`[handleSingleUrl] Checking cache for ${url}...`);
+    log.debug({ url }, 'Checking cache');
     const withdrawResult = await withdraw({ url, format: cacheFormat as 'hqcc' | 'intr' }, authHeader, userId);
 
-    console.log(`[handleSingleUrl] Cache check result:`, {
-      ok: withdrawResult.ok,
-      found: withdrawResult.data?.found,
-      hasHqcc: !!withdrawResult.data?.hqcc_content,
-    });
+    log.debug(
+      {
+        ok: withdrawResult.ok,
+        found: withdrawResult.data?.found,
+        hasHqcc: !!withdrawResult.data?.hqcc_content,
+      },
+      'Cache check result',
+    );
 
     if (withdrawResult.ok && withdrawResult.data?.found && withdrawResult.data?.hqcc_content) {
       const data = withdrawResult.data;
@@ -195,7 +223,7 @@ async function handleSingleUrl(
     }
 
     // Step 2: 缓存未命中 - 获取 URL 内容
-    console.log(`[handleSingleUrl] Cache miss for ${url}, fetching content...`);
+    log.debug({ url }, 'Cache miss, fetching content');
 
     const contentRes = await fetch(`${baseUrl}/api/content`, {
       method: 'POST',
@@ -205,10 +233,11 @@ async function handleSingleUrl(
 
     if (!contentRes.ok) {
       const errorData = await contentRes.json().catch(() => ({}));
-      console.error('[handleSingleUrl] Content fetch failed:', errorData);
-      const reason = contentRes.status === 503
-        ? (errorData.error || 'Content fetching service not configured')
-        : 'Failed to fetch URL content';
+      log.error({ errorData, status: contentRes.status }, 'Content fetch failed');
+      const reason =
+        contentRes.status === 503
+          ? errorData.error || 'Content fetching service not configured'
+          : 'Failed to fetch URL content';
       return NextResponse.json({
         success: false,
         requestId: taskId,
@@ -227,7 +256,7 @@ async function handleSingleUrl(
     const contentData = await contentRes.json();
 
     if (!contentData.results || contentData.results.length === 0 || !contentData.results[0].text) {
-      console.log('[handleSingleUrl] No content found for URL');
+      log.debug({ url }, 'No content found for URL');
       return NextResponse.json({
         success: true,
         requestId: `load_${Date.now().toString(36)}`,
@@ -248,7 +277,7 @@ async function handleSingleUrl(
     // 检查内容质量（太短的内容可能是抓取失败）
     const MIN_URL_CONTENT_LENGTH = 500;
     if (content.text.length < MIN_URL_CONTENT_LENGTH) {
-      console.log(`[handleSingleUrl] Content too short: ${content.text.length} chars (< ${MIN_URL_CONTENT_LENGTH})`);
+      log.debug({ length: content.text.length, minRequired: MIN_URL_CONTENT_LENGTH }, 'Content too short');
       return NextResponse.json({
         success: true,
         requestId: taskId,
@@ -266,7 +295,7 @@ async function handleSingleUrl(
     }
 
     // Step 3: 压缩内容
-    console.log(`[handleSingleUrl] Compressing content (${content.text.length} chars)...`);
+    log.debug({ contentLength: content.text.length }, 'Compressing content');
 
     const compressRes = await fetch(`${baseUrl}/api/compress`, {
       method: 'POST',
@@ -281,7 +310,7 @@ async function handleSingleUrl(
     });
 
     if (!compressRes.ok) {
-      console.error('[handleSingleUrl] Compression failed');
+      log.error('Compression failed');
       return NextResponse.json({
         success: true,
         requestId: `load_${Date.now().toString(36)}`,
@@ -304,7 +333,7 @@ async function handleSingleUrl(
     const extracted = extractMeta(compressData.hqcc);
     const cleanedHqcc = extracted.hqcc;
     if (authHeader && cleanedHqcc) {
-      console.log('[handleSingleUrl] Depositing to Context Server (background)...');
+      log.debug('Depositing to Context Server (background)');
       deposit(
         {
           url,
@@ -326,12 +355,12 @@ async function handleSingleUrl(
       )
         .then((result) => {
           if (result.ok) {
-            console.log('[handleSingleUrl] Deposit SUCCESS:', { url, data: result.data });
+            log.info({ url, data: result.data }, 'Deposit success');
           } else {
-            console.error('[handleSingleUrl] Deposit FAILED:', { url, error: result.error });
+            log.error({ url, error: result.error }, 'Deposit failed');
           }
         })
-        .catch((err) => console.error('[handleSingleUrl] Deposit ERROR:', err));
+        .catch((err) => log.error({ err }, 'Deposit error'));
     }
 
     // Step 5: 记录使用量
@@ -354,6 +383,7 @@ async function handleSingleUrl(
     );
 
     // Step 6: 返回结果
+    const savings = calculateSavings(content.text, compressData.hqcc);
     return NextResponse.json({
       success: true,
       requestId: taskId,
@@ -370,11 +400,12 @@ async function handleSingleUrl(
           source: 'load_api',
         },
       },
+      savings,
       cost: { credits: 0.5, cached: false },
       processingTime,
     });
   } catch (error) {
-    console.error('[handleSingleUrl] Error:', error);
+    log.error({ err: error }, 'handleSingleUrl error');
     return NextResponse.json(
       {
         success: false,
@@ -452,7 +483,7 @@ async function handleBatchUrls(
       const uncachedUrls = results.filter((r) => !r.found || !r.hqcc).map((r) => r.url);
 
       if (uncachedUrls.length > 0) {
-        console.log(`[handleBatchUrls] Processing ${uncachedUrls.length} uncached URLs...`);
+        log.debug({ count: uncachedUrls.length }, 'Processing uncached URLs');
 
         // 批量获取内容
         const contentRes = await fetch(`${baseUrl}/api/content`, {
@@ -522,11 +553,11 @@ async function handleBatchUrls(
                       },
                       authHeader,
                       userId,
-                    ).catch((err) => console.error('[handleBatchUrls] Background deposit failed:', err));
+                    ).catch((err) => log.error({ err }, 'Background deposit failed'));
                   }
                 }
               } catch (err) {
-                console.error(`[handleBatchUrls] Compress failed for ${url}:`, err);
+                log.error({ err, url }, 'Compress failed');
               }
             });
 
@@ -565,6 +596,39 @@ async function handleBatchUrls(
       authHeader,
     );
 
+    // Calculate batch savings from all processed URLs
+    let batchOriginalTokens = 0;
+    let batchCompressedTokens = 0;
+    for (const r of finalResults) {
+      if (r.hqcc) batchCompressedTokens += Math.round(r.hqcc.length / 4);
+    }
+    // Estimate original tokens from raw content or cached intr_content
+    for (const r of finalResults) {
+      const raw = (r as any).raw;
+      if (raw) {
+        batchOriginalTokens += Math.round(raw.length / 4);
+      } else if (r.hqcc) {
+        // If no raw available, estimate original as ~5x compressed (typical ratio)
+        batchOriginalTokens += Math.round(r.hqcc.length / 4) * 5;
+      }
+    }
+    const batchSavings =
+      batchOriginalTokens > 0
+        ? {
+            originalTokens: batchOriginalTokens,
+            compressedTokens: batchCompressedTokens,
+            tokensSaved: Math.max(0, batchOriginalTokens - batchCompressedTokens),
+            moneySaved:
+              Math.round(
+                (Math.max(0, batchOriginalTokens - batchCompressedTokens) / 1000) * COST_PER_1K_TOKENS * 10000,
+              ) / 10000,
+            compressionRatio:
+              batchCompressedTokens > 0
+                ? `${Math.round((batchOriginalTokens / batchCompressedTokens) * 10) / 10}x`
+                : '0x',
+          }
+        : undefined;
+
     return NextResponse.json({
       success: true,
       requestId: taskId,
@@ -577,6 +641,7 @@ async function handleBatchUrls(
         cached: found - processed,
         processed,
       },
+      savings: batchSavings,
       cost: {
         credits: compressionCredits,
         cached: found - processed,
@@ -584,7 +649,7 @@ async function handleBatchUrls(
       processingTime,
     });
   } catch (error) {
-    console.error('[handleBatchUrls] Error:', error);
+    log.error({ err: error }, 'handleBatchUrls error');
     return NextResponse.json(
       {
         success: false,
@@ -632,10 +697,10 @@ async function handleQuery(
             meta: { source: 'local_cache' },
           }));
         if (localResults.length > 0) {
-          console.log(`[handleQuery] Local cache: ${localResults.length} hits (top score: ${localResults[0].score})`);
+          log.debug({ hits: localResults.length, topScore: localResults[0].score }, 'Local cache hits');
         }
       } catch (err) {
-        console.error('[handleQuery] Local search failed (non-blocking):', err);
+        log.error({ err }, 'Local search failed (non-blocking)');
       }
     }
 
@@ -662,8 +727,13 @@ async function handleQuery(
     const MIN_CONTENT_LENGTH = 1000;
     const qualityResults = (searchData.results || []).filter((r: any) => r.text && r.text.length >= MIN_CONTENT_LENGTH);
 
-    console.log(
-      `[handleQuery] Search returned ${searchData.results?.length || 0} results, ${qualityResults.length} quality results (>= ${MIN_CONTENT_LENGTH} chars)`,
+    log.info(
+      {
+        total: searchData.results?.length || 0,
+        quality: qualityResults.length,
+        minLength: MIN_CONTENT_LENGTH,
+      },
+      'Search results filtered',
     );
 
     const searchResults = qualityResults.slice(0, searchTopK);
@@ -756,11 +826,11 @@ async function handleQuery(
                 },
                 authHeader,
                 userId,
-              ).catch((err) => console.error('[Load API] Background deposit failed:', err));
+              ).catch((err) => log.error({ err }, 'Background deposit failed'));
             }
           }
         } catch (err) {
-          console.error(`[Load API] Compress failed for ${result.url}:`, err);
+          log.error({ err, url: result.url }, 'Compress failed');
         }
       });
 
@@ -858,6 +928,37 @@ async function handleQuery(
     const cacheHits = rankableItems.filter((r) => r.cached).length;
     const processingTime = Date.now() - startTime;
 
+    // Calculate aggregate savings for query mode
+    let totalOriginalTokens = 0;
+    let totalCompressedTokens = 0;
+    for (const result of searchResults) {
+      if (result.text) {
+        totalOriginalTokens += Math.round(result.text.length / 4);
+      }
+    }
+    for (const [, val] of compressedMap) {
+      if (val.hqcc) totalCompressedTokens += Math.round(val.hqcc.length / 4);
+    }
+    for (const [, val] of cacheMap) {
+      if (val.hqcc_content) totalCompressedTokens += Math.round(val.hqcc_content.length / 4);
+    }
+    const querySavings =
+      totalOriginalTokens > 0
+        ? {
+            originalTokens: totalOriginalTokens,
+            compressedTokens: totalCompressedTokens,
+            tokensSaved: Math.max(0, totalOriginalTokens - totalCompressedTokens),
+            moneySaved:
+              Math.round(
+                (Math.max(0, totalOriginalTokens - totalCompressedTokens) / 1000) * COST_PER_1K_TOKENS * 10000,
+              ) / 10000,
+            compressionRatio:
+              totalCompressedTokens > 0
+                ? `${Math.round((totalOriginalTokens / totalCompressedTokens) * 10) / 10}x`
+                : '0x',
+          }
+        : undefined;
+
     // 记录使用量
     const sources: UsageSource[] = rankableItems.slice(0, 10).map((r) => ({
       url: r.url,
@@ -892,6 +993,7 @@ async function handleQuery(
         compressed: compressedMap.size,
         returned: finalResults.length,
       },
+      savings: querySavings,
       cost: {
         searchCredits: 1,
         compressionCredits: Math.round(compressionCredits * 100) / 100,
@@ -901,7 +1003,7 @@ async function handleQuery(
       processingTime,
     });
   } catch (error) {
-    console.error('[handleQuery] Error:', error);
+    log.error({ err: error }, 'handleQuery error');
     return NextResponse.json(
       {
         success: false,
@@ -926,7 +1028,7 @@ async function handleQueryStream(
   userId?: string,
 ): Promise<Response> {
   // 暂时 fallback 到非流式
-  console.log('[Load API] Stream mode requested but not yet fully implemented, falling back to non-stream');
+  log.info('Stream mode requested but not yet fully implemented, falling back to non-stream');
   return handleQuery(request, query, search, processing, returnConfig, ranking, userId);
 }
 
@@ -975,7 +1077,7 @@ async function handlePrismerUri(
       { status: 404 },
     );
   } catch (error) {
-    console.error('[handlePrismerUri] Error:', error);
+    log.error({ err: error }, 'handlePrismerUri error');
     return NextResponse.json(
       {
         success: false,

@@ -12,6 +12,7 @@ import crypto from 'node:crypto';
 import type Redis from 'ioredis';
 import type { Transport } from './transport';
 import type { WSMessage } from '../types/index';
+import type { AckTracker } from './ack-tracker';
 
 const CHANNEL = 'im:broadcast';
 
@@ -40,6 +41,7 @@ export class RoomManager {
   private instanceId = crypto.randomUUID();
   private redis?: Redis;
   private subscriber?: Redis;
+  private ackTracker?: AckTracker;
 
   constructor(redis?: Redis) {
     if (!redis) return;
@@ -60,16 +62,42 @@ export class RoomManager {
         const msg: RedisBroadcast = JSON.parse(raw);
         if (msg.src === this.instanceId) return;
         this.deliverLocally(msg);
-      } catch { /* malformed message — ignore */ }
+      } catch {
+        /* malformed message — ignore */
+      }
     });
     console.log(`[RoomManager] Redis pub/sub ready (instance: ${this.instanceId.slice(0, 8)})`);
   }
 
+  /**
+   * Attach an AckTracker to wrap outbound messages with ackId.
+   * Messages that require ACK will have ackId injected into their payload.
+   */
+  setAckTracker(tracker: AckTracker): void {
+    this.ackTracker = tracker;
+  }
+
   // ─── Client management (unchanged) ─────────────────────────
+
+  private static readonly MAX_CONNECTIONS_PER_USER = 5;
 
   addClient(client: ConnectedClient): void {
     const existing = this.clients.get(client.userId);
     if (existing) {
+      // Evict oldest connection if at limit
+      if (existing.size >= RoomManager.MAX_CONNECTIONS_PER_USER) {
+        let oldest: ConnectedClient | null = null;
+        for (const c of existing) {
+          if (!oldest || c.connectedAt < oldest.connectedAt) oldest = c;
+        }
+        if (oldest) {
+          oldest.transport.send(
+            JSON.stringify({ type: 'error', data: { message: 'Connection replaced by newer client' } }),
+          );
+          oldest.transport.close();
+          existing.delete(oldest);
+        }
+      }
       existing.add(client);
     } else {
       this.clients.set(client.userId, new Set([client]));
@@ -155,11 +183,20 @@ export class RoomManager {
     const members = this.rooms.get(conversationId);
     if (!members) return;
 
-    const payload = JSON.stringify(event);
     for (const userId of members) {
       if (userId === excludeUserId) continue;
       const connections = this.clients.get(userId);
       if (!connections) continue;
+
+      // If ACK tracker is attached, wrap the event with an ackId per user
+      let payload: string;
+      if (this.ackTracker) {
+        const ackId = this.ackTracker.track(userId, event as unknown as Record<string, unknown>);
+        payload = ackId ? JSON.stringify({ ...event, ackId }) : JSON.stringify(event);
+      } else {
+        payload = JSON.stringify(event);
+      }
+
       for (const client of connections) {
         if (client.transport.readyState === 1) {
           client.transport.send(payload);
@@ -171,7 +208,16 @@ export class RoomManager {
   private localSendToUser(userId: string, event: WSMessage): void {
     const connections = this.clients.get(userId);
     if (!connections) return;
-    const payload = JSON.stringify(event);
+
+    // If ACK tracker is attached, wrap the event with an ackId
+    let payload: string;
+    if (this.ackTracker) {
+      const ackId = this.ackTracker.track(userId, event as unknown as Record<string, unknown>);
+      payload = ackId ? JSON.stringify({ ...event, ackId }) : JSON.stringify(event);
+    } else {
+      payload = JSON.stringify(event);
+    }
+
     for (const client of connections) {
       if (client.transport.readyState === 1) {
         client.transport.send(payload);
@@ -210,7 +256,9 @@ export class RoomManager {
     if (!this.redis || this.redis.status !== 'ready') return;
     try {
       this.redis.publish(CHANNEL, JSON.stringify({ ...msg, src: this.instanceId }));
-    } catch { /* Redis unavailable — local delivery only */ }
+    } catch {
+      /* Redis unavailable — local delivery only */
+    }
   }
 
   // ─── Stats ──────────────────────────────────────────────────

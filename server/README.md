@@ -13,7 +13,7 @@ docker compose up -d         # localhost:3000, ready in ~30s
 
 Verify: `curl http://localhost:3000/api/health`
 
-Default admin: `admin@localhost` / `admin123` (change in `.env`).
+Default admin: `admin@localhost` / `PASSWORD-NOT-SET` (change in `.env`).
 
 ## Configuration
 
@@ -23,7 +23,7 @@ Default admin: `admin@localhost` / `admin123` (change in `.env`).
 |----------|---------|-------------|
 | `JWT_SECRET` | `change-me-in-production` | **Must change.** Secret key for JWT signing |
 | `INIT_ADMIN_EMAIL` | `admin@localhost` | Initial admin email |
-| `INIT_ADMIN_PASSWORD` | `admin123` | Initial admin password |
+| `INIT_ADMIN_PASSWORD` | `PASSWORD-NOT-SET` | Initial admin password |
 
 ### Auth Bypass
 

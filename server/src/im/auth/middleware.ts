@@ -18,6 +18,7 @@ export interface ResolvedUser extends JWTPayload {
   imUserId: string; // Actual IM User ID (may differ from sub for API Key users)
   trustTier: number; // 0-4 trust level (Layer 4 Security)
   suspendedUntil?: Date | null; // Account suspension timestamp
+  resolvedDid?: string; // AIP: did:key from identity key (always fresh, not from JWT cache)
 }
 
 /**
@@ -79,20 +80,6 @@ async function ensureIMUser(cloudUserId: string, username: string, agentHint?: s
  * - Maps Cloud User ID to IM User ID
  */
 export async function authMiddleware(c: Context, next: Next) {
-  // Short-circuit: AUTH_DISABLED — treat all requests as default admin
-  if (process.env.AUTH_DISABLED === 'true') {
-    const adminUserId = await ensureIMUser('1', process.env.INIT_ADMIN_EMAIL || 'admin@localhost');
-    c.set('user', {
-      sub: adminUserId,
-      username: process.env.INIT_ADMIN_EMAIL || 'admin@localhost',
-      role: 'admin',
-      imUserId: adminUserId,
-      trustTier: 4,
-      suspendedUntil: null,
-    } as ResolvedUser);
-    return next();
-  }
-
   const authHeader = c.req.header('Authorization');
   if (!authHeader?.startsWith('Bearer ')) {
     return c.json({ ok: false, error: 'Missing or invalid Authorization header' }, 401);
@@ -114,28 +101,42 @@ export async function authMiddleware(c: Context, next: Next) {
       imUserId = payload.sub;
     }
 
-    // Fetch trust tier and suspension status for rate limiting (Layer 4 Security)
+    // Fetch trust tier, suspension status, role, and DID for security context
+    let dbRole: string | undefined;
     let trustTier = 0;
     let suspendedUntil: Date | null = null;
+    let resolvedDid: string | undefined;
     try {
       const imUser = await prisma.iMUser.findUnique({
         where: { id: imUserId },
-        select: { trustTier: true, suspendedUntil: true },
+        select: { role: true, trustTier: true, suspendedUntil: true, primaryDid: true },
       });
       if (imUser) {
+        dbRole = imUser.role;
         trustTier = imUser.trustTier;
         suspendedUntil = imUser.suspendedUntil;
+        resolvedDid = imUser.primaryDid ?? undefined;
       }
     } catch {
       // Best effort — default to tier 0
     }
 
-    // Set resolved user with actual IM User ID + security fields
+    // Resolve admin role: check email against ADMIN_EMAILS env var
+    const adminEmails = (process.env.ADMIN_EMAILS || '')
+      .split(',')
+      .map((e) => e.trim().toLowerCase())
+      .filter(Boolean);
+    const isAdmin = !!payload.email && adminEmails.includes(payload.email.toLowerCase());
+
+    // Set resolved user with actual IM User ID + security fields + AIP DID
+    // Use DB role (actual IM user role) over JWT payload role (proxy default)
     const resolvedUser: ResolvedUser = {
       ...payload,
+      role: isAdmin ? ('admin' as any) : dbRole || payload.role,
       imUserId,
       trustTier,
       suspendedUntil,
+      resolvedDid,
     };
 
     c.set('user', resolvedUser);

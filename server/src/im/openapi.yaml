@@ -24,7 +24,7 @@ info:
     1. Query 参数: `ws://<host>:3200/ws?token=<jwt_token>`
     2. 连接后发送 authenticate 事件
 
-  version: 1.7.0
+  version: 1.8.0
   contact:
     name: Prismer Cloud Team
   license:
@@ -75,7 +75,7 @@ paths:
                     example: prismer-im-server
                   version:
                     type: string
-                    example: "0.1.0"
+                    example: '0.1.0'
                   timestamp:
                     type: string
                     format: date-time
@@ -594,13 +594,13 @@ paths:
                 summary: Agent 工具调用
                 value:
                   type: tool_call
-                  content: ""
+                  content: ''
                   metadata:
                     toolCall:
                       callId: call_abc123
                       toolName: search_web
                       arguments:
-                        query: "weather in Beijing"
+                        query: 'weather in Beijing'
       responses:
         '201':
           description: 发送成功
@@ -767,7 +767,7 @@ paths:
               endpoint: https://my-agent.example.com/api/invoke
               metadata:
                 model: gpt-4
-                version: "1.0"
+                version: '1.0'
       responses:
         '201':
           description: 注册成功
@@ -1139,7 +1139,7 @@ paths:
   /workspace/mentions/autocomplete:
     get:
       tags: [Workspace]
-      summary: "@提及自动补全"
+      summary: '@提及自动补全'
       description: 获取 @mention 的自动补全建议
       operationId: getMentionAutocomplete
       security:
@@ -1262,23 +1262,23 @@ paths:
                 data:
                   events:
                     - seq: 42
-                      type: "message.new"
+                      type: 'message.new'
                       data:
-                        id: "msg_abc"
-                        content: "Hello!"
-                        senderId: "u_xyz"
-                        type: "text"
-                      conversationId: "conv_123"
-                      at: "2026-02-19T08:00:00.000Z"
+                        id: 'msg_abc'
+                        content: 'Hello!'
+                        senderId: 'u_xyz'
+                        type: 'text'
+                      conversationId: 'conv_123'
+                      at: '2026-02-19T08:00:00.000Z'
                     - seq: 43
-                      type: "conversation.create"
+                      type: 'conversation.create'
                       data:
-                        id: "conv_456"
-                        type: "group"
-                        title: "Team"
-                        members: ["u_a", "u_b"]
-                      conversationId: "conv_456"
-                      at: "2026-02-19T08:01:00.000Z"
+                        id: 'conv_456'
+                        type: 'group'
+                        title: 'Team'
+                        members: ['u_a', 'u_b']
+                      conversationId: 'conv_456'
+                      at: '2026-02-19T08:01:00.000Z'
                   cursor: 43
                   hasMore: false
         '401':
@@ -1316,7 +1316,7 @@ paths:
           in: query
           schema:
             type: string
-            default: "0"
+            default: '0'
           description: 游标（同步事件 ID），从此处恢复
       responses:
         '200':
@@ -1906,7 +1906,7 @@ components:
                   type: string
                 expiresIn:
                   type: string
-                  example: "7d"
+                  example: '7d'
 
     WorkspaceAgentListResponse:
       type: object
@@ -1954,7 +1954,7 @@ components:
               description: 绑定的会话 ID
             expiresIn:
               type: string
-              example: "7d"
+              example: '7d'
 
     SyncEvent:
       type: object
@@ -2022,7 +2022,7 @@ components:
             $ref: '#/components/schemas/ErrorResponse'
           example:
             ok: false
-            error: "Missing required field: username"
+            error: 'Missing required field: username'
 
     Unauthorized:
       description: 未认证或 Token 无效
@@ -2032,7 +2032,7 @@ components:
             $ref: '#/components/schemas/ErrorResponse'
           example:
             ok: false
-            error: "Invalid or expired token"
+            error: 'Invalid or expired token'
 
     Forbidden:
       description: 无权限
@@ -2042,7 +2042,7 @@ components:
             $ref: '#/components/schemas/ErrorResponse'
           example:
             ok: false
-            error: "Not a participant"
+            error: 'Not a participant'
 
     NotFound:
       description: 资源不存在
@@ -2052,4 +2052,4 @@ components:
             $ref: '#/components/schemas/ErrorResponse'
           example:
             ok: false
-            error: "User not found"
+            error: 'User not found'

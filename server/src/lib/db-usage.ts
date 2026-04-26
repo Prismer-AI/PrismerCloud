@@ -1,6 +1,6 @@
 /**
  * Database Operations for Usage Records
- * 
+ *
  * 操作表：pc_usage_records
  * 前端先行实现，与后端 usage_records 解耦
  */
@@ -77,15 +77,16 @@ export interface UsageRecordRow extends RowDataPacket {
 // Activity 格式 - 匹配前端 types/index.ts 中的 Activity 接口
 export interface Activity {
   id: string;
-  url: string;         // 显示 URL 或 query
-  strategy: string;    // 显示 task_type，如 "load", "save", "parse"
+  url: string; // 显示 URL 或 query
+  strategy: string; // 显示 task_type，如 "load", "save", "parse"
   status: 'Completed' | 'Processing' | 'Failed';
-  cost: string;        // 字符串格式，如 "0.78 credits"
-  time: string;        // 相对时间，如 "2 min ago"
+  cost: string; // 字符串格式，如 "0.78 credits"
+  time: string; // 相对时间，如 "2 min ago"
   // 扩展字段 (用于获取 hqcc)
-  taskId?: string;     // 任务 ID
-  inputType?: string;  // 输入类型: url, urls, query, file
-  sources?: Array<{    // 来源 URL 列表 (用于 /api/context/load 获取 hqcc)
+  taskId?: string; // 任务 ID
+  inputType?: string; // 输入类型: url, urls, query, file
+  sources?: Array<{
+    // 来源 URL 列表 (用于 /api/context/load 获取 hqcc)
     url: string;
     cached: boolean;
   }>;
@@ -109,7 +110,7 @@ export interface Activity {
 export async function createUsageRecord(
   userId: number,
   input: UsageRecordInput,
-  externalConn?: PoolConnection
+  externalConn?: PoolConnection,
 ): Promise<{ id: string; credits_deducted: number }> {
   const id = generateUUID();
   const metrics = input.metrics || {};
@@ -150,7 +151,7 @@ export async function createUsageRecord(
     cost.total_credits,
     input.sources ? JSON.stringify(input.sources) : null,
     input.error_message || null,
-    input.status || 'completed'
+    input.status || 'completed',
   ];
 
   if (externalConn) {
@@ -161,7 +162,7 @@ export async function createUsageRecord(
 
   return {
     id,
-    credits_deducted: cost.total_credits
+    credits_deducted: cost.total_credits,
   };
 }
 
@@ -175,15 +176,15 @@ export async function createUsageRecord(
 export async function getUserUsageRecords(
   userId: number,
   page: number = 1,
-  limit: number = 20
+  limit: number = 20,
 ): Promise<{ records: UsageRecordRow[]; total: number }> {
   const offset = (page - 1) * limit;
-  
+
   // 获取总数
   const countSql = `SELECT COUNT(*) as total FROM pc_usage_records WHERE user_id = ?`;
   const countResult = await queryOne<{ total: number } & RowDataPacket>(countSql, [userId]);
   const total = Number(countResult?.total || 0);
-  
+
   // 获取记录
   // Note: LIMIT/OFFSET inlined (not parameterized) because mysql2 pool.execute()
   // sends JS numbers as DOUBLE in binary protocol, which MySQL rejects for LIMIT/OFFSET
@@ -196,7 +197,7 @@ export async function getUserUsageRecords(
     LIMIT ${safeLimit} OFFSET ${safeOffset}
   `;
   const records = await query<UsageRecordRow[]>(sql, [userId]);
-  
+
   return { records, total };
 }
 
@@ -210,7 +211,7 @@ function formatRelativeTime(date: Date): string {
   const diffMin = Math.floor(diffSec / 60);
   const diffHour = Math.floor(diffMin / 60);
   const diffDay = Math.floor(diffHour / 24);
-  
+
   if (diffSec < 60) return 'just now';
   if (diffMin < 60) return `${diffMin} min ago`;
   if (diffHour < 24) return `${diffHour} hour${diffHour > 1 ? 's' : ''} ago`;
@@ -232,10 +233,14 @@ function formatCredits(credits: string | number): string {
  */
 function formatStatus(status: string): 'Completed' | 'Processing' | 'Failed' {
   switch (status) {
-    case 'completed': return 'Completed';
-    case 'processing': return 'Processing';
-    case 'failed': return 'Failed';
-    default: return 'Completed';
+    case 'completed':
+      return 'Completed';
+    case 'processing':
+      return 'Processing';
+    case 'failed':
+      return 'Failed';
+    default:
+      return 'Completed';
   }
 }
 
@@ -251,7 +256,7 @@ export function toActivity(record: UsageRecordRow): Activity {
       const parsed = JSON.parse(record.sources_json);
       sources = parsed.map((s: { url: string; cached: boolean; tokens?: number }) => ({
         url: s.url,
-        cached: s.cached
+        cached: s.cached,
       }));
     } catch {
       // ignore parse error
@@ -260,8 +265,8 @@ export function toActivity(record: UsageRecordRow): Activity {
 
   return {
     id: record.id,
-    url: truncate(record.input_value, 80),  // 显示 URL 或 query
-    strategy: record.task_type,              // load, save, parse 等
+    url: truncate(record.input_value, 80), // 显示 URL 或 query
+    strategy: record.task_type, // load, save, parse 等
     status: formatStatus(record.status),
     cost: formatCredits(record.total_credits),
     time: formatRelativeTime(record.created_at),
@@ -275,8 +280,8 @@ export function toActivity(record: UsageRecordRow): Activity {
       tokensInput: record.tokens_input ? Number(record.tokens_input) : undefined,
       tokensOutput: record.tokens_output ? Number(record.tokens_output) : undefined,
       pagesParsed: record.pages_parsed || undefined,
-      imagesExtracted: record.images_extracted || undefined
-    }
+      imagesExtracted: record.images_extracted || undefined,
+    },
   };
 }
 
@@ -286,16 +291,16 @@ export function toActivity(record: UsageRecordRow): Activity {
 export async function getUserActivities(
   userId: number,
   page: number = 1,
-  limit: number = 20
+  limit: number = 20,
 ): Promise<{ activities: Activity[]; total: number; page: number; limit: number }> {
   const { records, total } = await getUserUsageRecords(userId, page, limit);
   const activities = records.map(toActivity);
-  
+
   return {
     activities,
     total,
     page,
-    limit
+    limit,
   };
 }
 
@@ -313,6 +318,12 @@ export interface DashboardStats {
   cacheHitRate: number;
   creditsRemaining: number;
   totalCreditsUsed: number;
+  savings: {
+    monthlyTokensInput: number;
+    monthlyTokensOutput: number;
+    monthlyTokensSaved: number;
+    monthlyMoneySaved: number;
+  };
 }
 
 /**
@@ -321,11 +332,11 @@ export interface DashboardStats {
 export async function getDashboardStats(
   userId: number,
   period: string = '7d',
-  creditsRemaining: number = 0
+  creditsRemaining: number = 0,
 ): Promise<DashboardStats> {
   // 解析时间范围
   const days = period === '30d' ? 30 : period === '90d' ? 90 : 7;
-  
+
   // 获取每日统计
   const chartSql = `
     SELECT 
@@ -339,16 +350,20 @@ export async function getDashboardStats(
     GROUP BY DATE(created_at)
     ORDER BY date ASC
   `;
-  
-  const chartRows = await query<Array<{
-    date: Date;
-    requests: number;
-    credits: string;
-  } & RowDataPacket>>(chartSql, [userId, days]);
-  
+
+  const chartRows = await query<
+    Array<
+      {
+        date: Date;
+        requests: number;
+        credits: string;
+      } & RowDataPacket
+    >
+  >(chartSql, [userId, days]);
+
   // 填充缺失的日期
   const chartData = fillMissingDates(chartRows, days);
-  
+
   // 获取本月统计
   const monthlySql = `
     SELECT 
@@ -361,28 +376,60 @@ export async function getDashboardStats(
       AND created_at >= DATE_FORMAT(NOW(), '%Y-%m-01')
       AND status = 'completed'
   `;
-  
-  const monthlyRow = await queryOne<{
-    total_requests: number;
-    cache_hits: number;
-    total_urls: number;
-    total_credits: string;
-  } & RowDataPacket>(monthlySql, [userId]);
-  
+
+  const monthlyRow = await queryOne<
+    {
+      total_requests: number;
+      cache_hits: number;
+      total_urls: number;
+      total_credits: string;
+    } & RowDataPacket
+  >(monthlySql, [userId]);
+
   const monthlyRequests = monthlyRow?.total_requests || 0;
   const cacheHits = monthlyRow?.cache_hits || 0;
   const totalUrls = monthlyRow?.total_urls || 0;
   const totalCreditsUsed = parseFloat(monthlyRow?.total_credits || '0');
-  
+
   // 计算缓存命中率
   const cacheHitRate = totalUrls > 0 ? Math.round((cacheHits / totalUrls) * 100) : 0;
-  
+
+  // Token savings aggregation (monthly + all-time)
+  const savingsSql = `
+    SELECT
+      SUM(tokens_input) as total_tokens_input,
+      SUM(tokens_output) as total_tokens_output
+    FROM pc_usage_records
+    WHERE user_id = ?
+      AND created_at >= DATE_FORMAT(NOW(), '%Y-%m-01')
+      AND status = 'completed'
+      AND tokens_input > 0
+  `;
+  const savingsRow = await queryOne<
+    {
+      total_tokens_input: string;
+      total_tokens_output: string;
+    } & RowDataPacket
+  >(savingsSql, [userId]);
+
+  const monthlyTokensInput = parseInt(savingsRow?.total_tokens_input || '0', 10);
+  const monthlyTokensOutput = parseInt(savingsRow?.total_tokens_output || '0', 10);
+  const monthlyTokensSaved = Math.max(0, monthlyTokensInput - monthlyTokensOutput);
+  // $0.009 per 1K tokens (Claude Sonnet pricing)
+  const monthlyMoneySaved = Math.round((monthlyTokensSaved / 1000) * 0.009 * 100) / 100;
+
   return {
     chartData,
     monthlyRequests,
     cacheHitRate,
     creditsRemaining,
-    totalCreditsUsed
+    totalCreditsUsed,
+    savings: {
+      monthlyTokensInput,
+      monthlyTokensOutput,
+      monthlyTokensSaved,
+      monthlyMoneySaved,
+    },
   };
 }
 
@@ -397,34 +444,34 @@ function truncate(str: string, maxLen: number): string {
 
 function fillMissingDates(
   rows: Array<{ date: Date; requests: number; credits: string }>,
-  days: number
+  days: number,
 ): Array<{ date: string; requests: number; credits: number }> {
   const result: Array<{ date: string; requests: number; credits: number }> = [];
   const dataMap = new Map<string, { requests: number; credits: number }>();
-  
+
   // 建立已有数据的 map
   for (const row of rows) {
     const dateStr = row.date.toISOString().split('T')[0];
     dataMap.set(dateStr, {
       requests: row.requests,
-      credits: parseFloat(row.credits || '0')
+      credits: parseFloat(row.credits || '0'),
     });
   }
-  
+
   // 填充所有日期
   const now = new Date();
   for (let i = days - 1; i >= 0; i--) {
     const date = new Date(now);
     date.setDate(date.getDate() - i);
     const dateStr = date.toISOString().split('T')[0];
-    
+
     const data = dataMap.get(dateStr);
     result.push({
       date: dateStr,
       requests: data?.requests || 0,
-      credits: data?.credits || 0
+      credits: data?.credits || 0,
     });
   }
-  
+
   return result;
 }
