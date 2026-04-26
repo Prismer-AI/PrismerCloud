@@ -33,8 +33,10 @@ import { useApp } from '@/contexts/app-context';
 import { useTheme } from '@/contexts/theme-context';
 import { StripeCardModal } from '@/components/stripe-card-modal';
 import { CreditPurchaseSlider } from '@/components/credit-purchase-slider';
+import { TiltCard } from '@/components/evolution/tilt-card';
+import { EvolutionGraph } from '@/components/evolution/evolution-graph';
 
-type DashboardTab = 'overview' | 'api-keys' | 'billing';
+type DashboardTab = 'overview' | 'api-keys' | 'billing' | 'evolution';
 
 export default function DashboardPage() {
   const router = useRouter();
@@ -78,7 +80,7 @@ export default function DashboardPage() {
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const hash = window.location.hash.replace('#', '');
-      if (hash === 'api-keys' || hash === 'billing' || hash === 'overview') {
+      if (hash === 'api-keys' || hash === 'billing' || hash === 'overview' || hash === 'evolution') {
         setActiveTab(hash as DashboardTab);
       }
     }
@@ -312,7 +314,7 @@ export default function DashboardPage() {
         <div
           className={`flex p-0.5 sm:p-1 rounded-lg overflow-x-auto scrollbar-none ${isDark ? 'bg-zinc-900 border border-white/5' : 'bg-zinc-100 border border-zinc-200'}`}
         >
-          {(['overview', 'api-keys', 'billing'] as const).map((tab) => (
+          {(['overview', 'api-keys', 'billing', 'evolution'] as const).map((tab) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -1163,6 +1165,8 @@ export default function DashboardPage() {
         </div>
       )}
 
+      {activeTab === 'evolution' && <DashboardEvolutionTab isDark={isDark} />}
+
       {/* New API Key Modal */}
       {newlyCreatedKey && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -1253,3 +1257,419 @@ export default function DashboardPage() {
 }
 
 // ============================================================================
+// Dashboard Evolution Tab
+// ============================================================================
+
+interface EvolutionGene {
+  id: string;
+  category: string;
+  title?: string;
+  description?: string;
+  visibility?: string;
+  signals_match: string[];
+  strategy: string[];
+  success_count: number;
+  failure_count: number;
+  created_by: string;
+}
+
+function DashboardEvolutionTab({ isDark }: { isDark: boolean }) {
+  const { addToast } = useApp();
+  const [genes, setGenes] = useState<EvolutionGene[]>([]);
+  const [capsuleCount, setCapsuleCount] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [distillStatus, setDistillStatus] = useState<{
+    ready: boolean;
+    success_capsules: number;
+    min_required: number;
+  } | null>(null);
+  const [capsules, setCapsules] = useState<
+    Array<{
+      id: string;
+      gene_id: string;
+      gene_title?: string;
+      outcome: string;
+      score?: number;
+      summary?: string;
+      created_at: string;
+    }>
+  >([]);
+  const [showGraph, setShowGraph] = useState(false);
+
+  const getAuthHeaders = (): Record<string, string> => {
+    try {
+      const auth = JSON.parse(localStorage.getItem('prismer_auth') || '{}');
+      if (auth.token) return { Authorization: `Bearer ${auth.token}`, 'Content-Type': 'application/json' };
+      const apiKey = JSON.parse(localStorage.getItem('prismer_active_api_key') || '{}');
+      if (apiKey.key) return { Authorization: `Bearer ${apiKey.key}`, 'Content-Type': 'application/json' };
+    } catch {}
+    return { 'Content-Type': 'application/json' };
+  };
+
+  useEffect(() => {
+    const headers = getAuthHeaders();
+    Promise.all([
+      fetch('/api/im/evolution/genes', { headers }).then((r) => r.json()),
+      fetch('/api/im/evolution/distill?dry_run=true', { method: 'POST', headers }).then((r) => r.json()),
+      fetch('/api/im/evolution/capsules?limit=10', { headers }).then((r) => r.json()),
+    ])
+      .then(([genesRes, distillRes, capsulesRes]) => {
+        if (genesRes.ok) setGenes(genesRes.data || []);
+        if (distillRes.ok) setDistillStatus(distillRes.data);
+        if (capsulesRes.ok) {
+          setCapsuleCount(capsulesRes.meta?.total || 0);
+          setCapsules(capsulesRes.data || []);
+        }
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
+
+  const handlePublish = async (geneId: string) => {
+    const headers = getAuthHeaders();
+    const res = await fetch(`/api/im/evolution/genes/${geneId}/publish`, { method: 'POST', headers });
+    const data = await res.json();
+    if (data.ok) {
+      addToast('Gene published to market!', 'success');
+      setGenes((prev) => prev.map((g) => (g.id === geneId ? { ...g, visibility: 'published' } : g)));
+    } else {
+      addToast(data.error || 'Failed to publish', 'error');
+    }
+  };
+
+  const handleDelete = async (geneId: string) => {
+    const headers = getAuthHeaders();
+    const res = await fetch(`/api/im/evolution/genes/${geneId}`, { method: 'DELETE', headers });
+    const data = await res.json();
+    if (data.ok) {
+      addToast('Gene deleted', 'info');
+      setGenes((prev) => prev.filter((g) => g.id !== geneId));
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-20">
+        <Loader2 className="w-8 h-8 animate-spin text-violet-500" />
+      </div>
+    );
+  }
+
+  const totalUses = genes.reduce((sum, g) => sum + g.success_count + g.failure_count, 0);
+  const totalSuccess = genes.reduce((sum, g) => sum + g.success_count, 0);
+  const avgSuccessRate = totalUses > 0 ? Math.round((totalSuccess / totalUses) * 100) : 0;
+
+  const catColors: Record<string, string> = {
+    repair: 'text-orange-400',
+    optimize: 'text-cyan-400',
+    innovate: 'text-violet-400',
+  };
+  const catGlows: Record<string, string> = {
+    repair: 'rgba(251,146,60,0.15)',
+    optimize: 'rgba(34,211,238,0.15)',
+    innovate: 'rgba(139,92,246,0.15)',
+  };
+  const catIcons: Record<string, typeof Wrench> = {
+    repair: Wrench,
+    optimize: Zap,
+    innovate: Sparkles,
+  };
+
+  return (
+    <div className="space-y-6 animate-spring-in">
+      {/* KPIs - Glassmorphism */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 stagger-children">
+        {[
+          { label: 'My Genes', value: genes.length, icon: Dna },
+          { label: 'Success Rate', value: `${avgSuccessRate}%`, icon: TrendingUp },
+          { label: 'Total Capsules', value: capsuleCount, icon: Zap },
+          { label: 'Published', value: genes.filter((g) => g.visibility === 'published').length, icon: Upload },
+        ].map(({ label, value, icon: Icon }) => (
+          <div
+            key={label}
+            className={`p-4 rounded-xl spring-hover ${
+              isDark
+                ? 'backdrop-blur-xl bg-white/[0.03] border border-white/10 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.04)]'
+                : 'backdrop-blur-xl bg-white/70 border border-white/30 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.5)]'
+            }`}
+          >
+            <div className="flex items-center gap-2 mb-1">
+              <Icon className={`w-4 h-4 ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`} />
+              <span className={`text-xs ${isDark ? 'text-zinc-500' : 'text-zinc-500'}`}>{label}</span>
+            </div>
+            <div className={`text-2xl font-bold ${isDark ? 'text-white' : 'text-zinc-900'}`}>
+              {typeof value === 'number' ? value.toLocaleString() : value}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Distillation Card - Glassmorphism */}
+      {distillStatus && (
+        <div
+          className={`p-4 rounded-xl flex items-center justify-between ${
+            isDark
+              ? 'backdrop-blur-xl bg-white/[0.03] border border-white/10 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.04)]'
+              : 'backdrop-blur-xl bg-white/70 border border-white/30 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.5)]'
+          }`}
+        >
+          <div>
+            <h3 className={`font-bold mb-1 ${isDark ? 'text-white' : 'text-zinc-900'}`}>Gene Distillation</h3>
+            <p className={`text-xs ${isDark ? 'text-zinc-400' : 'text-zinc-600'}`}>
+              {distillStatus.ready
+                ? 'Your agent is ready to distill a new Gene from successful capsules.'
+                : `Need ${distillStatus.min_required} successful capsules. Have ${distillStatus.success_capsules}.`}
+            </p>
+          </div>
+          <div className={`flex items-center gap-3`}>
+            {!distillStatus.ready && (
+              <div className={`w-24 h-2 rounded-full overflow-hidden ${isDark ? 'bg-zinc-800' : 'bg-zinc-200'}`}>
+                <div
+                  className="h-full rounded-full bg-gradient-to-r from-violet-500 to-violet-400 transition-all"
+                  style={{
+                    width: `${Math.min((distillStatus.success_capsules / distillStatus.min_required) * 100, 100)}%`,
+                  }}
+                />
+              </div>
+            )}
+            <button
+              disabled={!distillStatus.ready}
+              className={`px-4 py-2 rounded-lg text-xs font-medium transition-colors ${
+                distillStatus.ready
+                  ? 'bg-violet-600 text-white hover:bg-violet-500'
+                  : isDark
+                    ? 'bg-zinc-800 text-zinc-500 cursor-not-allowed'
+                    : 'bg-zinc-100 text-zinc-400 cursor-not-allowed'
+              }`}
+            >
+              {distillStatus.ready ? 'Trigger Distillation' : 'Not Ready'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Gene List */}
+      <div>
+        <h3 className={`font-bold mb-3 ${isDark ? 'text-white' : 'text-zinc-900'}`}>My Genes ({genes.length})</h3>
+        {genes.length === 0 ? (
+          <div
+            className={`text-center py-12 rounded-xl ${
+              isDark
+                ? 'backdrop-blur-xl bg-white/[0.02] border border-white/5'
+                : 'backdrop-blur-xl bg-white/50 border border-white/20'
+            }`}
+          >
+            <Dna className={`w-8 h-8 mx-auto mb-3 ${isDark ? 'text-zinc-600' : 'text-zinc-400'}`} />
+            <p className={`text-sm mb-2 ${isDark ? 'text-zinc-400' : 'text-zinc-600'}`}>No genes yet</p>
+            <p className={`text-xs ${isDark ? 'text-zinc-500' : 'text-zinc-500'}`}>
+              Import genes from the{' '}
+              <a href="/evolution" className="text-violet-400 hover:underline">
+                Gene Market
+              </a>{' '}
+              or create them via the API.
+            </p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 stagger-children">
+            {genes.map((gene) => {
+              const CatIcon = catIcons[gene.category] || Wrench;
+              const totalG = gene.success_count + gene.failure_count;
+              const successRate = totalG > 0 ? Math.round((gene.success_count / totalG) * 100) : 0;
+              const isPublished = gene.visibility === 'published';
+              const isSeed = gene.visibility === 'seed';
+
+              return (
+                <TiltCard
+                  key={gene.id}
+                  glowColor={catGlows[gene.category] || catGlows.repair}
+                  maxTilt={4}
+                  scale={1.01}
+                  className="rounded-xl"
+                >
+                  <div
+                    className={`rounded-xl p-4 h-full ${
+                      isDark
+                        ? 'backdrop-blur-xl bg-white/[0.03] border border-white/10 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.04)]'
+                        : 'backdrop-blur-xl bg-white/70 border border-white/30 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.5)]'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between mb-2">
+                      <div className="flex items-center gap-1.5">
+                        <CatIcon className={`w-4 h-4 ${catColors[gene.category] || 'text-zinc-400'}`} />
+                        <span className={`text-xs font-medium ${isDark ? 'text-zinc-300' : 'text-zinc-700'}`}>
+                          {gene.category}
+                        </span>
+                      </div>
+                      {isPublished && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400">
+                          Published
+                        </span>
+                      )}
+                      {isSeed && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-violet-500/20 text-violet-300">Seed</span>
+                      )}
+                    </div>
+                    <h4 className={`font-bold text-sm mb-1 ${isDark ? 'text-white' : 'text-zinc-900'}`}>
+                      {gene.title ||
+                        (typeof gene.signals_match[0] === 'string'
+                          ? gene.signals_match[0]
+                          : ((gene.signals_match[0] as Record<string, unknown>)?.type as string)) ||
+                        'Untitled'}
+                    </h4>
+                    <p className={`text-xs mb-2 line-clamp-1 ${isDark ? 'text-zinc-500' : 'text-zinc-500'}`}>
+                      {gene.description || gene.strategy[0] || ''}
+                    </p>
+                    <div className="flex items-center gap-2 mb-3">
+                      {totalG > 0 ? (
+                        <>
+                          <span className={`text-xs ${isDark ? 'text-emerald-400' : 'text-emerald-600'}`}>
+                            {successRate}%
+                          </span>
+                          <span className={`text-xs ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>{totalG} uses</span>
+                        </>
+                      ) : (
+                        <span className={`text-xs ${isDark ? 'text-zinc-600' : 'text-zinc-400'}`}>No uses yet</span>
+                      )}
+                    </div>
+                    <div
+                      className={`flex items-center gap-2 pt-2 border-t ${isDark ? 'border-white/5' : 'border-zinc-100'}`}
+                    >
+                      {!isPublished && !isSeed && (
+                        <div>
+                          <button
+                            onClick={() => handlePublish(gene.id)}
+                            className="text-xs font-medium text-violet-400 hover:text-violet-300 transition-colors"
+                          >
+                            Publish
+                          </button>
+                          <p className={`text-[9px] mt-0.5 ${isDark ? 'text-zinc-600' : 'text-zinc-400'}`}>
+                            Earn up to 5,000 credits when others use your gene
+                          </p>
+                        </div>
+                      )}
+                      {!isSeed && (
+                        <button
+                          onClick={() => handleDelete(gene.id)}
+                          className="text-xs text-red-400 hover:text-red-300 transition-colors ml-auto"
+                        >
+                          Delete
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </TiltCard>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Capsule History */}
+      {capsules.length > 0 && (
+        <div>
+          <h3 className={`font-bold mb-3 ${isDark ? 'text-white' : 'text-zinc-900'}`}>Capsule History</h3>
+          <div
+            className={`rounded-xl p-4 ${
+              isDark
+                ? 'backdrop-blur-xl bg-white/[0.02] border border-white/10'
+                : 'backdrop-blur-xl bg-white/50 border border-white/20'
+            }`}
+          >
+            <div className="relative pl-6">
+              {/* Timeline line */}
+              <div className={`absolute left-2 top-1 bottom-1 w-px ${isDark ? 'bg-white/10' : 'bg-zinc-200'}`} />
+              <div className="space-y-4">
+                {capsules.map((capsule, i) => {
+                  const isSuccess = capsule.outcome === 'success';
+                  return (
+                    <div key={capsule.id || i} className="relative">
+                      {/* Timeline dot */}
+                      <div
+                        className={`absolute -left-[18px] top-1 w-2.5 h-2.5 rounded-full border-2 ${
+                          isSuccess ? 'bg-emerald-500 border-emerald-400' : 'bg-red-500 border-red-400'
+                        }`}
+                      />
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2 mb-0.5">
+                            <span className={`text-xs font-medium ${isDark ? 'text-white' : 'text-zinc-900'}`}>
+                              {capsule.gene_title || capsule.gene_id?.slice(0, 16) || 'Unknown Gene'}
+                            </span>
+                            <span
+                              className={`text-[10px] px-1.5 py-0.5 rounded ${
+                                isSuccess ? 'bg-emerald-500/15 text-emerald-400' : 'bg-red-500/15 text-red-400'
+                              }`}
+                            >
+                              {isSuccess ? 'Success' : 'Failed'}
+                            </span>
+                            {capsule.score !== undefined && (
+                              <span className={`text-[10px] font-mono ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>
+                                score: {capsule.score}
+                              </span>
+                            )}
+                          </div>
+                          {capsule.summary && (
+                            <p className={`text-xs line-clamp-1 ${isDark ? 'text-zinc-500' : 'text-zinc-500'}`}>
+                              {capsule.summary}
+                            </p>
+                          )}
+                        </div>
+                        <span className={`text-[10px] shrink-0 ${isDark ? 'text-zinc-600' : 'text-zinc-400'}`}>
+                          {new Date(capsule.created_at).toLocaleDateString(undefined, {
+                            month: 'short',
+                            day: 'numeric',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          })}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Memory Graph (Collapsible) */}
+      {genes.length > 0 && (
+        <div>
+          <button
+            onClick={() => setShowGraph((prev) => !prev)}
+            className={`flex items-center gap-2 font-bold mb-3 transition-colors ${isDark ? 'text-white hover:text-zinc-300' : 'text-zinc-900 hover:text-zinc-700'}`}
+          >
+            Memory Graph
+            <svg
+              className={`w-4 h-4 transition-transform duration-300 ${showGraph ? 'rotate-180' : ''}`}
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+            </svg>
+          </button>
+          <div
+            className="overflow-hidden transition-all duration-300 ease-in-out"
+            style={{
+              display: 'grid',
+              gridTemplateRows: showGraph ? '1fr' : '0fr',
+            }}
+          >
+            <div className="min-h-0 overflow-hidden">
+              <div
+                className={`rounded-xl p-4 ${
+                  isDark
+                    ? 'backdrop-blur-xl bg-white/[0.02] border border-white/10'
+                    : 'backdrop-blur-xl bg-white/50 border border-white/20'
+                }`}
+              >
+                <EvolutionGraph genes={genes} width={700} height={350} className="max-w-full mx-auto" />
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
