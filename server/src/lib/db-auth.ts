@@ -189,7 +189,10 @@ export async function sendVerificationCode(email: string, type: 'signup' | 'rese
   // Send via SMTP if configured
   if (process.env.SMTP_HOST) {
     try {
-      const nodemailer = await import('nodemailer');
+      // nodemailer is an optional runtime dep — only loaded when SMTP_HOST is set.
+      // Using @ts-ignore because it may or may not be installed locally vs CI.
+      // @ts-ignore optional peer dep
+      const nodemailer = (await import('nodemailer')) as typeof import('nodemailer');
       const transporter = nodemailer.createTransport({
         host: process.env.SMTP_HOST,
         port: parseInt(process.env.SMTP_PORT || '587', 10),
