@@ -16,6 +16,10 @@ import { readFileSync } from 'fs';
 import { resolve } from 'path';
 import { normalizeSignals, tagCoverageScore } from './evolution-signals';
 import { generateTitle } from './evolution-selector';
+import { bumpGeneOnSuccess, decayGeneOnFailure } from './quality-score.service';
+import { createModuleLogger } from '../../lib/logger';
+
+const log = createModuleLogger('Evolution');
 
 // ===== Gene Store (uses im_genes table) =====
 
@@ -53,6 +57,7 @@ export function dbGeneToModel(r: any): PrismerGene {
     parentGeneId: r.parentId ?? null,
     forkCount: r.forkCount ?? 0,
     generation: r.generation ?? 1,
+    qualityScore: r.qualityScore ?? 0.01,
   };
 }
 
@@ -221,12 +226,20 @@ export async function publishGene(
   });
   invalidatePublicGenesCache();
 
+  // Increment owner's publishCount
+  await prisma.iMUser
+    .update({
+      where: { id: gene.ownerAgentId },
+      data: { publishCount: { increment: 1 } },
+    })
+    .catch(() => {});
+
   // Credit reward for publishing (+10 cr)
   if (deps.creditService) {
     try {
       await deps.creditService.credit(agentId, 10, 'evolution_reward', `Gene published: ${geneId}`);
     } catch (err) {
-      console.warn('[Evolution] Publish credit reward failed:', (err as Error).message);
+      log.warn(`Publish credit reward failed: ${(err as Error).message}`);
     }
   }
 
@@ -237,7 +250,7 @@ export async function publishGene(
     } catch {}
   }
 
-  console.log(`[Evolution] Gene ${geneId} published by ${agentId}`);
+  log.info(`Gene ${geneId} published by ${agentId}`);
   return dbGeneToModel({ ...gene, visibility: 'published' });
 }
 
@@ -254,7 +267,16 @@ export async function publishGeneDirect(agentId: string, geneId: string): Promis
     data: { visibility: 'published' },
   });
   invalidatePublicGenesCache();
-  console.log(`[Evolution] Gene ${geneId} published directly (skipCanary) by ${agentId}`);
+
+  // Increment owner's publishCount
+  await prisma.iMUser
+    .update({
+      where: { id: gene.ownerAgentId },
+      data: { publishCount: { increment: 1 } },
+    })
+    .catch(() => {});
+
+  log.info(`Gene ${geneId} published directly (skipCanary) by ${agentId}`);
   return dbGeneToModel({ ...gene, visibility: 'published' });
 }
 
@@ -274,6 +296,15 @@ export async function publishGeneAsCanary(agentId: string, geneId: string): Prom
     data: { visibility: 'canary' },
   });
   invalidatePublicGenesCache();
+
+  // Increment owner's publishCount
+  await prisma.iMUser
+    .update({
+      where: { id: gene.ownerAgentId },
+      data: { publishCount: { increment: 1 } },
+    })
+    .catch(() => {});
+
   return dbGeneToModel({ ...gene, visibility: 'canary' });
 }
 
@@ -316,7 +347,7 @@ export async function importPublicGene(
         `Gene adopted: ${geneId} by ${agentId.slice(-6)}`,
       );
     } catch (err) {
-      console.warn('[Evolution] Adoption credit reward failed:', (err as Error).message);
+      log.warn(`Adoption credit reward failed: ${(err as Error).message}`);
     }
   }
 
@@ -330,7 +361,7 @@ export async function importPublicGene(
     } catch {}
   }
 
-  console.log(`[Evolution] Gene ${geneId} imported by ${agentId} as ${imported.id}`);
+  log.info(`Gene ${geneId} imported by ${agentId} as ${imported.id}`);
   return imported;
 }
 
@@ -370,11 +401,14 @@ export async function forkGene(
       where: { id: sourceGeneId },
       data: { forkCount: { increment: 1 } },
     });
+    // Bump parent's quality score on fork
+    const { bumpGeneOnFork } = await import('./quality-score.service');
+    bumpGeneOnFork(sourceGeneId).catch(() => {});
   } catch {
     // Skip silently if parent gene not in table (seed genes etc.)
   }
 
-  console.log(`[Evolution] Gene ${sourceGeneId} forked by ${agentId} as ${forkedGene.id}`);
+  log.info(`Gene ${sourceGeneId} forked by ${agentId} as ${forkedGene.id}`);
   return forkedGene;
 }
 
@@ -420,8 +454,17 @@ export async function checkCanaryPromotion(geneId: string): Promise<{ promote: b
     where: { id: geneId },
     data: { visibility: 'published' },
   });
-  console.log(
-    `[Evolution] Canary gene ${geneId} promoted to published (${Math.round(successRate * 100)}%, ${totalExec} runs, ${agentCount.length} agents)`,
+
+  // Increment owner's publishCount on canary → published promotion
+  await prisma.iMUser
+    .update({
+      where: { id: gene.ownerAgentId },
+      data: { publishCount: { increment: 1 } },
+    })
+    .catch(() => {});
+
+  log.info(
+    `Canary gene ${geneId} promoted to published (${Math.round(successRate * 100)}%, ${totalExec} runs, ${agentCount.length} agents)`,
   );
   return { promote: true, reason: 'all conditions met' };
 }
@@ -464,9 +507,7 @@ export async function checkGeneDemotion(geneId: string): Promise<{ demote: boole
   }
   if (consecutiveFails >= 10) {
     await prisma.iMGene.update({ where: { id: geneId }, data: { visibility: 'quarantined' } });
-    console.log(
-      `[Evolution] Gene ${geneId} quarantined: ${consecutiveFails} consecutive failures from ${distinctAgents.size} agents`,
-    );
+    log.info(`Gene ${geneId} quarantined: ${consecutiveFails} consecutive failures from ${distinctAgents.size} agents`);
     return { demote: true, reason: `${consecutiveFails} consecutive failures` };
   }
 
@@ -475,9 +516,7 @@ export async function checkGeneDemotion(geneId: string): Promise<{ demote: boole
   const rate = successes / recentCapsules.length;
   if (rate < 0.2) {
     await prisma.iMGene.update({ where: { id: geneId }, data: { visibility: 'quarantined' } });
-    console.log(
-      `[Evolution] Gene ${geneId} quarantined: ${Math.round(rate * 100)}% success rate from ${distinctAgents.size} agents`,
-    );
+    log.info(`Gene ${geneId} quarantined: ${Math.round(rate * 100)}% success rate from ${distinctAgents.size} agents`);
     return { demote: true, reason: `success rate ${Math.round(rate * 100)}% < 20%` };
   }
 
@@ -595,7 +634,7 @@ export async function updateCircuitBreaker(
       where: { id: geneId },
       data: { breakerState: 'open', breakerStateAt: now },
     });
-    console.log(`[Evolution] Circuit breaker OPEN for gene ${geneId} (${updated.breakerFailCount} failures in window)`);
+    log.info(`Circuit breaker OPEN for gene ${geneId} (${updated.breakerFailCount} failures in window)`);
   }
 }
 
@@ -644,11 +683,11 @@ export async function updateFreezeMode(): Promise<boolean> {
   freezeCache.computedAt = now;
 
   if (!wasFrozen && nowFrozen) {
-    console.log(
-      `[Evolution] ⚠️ FREEZE MODE activated: ${Math.round(failureRate * 100)}% failure rate over ${total} capsules (5min window)`,
+    log.warn(
+      `FREEZE MODE activated: ${Math.round(failureRate * 100)}% failure rate over ${total} capsules (5min window)`,
     );
   } else if (wasFrozen && !nowFrozen) {
-    console.log(`[Evolution] ✅ FREEZE MODE deactivated (failure rate now ${Math.round(failureRate * 100)}%)`);
+    log.info(`FREEZE MODE deactivated (failure rate now ${Math.round(failureRate * 100)}%)`);
   }
 
   return nowFrozen;
@@ -708,13 +747,11 @@ export async function checkProviderFrozen(provider: string): Promise<boolean> {
   providerFreezeCache.set(provider, { isFrozen: nowFrozen, computedAt: now });
 
   if (!wasFrozen && nowFrozen) {
-    console.log(
-      `[Evolution] ⚠️ PROVIDER FREEZE: ${provider} — ${Math.round(failureRate * 100)}% failure rate (${total} capsules in 5min)`,
+    log.warn(
+      `PROVIDER FREEZE: ${provider} — ${Math.round(failureRate * 100)}% failure rate (${total} capsules in 5min)`,
     );
   } else if (wasFrozen && !nowFrozen) {
-    console.log(
-      `[Evolution] ✅ PROVIDER FREEZE deactivated: ${provider} (failure rate now ${Math.round(failureRate * 100)}%)`,
-    );
+    log.info(`PROVIDER FREEZE deactivated: ${provider} (failure rate now ${Math.round(failureRate * 100)}%)`);
   }
 
   return nowFrozen;
@@ -754,10 +791,10 @@ export function loadSeedGenes(): PrismerGene[] {
       failure_count: g.failure_count || 0,
       last_used_at: g.last_used_at || null,
     }));
-    console.log(`[Evolution] Loaded ${_seedGenesCache.length} seed genes`);
+    log.info(`Loaded ${_seedGenesCache.length} seed genes`);
     return _seedGenesCache;
   } catch (err) {
-    console.error('[Evolution] Failed to load seed genes:', err);
+    log.error({ err }, 'Failed to load seed genes');
     return [];
   }
 }
@@ -781,6 +818,7 @@ export async function ensureSeedGenesInTable(): Promise<void> {
           constraints: JSON.stringify(g.constraints || {}),
           title: g.title || '',
           description: g.description || '',
+          qualityScore: 1.0,
         },
         create: {
           id: g.id,
@@ -793,6 +831,7 @@ export async function ensureSeedGenesInTable(): Promise<void> {
           constraints: JSON.stringify(g.constraints || {}),
           visibility: 'seed',
           generation: 1,
+          qualityScore: 1.0,
         },
       });
       // Re-sync signal links: delete stale, insert current
@@ -810,7 +849,7 @@ export async function ensureSeedGenesInTable(): Promise<void> {
       // Skip duplicates
     }
   }
-  console.log(`[Evolution] Synced ${seedGenes.length} seed genes in im_genes table`);
+  log.info(`Synced ${seedGenes.length} seed genes in im_genes table`);
 }
 
 /**
@@ -858,7 +897,7 @@ export async function seedGenesForNewAgent(agentId: string): Promise<void> {
     }
   }
 
-  console.log(`[Evolution] Seeded ${seedGenes.length} genes for agent ${agentId}`);
+  log.info(`Seeded ${seedGenes.length} genes for agent ${agentId}`);
 }
 
 /**
@@ -903,9 +942,9 @@ export async function scanCreditReturns(): Promise<number> {
               'evolution_milestone',
               `${gene.id}_${milestone.threshold}`,
             );
-            console.log(`[Evolution] Granted ${milestone.reward} credits for gene ${gene.id}`);
+            log.info(`Granted ${milestone.reward} credits for gene ${gene.id}`);
           } catch (err) {
-            console.error(`[Evolution] Failed to grant credits for gene ${gene.id}:`, err);
+            log.error({ err }, `Failed to grant credits for gene ${gene.id}`);
             continue;
           }
         }
@@ -950,6 +989,12 @@ export async function updateGeneStats(
         lastUsedAt: new Date(),
       },
     });
+    // Update quality score based on outcome
+    if (isSuccess) {
+      bumpGeneOnSuccess(geneId).catch(() => {});
+    } else {
+      decayGeneOnFailure(geneId).catch(() => {});
+    }
   } catch {
     // Gene might not exist in table yet (legacy data) — ignore
   }

@@ -14,6 +14,7 @@ export interface CreateMessageInput {
   content: string;
   metadata?: MessageMetadata;
   parentId?: string;
+  quotedMessageId?: string; // v1.8.2: Quote reply
   // E2E Signing fields (Layer 2)
   secVersion?: number;
   senderKeyId?: string;
@@ -21,6 +22,9 @@ export interface CreateMessageInput {
   contentHash?: string;
   prevHash?: string;
   signature?: string;
+  // AIP DID fields (v1.8.0 S2)
+  senderDid?: string;
+  delegationProof?: string;
 }
 
 export interface MessageQuery {
@@ -40,6 +44,7 @@ export class MessageModel {
         content: input.content,
         metadata: input.metadata ? JSON.stringify(input.metadata) : '{}',
         parentId: input.parentId,
+        quotedMessageId: input.quotedMessageId,
         status: 'sent',
         // E2E Signing fields (Layer 2)
         secVersion: input.secVersion,
@@ -48,6 +53,9 @@ export class MessageModel {
         contentHash: input.contentHash,
         prevHash: input.prevHash,
         signature: input.signature,
+        // AIP DID fields (v1.8.0 S2)
+        senderDid: input.senderDid,
+        delegationProof: input.delegationProof,
       },
     });
   }
@@ -92,10 +100,7 @@ export class MessageModel {
     return query.after ? messages : messages.reverse();
   }
 
-  async update(
-    id: string,
-    data: { content?: string; metadata?: Record<string, unknown>; status?: string }
-  ) {
+  async update(id: string, data: { content?: string; metadata?: Record<string, unknown>; status?: string }) {
     return prisma.iMMessage.update({
       where: { id },
       data: {

@@ -2,6 +2,9 @@ import { NextResponse } from 'next/server';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { parse as parseYaml } from 'yaml';
+import { createModuleLogger } from '@/lib/logger';
+
+const log = createModuleLogger('OpenAPIDocs');
 
 /**
  * OpenAPI Docs API
@@ -448,7 +451,7 @@ export async function GET() {
       },
     );
   } catch (error) {
-    console.error('[OpenAPI Docs] Error loading spec:', error);
+    log.error({ err: error }, 'Error loading spec');
     return NextResponse.json(
       {
         success: false,

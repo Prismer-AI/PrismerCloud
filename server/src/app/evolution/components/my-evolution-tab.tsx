@@ -19,15 +19,26 @@ import {
   Eye,
   EyeOff,
   Filter,
+  Upload,
+  ExternalLink,
 } from 'lucide-react';
-import { type Achievement, type LeaderboardEntry, type PublicGene, CAT_COLORS, glass } from './helpers';
+import {
+  type Achievement,
+  type LeaderboardEntry,
+  type PublicGene,
+  type CreatedSkill,
+  CAT_COLORS,
+  glass,
+} from './helpers';
 import { GeneCreateSheet } from './gene-create-sheet';
 import { GeneDetailDrawer } from './gene-detail-drawer';
 import { GenePublishDialog } from './gene-publish-dialog';
 import { GeneForkSheet } from './gene-fork-sheet';
 import { SkillUploadSheet } from './skill-upload-sheet';
 import { CapsuleDetailDrawer } from './capsule-detail-drawer';
-import { DistillationLab } from './distillation-lab';
+import { AgentCard } from './agent-card';
+import { MemoryExplorer } from './memory-explorer';
+import { BadgeIcon, BADGE_META, MY_EVOLUTION_TAB_BADGE_KEYS } from './leaderboard-row';
 
 /* ─── Types ──────────────────────────────────────────── */
 
@@ -44,6 +55,7 @@ interface MyGene {
   success_count: number;
   failure_count: number;
   visibility?: string;
+  parentId?: string | null;
 }
 
 interface MySkill {
@@ -85,6 +97,8 @@ const GENE_CAT_PILLS = [
   { key: 'diagnostic', label: 'Diagnostic' },
 ] as const;
 
+const CAPSULE_PAGE_SIZE = 30;
+
 /* ─── Component ──────────────────────────────────────── */
 
 export function MyEvolutionTab({ isDark, isAuthenticated }: MyEvolutionTabProps) {
@@ -92,11 +106,17 @@ export function MyEvolutionTab({ isDark, isAuthenticated }: MyEvolutionTabProps)
   const [loading, setLoading] = useState(true);
   const [report, setReport] = useState<Record<string, unknown> | null>(null);
   const [capsules, setCapsules] = useState<Record<string, unknown>[]>([]);
+  const [capsulesTotal, setCapsulesTotal] = useState(0);
+  const [capsulesPage, setCapsulesPage] = useState(1);
+  const [loadingMoreCapsules, setLoadingMoreCapsules] = useState(false);
   const [achievements, setAchievements] = useState<Achievement[]>([]);
   const [creditBalance, setCreditBalance] = useState<number | null>(null);
   const [myGenes, setMyGenes] = useState<MyGene[]>([]);
   const [mySkills, setMySkills] = useState<MySkill[]>([]);
-  const [rank, setRank] = useState<number | null>(null);
+  const [createdSkills, setCreatedSkills] = useState<CreatedSkill[]>([]);
+  /** Public achievement leaderboard position (badges + capsules), not value board */
+  const [achievementRank, setAchievementRank] = useState<number | null>(null);
+  const [valueMetrics, setValueMetrics] = useState<any>(null);
 
   // Sheet/drawer state
   const [createGeneOpen, setCreateGeneOpen] = useState(false);
@@ -129,7 +149,7 @@ export function MyEvolutionTab({ isDark, isAuthenticated }: MyEvolutionTabProps)
       fetch('/api/im/evolution/report', { headers })
         .then((r) => (r.ok ? r.json() : null))
         .catch(() => null),
-      fetch('/api/im/evolution/capsules?limit=30', { headers })
+      fetch(`/api/im/evolution/capsules?page=1&limit=${CAPSULE_PAGE_SIZE}`, { headers })
         .then((r) => (r.ok ? r.json() : null))
         .catch(() => null),
       fetch('/api/im/evolution/achievements', { headers })
@@ -147,10 +167,21 @@ export function MyEvolutionTab({ isDark, isAuthenticated }: MyEvolutionTabProps)
       fetch('/api/im/skills/installed', { headers })
         .then((r) => (r.ok ? r.json() : null))
         .catch(() => null),
+      fetch('/api/im/skills/created', { headers })
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null),
+      fetch('/api/im/evolution/leaderboard/agents/me?period=alltime', { headers })
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null),
     ])
-      .then(([rpt, caps, ach, cred, genes, lb, skillsRes]) => {
+      .then(([rpt, caps, ach, cred, genes, lb, skillsRes, createdRes, meLb]) => {
         if (rpt?.ok) setReport(rpt.data);
-        if (caps?.ok) setCapsules(caps.data || []);
+        if (caps?.ok) {
+          setCapsules(caps.data || []);
+          const meta = caps.meta as { total?: number } | undefined;
+          setCapsulesTotal(typeof meta?.total === 'number' ? meta.total : (caps.data || []).length);
+          setCapsulesPage(1);
+        }
         if (ach?.ok) setAchievements(ach.data || []);
         if (cred?.ok || cred?.data) setCreditBalance(cred.data?.balance ?? cred.balance ?? null);
         if (genes?.ok) setMyGenes(genes.data || []);
@@ -158,8 +189,12 @@ export function MyEvolutionTab({ isDark, isAuthenticated }: MyEvolutionTabProps)
           const myAgentId = rpt?.data?.agent_id;
           if (myAgentId) {
             const idx = (lb.data as LeaderboardEntry[]).findIndex((e: LeaderboardEntry) => e.agentId === myAgentId);
-            if (idx >= 0) setRank(idx + 1);
+            setAchievementRank(idx >= 0 ? idx + 1 : null);
+          } else {
+            setAchievementRank(null);
           }
+        } else {
+          setAchievementRank(null);
         }
         if (skillsRes?.ok) {
           const installed = (skillsRes.data || []).map((r: any) => ({
@@ -181,6 +216,21 @@ export function MyEvolutionTab({ isDark, isAuthenticated }: MyEvolutionTabProps)
           }));
           setMySkills(installed);
         }
+        if (createdRes?.ok) {
+          setCreatedSkills(
+            (createdRes.data || []).map((s: any) => ({
+              id: s.id,
+              name: s.name,
+              category: s.category,
+              installs: s.installs || 0,
+              stars: s.stars || 0,
+              sourceUrl: s.sourceUrl || '',
+            })),
+          );
+        }
+
+        if (meLb?.ok && meLb.data) setValueMetrics(meLb.data);
+        else setValueMetrics(null);
       })
       .finally(() => setLoading(false));
   }, []);
@@ -208,13 +258,68 @@ export function MyEvolutionTab({ isDark, isAuthenticated }: MyEvolutionTabProps)
   const refreshCapsules = useCallback(() => {
     const token = getToken();
     if (!token) return;
-    fetch('/api/im/evolution/capsules?limit=30', { headers: { Authorization: `Bearer ${token}` } })
+    fetch(`/api/im/evolution/capsules?page=1&limit=${CAPSULE_PAGE_SIZE}`, { headers: { Authorization: `Bearer ${token}` } })
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
-        if (d?.ok) setCapsules(d.data || []);
+        if (d?.ok) {
+          setCapsules(d.data || []);
+          const meta = d.meta as { total?: number } | undefined;
+          setCapsulesTotal(typeof meta?.total === 'number' ? meta.total : (d.data || []).length);
+          setCapsulesPage(1);
+        }
       })
       .catch(() => {});
   }, []);
+
+  const refreshAchievements = useCallback(() => {
+    const token = getToken();
+    if (!token) return;
+    fetch('/api/im/evolution/achievements', { headers: { Authorization: `Bearer ${token}` } })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (d?.ok) setAchievements(d.data || []);
+      })
+      .catch(() => {});
+  }, []);
+
+  const refreshMyLeaderboardEntry = useCallback(() => {
+    const token = getToken();
+    if (!token) return;
+    fetch('/api/im/evolution/leaderboard/agents/me?period=alltime', { headers: { Authorization: `Bearer ${token}` } })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (d?.ok && d.data) setValueMetrics(d.data);
+        else setValueMetrics(null);
+      })
+      .catch(() => {});
+  }, []);
+
+  const loadMoreCapsules = useCallback(() => {
+    const token = getToken();
+    if (!token || loadingMoreCapsules) return;
+    if (capsules.length >= capsulesTotal) return;
+    const nextPage = capsulesPage + 1;
+    setLoadingMoreCapsules(true);
+    fetch(`/api/im/evolution/capsules?page=${nextPage}&limit=${CAPSULE_PAGE_SIZE}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (d?.ok && Array.isArray(d.data)) {
+          setCapsules((prev) => {
+            const seen = new Set(prev.map((c) => String((c as { id?: string }).id ?? '')));
+            const add = (d.data as Record<string, unknown>[]).filter((c) => {
+              const id = String((c as { id?: string }).id ?? '');
+              return id && !seen.has(id);
+            });
+            return [...prev, ...add];
+          });
+          setCapsulesPage(nextPage);
+        }
+      })
+      .catch(() => {})
+      .finally(() => setLoadingMoreCapsules(false));
+  }, [capsules.length, capsulesTotal, capsulesPage, loadingMoreCapsules]);
 
   const refreshSkills = useCallback(() => {
     const token = getToken();
@@ -246,15 +351,41 @@ export function MyEvolutionTab({ isDark, isAuthenticated }: MyEvolutionTabProps)
       .catch(() => {});
   }, []);
 
+  const refreshCreatedSkills = useCallback(() => {
+    const token = getToken();
+    if (!token) return;
+    fetch('/api/im/skills/created', { headers: { Authorization: `Bearer ${token}` } })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (d?.ok) {
+          setCreatedSkills(
+            (d.data || []).map((s: any) => ({
+              id: s.id,
+              name: s.name,
+              category: s.category,
+              installs: s.installs || 0,
+              stars: s.stars || 0,
+              sourceUrl: s.sourceUrl || '',
+            })),
+          );
+        }
+      })
+      .catch(() => {});
+  }, []);
+
   // Callbacks for gene operations — targeted refresh only
   const handleGeneCreated = useCallback(() => {
     refreshGenes();
-  }, [refreshGenes]);
+    void refreshAchievements();
+    void refreshMyLeaderboardEntry();
+  }, [refreshGenes, refreshAchievements, refreshMyLeaderboardEntry]);
 
   const handleGeneDeleted = useCallback(() => {
     setGeneDetailId(null);
     refreshGenes();
-  }, [refreshGenes]);
+    void refreshAchievements();
+    void refreshMyLeaderboardEntry();
+  }, [refreshGenes, refreshAchievements, refreshMyLeaderboardEntry]);
 
   const handlePublishFromDetail = useCallback(
     (geneId: string) => {
@@ -275,16 +406,21 @@ export function MyEvolutionTab({ isDark, isAuthenticated }: MyEvolutionTabProps)
   const handlePublished = useCallback(() => {
     setPublishGene(null);
     refreshGenes();
-  }, [refreshGenes]);
+    void refreshAchievements();
+    void refreshMyLeaderboardEntry();
+  }, [refreshGenes, refreshAchievements, refreshMyLeaderboardEntry]);
 
   const handleForked = useCallback(() => {
     setForkGene(null);
     refreshGenes();
-  }, [refreshGenes]);
+    void refreshAchievements();
+    void refreshMyLeaderboardEntry();
+  }, [refreshGenes, refreshAchievements, refreshMyLeaderboardEntry]);
 
   const handleSkillCreated = useCallback(() => {
     refreshSkills();
-  }, [refreshSkills]);
+    refreshCreatedSkills();
+  }, [refreshSkills, refreshCreatedSkills]);
 
   // ─── Unauthenticated state ───
   if (!isAuthenticated) {
@@ -292,10 +428,10 @@ export function MyEvolutionTab({ isDark, isAuthenticated }: MyEvolutionTabProps)
       <div className={`text-center py-20 rounded-2xl ${glass(isDark)}`}>
         <User className="w-10 h-10 mx-auto mb-4 opacity-40" />
         <h3 className={`text-lg font-bold mb-2 ${isDark ? 'text-white' : 'text-zinc-900'}`}>
-          Sign in to see your evolution
+          Sign in to access your workspace
         </h3>
         <p className={`text-sm mb-6 ${isDark ? 'text-zinc-400' : 'text-zinc-600'}`}>
-          Track your agent&apos;s genes, executions, personality, and credits.
+          Manage your installed skills, genes, and executions.
         </p>
         <Link
           href="/auth"
@@ -343,23 +479,34 @@ export function MyEvolutionTab({ isDark, isAuthenticated }: MyEvolutionTabProps)
       {/* ─── 1. Overview Strip ─── */}
       <div className="grid grid-cols-5 gap-3">
         {[
-          { label: 'Genes', value: geneCount, icon: Dna, accent: 'text-violet-400' },
-          { label: 'Executions', value: totalCapsules, icon: Zap, accent: 'text-amber-400' },
+          { label: 'Genes', value: geneCount, icon: Dna, accent: 'text-violet-400' as const },
+          { label: 'Executions', value: totalCapsules, icon: Zap, accent: 'text-amber-400' as const },
           {
             label: 'Success',
             value: `${Math.round(successRate * 100)}%`,
             icon: TrendingUp,
-            accent: 'text-emerald-400',
+            accent: 'text-emerald-400' as const,
           },
           {
             label: 'Credits',
             value: creditBalance != null ? creditBalance.toLocaleString() : '\u2014',
             icon: Star,
-            accent: 'text-cyan-400',
+            accent: 'text-cyan-400' as const,
           },
-          { label: 'Rank', value: rank != null ? `#${rank}` : '\u2014', icon: Trophy, accent: 'text-amber-400' },
-        ].map(({ label, value, icon: Icon, accent }) => (
-          <div key={label} className={`rounded-xl px-3 py-3 text-center ${glass(isDark)}`}>
+          {
+            label: 'Achieve',
+            value: achievementRank != null ? `#${achievementRank}` : '\u2014',
+            icon: Trophy,
+            accent: 'text-amber-400' as const,
+            stripTitle:
+              'Achievement leaderboard (public top 50): badge count + execution activity — not the value board rank',
+          },
+        ].map(({ label, value, icon: Icon, accent, stripTitle }) => (
+          <div
+            key={label}
+            title={stripTitle}
+            className={`rounded-xl px-3 py-3 text-center ${glass(isDark)} ${stripTitle ? 'cursor-help' : ''}`}
+          >
             <Icon className={`w-4 h-4 mx-auto mb-1.5 ${accent}`} />
             <div className={`text-xl font-bold tabular-nums leading-tight ${isDark ? 'text-white' : 'text-zinc-900'}`}>
               {value}
@@ -493,6 +640,21 @@ export function MyEvolutionTab({ isDark, isAuthenticated }: MyEvolutionTabProps)
                           <EyeOff className="w-3 h-3" /> Private
                         </span>
                       )}
+                      {gene.parentId && (
+                        <span
+                          className={`px-1.5 py-0 rounded text-[10px] font-medium ${
+                            gene.id.includes('_fork_')
+                              ? isDark
+                                ? 'bg-orange-500/10 text-orange-300'
+                                : 'bg-orange-50 text-orange-600'
+                              : isDark
+                                ? 'bg-blue-500/10 text-blue-300'
+                                : 'bg-blue-50 text-blue-600'
+                          }`}
+                        >
+                          {gene.id.includes('_fork_') ? 'Forked' : 'Imported'}
+                        </span>
+                      )}
                     </div>
                   </div>
                   {total > 0 && (
@@ -512,6 +674,49 @@ export function MyEvolutionTab({ isDark, isAuthenticated }: MyEvolutionTabProps)
         )}
       </div>
 
+      {/* ─── 2.5 My Created Skills ─── */}
+      {createdSkills.length > 0 && (
+        <div className={`rounded-xl overflow-hidden ${glass(isDark)}`}>
+          <div
+            className={`flex items-center justify-between px-5 py-3 border-b ${isDark ? 'border-white/5' : 'border-zinc-200/50'}`}
+          >
+            <h3 className={`text-sm font-bold ${isDark ? 'text-white' : 'text-zinc-900'}`}>
+              Published Skills ({createdSkills.length})
+            </h3>
+          </div>
+          <div className="divide-y divide-transparent">
+            {createdSkills.map((skill) => (
+              <div
+                key={skill.id}
+                className={`flex items-center gap-3 px-5 py-3 ${isDark ? 'hover:bg-white/[0.02]' : 'hover:bg-black/[0.02]'}`}
+              >
+                <Upload className={`w-4 h-4 shrink-0 ${isDark ? 'text-violet-400' : 'text-violet-500'}`} />
+                <div className="flex-1 min-w-0">
+                  <p className={`text-sm font-medium truncate ${isDark ? 'text-zinc-200' : 'text-zinc-800'}`}>
+                    {skill.name}
+                  </p>
+                  <div className={`flex gap-2 text-xs ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>
+                    <span>{skill.category}</span>
+                    {skill.installs > 0 && <span>{skill.installs} installs</span>}
+                  </div>
+                </div>
+                {skill.sourceUrl && (
+                  <a
+                    href={skill.sourceUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className={`shrink-0 ${isDark ? 'text-zinc-600 hover:text-zinc-400' : 'text-zinc-400 hover:text-zinc-600'}`}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" />
+                  </a>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* ─── 3. My Skills ─── */}
       <div className={`rounded-xl overflow-hidden ${glass(isDark)}`}>
         <div
@@ -520,7 +725,7 @@ export function MyEvolutionTab({ isDark, isAuthenticated }: MyEvolutionTabProps)
           }`}
         >
           <h3 className={`text-sm font-bold ${isDark ? 'text-white' : 'text-zinc-900'}`}>
-            My Skills ({mySkills.length})
+            Installed Skills ({mySkills.length})
           </h3>
           <button
             type="button"
@@ -535,7 +740,7 @@ export function MyEvolutionTab({ isDark, isAuthenticated }: MyEvolutionTabProps)
         {mySkills.length === 0 ? (
           <div className={`text-center py-12 ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>
             <Sparkles className="w-6 h-6 mx-auto mb-2 opacity-40" />
-            <p className="text-sm">No skills yet. Upload your first skill to share knowledge.</p>
+            <p className="text-sm">No skills installed yet. Browse the Library to find skills.</p>
           </div>
         ) : (
           <div className="divide-y divide-transparent">
@@ -595,7 +800,6 @@ export function MyEvolutionTab({ isDark, isAuthenticated }: MyEvolutionTabProps)
       </div>
 
       {/* ─── 4. Distillation Lab ─── */}
-      <DistillationLab isDark={isDark} isAuthenticated={isAuthenticated} />
 
       {/* ─── 5. Execution Log ─── */}
       <div className={`rounded-xl overflow-hidden ${glass(isDark)}`}>
@@ -644,46 +848,82 @@ export function MyEvolutionTab({ isDark, isAuthenticated }: MyEvolutionTabProps)
             </p>
           </div>
         ) : (
-          <div className="divide-y divide-transparent">
-            {filteredCapsules.map((c, i) => {
-              const ok = c.outcome === 'success';
-              return (
-                <button
-                  key={i}
-                  type="button"
-                  onClick={() => setCapsuleDetail(c)}
-                  className={`flex items-center gap-3 px-5 py-3 w-full text-left transition-colors ${
-                    isDark ? 'hover:bg-white/[0.04]' : 'hover:bg-black/[0.03]'
-                  }`}
-                >
-                  <span
-                    className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0 ${
-                      ok ? 'bg-emerald-500/15 text-emerald-400' : 'bg-red-500/15 text-red-400'
+          <div>
+            <div className="divide-y divide-transparent">
+              {filteredCapsules.map((c) => {
+                const ok = c.outcome === 'success';
+                const capId = String((c as { id?: string }).id ?? '');
+                const rowKey =
+                  capId ||
+                  `${String((c as { createdAt?: string }).createdAt ?? '')}-${String(c.geneId || c.gene_id || '')}-${String(c.summary ?? '').slice(0, 24)}`;
+                return (
+                  <button
+                    key={rowKey}
+                    type="button"
+                    onClick={() => setCapsuleDetail(c)}
+                    className={`flex items-center gap-3 px-5 py-3 w-full text-left transition-colors ${
+                      isDark ? 'hover:bg-white/[0.04]' : 'hover:bg-black/[0.03]'
                     }`}
                   >
-                    {ok ? '\u2713' : '\u2717'}
-                  </span>
-                  <div className="flex-1 min-w-0">
-                    <p className={`text-sm font-medium truncate ${isDark ? 'text-zinc-200' : 'text-zinc-800'}`}>
-                      {String(c.geneId || c.gene_id || '')}
-                    </p>
-                    <p className={`text-xs truncate ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>
-                      {String(c.summary || '')}
-                    </p>
-                  </div>
-                  {c.score != null && (
                     <span
-                      className={`text-xs font-semibold tabular-nums ${isDark ? 'text-zinc-400' : 'text-zinc-500'}`}
+                      className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0 ${
+                        ok ? 'bg-emerald-500/15 text-emerald-400' : 'bg-red-500/15 text-red-400'
+                      }`}
                     >
-                      {Math.round(Number(c.score) * 100)}%
+                      {ok ? '\u2713' : '\u2717'}
                     </span>
-                  )}
-                  <ChevronRight className={`w-4 h-4 shrink-0 ${isDark ? 'text-zinc-700' : 'text-zinc-300'}`} />
+                    <div className="flex-1 min-w-0">
+                      <p className={`text-sm font-medium truncate ${isDark ? 'text-zinc-200' : 'text-zinc-800'}`}>
+                        {String(c.geneId || c.gene_id || '')}
+                      </p>
+                      <p className={`text-xs truncate ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>
+                        {String(c.summary || '')}
+                      </p>
+                    </div>
+                    {c.score != null && (
+                      <span
+                        className={`text-xs font-semibold tabular-nums ${isDark ? 'text-zinc-400' : 'text-zinc-500'}`}
+                      >
+                        {Math.round(Number(c.score) * 100)}%
+                      </span>
+                    )}
+                    <ChevronRight className={`w-4 h-4 shrink-0 ${isDark ? 'text-zinc-700' : 'text-zinc-300'}`} />
+                  </button>
+                );
+              })}
+            </div>
+            {capsules.length < capsulesTotal && capsuleOutcomeFilter === 'all' && (
+              <div className="px-5 py-3 border-t border-transparent">
+                <button
+                  type="button"
+                  disabled={loadingMoreCapsules}
+                  onClick={() => void loadMoreCapsules()}
+                  className={`w-full rounded-lg py-2 text-xs font-medium transition-colors ${
+                    isDark
+                      ? 'bg-white/[0.06] text-zinc-300 hover:bg-white/[0.1] disabled:opacity-50'
+                      : 'bg-zinc-100 text-zinc-700 hover:bg-zinc-200 disabled:opacity-50'
+                  }`}
+                >
+                  {loadingMoreCapsules
+                    ? 'Loading…'
+                    : `Load more (${capsules.length} / ${capsulesTotal})`}
                 </button>
-              );
-            })}
+              </div>
+            )}
           </div>
         )}
+      </div>
+
+      {/* ─── 5.5. Memory Explorer ─── */}
+      <div className={`rounded-xl overflow-hidden ${glass(isDark)}`}>
+        <div
+          className={`px-5 py-3 border-b ${isDark ? 'border-white/5' : 'border-zinc-200/50'}`}
+        >
+          <h3 className={`text-sm font-bold ${isDark ? 'text-white' : 'text-zinc-900'}`}>Memory</h3>
+        </div>
+        <div className="px-5 py-4">
+          <MemoryExplorer isDark={isDark} />
+        </div>
       </div>
 
       {/* ─── 6. Achievements (collapsible) ─── */}
@@ -696,7 +936,7 @@ export function MyEvolutionTab({ isDark, isAuthenticated }: MyEvolutionTabProps)
           }`}
         >
           <h3 className={`text-sm font-bold ${isDark ? 'text-white' : 'text-zinc-900'}`}>
-            Achievements ({achievements.length}/6)
+            Achievements ({achievements.length}/{MY_EVOLUTION_TAB_BADGE_KEYS.length})
           </h3>
           {achievementsExpanded ? (
             <ChevronDown className={`w-4 h-4 ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`} />
@@ -707,18 +947,15 @@ export function MyEvolutionTab({ isDark, isAuthenticated }: MyEvolutionTabProps)
         {achievementsExpanded && (
           <div className={`px-5 pb-4 border-t ${isDark ? 'border-white/5' : 'border-zinc-200/50'}`}>
             <div className="grid grid-cols-3 sm:grid-cols-6 gap-3 pt-4">
-              {[
-                { key: 'first_gene', icon: '\u{1F331}', name: 'Gene Pioneer' },
-                { key: 'first_execution', icon: '\u26A1', name: 'First Strike' },
-                { key: 'first_publish', icon: '\u{1F9EC}', name: 'Open Source' },
-                { key: 'streak_10', icon: '\u{1F525}', name: 'Reliable' },
-                { key: 'diversity_3', icon: '\u{1F308}', name: 'Generalist' },
-                { key: 'gene_adopted', icon: '\u{1F3C6}', name: 'Influential' },
-              ].map((badge) => {
-                const unlocked = achievements.find((a) => a.badgeKey === badge.key);
+              {MY_EVOLUTION_TAB_BADGE_KEYS.map((key) => {
+                const meta = BADGE_META[key];
+                const unlocked = achievements.find((a) => a.badgeKey === key);
+                const titleLine = meta
+                  ? `${meta.title} — ${meta.subtitle}`
+                  : key.replace(/_/g, ' ');
                 return (
                   <div
-                    key={badge.key}
+                    key={key}
                     className={`text-center p-3 rounded-lg transition-all ${
                       unlocked
                         ? isDark
@@ -729,12 +966,20 @@ export function MyEvolutionTab({ isDark, isAuthenticated }: MyEvolutionTabProps)
                           : 'bg-zinc-100/60 opacity-40'
                     }`}
                     title={
-                      unlocked ? `Unlocked ${new Date(unlocked.unlockedAt).toLocaleDateString()}` : 'Not yet unlocked'
+                      unlocked
+                        ? `${titleLine}\nUnlocked ${new Date(unlocked.unlockedAt).toLocaleDateString()}`
+                        : `${titleLine}\nNot yet unlocked`
                     }
                   >
-                    <div className="text-2xl mb-1">{badge.icon}</div>
-                    <div className={`text-[10px] font-medium ${isDark ? 'text-zinc-300' : 'text-zinc-700'}`}>
-                      {badge.name}
+                    <div className="flex justify-center mb-1.5 scale-125 origin-center">
+                      <BadgeIcon badge={key} isDark={isDark} />
+                    </div>
+                    <div
+                      className={`text-[9px] font-semibold leading-tight tracking-tight line-clamp-2 uppercase ${
+                        isDark ? 'text-zinc-300' : 'text-zinc-700'
+                      }`}
+                    >
+                      {meta?.title ?? key}
                     </div>
                   </div>
                 );
@@ -796,6 +1041,30 @@ export function MyEvolutionTab({ isDark, isAuthenticated }: MyEvolutionTabProps)
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* ─── 7. Agent Card ─── */}
+      {valueMetrics && report?.agent_id && (
+        <div className="mt-6">
+          <h3 className={`text-lg font-semibold mb-3 ${isDark ? 'text-zinc-200' : 'text-zinc-800'}`}>My Agent Card</h3>
+          <p className={`text-xs mb-2 ${isDark ? 'text-zinc-500' : 'text-zinc-500'}`}>
+            Value board (snapshot / metrics). Rank here is independent of the &quot;Achieve&quot; strip above.
+          </p>
+          <AgentCard
+            isDark={isDark}
+            data={{
+              agentId: report.agent_id as string,
+              agentName: valueMetrics.agentName || (report.agent_id as string),
+              ownerUsername: valueMetrics.ownerUsername || '',
+              rank: valueMetrics.rank != null ? valueMetrics.rank : null,
+              percentile: valueMetrics.percentile,
+              value: valueMetrics.value || { tokenSaved: 0, moneySaved: 0, co2Reduced: 0, devHoursSaved: 0 },
+              trend: (valueMetrics.trendData ?? valueMetrics.trend ?? []) as number[],
+              badges: achievements.map((a: any) => a.badgeKey || a.badge?.key || ''),
+              err: valueMetrics.err,
+            }}
+          />
         </div>
       )}
 

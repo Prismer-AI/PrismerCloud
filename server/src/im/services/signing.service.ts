@@ -10,6 +10,7 @@ import {
   SEC_VERSION,
   computeContentHash,
   buildSigningPayload,
+  buildLiteSigningPayload,
   verifySignature,
   checkReplay,
   serializeReplayWindow,
@@ -17,14 +18,23 @@ import {
   type ReplayWindowState,
 } from '../crypto';
 import { IdentityService } from './identity.service';
+import { RevocationService } from './revocation.service';
+import { DelegationService } from './delegation.service';
 
 export interface VerifyResult {
   valid: boolean;
   reason?: string;
+  keyId?: string;
 }
 
 export class SigningService {
-  constructor(private identityService: IdentityService) {}
+  private revocationService: RevocationService;
+  private delegationService: DelegationService;
+
+  constructor(private identityService: IdentityService) {
+    this.revocationService = new RevocationService();
+    this.delegationService = new DelegationService();
+  }
 
   /**
    * Server-side verification of a signed message.
@@ -34,7 +44,7 @@ export class SigningService {
    * 2. Ed25519 signature is valid (STRICT RFC 8032)
    * 3. contentHash matches actual content (reject on mismatch)
    * 4. Sequence passes sliding window anti-replay
-   * 5. prevHash chain continuity (detect + log, no rejection)
+   * 5. prevHash chain continuity (v1.8.0 S4: reject on break)
    *
    * Returns { valid: true } or { valid: false, reason: "..." }
    */
@@ -46,6 +56,8 @@ export class SigningService {
     createdAt: number; // ms since epoch
     secVersion: number;
     senderKeyId: string;
+    senderDid?: string; // AIP: preferred over senderKeyId
+    delegationProof?: string; // AIP: JSON delegation chain proof
     sequence: number;
     contentHash: string;
     prevHash: string | null;
@@ -58,13 +70,31 @@ export class SigningService {
       return { valid: false, reason: 'timestamp_skew' };
     }
 
-    // 1. Lookup sender's identity key
-    const key = await this.identityService.lookupByKeyId(params.senderKeyId);
+    // 1. Lookup sender's identity key — prefer DID, fallback to keyId
+    const key = params.senderDid
+      ? await this.identityService.lookupByDID(params.senderDid)
+      : await this.identityService.lookupByKeyId(params.senderKeyId);
     if (!key) {
-      return { valid: false, reason: 'unknown_key_id' };
+      return { valid: false, reason: params.senderDid ? 'unknown_did' : 'unknown_key_id' };
     }
     if (key.imUserId !== params.senderId) {
       return { valid: false, reason: 'key_sender_mismatch' };
+    }
+
+    // 1b. AIP: Check if the sender's DID has been revoked
+    if (key.didKey) {
+      const revoked = await this.revocationService.isRevoked(key.didKey);
+      if (revoked) {
+        return { valid: false, reason: 'sender_did_revoked' };
+      }
+    }
+
+    // 1c. AIP: Verify delegation chain if delegationProof is provided
+    if (params.delegationProof) {
+      const chainResult = await this.verifyDelegationChain(params.delegationProof);
+      if (!chainResult.valid) {
+        return { valid: false, reason: `delegation_invalid: ${chainResult.reason}` };
+      }
     }
 
     // 2. Verify contentHash matches actual content
@@ -74,35 +104,51 @@ export class SigningService {
     }
 
     // 3. Verify Ed25519 signature
-    const payload = buildSigningPayload({
-      secVersion: params.secVersion,
-      senderId: params.senderId,
-      senderKeyId: params.senderKeyId,
-      conversationId: params.conversationId,
-      sequence: params.sequence,
-      type: params.type,
-      timestamp: params.createdAt,
-      contentHash: params.contentHash,
-      prevHash: params.prevHash,
-    });
+    // v1.8.0: Detect lite signing mode (SDK auto-sign sends senderDid but no senderKeyId)
+    const isLiteMode = params.senderDid && !params.senderKeyId;
+    const payload = isLiteMode
+      ? buildLiteSigningPayload({
+          secVersion: params.secVersion,
+          senderDid: params.senderDid!,
+          type: params.type,
+          timestamp: params.createdAt,
+          contentHash: params.contentHash,
+        })
+      : buildSigningPayload({
+          secVersion: params.secVersion,
+          senderId: params.senderId,
+          senderKeyId: params.senderKeyId,
+          senderDid: params.senderDid,
+          conversationId: params.conversationId,
+          sequence: params.sequence,
+          type: params.type,
+          timestamp: params.createdAt,
+          contentHash: params.contentHash,
+          prevHash: params.prevHash,
+        });
 
     const sigValid = verifySignature(key.publicKey, params.signature, payload);
     if (!sigValid) {
       return { valid: false, reason: 'invalid_signature' };
     }
 
-    // 4. Anti-replay: sliding window check
-    const replayResult = await this.checkSequence(params.senderId, params.conversationId, params.sequence);
-    if (replayResult === 'reject') {
-      return { valid: false, reason: 'replay_detected' };
+    // 4. Anti-replay: sliding window check (skip for lite mode — no sequence)
+    if (!isLiteMode && typeof params.sequence === 'number') {
+      const replayResult = await this.checkSequence(params.senderId, params.conversationId, params.sequence);
+      if (replayResult === 'reject') {
+        return { valid: false, reason: 'replay_detected' };
+      }
     }
 
-    // 5. Hash chain verification (detection, not rejection)
+    // 5. Hash chain verification (v1.8.0 S4: reject on break)
+    // Skip for lite mode — SDK auto-signing doesn't track prevHash/sequence
+    if (isLiteMode) {
+      return { valid: true, keyId: key.keyId };
+    }
     // Verify that prevHash matches the most recent message's contentHash
-    // from this sender in this conversation. Chain breaks are logged for
-    // audit but not rejected — they could indicate tampering OR legitimate
-    // operations (message deletion, server-side compaction, etc.).
-    if (params.prevHash) {
+    // from this sender in this conversation.
+    // Always check when previous messages exist — even if params.prevHash is null/undefined.
+    {
       const prevMsg = await prisma.iMMessage.findFirst({
         where: {
           conversationId: params.conversationId,
@@ -113,19 +159,55 @@ export class SigningService {
         select: { contentHash: true },
       });
 
-      if (prevMsg && prevMsg.contentHash !== params.prevHash) {
-        console.warn(
-          `[Signing] Hash chain break detected: sender=${params.senderId}, ` +
-            `conv=${params.conversationId}, expected=${prevMsg.contentHash}, ` +
-            `got=${params.prevHash}`,
-        );
-        // Log only — do not reject. Hash chain breaks are evidence of
-        // potential tampering but can also be caused by legitimate operations
-        // like message deletion by owner or server-side compaction.
+      if (prevMsg) {
+        // Previous signed messages exist — prevHash must be provided and match
+        if (!params.prevHash) {
+          console.warn(
+            `[Signing] Hash chain break: sender=${params.senderId}, ` +
+              `conv=${params.conversationId}, expected=${prevMsg.contentHash}, ` +
+              `got=null`,
+          );
+          return { valid: false, reason: 'hash_chain_break' };
+        }
+        if (prevMsg.contentHash !== params.prevHash) {
+          console.warn(
+            `[Signing] Hash chain break: sender=${params.senderId}, ` +
+              `conv=${params.conversationId}, expected=${prevMsg.contentHash}, ` +
+              `got=${params.prevHash}`,
+          );
+          return { valid: false, reason: 'hash_chain_break' };
+        }
       }
     }
 
     return { valid: true };
+  }
+
+  /**
+   * AIP: Verify a delegation chain proof.
+   * Parses the proof JSON to extract the delegatee DID, then walks the chain.
+   */
+  private async verifyDelegationChain(delegationProofJson: string): Promise<{ valid: boolean; reason?: string }> {
+    try {
+      const proof = JSON.parse(delegationProofJson);
+      // proof can be { delegateeDid: "did:key:..." } or a raw DID string
+      const subjectDid = typeof proof === 'string' ? proof : (proof.delegateeDid ?? proof.did);
+      if (!subjectDid) {
+        return { valid: false, reason: 'missing_delegatee_did_in_proof' };
+      }
+
+      const result = await this.delegationService.verifyChain(subjectDid);
+      return result;
+    } catch (err) {
+      return { valid: false, reason: `delegation_parse_error: ${(err as Error).message}` };
+    }
+  }
+
+  /**
+   * AIP: Check if a DID has been revoked.
+   */
+  async checkRevocation(did: string): Promise<boolean> {
+    return this.revocationService.isRevoked(did);
   }
 
   /**
@@ -170,7 +252,7 @@ export class SigningService {
     const security = await prisma.iMConversationSecurity.findUnique({
       where: { conversationId },
     });
-    return security?.signingPolicy ?? 'optional';
+    return security?.signingPolicy ?? 'recommended';
   }
 
   /**

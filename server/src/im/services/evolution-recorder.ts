@@ -22,7 +22,11 @@ import {
   checkGeneDemotion,
 } from './evolution-lifecycle';
 import { adjustPersonality } from './evolution-personality';
+import { bumpGeneOnSuccess, decayGeneOnFailure } from './quality-score.service';
 import { updateBimodalityIndex, invalidateAnalyzeCache } from './evolution-selector';
+import { callLLM } from './evolution-distill';
+import { KnowledgeLinkService } from './knowledge-link.service';
+import type { MemoryService } from './memory.service';
 
 // ===== Capsule Quality Evaluation =====
 
@@ -181,6 +185,7 @@ export async function recordOutcome(
     creditService?: CreditService;
     achievementService?: AchievementService;
     shouldDistill: (agentId: string) => Promise<boolean>;
+    memoryService?: MemoryService;
   },
   scope = 'global',
 ): Promise<{
@@ -331,7 +336,7 @@ export async function recordOutcome(
   invalidateAnalyzeCache(agentId);
 
   // ── Parallel Phase 3: Critical writes (capsule + circuit breaker + freeze) ──
-  await Promise.all([
+  const [createdCapsule] = await Promise.all([
     // 2. Create capsule record (always, even when frozen — append-only audit)
     prisma.iMEvolutionCapsule.create({
       data: {
@@ -352,6 +357,8 @@ export async function recordOutcome(
         provider: provider ?? null,
         mode: agentMode,
         scope,
+        transitionReason: input.transition_reason ?? 'gene_applied',
+        contextSnapshot: input.context_snapshot ? JSON.stringify(input.context_snapshot).slice(0, 16384) : null,
       },
     }),
     // 1.6 Circuit Breaker: update per-gene state
@@ -373,15 +380,20 @@ export async function recordOutcome(
     // Personality adjustment
     await adjustPersonality(agentId, input).catch(() => {});
 
+    // Quality score update (bridges evolution selection ↔ library ranking)
+    if (isSuccess) {
+      await bumpGeneOnSuccess(input.gene_id).catch(() => {});
+    } else {
+      await decayGeneOnFailure(input.gene_id).catch(() => {});
+    }
+
     // Distillation check (informational)
     await deps.shouldDistill(agentId).catch(() => {});
 
-    // Hypergraph layer (only in hypergraph mode)
-    if (agentMode === 'hypergraph') {
-      await writeHypergraphLayer(agentId, signalTags, input.gene_id, input.outcome, signalKey).catch((err) =>
-        console.error('[Evolution] Hypergraph write failed:', err instanceof Error ? err.message : err),
-      );
-    }
+    // Hypergraph layer: always write as parallel observation system (independent of mode)
+    await writeHypergraphLayer(agentId, signalTags, input.gene_id, input.outcome, signalKey).catch((err) =>
+      console.warn('[Evolution] Hypergraph write error:', err instanceof Error ? err.message : err),
+    );
 
     // Credit reward (+1 cr)
     if (isSuccess && deps.creditService) {
@@ -423,11 +435,162 @@ export async function recordOutcome(
     if (targetGene.visibility === 'canary' || targetGene.visibility === 'published') {
       await checkGeneDemotion(input.gene_id).catch(() => {});
     }
+
+    // v1.8.0 Phase 2a: Reflection generation (Reflexion pattern — only for failures or low-score)
+    if (
+      process.env.FF_EVOLUTION_REFLECTION !== 'false' &&
+      (input.outcome === 'failed' || (input.score !== undefined && input.score !== null && input.score < 0.5))
+    ) {
+      await generateReflection(
+        createdCapsule.id,
+        agentId,
+        input.gene_id,
+        signalKey,
+        targetGene.title ?? input.gene_id,
+        targetGene.strategySteps ?? '[]',
+        input.summary ?? '',
+        input.outcome,
+        input.score,
+      ).catch((err) => console.warn('[Evolution] Reflection generation failed:', (err as Error).message));
+    }
+
+    // v1.8.0 Phase 2c.1: Cross-layer sediment (evolution → memory)
+    if (isSuccess && (input.score ?? 0) >= 0.8 && deps.memoryService) {
+      await crossLayerSediment(
+        agentId,
+        input.gene_id,
+        signalKey,
+        targetGene.title ?? input.gene_id,
+        input.summary ?? '',
+        deps.memoryService,
+        scope,
+      ).catch((err) => console.warn('[Evolution] Cross-layer sediment failed:', (err as Error).message));
+    }
+
+    // v1.8.0: Auto-create knowledge links between gene and related memories
+    const knowledgeLinkService = new KnowledgeLinkService();
+    await knowledgeLinkService
+      .autoLinkFromCapsule(input.gene_id, signalKey, agentId, scope)
+      .catch((err) => console.warn('[Evolution] Auto-link from capsule failed:', (err as Error).message));
+
+    // v1.8.0: Update bimodality index on the edge (was never written to DB before)
+    if (existingEdge) {
+      try {
+        const recentCapsules = await prisma.iMEvolutionCapsule.findMany({
+          where: { geneId: input.gene_id, ownerAgentId: agentId, signalKey, scope },
+          orderBy: { createdAt: 'asc' },
+          take: 100,
+          select: { outcome: true },
+        });
+        const recentOutcomes = recentCapsules.map((c: { outcome: string }) => (c.outcome === 'success' ? 1 : 0));
+        const bimodality = updateBimodalityIndex(recentOutcomes);
+        if (bimodality > 0) {
+          await prisma.iMEvolutionEdge.update({
+            where: { id: existingEdge.id },
+            data: { bimodalityIndex: bimodality },
+          });
+        }
+      } catch (err) {
+        console.warn('[EvolutionRecorder] bimodality update failed:', err);
+      }
+    }
   });
 
   return {
     edge_updated: shouldUpdateEdge,
-    personality_adjusted: true, // deferred to background — always returns true
-    distill_ready: false, // deferred to background — check omitted for latency
+    personality_adjusted: true,
+    distill_ready: false,
   };
+}
+
+// ===== Phase 2a: Reflection Generation (Reflexion pattern) =====
+
+async function generateReflection(
+  capsuleId: string,
+  agentId: string,
+  geneId: string,
+  signalKey: string,
+  geneTitle: string,
+  strategyStepsJson: string,
+  summary: string,
+  outcome: string,
+  score?: number | null,
+): Promise<void> {
+  let steps: string[];
+  try {
+    steps = JSON.parse(strategyStepsJson);
+  } catch {
+    steps = [];
+  }
+
+  const prompt = `You are an AI strategy reflection engine. A gene (reusable strategy) was applied and ${outcome === 'failed' ? 'FAILED' : `scored low (${score})`}.
+
+Gene: "${geneTitle}"
+Signal: ${signalKey}
+Strategy steps: ${steps.length > 0 ? steps.join(' → ') : '(none)'}
+Outcome summary: ${summary || '(no summary)'}
+
+In ONE sentence (max 100 tokens), explain the root cause of why this strategy ${outcome === 'failed' ? 'failed' : 'underperformed'} in this context. Focus on actionable insight.`;
+
+  const reflection = await callLLM(prompt, 1);
+  if (!reflection) return;
+
+  const trimmed = reflection.trim().slice(0, 500);
+
+  await prisma.iMEvolutionCapsule.update({
+    where: { id: capsuleId },
+    data: { reflection: trimmed },
+  });
+  console.log(`[Evolution] Reflection generated for capsule ${capsuleId}: ${trimmed.slice(0, 80)}...`);
+}
+
+// ===== Phase 2c.1: Cross-layer Sediment (Evolution → Memory) =====
+
+async function crossLayerSediment(
+  agentId: string,
+  geneId: string,
+  signalKey: string,
+  geneTitle: string,
+  summary: string,
+  memoryService: MemoryService,
+  scope: string,
+): Promise<void> {
+  const recentSuccesses = await prisma.iMEvolutionCapsule.count({
+    where: {
+      ownerAgentId: agentId,
+      geneId,
+      signalKey,
+      outcome: 'success',
+      score: { gte: 0.8 },
+      createdAt: { gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) },
+    },
+  });
+
+  if (recentSuccesses < 3) return;
+
+  const insightPath = 'evolution-insights.md';
+  const insightLine = `- **${geneTitle}** on \`${signalKey}\`: ${summary.slice(0, 200)} (${recentSuccesses} successes, ${new Date().toISOString().slice(0, 10)})`;
+
+  try {
+    const existing = await memoryService.readMemoryFileByPath(agentId, scope, insightPath);
+    if (existing) {
+      if (existing.content.includes(geneTitle) && existing.content.includes(signalKey)) {
+        return;
+      }
+      const updated = existing.content + '\n' + insightLine;
+      await memoryService.updateMemoryFile(existing.id, 'replace', updated);
+      console.log(`[Evolution] Cross-layer sediment: appended insight to ${insightPath}`);
+    } else {
+      await memoryService.writeMemoryFile(
+        agentId,
+        'agent',
+        insightPath,
+        `# Evolution Insights (auto-generated)\n\nProven strategies from the evolution network:\n\n${insightLine}`,
+        scope,
+      );
+      console.log(`[Evolution] Cross-layer sediment: created ${insightPath}`);
+    }
+  } catch (err) {
+    console.warn('[Evolution] Cross-layer sediment error:', (err as Error).message);
+  }
 }

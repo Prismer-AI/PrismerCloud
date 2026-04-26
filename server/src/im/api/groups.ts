@@ -134,7 +134,7 @@ export function createGroupsRouter(
    */
   router.get('/:groupId', async (c) => {
     const user = c.get('user');
-    const groupId = c.req.param('groupId')!;
+    const groupId = c.req.param('groupId');
 
     // Check membership
     const isMember = await conversationService.isParticipant(groupId, user.imUserId);
@@ -177,11 +177,23 @@ export function createGroupsRouter(
   }
   router.post('/:groupId/messages', async (c) => {
     const user = c.get('user');
-    const groupId = c.req.param('groupId')!;
+    const groupId = c.req.param('groupId');
     const body = await c.req.json();
 
-    const { type, content, metadata, secVersion, senderKeyId, sequence, contentHash, prevHash, signature, timestamp } =
-      body;
+    const {
+      type,
+      content,
+      metadata,
+      secVersion,
+      senderKeyId,
+      senderDid,
+      signedAt,
+      sequence,
+      contentHash,
+      prevHash,
+      signature,
+      timestamp,
+    } = body;
 
     if (!content && type !== 'system_event') {
       return c.json<ApiResponse>({ ok: false, error: 'content is required' }, 400);
@@ -194,8 +206,10 @@ export function createGroupsRouter(
     }
 
     // E2E Signing verification (Layer 2)
-    const isSigned = secVersion != null && senderKeyId && signature;
-    if (isSigned && (typeof sequence !== 'number' || !Number.isInteger(sequence) || sequence < 1)) {
+    // Accept both full signing (senderKeyId) and lite signing (senderDid only)
+    const isSigned = secVersion != null && (senderKeyId || senderDid) && signature;
+    const isLiteMode = isSigned && senderDid && !senderKeyId;
+    if (isSigned && !isLiteMode && (typeof sequence !== 'number' || !Number.isInteger(sequence) || sequence < 1)) {
       return c.json<ApiResponse>({ ok: false, error: 'sequence must be a positive integer when signing' }, 400);
     }
     if (isSigned) {
@@ -204,9 +218,10 @@ export function createGroupsRouter(
         conversationId: groupId,
         type: (type as string) ?? 'text',
         content: content ?? '',
-        createdAt: timestamp ?? Date.now(),
+        createdAt: signedAt ?? timestamp ?? Date.now(),
         secVersion,
         senderKeyId,
+        senderDid,
         sequence,
         contentHash,
         prevHash: prevHash ?? null,
@@ -255,7 +270,19 @@ export function createGroupsRouter(
         type: (type as MessageType) ?? 'text',
         content: content ?? '',
         metadata: enrichedMetadata,
-        ...(isSigned ? { secVersion, senderKeyId, sequence, contentHash, prevHash, signature } : {}),
+        ...(isSigned
+          ? {
+              secVersion,
+              senderKeyId,
+              senderDid,
+              sequence,
+              contentHash,
+              prevHash,
+              signature,
+              signedAt: signedAt ?? timestamp,
+              _signatureVerified: true,
+            }
+          : {}),
       });
     } catch (err) {
       const message = (err as Error).message;
@@ -312,7 +339,7 @@ export function createGroupsRouter(
    */
   router.get('/:groupId/messages', async (c) => {
     const user = c.get('user');
-    const groupId = c.req.param('groupId')!;
+    const groupId = c.req.param('groupId');
 
     // Check membership
     const isMember = await conversationService.isParticipant(groupId, user.imUserId);
@@ -340,7 +367,7 @@ export function createGroupsRouter(
    */
   router.post('/:groupId/members', async (c) => {
     const user = c.get('user');
-    const groupId = c.req.param('groupId')!;
+    const groupId = c.req.param('groupId');
     const body = await c.req.json();
     const { userId, role } = body;
 
@@ -376,8 +403,8 @@ export function createGroupsRouter(
    */
   router.delete('/:groupId/members/:userId', async (c) => {
     const user = c.get('user');
-    const groupId = c.req.param('groupId')!;
-    const targetUserId = c.req.param('userId')!;
+    const groupId = c.req.param('groupId');
+    const targetUserId = c.req.param('userId');
 
     // Resolve target
     const resolvedUserId = await resolveTargetUser(targetUserId);

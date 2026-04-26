@@ -1,7 +1,14 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetFooter, SheetDescription } from '@/components/ui/sheet';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+  DialogDescription,
+} from '@/components/ui/dialog';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -73,7 +80,12 @@ interface GeneDetailDrawerProps {
 
 function getToken(): string | null {
   try {
-    return JSON.parse(localStorage.getItem('prismer_auth') || '{}')?.token ?? null;
+    // Try JWT first, then API key
+    const auth = JSON.parse(localStorage.getItem('prismer_auth') || '{}');
+    if (auth?.token) return auth.token;
+    const apiKey = localStorage.getItem('prismer_active_api_key');
+    if (apiKey) return apiKey;
+    return null;
   } catch {
     return null;
   }
@@ -118,13 +130,31 @@ export function GeneDetailDrawer({
     const token = getToken();
     const headers: HeadersInit = token ? { Authorization: `Bearer ${token}` } : {};
 
-    // Fetch gene detail
-    fetch(`/api/im/evolution/public/genes/${geneId}`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => {
-        if (d?.ok || d?.data) setGene(d.data || d);
-      })
-      .catch(() => {});
+    // Fetch gene detail — try authenticated endpoint first (for private genes), fall back to public
+    const fetchGene = async () => {
+      // Try private endpoint first (workspace genes)
+      if (token) {
+        try {
+          const r = await fetch(`/api/im/evolution/genes/${geneId}`, { headers });
+          if (r.ok) {
+            const d = await r.json();
+            if (d?.ok || d?.data) {
+              setGene(d.data || d);
+              return;
+            }
+          }
+        } catch {}
+      }
+      // Fall back to public endpoint
+      try {
+        const r = await fetch(`/api/im/evolution/public/genes/${geneId}`);
+        if (r.ok) {
+          const d = await r.json();
+          if (d?.ok || d?.data) setGene(d.data || d);
+        }
+      } catch {}
+    };
+    fetchGene();
 
     // Fetch edges for this gene (requires auth)
     if (token) {
@@ -184,20 +214,19 @@ export function GeneDetailDrawer({
   const cat = gene ? catColor(gene.category) : catColor('repair');
 
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent
-        side="right"
-        className={`w-full sm:max-w-lg flex flex-col ${
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent
+        className={`max-w-2xl max-h-[85vh] flex flex-col p-0 ${
           isDark ? 'bg-zinc-950 border-zinc-800 text-white' : 'bg-white border-zinc-200 text-zinc-900'
         }`}
       >
         {/* Header */}
-        <SheetHeader className="px-6 pt-6 pb-0">
-          <SheetTitle className={`text-lg font-bold ${isDark ? 'text-white' : 'text-zinc-900'}`}>
+        <DialogHeader className="px-6 pt-6 pb-0">
+          <DialogTitle className={`text-lg font-bold ${isDark ? 'text-white' : 'text-zinc-900'}`}>
             Gene Detail
-          </SheetTitle>
-          <SheetDescription className="sr-only">View gene details, signals, history, and lineage</SheetDescription>
-        </SheetHeader>
+          </DialogTitle>
+          <DialogDescription className="sr-only">View gene details, signals, history, and lineage</DialogDescription>
+        </DialogHeader>
 
         {/* Body */}
         <div className="flex-1 overflow-y-auto px-6 pb-4">
@@ -571,7 +600,7 @@ export function GeneDetailDrawer({
 
         {/* Footer actions */}
         {gene && (
-          <SheetFooter className={`px-6 py-4 border-t ${isDark ? 'border-white/5' : 'border-zinc-200/50'}`}>
+          <DialogFooter className={`px-6 py-4 border-t ${isDark ? 'border-white/5' : 'border-zinc-200/50'}`}>
             <div className="flex items-center gap-2 w-full">
               {onPublish && gene.visibility !== 'published' && (
                 <Button
@@ -614,10 +643,10 @@ export function GeneDetailDrawer({
                 </Button>
               )}
             </div>
-          </SheetFooter>
+          </DialogFooter>
         )}
-      </SheetContent>
-    </Sheet>
+      </DialogContent>
+    </Dialog>
   );
 }
 

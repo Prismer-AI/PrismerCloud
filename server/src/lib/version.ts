@@ -1,19 +1,19 @@
 /**
  * Prismer Cloud Version Configuration
  *
- * 统一版本号管理，确保所有地方版本一致
+ * 单一真相源：根 `/VERSION` 文件。
+ * 此文件中的 VERSION + BUILD_DATE 由 `sdk/build/version.sh` 在 bump 时
+ * 自动改写（Edge runtime 不能 fs.readFileSync，所以编译期注入）。
+ * **不要手改下面两个常量**，改 `/VERSION` 后跑 `sdk/build/version.sh`。
  *
- * 版本更新流程：
- * 1. 更新此文件的 VERSION
- * 2. 同步更新 package.json
- * 3. 文档版本号自动从此读取
+ * Hotfix（X.Y.Z.N）使用 `sdk/build/hotfix.sh`，不影响此文件。
  */
 
-// 主版本号 - 统一版本号（平台、SDK、文档共用）
-export const VERSION = '1.7.2';
+// 主版本号 - 与根 /VERSION 同步（由 version.sh 改写）
+export const VERSION = '1.8.2';
 
 // 构建信息
-export const BUILD_DATE = '2026-03-24';
+export const BUILD_DATE = '2026-04-13';
 
 // 后端 API 兼容版本
 export const BACKEND_API_VERSION = '7.3';
@@ -31,10 +31,12 @@ export const VERSION_INFO = {
     parseApi: '1.1', // Document parsing
     imApi: '0.5', // IM + file transfer
     billingApi: '1.0', // Credits & billing (frontend-first)
-    evolutionApi: '0.3.1', // Evolution engine + hypergraph
-    memoryApi: '1.0', // Memory layer + compaction
+    evolutionApi: '0.4', // Evolution engine + harness convergence + leaderboard V2
+    memoryApi: '1.1', // Memory intelligence (4-type + LLM recall + Dream + Knowledge Links)
     skillsApi: '1.0', // Skill catalog (19K+ skills)
-    securityApi: '1.0', // E2E signing + encryption
+    securityApi: '1.1', // Ed25519 auto-signing + hash chain + DID binding
+    communityApi: '1.0', // Community forum (posts, comments, votes, follows)
+    contactApi: '1.0', // Contact system (friends, block, pin, mute)
   },
 
   // 端点状态

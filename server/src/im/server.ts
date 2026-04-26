@@ -82,7 +82,9 @@ export async function createApp(): Promise<IMAppResult> {
   const syncService = new SyncService();
   syncService.setRedis(redis);
   const contextAccessService = new ContextAccessService();
-  const messageService = new MessageService(redis, webhookService, syncService, contextAccessService);
+  const identityService = new IdentityService();
+  const signingService = new SigningService(identityService);
+  const messageService = new MessageService(redis, webhookService, syncService, contextAccessService, signingService);
   const conversationService = new ConversationService(redis, syncService);
   const presenceService = new PresenceService(redis);
   const agentService = new AgentService(redis);
@@ -95,11 +97,9 @@ export async function createApp(): Promise<IMAppResult> {
   const achievementService = new AchievementService();
   const signalExtractor = new SignalExtractorService();
   signalExtractor.setRedis(redis);
-  const evolutionService = new EvolutionService(creditService, achievementService, signalExtractor);
+  const evolutionService = new EvolutionService(creditService, achievementService, signalExtractor, memoryService);
   const skillService = new SkillService();
-  const identityService = new IdentityService();
-  const signingService = new SigningService(identityService);
-  const eventBusService = new EventBusService({ rooms, syncService });
+  const eventBusService = new EventBusService({ rooms, syncService, redis });
   const taskService = new TaskService({
     redis,
     rooms,
@@ -108,8 +108,15 @@ export async function createApp(): Promise<IMAppResult> {
     syncService,
     evolutionService,
     eventBusService,
+    creditService,
   });
   const schedulerService = new SchedulerService(taskService, undefined, evolutionService);
+
+  // ─── Cross-system Signal Bridge (P3 v1.8.0) ──────────────
+  // Listens for task/memory events and auto-generates evolution gene signals.
+  // Agents subscribed to "task.*" or "memory.*" already get EventBus notifications;
+  // this bridge ensures the evolution network also learns from cross-system outcomes.
+  registerCrossSystemSignalBridge(eventBusService, evolutionService);
 
   // ─── Hono app ────────────────────────────────────────────
   const app = new Hono();
@@ -290,4 +297,42 @@ export async function createServer() {
   process.on('SIGTERM', shutdown);
 
   return { app: result.app, server, wss, redis: result.redis };
+}
+
+// ─── Cross-system Signal Bridge (P3 v1.8.0) ──────────────────────
+
+const CROSS_SYSTEM_EVENT_MAP: Record<string, { signalType: string; outcome: 'success' | 'failed' }> = {
+  'task.completed': { signalType: 'task:completed', outcome: 'success' },
+  'task.failed': { signalType: 'task:failed', outcome: 'failed' },
+  'memory.dream_completed': { signalType: 'memory:dream_completed', outcome: 'success' },
+  'memory.write': { signalType: 'memory:write', outcome: 'success' },
+  'memory.recall': { signalType: 'memory:recall', outcome: 'success' },
+};
+
+function registerCrossSystemSignalBridge(eventBus: EventBusService, evolutionService: EvolutionService) {
+  const originalPublish = eventBus.publish.bind(eventBus);
+  eventBus.publish = async (event) => {
+    await originalPublish(event);
+
+    const mapping = CROSS_SYSTEM_EVENT_MAP[event.type];
+    if (!mapping) return;
+
+    const agentId = (event.data as any)?.assigneeId || (event.data as any)?.agentId;
+    const geneId = (event.data as any)?.geneId;
+    if (!agentId || !geneId) return;
+
+    // Fire-and-forget: never block publish caller
+    void evolutionService
+      .recordOutcome(agentId, {
+        gene_id: geneId,
+        signals: [{ type: mapping.signalType }],
+        outcome: mapping.outcome,
+        summary: `Cross-system signal from ${event.type}`,
+        transition_reason: 'cross_system',
+        context_snapshot: { sourceEvent: event.type, ...((event.data || {}) as Record<string, unknown>) },
+      })
+      .then(() => console.log(`[CrossSystemBridge] ${event.type} → evolution signal for agent ${agentId}`))
+      .catch((err) => console.warn(`[CrossSystemBridge] Failed to bridge ${event.type}:`, (err as Error).message));
+  };
+  console.log('[CrossSystemBridge] Registered for:', Object.keys(CROSS_SYSTEM_EVENT_MAP).join(', '));
 }

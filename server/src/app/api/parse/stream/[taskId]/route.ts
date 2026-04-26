@@ -2,37 +2,37 @@ import { NextRequest } from 'next/server';
 import { getStreamUrl } from '@/lib/parser-client';
 import { getUserFromAuth } from '@/lib/auth-utils';
 import { ensureNacosConfig } from '@/lib/nacos-config';
+import { createModuleLogger } from '@/lib/logger';
+
+const log = createModuleLogger('ParseStream');
 
 /**
  * GET /api/parse/stream/{taskId}
- * 
+ *
  * SSE 实时进度流
- * 转发后端 Parser 服务的 SSE 流
- * 
+ * 转发后端 parser.prismer.dev 的 SSE 流
+ *
  * 事件类型:
  * - progress: 处理进度更新
  * - page: 单页处理完成
  * - complete: 任务完成
  * - error: 错误
  */
-export async function GET(
-  request: NextRequest,
-  { params }: { params: Promise<{ taskId: string }> }
-) {
+export async function GET(request: NextRequest, { params }: { params: Promise<{ taskId: string }> }) {
   try {
     await ensureNacosConfig();
-    
+
     const { taskId } = await params;
-    
+
     // 验证认证
     const authHeader = request.headers.get('authorization');
     if (!authHeader) {
       return new Response(
         JSON.stringify({
           success: false,
-          error: { code: 'UNAUTHORIZED', message: 'Authorization header is required' }
+          error: { code: 'UNAUTHORIZED', message: 'Authorization header is required' },
         }),
-        { status: 401, headers: { 'Content-Type': 'application/json' } }
+        { status: 401, headers: { 'Content-Type': 'application/json' } },
       );
     }
 
@@ -41,31 +41,31 @@ export async function GET(
       return new Response(
         JSON.stringify({
           success: false,
-          error: { code: 'INVALID_TOKEN', message: authResult.error || 'Invalid token' }
+          error: { code: 'INVALID_TOKEN', message: authResult.error || 'Invalid token' },
         }),
-        { status: 401, headers: { 'Content-Type': 'application/json' } }
+        { status: 401, headers: { 'Content-Type': 'application/json' } },
       );
     }
 
     // 获取后端 SSE URL
     const streamUrl = await getStreamUrl(taskId);
-    console.log(`[Parse Stream] Connecting to ${streamUrl}`);
+    log.debug({ streamUrl }, 'Connecting to stream');
 
     // 创建 SSE 响应
     const encoder = new TextEncoder();
-    
+
     const stream = new ReadableStream({
       async start(controller) {
         try {
           // 连接到后端 SSE
           const response = await fetch(streamUrl, {
-            headers: { 'Accept': 'text/event-stream' }
+            headers: { Accept: 'text/event-stream' },
           });
 
           if (!response.ok) {
-            const errorData = { 
-              type: 'error', 
-              data: { code: 'STREAM_ERROR', message: 'Failed to connect to stream' } 
+            const errorData = {
+              type: 'error',
+              data: { code: 'STREAM_ERROR', message: 'Failed to connect to stream' },
             };
             controller.enqueue(encoder.encode(`event: error\ndata: ${JSON.stringify(errorData)}\n\n`));
             controller.close();
@@ -79,10 +79,10 @@ export async function GET(
           }
 
           const decoder = new TextDecoder();
-          
+
           while (true) {
             const { done, value } = await reader.read();
-            
+
             if (done) {
               // 发送完成事件
               controller.enqueue(encoder.encode(`event: complete\ndata: {}\n\n`));
@@ -96,34 +96,33 @@ export async function GET(
 
           controller.close();
         } catch (error) {
-          console.error('[Parse Stream] Error:', error);
-          const errorData = { 
-            type: 'error', 
-            data: { code: 'STREAM_ERROR', message: 'Stream connection failed' } 
+          log.error({ err: error }, 'Stream error');
+          const errorData = {
+            type: 'error',
+            data: { code: 'STREAM_ERROR', message: 'Stream connection failed' },
           };
           controller.enqueue(encoder.encode(`event: error\ndata: ${JSON.stringify(errorData)}\n\n`));
           controller.close();
         }
-      }
+      },
     });
 
     return new Response(stream, {
       headers: {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive',
-        'X-Accel-Buffering': 'no'
-      }
+        Connection: 'keep-alive',
+        'X-Accel-Buffering': 'no',
+      },
     });
-
   } catch (error) {
-    console.error('[Parse Stream] Error:', error);
+    log.error({ err: error }, 'Stream setup error');
     return new Response(
       JSON.stringify({
         success: false,
-        error: { code: 'INTERNAL_ERROR', message: 'Failed to create stream' }
+        error: { code: 'INTERNAL_ERROR', message: 'Failed to create stream' },
       }),
-      { status: 500, headers: { 'Content-Type': 'application/json' } }
+      { status: 500, headers: { 'Content-Type': 'application/json' } },
     );
   }
 }

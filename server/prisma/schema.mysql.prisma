@@ -44,6 +44,21 @@ model IMUser {
   violationCount  Int       @default(0)
   suspendedUntil  DateTime? @db.DateTime(3)
   lastViolationAt DateTime? @db.DateTime(3)
+  // Moderation (v1.7.3)
+  reportBanUntil  DateTime? @db.DateTime(3)
+  quarantineCount Int       @default(0)
+  publishCount    Int       @default(0)
+  banned          Boolean   @default(false)
+  bannedAt        DateTime? @db.DateTime(3)
+  banReason       String?   @db.VarChar(500)
+  // AIP Layer 1: DID identity
+  primaryDid      String?   @unique @db.VarChar(128)
+  delegatedBy     String?   @db.VarChar(128)
+
+  // Contact system (v1.8.0 P9)
+  institution     String?   @db.VarChar(200)
+  description     String?   @db.VarChar(500)
+  lastSeenAt      DateTime? @db.DateTime(3)
 
   agentCard     IMAgentCard?
   identityKey   IMIdentityKey?
@@ -54,8 +69,17 @@ model IMUser {
   bindings      IMBinding[]
   fileUploads   IMFileUpload[]
 
+  // Contact system relations (v1.8.0 P9)
+  friendRequestsSent     IMFriendRequest[]   @relation("FriendRequestsSent")
+  friendRequestsReceived IMFriendRequest[]   @relation("FriendRequestsReceived")
+  contactsOwned          IMContactRelation[] @relation("ContactsOwned")
+  contactsOf             IMContactRelation[] @relation("ContactsOf")
+  blocksOwned            IMBlock[]           @relation("BlocksOwned")
+  blockedBy              IMBlock[]           @relation("BlockedBy")
+
   @@index([role])
   @@index([userId])
+  @@index([primaryDid])
   @@map("im_users")
 }
 
@@ -67,22 +91,73 @@ model IMAgentCard {
   id              String    @id @default(cuid()) @db.VarChar(30)
   imUserId        String    @unique @db.VarChar(30)
   name            String    @db.VarChar(200)
-  description     String    @db.Text
+  description     String    @default("") @db.Text
   agentType       String    @default("assistant") @db.VarChar(30)
-  capabilities    String    @db.Text
+  capabilities    String    @default("[]") @db.Text
   protocolVersion String    @default("1.0") @db.VarChar(20)
   endpoint        String?   @db.VarChar(500)
-  metadata        String    @db.Text
+  metadata        String    @default("{}") @db.Text
   lastHeartbeat   DateTime? @db.DateTime(3)
   status          String    @default("offline") @db.VarChar(20)
   load            Float     @default(0) @db.Double
   createdAt       DateTime  @default(now()) @db.DateTime(3)
   updatedAt       DateTime  @updatedAt @db.DateTime(3)
 
+  // AIP Layer 2: DID Document
+  did             String?   @db.VarChar(128)
+  didDocumentUrl  String?   @db.VarChar(512)
+
   imUser          IMUser    @relation(fields: [imUserId], references: [id], onDelete: Cascade)
 
   @@index([status])
   @@map("im_agent_cards")
+}
+
+// ==============================================================================
+// AIP Layer 3-4: Agent Credentials, DID Mappings, Revocation
+// ==============================================================================
+
+model IMAgentCredential {
+  id              String    @id @default(cuid()) @db.VarChar(30)
+  holderDid       String    @db.VarChar(128)
+  credentialType  String    @db.VarChar(50)
+  issuerDid       String    @db.VarChar(128)
+  credential      String    @db.MediumText
+  validFrom       DateTime  @db.DateTime(3)
+  validUntil      DateTime? @db.DateTime(3)
+  revoked         Boolean   @default(false)
+  createdAt       DateTime  @default(now()) @db.DateTime(3)
+
+  @@index([holderDid])
+  @@index([issuerDid])
+  @@index([credentialType])
+  @@map("im_agent_credentials")
+}
+
+model IMDIDMapping {
+  id              String    @id @default(cuid()) @db.VarChar(30)
+  did             String    @unique @db.VarChar(128)
+  imUserId        String    @db.VarChar(30)
+  didMethod       String    @db.VarChar(10)
+  isPrimary       Boolean   @default(false)
+  createdAt       DateTime  @default(now()) @db.DateTime(3)
+
+  @@index([imUserId])
+  @@map("im_did_mappings")
+}
+
+model IMRevocationEntry {
+  id              String    @id @default(cuid()) @db.VarChar(30)
+  issuerDid       String    @db.VarChar(128)
+  targetDid       String    @db.VarChar(128)
+  credentialId    String?   @db.VarChar(128)
+  reason          String    @db.VarChar(500)
+  statusListIndex Int
+  createdAt       DateTime  @default(now()) @db.DateTime(3)
+
+  @@unique([issuerDid, targetDid, credentialId])
+  @@index([targetDid])
+  @@map("im_revocation_entries")
 }
 
 // ==============================================================================
@@ -95,7 +170,7 @@ model IMConversation {
   title         String?   @db.VarChar(255)
   description   String?   @db.Text
   status        String    @default("active") @db.VarChar(20)
-  metadata      String    @db.Text
+  metadata      String    @default("{}") @db.Text
   createdById   String    @db.VarChar(30)
   workspaceId   String?   @unique @db.VarChar(50)
   lastMessageAt DateTime? @db.DateTime(3)
@@ -124,6 +199,9 @@ model IMParticipant {
   role            String    @default("member") @db.VarChar(20)
   joinedAt        DateTime  @default(now()) @db.DateTime(3)
   leftAt          DateTime? @db.DateTime(3)
+  pinned          Boolean   @default(false)
+  muted           Boolean   @default(false)
+  pinnedAt        DateTime? @db.DateTime(3)
 
   conversation    IMConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   imUser          IMUser    @relation(fields: [imUserId], references: [id], onDelete: Cascade)
@@ -143,8 +221,9 @@ model IMMessage {
   senderId        String    @db.VarChar(30)
   type            String    @default("text") @db.VarChar(30)
   content         String    @default("") @db.LongText
-  metadata        String    @db.Text
+  metadata        String    @default("{}") @db.Text
   parentId        String?   @db.VarChar(30)
+  quotedMessageId String?   @db.VarChar(30)
   status          String    @default("sent") @db.VarChar(20)
   createdAt       DateTime  @default(now()) @db.DateTime(3)
   updatedAt       DateTime  @updatedAt @db.DateTime(3)
@@ -157,15 +236,44 @@ model IMMessage {
   prevHash        String?   @db.VarChar(64)
   signature       String?   @db.Text
 
+  // AIP Layer 2: DID-based signing
+  senderDid       String?   @db.VarChar(128)
+  delegationProof String?   @db.MediumText
+
+  // E2E Layer 5: encryption first-class field (S5 fix)
+  encrypted       Boolean   @default(false)
+
   conversation    IMConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   sender          IMUser    @relation(fields: [senderId], references: [id])
+  reactions       IMMessageReaction[]
 
   @@index([conversationId])
   @@index([senderId])
   @@index([createdAt])
   @@index([parentId])
+  @@index([quotedMessageId])
+  @@index([senderDid])
   @@index([conversationId, senderId, sequence])
   @@map("im_messages")
+}
+
+// ==============================================================================
+// 消息反应 (Reactions, v1.8.2)
+// ==============================================================================
+
+model IMMessageReaction {
+  id        String   @id @default(cuid()) @db.VarChar(30)
+  messageId String   @db.VarChar(30)
+  userId    String   @db.VarChar(36)
+  emoji     String   @db.VarChar(32)
+  createdAt DateTime @default(now()) @db.DateTime(3)
+
+  message   IMMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, userId, emoji])
+  @@index([messageId])
+  @@index([userId])
+  @@map("im_message_reactions")
 }
 
 // ==============================================================================
@@ -196,7 +304,7 @@ model IMReadCursor {
 model IMWebhook {
   id            String    @id @default(cuid()) @db.VarChar(30)
   url           String    @db.VarChar(500)
-  events        String    @db.Text
+  events        String    @default("[]") @db.Text
   secret        String?   @db.VarChar(100)
   active        Boolean   @default(true)
   createdById   String    @db.VarChar(30)
@@ -229,8 +337,8 @@ model IMBinding {
   verificationCode String?  @db.VarChar(10)
   verifiedAt      DateTime? @db.DateTime(3)
 
-  capabilities    String    @db.Text
-  config          String    @db.Text
+  capabilities    String    @default("[]") @db.Text
+  config          String    @default("{}") @db.Text
 
   createdAt       DateTime  @default(now()) @db.DateTime(3)
   updatedAt       DateTime  @updatedAt @db.DateTime(3)
@@ -282,8 +390,8 @@ model ContextCache {
   hqccContent   String    @default("") @db.LongText  // Up to ~4GB (100MB gate at service layer)
   intrContent   String?   @db.LongText               // Up to ~4GB
   visibility    String    @default("private") @db.VarChar(20)
-  meta          String    @db.Text
-  tags          String    @db.Text   // JSON: string[] — search tags
+  meta          String    @default("{}") @db.Text
+  tags          String    @default("[]") @db.Text   // JSON: string[] — search tags
   sizeBytes     Int       @default(0)
   expiresAt     DateTime? @db.DateTime(3)
   createdAt     DateTime  @default(now()) @db.DateTime(3)
@@ -328,7 +436,7 @@ model IMFileUpload {
 model IMSyncEvent {
   id              Int      @id @default(autoincrement())
   type            String   @db.VarChar(50)
-  data            String   @db.Text
+  data            String   @default("{}") @db.Text
   conversationId  String?  @db.VarChar(30)
   imUserId        String   @db.VarChar(30)
   createdAt       DateTime @default(now()) @db.DateTime(3)
@@ -349,15 +457,19 @@ model IMTask {
   title         String    @db.VarChar(255)
   description   String?   @db.Text
   capability    String?   @db.VarChar(100)
-  input         String    @db.Text
+  input         String    @default("{}") @db.Text
   contextUri    String?   @db.VarChar(500)
 
   // Participants
   creatorId     String    @db.VarChar(36)
   assigneeId    String?   @db.VarChar(36)
+  scope         String    @default("global") @db.VarChar(100)
+  conversationId String?  @db.VarChar(36)
 
   // State machine
   status        String    @default("pending") @db.VarChar(20)
+  progress      Float?    @db.Double
+  statusMessage String?   @db.VarChar(500)
 
   // Scheduling
   scheduleType  String?   @db.VarChar(20)
@@ -381,12 +493,13 @@ model IMTask {
   // Timeout / Retry
   timeoutMs     Int       @default(300000)
   deadline      DateTime? @db.DateTime(3)
+  completedAt   DateTime? @db.DateTime(3)
   maxRetries    Int       @default(0)
   retryDelayMs  Int       @default(60000)
   retryCount    Int       @default(0)
 
   // Metadata
-  metadata      String    @db.Text
+  metadata      String    @default("{}") @db.Text
   createdAt     DateTime  @default(now()) @db.DateTime(3)
   updatedAt     DateTime  @updatedAt @db.DateTime(3)
 
@@ -397,6 +510,9 @@ model IMTask {
   @@index([capability, status])
   @@index([scheduleType, nextRunAt, status])
   @@index([creatorId])
+  @@index([creatorId, scope, status])
+  @@index([conversationId])
+  @@index([completedAt])
   @@map("im_tasks")
 }
 
@@ -406,7 +522,7 @@ model IMTaskLog {
   actorId       String?   @db.VarChar(36)
   action        String    @db.VarChar(50)
   message       String?   @db.Text
-  metadata      String    @db.Text
+  metadata      String    @default("{}") @db.Text
   createdAt     DateTime  @default(now()) @db.DateTime(3)
 
   task          IMTask    @relation(fields: [taskId], references: [id], onDelete: Cascade)
@@ -447,6 +563,11 @@ model IMMemoryFile {
   createdAt   DateTime  @default(now()) @db.DateTime(3)
   updatedAt   DateTime  @updatedAt @db.DateTime(3)
 
+  memoryType          String?   @db.VarChar(20)
+  description         String?   @db.VarChar(500)
+  lastConsolidatedAt  DateTime? @db.DateTime(3)
+  stale               Boolean   @default(false)
+
   @@unique([ownerId, scope, path])
   @@index([ownerId, ownerType])
   @@map("im_memory_files")
@@ -460,7 +581,7 @@ model IMGene {
   id               String    @id @db.VarChar(100)
   category         String    @db.VarChar(20)
   title            String    @default("") @db.VarChar(200)
-  description      String    @db.Text
+  description      String    @default("") @db.Text
   strategySteps    String    @db.Text
   preconditions    String    @db.Text
   constraints      String    @db.Text
@@ -471,6 +592,7 @@ model IMGene {
   forkCount        Int       @default(0)
   successCount     Int       @default(0)
   failureCount     Int       @default(0)
+  qualityScore     Float     @default(0.01) @db.Double
   lastUsedAt       DateTime? @db.DateTime(3)
   createdAt        DateTime  @default(now()) @db.DateTime(3)
   updatedAt        DateTime  @updatedAt @db.DateTime(3)
@@ -548,17 +670,21 @@ model IMEvolutionCapsule {
   ownerAgentId    String    @db.VarChar(30)
   geneId          String    @db.VarChar(100)
   signalKey       String    @db.VarChar(500)
-  triggerSignals  String    @db.Text
+  triggerSignals  String    @default("[]") @db.Text
   outcome         String    @default("pending") @db.VarChar(20)
   score           Float?    @db.Double
-  summary         String    @db.Text
+  summary         String    @default("") @db.Text
   costCredits     Float     @default(0) @db.Double
-  metadata        String    @db.Text
+  metadata        String    @default("{}") @db.Text
   provider        String?   @db.VarChar(50)        // Provider tag for provider-scoped freeze
   mode            String    @default("standard") @db.VarChar(20)
   scope           String    @default("global") @db.VarChar(60)
   encrypted       Boolean   @default(false)
   createdAt       DateTime  @default(now()) @db.DateTime(3)
+
+  reflection          String?   @db.Text
+  transitionReason    String?   @db.VarChar(100) // 'gene_applied' | 'fallback_relaxed' | 'baseline'
+  contextSnapshot     String?   @db.Text         // JSON: capsule execution context
 
   @@index([ownerAgentId])
   @@index([geneId])
@@ -585,6 +711,12 @@ model IMEvolutionMetrics {
   successCapsules   Int       @default(0)
   uniqueGenesUsed   Int       @default(0)
   uniqueAgents      Int       @default(0)
+
+  // v1.7.3: North-star metrics
+  repeatRate        Float?    @db.Float
+  frrApprox         Float?    @db.Float
+  errApprox         Float?    @db.Float
+
   @@index([ts, mode])
   @@index([scope, ts])
   @@map("im_evolution_metrics")
@@ -646,6 +778,11 @@ model IMIdentityKey {
   registeredAt    DateTime  @default(now()) @db.DateTime(3)
   revokedAt       DateTime? @db.DateTime(3)
 
+  // AIP Layer 1-2: DID identity
+  didKey          String?   @unique @db.VarChar(128)
+  didDocument     String?   @db.MediumText
+  didDocumentHash String?   @db.VarChar(64)
+
   imUser          IMUser    @relation(fields: [imUserId], references: [id], onDelete: Cascade)
 
   @@index([keyId])
@@ -678,10 +815,10 @@ model IMKeyAuditLog {
 model IMConversationSecurity {
   id              String    @id @default(cuid()) @db.VarChar(30)
   conversationId  String    @unique @db.VarChar(30)
-  signingPolicy   String    @default("optional") @db.VarChar(20)
+  signingPolicy   String    @default("recommended") @db.VarChar(20)
   encryptionMode  String    @default("none") @db.VarChar(20)
   ephemeralKeys   String?   @db.Text
-  lastSequences   String    @db.Text
+  lastSequences   String    @default("{}") @db.Text
   createdAt       DateTime  @default(now()) @db.DateTime(3)
   updatedAt       DateTime  @updatedAt @db.DateTime(3)
 
@@ -696,9 +833,9 @@ model IMSkill {
   id            String    @id @default(cuid()) @db.VarChar(30)
   slug          String    @unique @db.VarChar(200)
   name          String    @db.VarChar(256)
-  description   String    @db.Text
+  description   String    @default("") @db.Text
   category      String    @default("general") @db.VarChar(50)
-  tags          String    @db.Text            // JSON: string[]
+  tags          String    @default("[]") @db.Text            // JSON: string[]
   author        String    @default("") @db.VarChar(128)
   source        String    @default("community") @db.VarChar(30)
   sourceUrl     String    @default("") @db.VarChar(512)
@@ -706,9 +843,10 @@ model IMSkill {
   content       String    @default("") @db.MediumText
   installs      Int       @default(0)
   stars         Int       @default(0)
+  qualityScore     Float     @default(0.01) @db.Double
   status        String    @default("active") @db.VarChar(20)
   geneId        String?   @db.VarChar(128)
-  metadata      String    @db.Text
+  metadata      String    @default("{}") @db.Text
   createdAt     DateTime  @default(now()) @db.DateTime(3)
   updatedAt     DateTime  @updatedAt @db.DateTime(3)
 
@@ -717,16 +855,16 @@ model IMSkill {
   packageHash   String?   @db.VarChar(64)
   packageSize   Int?
   fileCount     Int       @default(1)
-  compatibility String    @db.Text            // JSON: platform[]
-  signals       String    @db.Text            // JSON: SignalTag[]
-  requires      String    @db.Text            // JSON: { env, bins, capabilities }
+  compatibility String    @default("[]") @db.Text            // JSON: platform[]
+  signals       String    @default("[]") @db.Text            // JSON: SignalTag[]
+  requires      String    @default("{}") @db.Text            // JSON: { env, bins, capabilities }
   version       String    @default("1.0.0") @db.VarChar(20)
   ownerAgentId  String?   @db.VarChar(30)
   forkedFrom    String?   @db.VarChar(30)
   forkCount     Int       @default(0)
   license       String    @default("MIT") @db.VarChar(30)
   securityStatus String   @default("pending") @db.VarChar(20)
-  changelog     String    @db.Text
+  changelog     String    @default("") @db.Text
 
   @@index([category])
   @@index([source])
@@ -737,6 +875,45 @@ model IMSkill {
   @@map("im_skills")
 }
 
+model IMReport {
+  id             String    @id @default(cuid()) @db.VarChar(30)
+  reporterId     String    @db.VarChar(30)
+  targetType     String    @db.VarChar(10)
+  targetId       String    @db.VarChar(128)
+  reason         String    @db.VarChar(30)
+  reasonDetail   String?   @db.Text
+  status         String    @default("pending") @db.VarChar(20)
+  frozenCredits  Float     @default(0) @db.Double
+  resolvedBy     String?   @db.VarChar(30)
+  resolvedAt     DateTime? @db.DateTime(3)
+  createdAt      DateTime  @default(now()) @db.DateTime(3)
+
+  @@unique([reporterId, targetType, targetId])
+  @@index([status])
+  @@index([targetType, targetId])
+  @@index([reporterId])
+  @@map("im_reports")
+}
+
+model IMAgentSkill {
+  id          String    @id @default(cuid()) @db.VarChar(30)
+  agentId     String    @db.VarChar(30)
+  skillId     String    @db.VarChar(30)
+  geneId      String?   @db.VarChar(128)
+  scope       String    @default("global") @db.VarChar(100)
+  installedAt DateTime  @default(now()) @db.DateTime(3)
+  updatedAt   DateTime? @db.DateTime(3)
+  config      String    @default("{}") @db.Text
+  status      String    @default("active") @db.VarChar(20)
+  version     String?   @db.VarChar(20)
+
+  @@unique([agentId, skillId, scope])
+  @@index([agentId, scope, status])
+  @@index([agentId])
+  @@index([skillId])
+  @@map("im_agent_skills")
+}
+
 // ─── Unmatched Signals (evolution frontier) ──────────────────────────────────
 
 model IMUnmatchedSignal {
@@ -745,7 +922,7 @@ model IMUnmatchedSignal {
   signals     String   @db.Text            // JSON: string[] (compat)
   signalTags  String?  @db.Text            // v0.3.0: JSON-encoded SignalTag[]
   agentId     String   @db.VarChar(30)
-  context     String   @db.Text
+  context     String   @default("{}") @db.Text
   count       Int      @default(1)
   resolvedBy  String?  @db.VarChar(100)
   scope       String   @default("global") @db.VarChar(60)
@@ -765,7 +942,7 @@ model IMEvolutionAchievement {
   agentId    String   @db.VarChar(30)
   badgeKey   String   @db.VarChar(100)
   unlockedAt DateTime @default(now()) @db.DateTime(3)
-  metadata   String   @db.Text
+  metadata   String   @default("{}") @db.Text
   scope      String   @default("global") @db.VarChar(60)
 
   @@unique([agentId, badgeKey, scope])
@@ -797,7 +974,7 @@ model IMEvolutionACL {
 model IMSignalCluster {
   id            String    @id @default(cuid()) @db.VarChar(30)
   clusterKey    String    @unique @db.VarChar(200)
-  memberSignals String    @db.Text
+  memberSignals String    @default("[]") @db.Text
   frequency     Int       @default(0)
   agentCount    Int       @default(0)
   topGeneId     String?   @db.VarChar(100)
@@ -829,7 +1006,7 @@ model IMViolation {
   id         String   @id @default(cuid()) @db.VarChar(30)
   imUserId   String   @db.VarChar(30)
   type       String   @db.VarChar(50)          // spam | abuse | impersonation | policy_violation | tier_demotion
-  evidence   String   @db.Text  // JSON
+  evidence   String   @default("{}") @db.Text  // JSON
   action     String   @db.VarChar(20)          // warn | throttle | suspend | ban | demote
   createdAt  DateTime @default(now()) @db.DateTime(3)
 
@@ -856,8 +1033,8 @@ model IMConversationPolicy {
 model IMSubscription {
   id              String    @id @default(cuid()) @db.VarChar(30)
   subscriberId    String    @db.VarChar(36)
-  events          String    @db.Text
-  filter          String    @db.Text
+  events          String    @default("[]") @db.Text
+  filter          String    @default("{}") @db.Text
   delivery        String    @default("message") @db.VarChar(20)
   webhookUrl      String?   @db.VarChar(500)
   webhookSecret   String?   @db.VarChar(500)
@@ -867,7 +1044,7 @@ model IMSubscription {
   failureCount    Int       @default(0)
   lastTriggeredAt DateTime? @db.DateTime(3)
   expiresAt       DateTime? @db.DateTime(3)
-  metadata        String    @db.Text
+  metadata        String    @default("{}") @db.Text
   createdAt       DateTime  @default(now()) @db.DateTime(3)
   updatedAt       DateTime  @updatedAt @db.DateTime(3)
 
@@ -875,4 +1052,422 @@ model IMSubscription {
   @@index([active])
   @@index([expiresAt])
   @@map("im_subscriptions")
+}
+
+// ==============================================================================
+// v1.7.4 — Leaderboard Snapshots
+// ==============================================================================
+
+model IMLeaderboardSnapshot {
+  id              Int       @id @default(autoincrement())
+  period          String    @default("weekly") @db.VarChar(20)
+  domain          String    @default("general") @db.VarChar(30)
+  snapshotDate    DateTime  @default(now()) @db.DateTime(3)
+  agentId         String    @db.VarChar(36)
+  agentName       String    @default("") @db.VarChar(100)
+  ownerUsername   String    @default("") @db.VarChar(100)
+  err             Float?
+  sessionCount    Int       @default(0)
+  successRate     Float?
+  geneHitRate     Float?
+  trendData       String    @db.Text
+  geneId          String?   @db.VarChar(36)
+  geneName        String    @default("") @db.VarChar(200)
+  adopters        Int       @default(0)
+  avgImpact       Float?
+  geneCreatorId   String?   @db.VarChar(36)
+  genesPublished  Int       @default(0)
+  genesAdopted    Int       @default(0)
+  agentsHelped    Int       @default(0)
+  rank            Int       @default(0)
+  boardType       String    @default("agent") @db.VarChar(20)
+
+  // V2 value metrics
+  tokenSaved      Float?    @db.Double
+  moneySaved      Float?    @db.Double
+  co2Reduced      Float?    @db.Double
+  devHoursSaved   Float?    @db.Double
+  percentile      Float?    @db.Double
+  growthRate       Float?    @db.Double
+  prevRank        Int?
+
+  @@index([period, domain, boardType, snapshotDate])
+  @@index([agentId, period])
+  @@index([boardType, rank, snapshotDate])
+  @@map("im_leaderboard_snapshots")
+}
+
+// ==============================================================================
+// v1.8.0 — Value Metrics (token/cost savings per entity per period)
+// ==============================================================================
+
+model IMValueMetrics {
+  id              Int      @id @default(autoincrement())
+  entityType      String   @db.VarChar(20)
+  entityId        String   @db.VarChar(191)
+  period          String   @db.VarChar(20)
+  snapshotDate    DateTime @db.DateTime(3)
+
+  tokenSaved      Float    @default(0) @db.Double
+  moneySaved      Float    @default(0) @db.Double
+  co2Reduced      Float    @default(0) @db.Double
+  devHoursSaved   Float    @default(0) @db.Double
+
+  errorPatterns   Int      @default(0)
+  agentsHelped    Int      @default(0)
+  adoptionCount   Int      @default(0)
+
+  rankByValue     Int?
+  rankByImpact    Int?
+  percentile      Float?   @db.Double
+
+  prevPeriodValue Float?   @db.Double
+  growthRate      Float?   @db.Double
+
+  scope           String   @default("global") @db.VarChar(100)
+
+  @@index([entityType, period, snapshotDate])
+  @@index([entityType, entityId, period])
+  @@index([period, rankByValue, snapshotDate])
+  @@map("im_value_metrics")
+}
+
+// ==============================================================================
+// v1.8.0 — Anti-Cheat Log (rule violations for leaderboard integrity)
+// ==============================================================================
+
+model IMAntiCheatLog {
+  id           Int       @id @default(autoincrement())
+  ruleKey      String    @db.VarChar(50)
+  entityType   String    @db.VarChar(20)
+  entityId     String    @db.VarChar(191)
+  detail       String    @db.Text
+  action       String    @db.VarChar(20)
+  reviewedBy   String?   @db.VarChar(191)
+  reviewedAt   DateTime? @db.DateTime(3)
+  createdAt    DateTime  @default(now()) @db.DateTime(3)
+
+  @@index([ruleKey, createdAt])
+  @@index([entityId])
+  @@map("im_anti_cheat_log")
+}
+
+// ==============================================================================
+// v1.8.0 — Token Baseline (avg tokens without gene for savings calculation)
+// ==============================================================================
+
+model IMTokenBaseline {
+  id              Int      @id @default(autoincrement())
+  signalKey       String   @unique @db.VarChar(500)
+  avgTokensNoGene Float    @db.Double
+  sampleCount     Int
+  updatedAt       DateTime @updatedAt @db.DateTime(3)
+
+  @@map("im_token_baseline")
+}
+
+// ==============================================================================
+// v1.8.0 — Knowledge Links (Memory ↔ Evolution bidirectional associations)
+// ==============================================================================
+
+model IMKnowledgeLink {
+  id         String   @id @default(cuid()) @db.VarChar(30)
+  sourceType String   @db.VarChar(20)
+  sourceId   String   @db.VarChar(36)
+  targetType String   @db.VarChar(20)
+  targetId   String   @db.VarChar(36)
+  linkType   String   @default("related") @db.VarChar(20)
+  strength   Float    @default(1.0) @db.Double
+  scope      String   @default("global") @db.VarChar(50)
+  createdAt  DateTime @default(now()) @db.DateTime(3)
+
+  @@unique([sourceType, sourceId, targetType, targetId, linkType])
+  @@index([sourceType, sourceId])
+  @@index([targetType, targetId])
+  @@index([scope])
+  @@map("im_knowledge_links")
+}
+
+// ==============================================================================
+// v1.8.0 P8 — Community (Evolution Community Forum)
+// ==============================================================================
+
+model IMCommunityPost {
+  id            String   @id @default(cuid()) @db.VarChar(30)
+  boardId       String?  @db.VarChar(100) // nullable — pure tag system; legacy boards stored as tags
+  authorId      String   @db.VarChar(36)
+  authorType    String   @default("human") @db.VarChar(10) // 'human' | 'agent'
+
+  title         String   @db.VarChar(200)
+  content       String   @db.Text
+  contentHtml   String?  @db.Text
+  contentJson   String?  @db.LongText  // ProseMirror JSON for WYSIWYG editor round-trip
+
+  tags          Json?
+  postType      String   @default("discussion") @db.VarChar(20) // 'discussion' | 'battleReport' | 'milestone' | 'geneRelease' | 'help' | 'idea' | 'changelog'
+  status        String   @default("active") @db.VarChar(20) // 'active' | 'solved' | 'planned' | 'shipped' | 'archived' | 'hidden'
+
+  linkedGeneIds   Json?
+  linkedSkillIds  Json?
+  linkedAgentId   String?  @db.VarChar(36)
+  linkedCapsuleId String?  @db.VarChar(36)
+
+  attachments     Json?
+
+  upvotes       Int      @default(0)
+  downvotes     Int      @default(0)
+  commentCount  Int      @default(0)
+  viewCount     Int      @default(0)
+  bookmarkCount Int      @default(0)
+
+  solvedAt      DateTime? @db.DateTime(3)
+  bestAnswerId  String?   @db.VarChar(36)
+
+  deletedAt     DateTime? @db.DateTime(3)
+  deletedBy     String?   @db.VarChar(100)
+
+  pinned        Boolean  @default(false)
+  featured      Boolean  @default(false)
+  autoGenerated Boolean  @default(false)
+  scope         String   @default("global") @db.VarChar(50)
+
+  createdAt     DateTime @default(now()) @db.DateTime(3)
+  updatedAt     DateTime @updatedAt @db.DateTime(3)
+
+  @@index([boardId, createdAt])
+  @@index([boardId, upvotes])
+  @@index([authorId, createdAt])
+  @@index([status, boardId])
+  @@index([linkedAgentId])
+  @@index([deletedAt])
+  @@map("im_community_posts")
+}
+
+model IMCommunityComment {
+  id          String   @id @default(cuid()) @db.VarChar(30)
+  postId      String   @db.VarChar(36)
+  parentId    String?  @db.VarChar(36)
+  authorId    String   @db.VarChar(36)
+  authorType  String   @default("human") @db.VarChar(10)
+
+  content     String   @db.Text
+  contentHtml String?  @db.Text
+
+  commentType String   @default("reply") @db.VarChar(10) // 'reply' | 'answer'
+
+  upvotes     Int      @default(0)
+  downvotes   Int      @default(0)
+
+  isBestAnswer Boolean @default(false)
+  autoGenerated Boolean @default(false)
+
+  linkedGeneIds Json?
+  metrics       Json?
+
+  deletedAt   DateTime? @db.DateTime(3)
+  deletedBy   String?   @db.VarChar(100)
+
+  createdAt   DateTime @default(now()) @db.DateTime(3)
+  updatedAt   DateTime @updatedAt @db.DateTime(3)
+
+  @@index([postId, createdAt])
+  @@index([postId, upvotes])
+  @@index([postId, isBestAnswer])
+  @@index([authorId])
+  @@index([deletedAt])
+  @@map("im_community_comments")
+}
+
+model IMCommunityVote {
+  id          String   @id @default(cuid()) @db.VarChar(30)
+  userId      String   @db.VarChar(36)
+  targetType  String   @db.VarChar(10) // 'post' | 'comment'
+  targetId    String   @db.VarChar(36)
+  value       Int // +1 or -1
+
+  createdAt   DateTime @default(now()) @db.DateTime(3)
+
+  @@unique([userId, targetType, targetId])
+  @@index([targetType, targetId])
+  @@map("im_community_votes")
+}
+
+model IMCommunityBookmark {
+  id          String   @id @default(cuid()) @db.VarChar(30)
+  userId      String   @db.VarChar(36)
+  postId      String   @db.VarChar(36)
+
+  createdAt   DateTime @default(now()) @db.DateTime(3)
+
+  @@unique([userId, postId])
+  @@index([userId, createdAt])
+  @@map("im_community_bookmarks")
+}
+
+model IMCommunityFollow {
+  id            String   @id @default(cuid()) @db.VarChar(30)
+  followerId    String   @db.VarChar(36)
+  followingId   String   @db.VarChar(36)
+  followingType String   @default("user") @db.VarChar(10) // 'user' | 'agent' | 'gene' | 'board'
+
+  createdAt     DateTime @default(now()) @db.DateTime(3)
+
+  @@unique([followerId, followingId, followingType])
+  @@index([followingId, followingType])
+  @@map("im_community_follows")
+}
+
+model IMCommunityTag {
+  id        String   @id @default(cuid()) @db.VarChar(30)
+  name      String   @unique @db.VarChar(50)
+  postCount Int      @default(0)
+  trending  Boolean  @default(false)
+
+  createdAt DateTime @default(now()) @db.DateTime(3)
+  updatedAt DateTime @updatedAt @db.DateTime(3)
+
+  @@index([postCount])
+  @@index([name])
+  @@map("im_community_tags")
+}
+
+model IMCommunityPostTag {
+  id     String @id @default(cuid()) @db.VarChar(30)
+  postId String @db.VarChar(36)
+  tagId  String @db.VarChar(36)
+
+  @@unique([postId, tagId])
+  @@index([postId])
+  @@index([tagId])
+  @@map("im_community_post_tags")
+}
+
+// ── Community v1.5: Dynamic Boards ──────────────────────────────────
+
+model IMCommunityBoard {
+  id              String   @id @default(cuid()) @db.VarChar(30)
+  slug            String   @unique @db.VarChar(50)
+  name            String   @db.VarChar(100)
+  description     String?  @db.Text
+  icon            String?  @db.VarChar(50)
+
+  creatorId       String   @db.VarChar(36)
+  isSystem        Boolean  @default(false)
+
+  rules           String?  @db.Text // JSON: { allowedPostTypes?, requireTags?, approvalRequired? }
+
+  postCount       Int      @default(0)
+  subscriberCount Int      @default(0)
+
+  status          String   @default("active") @db.VarChar(20) // 'active' | 'archived' | 'hidden'
+
+  createdAt       DateTime @default(now()) @db.DateTime(3)
+  updatedAt       DateTime @updatedAt @db.DateTime(3)
+
+  @@index([status, postCount])
+  @@index([creatorId])
+  @@map("im_community_boards")
+}
+
+model IMCommunityBoardAdmin {
+  id        String   @id @default(cuid()) @db.VarChar(30)
+  boardId   String   @db.VarChar(30)
+  userId    String   @db.VarChar(36)
+  role      String   @default("moderator") @db.VarChar(15) // 'owner' | 'moderator'
+
+  createdAt DateTime @default(now()) @db.DateTime(3)
+
+  @@unique([boardId, userId])
+  @@index([userId])
+  @@map("im_community_board_admins")
+}
+
+// ── Community v1.5: User Profile ────────────────────────────────────
+
+model IMCommunityProfile {
+  id             String    @id @db.VarChar(36) // = im_users.id (1:1)
+  bio            String?   @db.VarChar(300)
+  website        String?   @db.VarChar(200)
+
+  postCount      Int       @default(0)
+  commentCount   Int       @default(0)
+  karmaTotal     Int       @default(0)
+  followerCount  Int       @default(0)
+  followingCount Int       @default(0)
+
+  lastActiveAt   DateTime? @db.DateTime(3)
+  streakDays     Int       @default(0)
+
+  createdAt      DateTime  @default(now()) @db.DateTime(3)
+  updatedAt      DateTime  @updatedAt @db.DateTime(3)
+
+  @@map("im_community_profiles")
+}
+
+// ── Community v1.5: Drafts ──────────────────────────────────────────
+
+model IMCommunityDraft {
+  id          String   @id @default(cuid()) @db.VarChar(30)
+  authorId    String   @db.VarChar(36)
+  boardSlug   String?  @db.VarChar(50)
+  title       String?  @db.VarChar(200)
+  contentJson String?  @db.LongText
+  content     String?  @db.Text
+
+  createdAt   DateTime @default(now()) @db.DateTime(3)
+  updatedAt   DateTime @updatedAt @db.DateTime(3)
+  expiresAt   DateTime @db.DateTime(3) // 7 days TTL
+
+  @@index([authorId, updatedAt])
+  @@map("im_community_drafts")
+}
+
+// ==============================================================================
+// Contact System (v1.8.0 P9)
+// ==============================================================================
+
+model IMFriendRequest {
+  id          String   @id @default(cuid()) @db.VarChar(36)
+  fromUserId  String   @db.VarChar(36)
+  toUserId    String   @db.VarChar(36)
+  reason      String?  @db.Text
+  source      String?  @db.VarChar(50)
+  status      String   @default("pending") @db.VarChar(20)
+  createdAt   DateTime @default(now()) @db.DateTime(3)
+  updatedAt   DateTime @updatedAt @db.DateTime(3)
+
+  fromUser IMUser @relation("FriendRequestsSent", fields: [fromUserId], references: [id])
+  toUser   IMUser @relation("FriendRequestsReceived", fields: [toUserId], references: [id])
+
+  @@unique([fromUserId, toUserId, status])
+  @@index([toUserId, status])
+  @@index([fromUserId, status])
+  @@map("im_friend_requests")
+}
+
+model IMContactRelation {
+  userId    String   @db.VarChar(36)
+  contactId String   @db.VarChar(36)
+  remark    String?  @db.VarChar(100)
+  createdAt DateTime @default(now()) @db.DateTime(3)
+
+  user    IMUser @relation("ContactsOwned", fields: [userId], references: [id])
+  contact IMUser @relation("ContactsOf", fields: [contactId], references: [id])
+
+  @@id([userId, contactId])
+  @@index([contactId])
+  @@map("im_contacts")
+}
+
+model IMBlock {
+  userId    String   @db.VarChar(36)
+  blockedId String   @db.VarChar(36)
+  reason    String?  @db.VarChar(200)
+  createdAt DateTime @default(now()) @db.DateTime(3)
+
+  user    IMUser @relation("BlocksOwned", fields: [userId], references: [id])
+  blocked IMUser @relation("BlockedBy", fields: [blockedId], references: [id])
+
+  @@id([userId, blockedId])
+  @@map("im_blocks")
 }

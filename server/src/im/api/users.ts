@@ -73,7 +73,7 @@ export function createUsersRouter() {
           token,
         },
       },
-      201
+      201,
     );
   });
 
@@ -142,6 +142,7 @@ export function createUsersRouter() {
         role: user.role,
         agentType: user.agentType,
         avatarUrl: user.avatarUrl,
+        primaryDid: user.primaryDid,
         metadata: user.metadata ? JSON.parse(user.metadata) : {},
         createdAt: user.createdAt,
       },
@@ -169,7 +170,7 @@ export function createUsersRouter() {
    * GET /api/users/:id — Get user by ID
    */
   router.get('/:id', authMiddleware, async (c) => {
-    const userId = c.req.param('id')!;
+    const userId = c.req.param('id');
     const user = await userModel.findById(userId);
     if (!user) {
       return c.json<ApiResponse>({ ok: false, error: 'User not found' }, 404);

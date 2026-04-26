@@ -14,6 +14,8 @@ export interface CreateMemoryFileData {
   scope: string;
   path: string;
   content: string;
+  memoryType?: string;
+  description?: string;
 }
 
 export interface MemoryFileQuery {
@@ -21,6 +23,10 @@ export interface MemoryFileQuery {
   ownerType?: MemoryOwnerType;
   scope?: string;
   path?: string;
+  memoryType?: string;
+  stale?: boolean;
+  sort?: string;
+  order?: 'asc' | 'desc';
 }
 
 export class MemoryFileModel {
@@ -33,6 +39,8 @@ export class MemoryFileModel {
         path: data.path,
         content: data.content,
         version: 1,
+        ...(data.memoryType !== undefined && { memoryType: data.memoryType }),
+        ...(data.description !== undefined && { description: data.description }),
       },
     });
   }
@@ -52,10 +60,16 @@ export class MemoryFileModel {
     if (query.ownerType) where.ownerType = query.ownerType;
     if (query.scope) where.scope = query.scope;
     if (query.path) where.path = query.path;
+    if (query.memoryType !== undefined) where.memoryType = query.memoryType;
+    if (query.stale !== undefined) where.stale = query.stale;
+
+    const ALLOWED_SORT = ['updatedAt', 'createdAt', 'path', 'memoryType'];
+    const sortField = ALLOWED_SORT.includes(query.sort || '') ? query.sort! : 'updatedAt';
+    const sortOrder = query.order || 'desc';
 
     return prisma.iMMemoryFile.findMany({
       where,
-      orderBy: { updatedAt: 'desc' },
+      orderBy: { [sortField]: sortOrder },
       select: {
         id: true,
         ownerId: true,
@@ -63,9 +77,19 @@ export class MemoryFileModel {
         scope: true,
         path: true,
         version: true,
+        memoryType: true,
+        description: true,
+        stale: true,
         createdAt: true,
         updatedAt: true,
       },
+    });
+  }
+
+  async updateMetadata(id: string, data: { memoryType?: string; description?: string; stale?: boolean }) {
+    return prisma.iMMemoryFile.update({
+      where: { id },
+      data,
     });
   }
 
@@ -107,10 +131,14 @@ export class MemoryFileModel {
         path: data.path,
         content: data.content,
         version: 1,
+        ...(data.memoryType !== undefined && { memoryType: data.memoryType }),
+        ...(data.description !== undefined && { description: data.description }),
       },
       update: {
         content: data.content,
         version: { increment: 1 },
+        ...(data.memoryType !== undefined && { memoryType: data.memoryType }),
+        ...(data.description !== undefined && { description: data.description }),
       },
     });
   }

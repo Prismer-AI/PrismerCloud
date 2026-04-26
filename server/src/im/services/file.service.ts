@@ -27,12 +27,7 @@ import {
   createPresignedPost,
   getSignedUrl,
 } from './s3.client';
-import {
-  validateUploadRequest,
-  validateFileContent,
-  sanitizeFileName,
-  MIME_WHITELIST,
-} from './file-validator';
+import { validateUploadRequest, validateFileContent, sanitizeFileName, MIME_WHITELIST } from './file-validator';
 import type { CreditService } from './credit.service';
 import type {
   PresignInput,
@@ -43,8 +38,9 @@ import type {
   MultipartCompleteInput,
   FileQuota,
 } from '../types';
+import { createModuleLogger } from '../../lib/logger';
 
-const LOG = '[FileService]';
+const log = createModuleLogger('FileService');
 
 // ─── Error Types ────────────────────────────────────────
 
@@ -70,9 +66,7 @@ export class FileService {
     const { fileName, fileSize, mimeType } = input;
 
     // 1. Validate request metadata
-    const validationError = validateUploadRequest(
-      fileName, fileSize, mimeType, config.files.maxSimpleSize,
-    );
+    const validationError = validateUploadRequest(fileName, fileSize, mimeType, config.files.maxSimpleSize);
     if (validationError) {
       throw new FileServiceError(validationError, 'INVALID_INPUT');
     }
@@ -123,7 +117,7 @@ export class FileService {
         Expires: config.files.presignExpiry,
       });
 
-      console.log(`${LOG} Presign created: uploadId=${uploadId}, key=${s3Key}, size=${fileSize}`);
+      log.info(`Presign created: uploadId=${uploadId}, key=${s3Key}, size=${fileSize}`);
 
       return {
         uploadId,
@@ -134,7 +128,7 @@ export class FileService {
     }
 
     // Dev mode: return local upload URL
-    console.log(`${LOG} [DEV] Presign created: uploadId=${uploadId}, local mode`);
+    log.info(`[DEV] Presign created: uploadId=${uploadId}, local mode`);
     return {
       uploadId,
       url: `/api/im/files/dev-upload/${uploadId}`,
@@ -187,10 +181,14 @@ export class FileService {
       const s3 = getS3Client();
       const bucket = getBucket();
 
-      const head = await s3.send(new HeadObjectCommand({
-        Bucket: bucket,
-        Key: upload.s3Key!,
-      })).catch(() => null);
+      const head = await s3
+        .send(
+          new HeadObjectCommand({
+            Bucket: bucket,
+            Key: upload.s3Key!,
+          }),
+        )
+        .catch(() => null);
 
       if (!head || !head.ContentLength) {
         await prisma.iMFileUpload.update({ where: { uploadId }, data: { status: 'failed' } });
@@ -200,11 +198,13 @@ export class FileService {
       actualSize = head.ContentLength;
 
       // Get first 8KB for magic bytes validation
-      const getResult = await s3.send(new GetObjectCommand({
-        Bucket: bucket,
-        Key: upload.s3Key!,
-        Range: 'bytes=0-8191',
-      }));
+      const getResult = await s3.send(
+        new GetObjectCommand({
+          Bucket: bucket,
+          Key: upload.s3Key!,
+          Range: 'bytes=0-8191',
+        }),
+      );
       headBytes = Buffer.from(await getResult.Body!.transformToByteArray());
     } else {
       // Dev mode: read from local filesystem
@@ -232,7 +232,7 @@ export class FileService {
     });
 
     if (!validation.valid) {
-      console.warn(`${LOG} Validation failed for ${uploadId}: ${validation.error}`);
+      log.warn(`Validation failed for ${uploadId}: ${validation.error}`);
       await prisma.iMFileUpload.update({ where: { uploadId }, data: { status: 'failed' } });
       throw new FileServiceError(
         validation.error || 'File validation failed',
@@ -246,7 +246,11 @@ export class FileService {
     // 5. Deduct credits
     const cost = this.calculateCost(actualSize);
     const deductResult = await this.creditService.deduct(
-      imUserId, cost, `file_upload: ${upload.fileName}`, 'file_upload', uploadId,
+      imUserId,
+      cost,
+      `file_upload: ${upload.fileName}`,
+      'file_upload',
+      uploadId,
     );
     if (!deductResult.success) {
       throw new FileServiceError('Insufficient credits', 'INSUFFICIENT_CREDITS', 402);
@@ -265,7 +269,7 @@ export class FileService {
       },
     });
 
-    console.log(`${LOG} Confirmed: uploadId=${uploadId}, size=${actualSize}, cost=${cost}`);
+    log.info(`Confirmed: uploadId=${uploadId}, size=${actualSize}, cost=${cost}`);
 
     return {
       uploadId: upload.uploadId,
@@ -284,9 +288,7 @@ export class FileService {
     const { fileName, fileSize, mimeType } = input;
 
     // Validate
-    const validationError = validateUploadRequest(
-      fileName, fileSize, mimeType, config.files.maxMultipartSize,
-    );
+    const validationError = validateUploadRequest(fileName, fileSize, mimeType, config.files.maxMultipartSize);
     if (validationError) {
       throw new FileServiceError(validationError, 'INVALID_INPUT');
     }
@@ -307,11 +309,7 @@ export class FileService {
     }
 
     if (!isS3Available()) {
-      throw new FileServiceError(
-        'Multipart upload is not available in dev mode',
-        'NOT_AVAILABLE',
-        501,
-      );
+      throw new FileServiceError('Multipart upload is not available in dev mode', 'NOT_AVAILABLE', 501);
     }
 
     const uploadId = this.generateUploadId();
@@ -323,11 +321,13 @@ export class FileService {
     const s3 = getS3Client();
     const bucket = getBucket();
 
-    const multipart = await s3.send(new CreateMultipartUploadCommand({
-      Bucket: bucket,
-      Key: s3Key,
-      ContentType: mimeType,
-    }));
+    const multipart = await s3.send(
+      new CreateMultipartUploadCommand({
+        Bucket: bucket,
+        Key: s3Key,
+        ContentType: mimeType,
+      }),
+    );
 
     const s3UploadId = multipart.UploadId!;
 
@@ -364,7 +364,7 @@ export class FileService {
       parts.push({ partNumber: i, url });
     }
 
-    console.log(`${LOG} Multipart init: uploadId=${uploadId}, parts=${partCount}, size=${fileSize}`);
+    log.info(`Multipart init: uploadId=${uploadId}, parts=${partCount}, size=${fileSize}`);
 
     return {
       uploadId,
@@ -403,14 +403,16 @@ export class FileService {
     const bucket = getBucket();
 
     // Complete S3 multipart
-    await s3.send(new CompleteMultipartUploadCommand({
-      Bucket: bucket,
-      Key: upload.s3Key!,
-      UploadId: s3UploadId,
-      MultipartUpload: {
-        Parts: parts.map(p => ({ PartNumber: p.partNumber, ETag: p.etag })),
-      },
-    }));
+    await s3.send(
+      new CompleteMultipartUploadCommand({
+        Bucket: bucket,
+        Key: upload.s3Key!,
+        UploadId: s3UploadId,
+        MultipartUpload: {
+          Parts: parts.map((p) => ({ PartNumber: p.partNumber, ETag: p.etag })),
+        },
+      }),
+    );
 
     // Now confirm (same pipeline as simple upload confirm)
     // Update the uploadId to just our ID for the confirm lookup
@@ -446,8 +448,9 @@ export class FileService {
   async deleteFile(uploadId: string, imUserId: string): Promise<void> {
     this.assertUploadIdFormat(uploadId);
     // Try exact match first, then composite (multipart: "ourId::s3Id")
-    const upload = await prisma.iMFileUpload.findUnique({ where: { uploadId } })
-      ?? await prisma.iMFileUpload.findFirst({ where: { uploadId: { startsWith: `${uploadId}::` } } });
+    const upload =
+      (await prisma.iMFileUpload.findUnique({ where: { uploadId } })) ??
+      (await prisma.iMFileUpload.findFirst({ where: { uploadId: { startsWith: `${uploadId}::` } } }));
     if (!upload) {
       throw new FileServiceError('Upload not found', 'NOT_FOUND', 404);
     }
@@ -463,10 +466,14 @@ export class FileService {
     // Delete from storage
     if (upload.s3Key) {
       if (isS3Available()) {
-        await getS3Client().send(new DeleteObjectCommand({
-          Bucket: getBucket(),
-          Key: upload.s3Key,
-        })).catch(err => console.warn(`${LOG} S3 delete failed for ${upload.s3Key}:`, err));
+        await getS3Client()
+          .send(
+            new DeleteObjectCommand({
+              Bucket: getBucket(),
+              Key: upload.s3Key,
+            }),
+          )
+          .catch((err: any) => log.warn(`S3 delete failed for ${upload.s3Key}: ${err.message}`));
       } else {
         // Dev mode: delete local file
         const localPath = this.getLocalPath(upload.uploadId, upload.fileName);
@@ -481,7 +488,7 @@ export class FileService {
       data: { status: 'failed' }, // Reuse 'failed' status for deleted
     });
 
-    console.log(`${LOG} Deleted: uploadId=${uploadId}`);
+    log.info(`Deleted: uploadId=${uploadId}`);
   }
 
   // ── Cleanup Expired Uploads ─────────────────────────
@@ -500,10 +507,14 @@ export class FileService {
     for (const upload of expired) {
       try {
         if (upload.s3Key && isS3Available()) {
-          await getS3Client().send(new DeleteObjectCommand({
-            Bucket: getBucket(),
-            Key: upload.s3Key,
-          })).catch(() => {}); // Best-effort S3 cleanup
+          await getS3Client()
+            .send(
+              new DeleteObjectCommand({
+                Bucket: getBucket(),
+                Key: upload.s3Key,
+              }),
+            )
+            .catch(() => {}); // Best-effort S3 cleanup
         }
       } catch {
         // Ignore individual cleanup errors
@@ -515,7 +526,7 @@ export class FileService {
       data: { status: 'failed' },
     });
 
-    console.log(`${LOG} Cleaned up ${expired.length} expired uploads`);
+    log.info(`Cleaned up ${expired.length} expired uploads`);
     return expired.length;
   }
 
@@ -533,7 +544,7 @@ export class FileService {
     const filePath = path.join(dirPath, upload.fileName);
     fs.writeFileSync(filePath, buffer);
 
-    console.log(`${LOG} [DEV] Saved local file: ${filePath} (${buffer.length} bytes)`);
+    log.info(`[DEV] Saved local file: ${filePath} (${buffer.length} bytes)`);
   }
 
   /**
@@ -574,9 +585,7 @@ export class FileService {
 
   private buildCdnUrl(s3Key: string, uploadId: string, fileName: string): string {
     if (config.cdn.domain) {
-      const domain = config.cdn.domain.startsWith('http')
-        ? config.cdn.domain
-        : `https://${config.cdn.domain}`;
+      const domain = config.cdn.domain.startsWith('http') ? config.cdn.domain : `https://${config.cdn.domain}`;
       return `${domain}/${s3Key}`;
     }
     // Dev mode: local download URL
@@ -600,7 +609,10 @@ export class FileService {
   }
 
   private async computeFullSha256(
-    s3Key: string, uploadId: string, fileName: string, fileSize: number,
+    s3Key: string,
+    uploadId: string,
+    fileName: string,
+    fileSize: number,
   ): Promise<string> {
     const hash = crypto.createHash('sha256');
 
@@ -611,9 +623,13 @@ export class FileService {
       const chunkSize = 1024 * 1024;
       for (let offset = 0; offset < fileSize; offset += chunkSize) {
         const end = Math.min(offset + chunkSize - 1, fileSize - 1);
-        const res = await s3.send(new GetObjectCommand({
-          Bucket: bucket, Key: s3Key, Range: `bytes=${offset}-${end}`,
-        }));
+        const res = await s3.send(
+          new GetObjectCommand({
+            Bucket: bucket,
+            Key: s3Key,
+            Range: `bytes=${offset}-${end}`,
+          }),
+        );
         hash.update(Buffer.from(await res.Body!.transformToByteArray()));
       }
     } else {

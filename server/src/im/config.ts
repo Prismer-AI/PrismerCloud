@@ -17,7 +17,7 @@ function buildRedisUrl(): string {
   const db = process.env.REDIS_DB || '0';
 
   const auth = password ? `:${password}@` : '';
-  return `redis://${auth}${host}:${port}/${db}`;
+  return `redis://localhost:6379/${db}`;
 }
 
 export const config = {
@@ -29,6 +29,8 @@ export const config = {
   },
 
   jwt: {
+    // Use getter: JWT_SECRET may be injected by Nacos AFTER module load.
+    // apiGuard (proxy layer) reads env dynamically — IM must match.
     get secret() {
       return process.env.JWT_SECRET || process.env.NEXTAUTH_SECRET || 'dev-secret-change-me';
     },
@@ -42,10 +44,14 @@ export const config = {
     heartbeatTimeoutMs: parseInt(process.env.AGENT_HEARTBEAT_TIMEOUT_MS || '90000', 10),
   },
 
+  ws: {
+    authTimeoutMs: parseInt(process.env.WS_AUTH_TIMEOUT_MS || '10000', 10),
+  },
+
   cors: {
-    origins: (
-      process.env.CORS_ORIGINS || 'http://localhost:3000,http://localhost:3100,http://localhost:3200'
-    ).split(','),
+    origins: (process.env.CORS_ORIGINS || 'http://localhost:3000,http://localhost:3100,http://localhost:3200').split(
+      ',',
+    ),
   },
 
   webhook: {
@@ -56,7 +62,7 @@ export const config = {
 
   s3: {
     region: process.env.AWS_S3_REGION || process.env.AWS_REGION || 'us-east-1',
-    bucket: process.env.AWS_S3_BUCKET || '',
+    bucket: process.env.AWS_S3_BUCKET || 'pro-prismer-slide',
     accessKeyId: process.env.AWS_S3_ACCESS_KEY_ID || process.env.AWS_ACCESS_KEY_ID || '',
     secretAccessKey: process.env.AWS_S3_SECRET_ACCESS_KEY || process.env.AWS_SECRET_ACCESS_KEY || '',
     endpoint: process.env.AWS_S3_ENDPOINT || undefined,

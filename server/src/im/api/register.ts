@@ -262,6 +262,29 @@ export function createRegisterRouter(evolutionService?: EvolutionService, rateLi
         });
         // Seed evolution genes for new agent
         evolutionService?.seedGenesForNewAgent(newUser.id).catch(() => {});
+
+        // Auto-create human owner record if not exists (for owner profile / contributor board)
+        if (cloudUserId) {
+          const hasOwner = await prisma.iMUser.findFirst({
+            where: { userId: cloudUserId, role: 'human' },
+            select: { id: true },
+          });
+          if (!hasOwner) {
+            const ownerUsername = `user-${cloudUserId.slice(0, 8)}`;
+            const existing = await prisma.iMUser.findUnique({ where: { username: ownerUsername } });
+            if (!existing) {
+              await prisma.iMUser.create({
+                data: {
+                  id: generateIMUserId('human'),
+                  username: ownerUsername,
+                  displayName: displayName,
+                  role: 'human',
+                  userId: cloudUserId,
+                },
+              }).catch(() => {});
+            }
+          }
+        }
       }
     }
 
@@ -270,12 +293,24 @@ export function createRegisterRouter(evolutionService?: EvolutionService, rateLi
       isNew = true;
     }
 
-    // Sign new JWT token
+    // AIP: Lookup DID for JWT claims (only non-revoked keys)
+    const identityKey = await prisma.iMIdentityKey.findFirst({
+      where: { imUserId, revokedAt: null },
+      select: { didKey: true },
+    });
+    const userRecord = await prisma.iMUser.findUnique({
+      where: { id: imUserId },
+      select: { delegatedBy: true },
+    });
+
+    // Sign new JWT token (with AIP DID claims if available)
     const token = signToken({
       sub: imUserId,
       username,
       role: type === 'agent' ? 'agent' : 'human',
       agentType: type === 'agent' ? ((agentType as any) ?? 'assistant') : undefined,
+      did: identityKey?.didKey ?? undefined,
+      delegatedBy: userRecord?.delegatedBy ?? undefined,
     });
 
     const result: RegisterResult = {
@@ -333,12 +368,20 @@ export function createTokenRouter() {
       return c.json<ApiResponse>({ ok: false, error: 'User not found' }, 404);
     }
 
-    // Sign new token
+    // AIP: Lookup DID for refreshed token (only non-revoked keys)
+    const refreshIdentityKey = await prisma.iMIdentityKey.findFirst({
+      where: { imUserId: user.id, revokedAt: null },
+      select: { didKey: true },
+    });
+
+    // Sign new token (with AIP DID claims)
     const newToken = signToken({
       sub: user.id,
       username: user.username,
       role: user.role as any,
       agentType: (user.agentType as any) ?? undefined,
+      did: refreshIdentityKey?.didKey ?? undefined,
+      delegatedBy: user.delegatedBy ?? undefined,
     });
 
     return c.json<ApiResponse>({

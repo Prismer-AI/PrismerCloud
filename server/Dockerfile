@@ -10,8 +10,10 @@ RUN apk add --no-cache libc6-compat
 # 复制依赖文件
 COPY package.json package-lock.json* ./
 
-# 安装依赖（npm ci requires package-lock.json; use npm install as fallback）
-RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi
+# 使用 npm 安装依赖
+# 清理 npm ci 产生的损坏符号链接（core-js 等包在 overlay2 上会出问题）
+# Alpine BusyBox find 不支持 -xtype，用 -L -type l 替代（-L 跟随链接后仍为 l 说明目标不存在）
+RUN npm ci && find /app/node_modules -L -type l -delete 2>/dev/null; true
 
 # 构建应用
 FROM base AS builder
@@ -62,15 +64,12 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 
-# Install Prisma CLI for runtime db push (used by docker-entrypoint.sh)
-RUN npm install -g prisma@6
-
 # 创建非 root 用户
 RUN addgroup --system --gid 1001 nodejs
 RUN adduser --system --uid 1001 nextjs
 
 # 复制公共资源
-COPY --from=builder --chown=nextjs:nodejs /app/public ./public
+COPY --from=builder /app/public ./public
 
 # 设置正确的权限
 RUN mkdir .next
@@ -86,9 +85,6 @@ COPY --from=builder --chown=nextjs:nodejs /app/prisma ./prisma
 # OpenAPI spec — read at runtime by /api/docs/openapi for docs page
 COPY --from=builder --chown=nextjs:nodejs /app/docs/openapi.yaml ./docs/openapi.yaml
 
-# Entrypoint script — runs Prisma db push for IM tables then starts server
-COPY --from=builder --chown=nextjs:nodejs /app/scripts/docker-entrypoint.sh ./docker-entrypoint.sh
-
 # Seed gene data — read at runtime by EvolutionService via process.cwd()/src/im/data/
 COPY --from=builder --chown=nextjs:nodejs /app/src/im/data ./src/im/data
 
@@ -103,7 +99,10 @@ ENV HOSTNAME="0.0.0.0"
 # OPENAI_API_KEY, OPENAI_API_BASE_URL, EXASEARCH_API_KEY, DEFAULT_MODEL
 # IM_SERVER_ENABLED=true/false, REDIS_URL, JWT_SECRET
 
+# K8s liveness/readiness probe — 检测进程存活 + 服务可用
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+  CMD wget -q --spider http://localhost:3000/api/health || exit 1
+
 # 运行自定义服务器 — HTTP + WebSocket + SSE on same port
-# Entrypoint runs Prisma db push (IM tables) then starts Node server
 # IM Server 通过 instrumentation.ts 在同一进程启动
-CMD ["sh", "docker-entrypoint.sh"]
+CMD ["node", "server.js"]

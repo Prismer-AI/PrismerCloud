@@ -6,7 +6,6 @@ import {
   Sparkles,
   Dna,
   Download,
-  Star,
   Compass,
   ExternalLink,
   Users,
@@ -27,6 +26,7 @@ import {
   getGeneId,
   getSignals,
   computePQI,
+  getSourceBadge,
 } from './helpers';
 
 interface LibraryTabProps {
@@ -36,7 +36,7 @@ interface LibraryTabProps {
   onGeneImport?: (geneId: string) => void;
   onGeneFork?: (gene: PublicGene) => void;
   onSkillInstall?: (skillId: string) => void;
-  onSkillStar?: (skillId: string) => void;
+  onSkillUninstall?: (slugOrId: string) => void;
   isAuthenticated?: boolean;
 }
 
@@ -51,14 +51,14 @@ export function LibraryTab({
   onGeneImport,
   onGeneFork,
   onSkillInstall,
-  onSkillStar,
+  onSkillUninstall,
   isAuthenticated,
 }: LibraryTabProps) {
   const [subTab, setSubTab] = useState<SubTab>('all');
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState('');
-  const [sort, setSort] = useState('most_installed');
+  const [sort, setSort] = useState('recommended');
   const [page, setPage] = useState(1);
 
   // Skills data
@@ -102,7 +102,14 @@ export function LibraryTab({
     fetch(`/api/im/skills/search?${params}`)
       .then((r) => r.json())
       .then((d) => {
-        setSkills(d.data || []);
+        const raw = d.data || [];
+        // Filter out test/low-quality items from recommended view
+        const filtered = raw.filter((s: any) => {
+          if (s.name?.startsWith('test-skill-')) return false;
+          if (sort === 'recommended' && (s.qualityScore ?? 1) < 0.005) return false;
+          return true;
+        });
+        setSkills(filtered);
         setSkillTotal(d.meta?.total || 0);
       })
       .catch(() => {})
@@ -113,21 +120,52 @@ export function LibraryTab({
   useEffect(() => {
     if (subTab === 'skills') return;
     setGeneLoading(true);
-    const gSort = sort === 'most_installed' ? 'most_used' : sort === 'most_starred' ? 'highest_success' : sort;
+    const gSort =
+      sort === 'most_installed'
+        ? 'most_used'
+        : sort === 'most_starred'
+          ? 'highest_success'
+          : sort === 'recommended'
+            ? 'recommended'
+            : sort === 'impact'
+              ? 'most_used'
+              : sort === 'rising'
+                ? 'newest'
+                : sort;
     const params = new URLSearchParams({ sort: gSort, page: String(page), limit: String(LIMIT) });
     if (category) params.set('category', category);
     if (search) params.set('search', search);
     fetch(`/api/im/evolution/public/genes?${params}`)
       .then((r) => r.json())
       .then((d) => {
-        setGenes(d.data || []);
+        let geneList: PublicGene[] = d.data || [];
+        // Client-side sort for impact and rising
+        if (sort === 'impact') {
+          geneList = [...geneList].sort((a, b) => {
+            const impactA = (a.used_by_count || 0) * (a.success_count / Math.max(1, a.success_count + a.failure_count));
+            const impactB = (b.used_by_count || 0) * (b.success_count / Math.max(1, b.success_count + b.failure_count));
+            return impactB - impactA;
+          });
+        } else if (sort === 'rising') {
+          geneList = [...geneList].sort((a, b) => {
+            const dateA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+            const dateB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+            return dateB - dateA;
+          });
+        }
+        setGenes(geneList);
         setGeneTotal(d.meta?.total || d.total || 0);
       })
       .catch(() => {})
       .finally(() => setGeneLoading(false));
   }, [subTab, search, category, sort, page]);
 
-  const loading = subTab === 'skills' ? skillLoading : subTab === 'genes' ? geneLoading : skillLoading || geneLoading;
+  const loading =
+    subTab === 'skills'
+      ? skillLoading
+      : subTab === 'genes'
+        ? geneLoading
+        : skillLoading || geneLoading;
   const total = subTab === 'skills' ? skillTotal : subTab === 'genes' ? geneTotal : skillTotal + geneTotal;
   const totalPages = Math.ceil(total / LIMIT);
 
@@ -142,26 +180,28 @@ export function LibraryTab({
           <div
             className={`flex p-0.5 rounded-lg shrink-0 ${isDark ? 'bg-zinc-900/60 border border-white/5' : 'bg-zinc-100/80 border border-zinc-200/60'}`}
           >
-            {(['all', 'skills', 'genes'] as SubTab[]).map((t) => (
-              <button
-                key={t}
-                onClick={() => {
-                  setSubTab(t);
-                  setPage(1);
-                }}
-                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all capitalize ${
-                  subTab === t
-                    ? isDark
-                      ? 'bg-zinc-800 text-white shadow-sm'
-                      : 'bg-white text-zinc-900 shadow-sm'
-                    : isDark
-                      ? 'text-zinc-500 hover:text-zinc-300'
-                      : 'text-zinc-500 hover:text-zinc-900'
-                }`}
-              >
-                {t === 'all' ? 'All' : t === 'skills' ? 'Skills' : 'Genes'}
-              </button>
-            ))}
+            {(['all', 'skills', 'genes'] as SubTab[]).map(
+              (t) => (
+                <button
+                  key={t}
+                  onClick={() => {
+                    setSubTab(t);
+                    setPage(1);
+                  }}
+                  className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all capitalize ${
+                    subTab === t
+                      ? isDark
+                        ? 'bg-zinc-800 text-white shadow-sm'
+                        : 'bg-white text-zinc-900 shadow-sm'
+                      : isDark
+                        ? 'text-zinc-500 hover:text-zinc-300'
+                        : 'text-zinc-500 hover:text-zinc-900'
+                  }`}
+                >
+                  {t === 'all' ? 'All' : t === 'skills' ? 'Skills' : 'Genes'}
+                </button>
+              ),
+            )}
           </div>
 
           {/* Search */}
@@ -193,32 +233,17 @@ export function LibraryTab({
             }}
             className={`px-3 py-2 rounded-lg text-xs font-medium border shrink-0 ${isDark ? 'bg-zinc-900/60 border-white/10 text-zinc-300' : 'bg-white/60 border-zinc-200/60 text-zinc-700'}`}
           >
+            <option value="recommended">Recommended</option>
             <option value="most_installed">Most Popular</option>
             <option value="newest">Newest</option>
-            <option value="most_starred">Highest Rated</option>
             <option value="name">Name</option>
+            <option value="impact">Impact Score</option>
+            <option value="rising">Rising</option>
           </select>
         </div>
 
         {/* Category pills */}
         <div className="flex gap-2 overflow-x-auto pb-1 custom-scrollbar">
-          <button
-            onClick={() => {
-              setCategory('');
-              setPage(1);
-            }}
-            className={`shrink-0 px-3 py-1.5 rounded-full text-xs font-medium transition-all ${
-              !category
-                ? isDark
-                  ? 'bg-white/10 text-white'
-                  : 'bg-zinc-900 text-white'
-                : isDark
-                  ? 'bg-zinc-800/60 text-zinc-400 hover:text-zinc-200'
-                  : 'bg-zinc-100 text-zinc-600 hover:text-zinc-900'
-            }`}
-          >
-            All
-          </button>
           {(subTab === 'genes' ? GENE_CATEGORIES.filter((c) => c.key) : skillCategories.slice(0, 15)).map((cat) => {
             const key = 'key' in cat ? cat.key : cat.category;
             const label = 'label' in cat ? cat.label : cat.category;
@@ -226,7 +251,7 @@ export function LibraryTab({
               <button
                 key={key}
                 onClick={() => {
-                  setCategory(key);
+                  setCategory(category === key ? '' : key);
                   setPage(1);
                 }}
                 className={`shrink-0 px-3 py-1.5 rounded-full text-xs font-medium transition-all whitespace-nowrap ${
@@ -268,19 +293,41 @@ export function LibraryTab({
                   onClick={() => onSkillClick(skill.id)}
                 >
                   <div className="flex items-center justify-between mb-2">
-                    <span
-                      className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${isDark ? 'bg-violet-500/15 text-violet-300' : 'bg-violet-100 text-violet-600'}`}
-                    >
-                      Skill
-                    </span>
+                    <div className="flex items-center gap-1.5">
+                      <span
+                        className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${isDark ? 'bg-violet-500/15 text-violet-300' : 'bg-violet-100 text-violet-600'}`}
+                      >
+                        Skill
+                      </span>
+                      {(() => {
+                        const badge = getSourceBadge(skill.source, isDark);
+                        return badge ? (
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded ${badge.className}`}>{badge.label}</span>
+                        ) : null;
+                      })()}
+                    </div>
                     <span
                       className={`text-[10px] px-1.5 py-0.5 rounded ${isDark ? 'bg-zinc-800 text-zinc-400' : 'bg-zinc-100 text-zinc-500'}`}
                     >
                       {skill.category}
                     </span>
                   </div>
-                  <h4 className={`font-bold text-sm mb-1 truncate ${isDark ? 'text-white' : 'text-zinc-900'}`}>
-                    {skill.name}
+                  <h4
+                    className={`font-bold text-sm mb-1 truncate flex items-center gap-1 ${isDark ? 'text-white' : 'text-zinc-900'}`}
+                  >
+                    <span className="truncate">{skill.name}</span>
+                    {skill.qualityScore !== undefined && (
+                      <span
+                        className={`inline-block w-2 h-2 rounded-full shrink-0 ${
+                          skill.qualityScore >= 0.5
+                            ? 'bg-emerald-400'
+                            : skill.qualityScore >= 0.01
+                              ? 'bg-amber-400'
+                              : 'bg-red-400'
+                        }`}
+                        title={`Quality: ${(skill.qualityScore * 100).toFixed(0)}%`}
+                      />
+                    )}
                   </h4>
                   <p
                     className={`text-xs leading-relaxed line-clamp-2 mb-3 ${isDark ? 'text-zinc-400' : 'text-zinc-600'}`}
@@ -288,31 +335,44 @@ export function LibraryTab({
                     {skill.description}
                   </p>
                   <div className={`flex items-center gap-3 text-xs ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>
+                    {skill.author && (
+                      <span className="flex items-center gap-1 truncate max-w-[100px]">
+                        <Users className="w-3 h-3 shrink-0" />
+                        {skill.author}
+                      </span>
+                    )}
                     <span className="flex items-center gap-1">
                       <Download className="w-3 h-3" />
                       {(skill.installs || 0).toLocaleString()}
-                    </span>
-                    <span className="flex items-center gap-1">
-                      <Star className="w-3 h-3" />
-                      {(skill.stars || 0).toLocaleString()}
                     </span>
                   </div>
                   {/* Signals */}
                   {skill.signals &&
                     (() => {
                       try {
-                        const parsed = JSON.parse(skill.signals) as Array<string | { type: string }>;
+                        const raw = skill.signals;
+                        const parsed: Array<string | { type: string }> =
+                          typeof raw === 'string' ? JSON.parse(raw) : Array.isArray(raw) ? raw : [];
                         if (parsed.length > 0) {
                           return (
                             <div className="flex flex-wrap gap-1 mt-2">
-                              {parsed.slice(0, 3).map((s, i) => (
-                                <span
-                                  key={i}
-                                  className={`text-[9px] px-1.5 py-0.5 rounded ${isDark ? 'bg-violet-500/10 text-violet-300' : 'bg-violet-50 text-violet-600'}`}
-                                >
-                                  {typeof s === 'string' ? s : s.type}
-                                </span>
-                              ))}
+                              {parsed.slice(0, 3).map((s, i) => {
+                                const label =
+                                  typeof s === 'string'
+                                    ? s
+                                    : s && typeof s === 'object' && 'type' in s && typeof (s as any).type === 'string'
+                                      ? (s as any).type
+                                      : '';
+                                if (!label) return null;
+                                return (
+                                  <span
+                                    key={i}
+                                    className={`text-[9px] px-1.5 py-0.5 rounded ${isDark ? 'bg-violet-500/10 text-violet-300' : 'bg-violet-50 text-violet-600'}`}
+                                  >
+                                    {label}
+                                  </span>
+                                );
+                              })}
                             </div>
                           );
                         }
@@ -333,15 +393,6 @@ export function LibraryTab({
                         className="flex items-center gap-1 text-[10px] px-2 py-1 rounded-md bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 transition-colors"
                       >
                         <Download className="w-3 h-3" /> Install
-                      </button>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onSkillStar?.(skill.id);
-                        }}
-                        className="flex items-center gap-1 text-[10px] px-2 py-1 rounded-md bg-amber-500/10 text-amber-400 hover:bg-amber-500/20 transition-colors"
-                      >
-                        <Star className="w-3 h-3" /> Star
                       </button>
                     </div>
                   )}
@@ -378,8 +429,22 @@ export function LibraryTab({
                         PQI {pqi}
                       </span>
                     </div>
-                    <h4 className={`font-bold text-sm mb-1 truncate ${isDark ? 'text-white' : 'text-zinc-900'}`}>
-                      {gene.title || getSignals(gene)[0] || 'Untitled Gene'}
+                    <h4
+                      className={`font-bold text-sm mb-1 truncate flex items-center gap-1 ${isDark ? 'text-white' : 'text-zinc-900'}`}
+                    >
+                      <span className="truncate">{gene.title || getSignals(gene)[0] || 'Untitled Gene'}</span>
+                      {gene.qualityScore !== undefined && (
+                        <span
+                          className={`inline-block w-2 h-2 rounded-full shrink-0 ${
+                            gene.qualityScore >= 0.5
+                              ? 'bg-emerald-400'
+                              : gene.qualityScore >= 0.01
+                                ? 'bg-amber-400'
+                                : 'bg-red-400'
+                          }`}
+                          title={`Quality: ${(gene.qualityScore * 100).toFixed(0)}%`}
+                        />
+                      )}
                     </h4>
                     <p
                       className={`text-xs leading-relaxed line-clamp-2 mb-3 ${isDark ? 'text-zinc-400' : 'text-zinc-600'}`}

@@ -6,7 +6,6 @@
  */
 
 import { query, execute, queryOne, withTransaction, generateUUID } from './db';
-import { FEATURE_FLAGS } from './feature-flags';
 import type { RowDataPacket, PoolConnection } from 'mysql2/promise';
 
 // ============================================================================
@@ -102,10 +101,6 @@ export async function deductCredits(
   referenceId?: string,
   externalConn?: PoolConnection
 ): Promise<{ success: boolean; balance_after: number; error?: string }> {
-  if (FEATURE_FLAGS.UNLIMITED_CREDITS) {
-    return { success: true, balance_after: 999999 };
-  }
-
   const doDeduct = async (conn: PoolConnection) => {
     // 获取当前余额（加锁）
     const [rows] = await conn.execute<(UserCredits & RowDataPacket)[]>(

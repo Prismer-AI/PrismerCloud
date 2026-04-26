@@ -8,8 +8,10 @@ import { ConversationService } from "../services/conversation.service";
 import prisma from "../db";
 import type { ApiResponse, ConversationStatus } from "../types/index";
 import type { IMParticipant, IMConversation, IMUser, IMReadCursor } from "@prisma/client";
+import type { RoomManager } from "../ws/rooms";
+import { ServerEvents } from "../ws/events";
 
-export function createConversationsRouter(conversationService: ConversationService) {
+export function createConversationsRouter(conversationService: ConversationService, rooms?: RoomManager) {
   const router = new Hono();
 
   // All routes require auth
@@ -78,6 +80,9 @@ export function createConversationsRouter(conversationService: ConversationServi
     let result = conversations.map((p: IMParticipant & { conversation: IMConversation }) => ({
       ...p.conversation,
       myRole: p.role,
+      pinned: p.pinned,
+      muted: p.muted,
+      pinnedAt: p.pinnedAt,
       unreadCount: 0,
     }));
 
@@ -109,6 +114,17 @@ export function createConversationsRouter(conversationService: ConversationServi
       }
     }
 
+    result.sort((a: any, b: any) => {
+      if (a.pinned && !b.pinned) return -1;
+      if (!a.pinned && b.pinned) return 1;
+      if (a.pinned && b.pinned) {
+        return (b.pinnedAt?.getTime() ?? 0) - (a.pinnedAt?.getTime() ?? 0);
+      }
+      const aTime = a.lastMessageAt?.getTime?.() ?? a.updatedAt?.getTime?.() ?? 0;
+      const bTime = b.lastMessageAt?.getTime?.() ?? b.updatedAt?.getTime?.() ?? 0;
+      return bTime - aTime;
+    });
+
     return c.json<ApiResponse>({
       ok: true,
       data: result,
@@ -120,7 +136,7 @@ export function createConversationsRouter(conversationService: ConversationServi
    */
   router.get("/:id", async (c) => {
     const user = c.get("user");
-    const convId = c.req.param("id")!;
+    const convId = c.req.param("id");
 
     const conv = await conversationService.getById(convId);
     if (!conv) {
@@ -160,7 +176,7 @@ export function createConversationsRouter(conversationService: ConversationServi
    */
   router.patch("/:id", async (c) => {
     const user = c.get("user");
-    const convId = c.req.param("id")!;
+    const convId = c.req.param("id");
     const body = await c.req.json();
 
     const isMember = await conversationService.isParticipant(convId, user.imUserId);
@@ -177,7 +193,7 @@ export function createConversationsRouter(conversationService: ConversationServi
    */
   router.post("/:id/read", async (c) => {
     const user = c.get("user");
-    const convId = c.req.param("id")!;
+    const convId = c.req.param("id");
 
     // Verify participation
     const isMember = await conversationService.isParticipant(convId, user.imUserId);
@@ -193,6 +209,7 @@ export function createConversationsRouter(conversationService: ConversationServi
     });
 
     // Upsert read cursor
+    const now = new Date();
     await prisma.iMReadCursor.upsert({
       where: {
         conversationId_imUserId: {
@@ -201,16 +218,25 @@ export function createConversationsRouter(conversationService: ConversationServi
         },
       },
       update: {
-        lastReadAt: new Date(),
+        lastReadAt: now,
         lastReadMsgId: latestMessage?.id ?? null,
       },
       create: {
         conversationId: convId,
         imUserId: user.imUserId,
-        lastReadAt: new Date(),
+        lastReadAt: now,
         lastReadMsgId: latestMessage?.id ?? null,
       },
     });
+
+    if (rooms) {
+      rooms.broadcastToRoom(convId, ServerEvents.messageRead({
+        conversationId: convId,
+        readBy: user.imUserId,
+        readAt: now.toISOString(),
+        lastReadMessageId: latestMessage?.id,
+      }), user.imUserId);
+    }
 
     return c.json<ApiResponse>({ ok: true });
   });
@@ -219,16 +245,85 @@ export function createConversationsRouter(conversationService: ConversationServi
    * POST /api/conversations/:id/archive — Archive conversation
    */
   router.post("/:id/archive", async (c) => {
-    const convId = c.req.param("id")!;
+    const convId = c.req.param("id");
     const updated = await conversationService.archive(convId);
     return c.json<ApiResponse>({ ok: true, data: updated });
+  });
+
+  /**
+   * PATCH /api/conversations/:id/pin — Toggle pin
+   */
+  router.patch("/:id/pin", async (c) => {
+    const user = c.get("user");
+    const convId = c.req.param("id");
+    const { pinned } = await c.req.json();
+
+    await prisma.iMParticipant.update({
+      where: { conversationId_imUserId: { conversationId: convId, imUserId: user.imUserId } },
+      data: { pinned: !!pinned, pinnedAt: pinned ? new Date() : null },
+    });
+
+    return c.json<ApiResponse>({ ok: true });
+  });
+
+  /**
+   * PATCH /api/conversations/:id/mute — Toggle mute
+   */
+  router.patch("/:id/mute", async (c) => {
+    const user = c.get("user");
+    const convId = c.req.param("id");
+    const { muted } = await c.req.json();
+
+    await prisma.iMParticipant.update({
+      where: { conversationId_imUserId: { conversationId: convId, imUserId: user.imUserId } },
+      data: { muted: !!muted },
+    });
+
+    return c.json<ApiResponse>({ ok: true });
+  });
+
+  /**
+   * POST /api/conversations/:id/unarchive — Restore archived conversation
+   */
+  router.post("/:id/unarchive", async (c) => {
+    const user = c.get("user");
+    const convId = c.req.param("id");
+
+    const participant = await prisma.iMParticipant.findUnique({
+      where: { conversationId_imUserId: { conversationId: convId, imUserId: user.imUserId } },
+    });
+    if (!participant) {
+      return c.json<ApiResponse>({ ok: false, error: "Not a participant" }, 403);
+    }
+
+    await prisma.iMConversation.update({
+      where: { id: convId },
+      data: { status: "active" },
+    });
+
+    return c.json<ApiResponse>({ ok: true });
+  });
+
+  /**
+   * DELETE /api/conversations/:id — Soft-delete (leave conversation)
+   */
+  router.delete("/:id", async (c) => {
+    const user = c.get("user");
+    const convId = c.req.param("id");
+
+    await prisma.iMParticipant.update({
+      where: { conversationId_imUserId: { conversationId: convId, imUserId: user.imUserId } },
+      data: { leftAt: new Date() },
+    });
+
+    return c.json<ApiResponse>({ ok: true });
   });
 
   /**
    * POST /api/conversations/:id/participants — Add participant
    */
   router.post("/:id/participants", async (c) => {
-    const convId = c.req.param("id")!;
+    const convId = c.req.param("id");
     const body = await c.req.json();
     const { userId, role } = body;
 
@@ -244,8 +339,8 @@ export function createConversationsRouter(conversationService: ConversationServi
    * DELETE /api/conversations/:id/participants/:userId — Remove participant
    */
   router.delete("/:id/participants/:userId", async (c) => {
-    const convId = c.req.param("id")!;
-    const userId = c.req.param("userId")!;
+    const convId = c.req.param("id");
+    const userId = c.req.param("userId");
 
     const removed = await conversationService.removeParticipant(convId, userId);
     return c.json<ApiResponse>({ ok: true, data: removed });

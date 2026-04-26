@@ -54,39 +54,81 @@ import { LibraryTab } from './components/library-tab';
 import { GeneForkSheet } from './components/gene-fork-sheet';
 // FeedTab removed — activity feed is now in the Map sidebar
 import { MyEvolutionTab as MyEvolutionPanel } from './components/my-evolution-tab';
-
-// ─── Types ──────────────────────────────────────────────
+import { WorkspaceTab } from './components/workspace-tab';
+import { getSourceBadge, glass } from './components/helpers';
+import { LeaderboardTab } from './components/leaderboard-tab';
+// ─── Evolution types (inline — leaderboard module removed, pending redesign) ─────
 
 interface PublicGene {
-  gene_id?: string;
   id?: string;
-  category: string;
-  title?: string;
+  gene_id?: string;
+  title: string;
   description?: string;
+  category?: string;
+  signals_match?: { type: string }[];
+  strategy?: string[];
+  successCount?: number;
+  failureCount?: number;
+  forkCount?: number;
   visibility?: string;
-  signals?: Array<string | { type: string; provider?: string }>;
-  signals_match?: Array<string | { type: string; provider?: string }>;
-  strategy?: { steps?: string[] } | string[];
-  preconditions?: string[];
-  success_count: number;
-  failure_count: number;
-  published_by?: string;
-  created_by?: string;
+  author?: string;
+  qualityScore?: number;
+  createdAt?: string;
+  updatedAt?: string;
+  success_count?: number;
+  failure_count?: number;
+  fork_count?: number;
   used_by_count?: number;
-  is_seed?: boolean;
+  [key: string]: any;
 }
 
 interface FeedEvent {
-  type: 'capsule' | 'distill' | 'publish' | 'milestone' | 'import';
-  timestamp: string;
-  agentName: string;
-  geneTitle: string;
-  geneCategory: string;
-  signal?: string;
+  id?: string;
+  type?: string;
+  geneId?: string;
+  geneTitle?: string;
+  geneCategory?: string;
+  agentName?: string;
   outcome?: string;
-  score?: number;
-  detail?: string;
-  summary?: string;
+  signalKey?: string;
+  ts?: string;
+  timestamp?: string;
+  [key: string]: any;
+}
+
+interface MetricsSnapshot {
+  id?: number;
+  ts?: string;
+  ssr?: number;
+  gd?: number;
+  er?: number;
+  frrApprox?: number;
+  nrr?: number;
+  totalGenes?: number;
+  totalCapsules?: number;
+  activeAgents?: number;
+  repeatRate?: number;
+  mode?: string;
+  scope?: string;
+  [key: string]: any;
+}
+
+function agentScore(a: { successes: number; failures: number; capsules: number }): number {
+  const total = a.successes + a.failures;
+  if (total === 0) return 0;
+  return (a.successes / total) * Math.log2(total + 1);
+}
+
+function aggregateAgentHeatmap(feed: FeedEvent[], name: string): { date: string; count: number }[] {
+  const counts: Record<string, number> = {};
+  for (const e of feed) {
+    if (e.agentName !== name || !e.ts) continue;
+    const d = new Date(e.ts as string).toISOString().slice(0, 10);
+    counts[d] = (counts[d] || 0) + 1;
+  }
+  return Object.entries(counts)
+    .map(([date, count]) => ({ date, count }))
+    .sort((a, b) => a.date.localeCompare(b.date));
 }
 
 interface Skill {
@@ -124,15 +166,15 @@ interface SkillStats {
   total_installs: number;
 }
 
-type TabKey = 'overview' | 'skills' | 'genes' | 'timeline' | 'agents' | 'my' | 'library' | 'feed' | 'leaderboard';
+type TabKey = 'overview' | 'skills' | 'genes' | 'timeline' | 'agents' | 'my' | 'library' | 'feed';
 
 // ─── Constants ──────────────────────────────────────────
 
 const TABS: { key: TabKey; label: string; icon: typeof Activity }[] = [
   { key: 'overview', label: 'Map', icon: Map },
-  { key: 'library', label: 'Library', icon: Sparkles },
-  { key: 'leaderboard', label: 'Leaderboard', icon: Trophy },
-  { key: 'my', label: 'My Evolution', icon: User },
+  { key: 'library', label: 'Marketplace', icon: Sparkles },
+  { key: 'agents', label: 'Leaderboard', icon: Trophy },
+  { key: 'my', label: 'Workspace', icon: User },
 ];
 
 const CAT_COLORS: Record<string, { text: string; bg: string; border: string; glow: string; hex: string }> = {
@@ -182,11 +224,6 @@ const FEED_ICONS: Record<string, { icon: typeof CircleDot; color: string }> = {
 
 // ─── Helpers ────────────────────────────────────────────
 
-const glass = (isDark: boolean) =>
-  isDark
-    ? 'backdrop-blur-xl bg-white/[0.03] border border-white/[0.06] shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)]'
-    : 'backdrop-blur-xl bg-white/70 border border-white/40 shadow-sm';
-
 function timeAgo(ts: string): string {
   const diff = Date.now() - new Date(ts).getTime();
   const m = Math.floor(diff / 60000);
@@ -217,8 +254,8 @@ function formatDate(ts: string): string {
 }
 
 function computePQI(g: PublicGene, maxExecutions: number): number {
-  const total = g.success_count + g.failure_count;
-  const successRate = total > 0 ? g.success_count / total : 0;
+  const total = (g.success_count || 0) + (g.failure_count || 0);
+  const successRate = total > 0 ? (g.success_count || 0) / total : 0;
   const normalizedExec = maxExecutions > 0 ? Math.min(total / maxExecutions, 1) : 0;
   const adoptionRate = (g.used_by_count || 0) > 0 ? Math.min((g.used_by_count || 0) / 50, 1) : 0;
   const freshness = 0.5; // No date info in list view, assume moderate freshness
@@ -565,13 +602,16 @@ export default function EvolutionPage() {
   // Trending
   const [trendingSkills, setTrendingSkills] = useState<Skill[]>([]);
 
+  // Metrics (for AEI Hero)
+  const [metrics, setMetrics] = useState<MetricsSnapshot | null>(null);
+  const [prevMetrics, setPrevMetrics] = useState<MetricsSnapshot | null>(null);
+
   // Gene detail modal
   const [geneDetailId, setGeneDetailId] = useState<string | null>(null);
   const [geneDetail, setGeneDetail] = useState<PublicGene | null>(null);
   const [geneDetailLoading, setGeneDetailLoading] = useState(false);
 
   // Agent detail
-  const [expandedAgent, setExpandedAgent] = useState<string | null>(null);
 
   // Library fork sheet
   const [forkGene, setForkGene] = useState<PublicGene | null>(null);
@@ -608,13 +648,13 @@ export default function EvolutionPage() {
         if (d.ok || d.data) setStats(d.data || d);
       })
       .catch(() => {});
-    fetch('/api/im/evolution/public/feed?limit=30')
+    fetch('/api/im/evolution/public/feed?limit=100')
       .then((r) => r.json())
       .then((d) => {
         if (d.ok || d.data) setFeed(d.data || []);
       })
       .catch(() => {});
-    fetch('/api/im/evolution/public/hot?limit=5')
+    fetch('/api/im/evolution/public/hot?limit=10')
       .then((r) => r.json())
       .then((d) => {
         if (d.ok || d.data) setHotGenes(d.data || []);
@@ -624,6 +664,24 @@ export default function EvolutionPage() {
       .then((r) => r.json())
       .then((d) => {
         if (d.ok || d.data) setTrendingSkills(d.data || []);
+      })
+      .catch(() => {});
+    fetch('/api/im/evolution/metrics')
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.ok && d.data) setMetrics(d.data.standard || null);
+      })
+      .catch(() => {});
+    // Fetch previous week's metrics for stage label comparison
+    fetch('/api/im/evolution/public/metrics-history?days=14')
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.ok && d.data && d.data.length >= 2) {
+          const rows = d.data as MetricsSnapshot[];
+          const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+          const prev = rows.find((r: MetricsSnapshot) => r.ts && new Date(r.ts).getTime() <= weekAgo);
+          if (prev) setPrevMetrics(prev);
+        }
       })
       .catch(() => {});
   }, []);
@@ -772,7 +830,7 @@ export default function EvolutionPage() {
 
   const navigateToAgent = useCallback(
     (agentName: string) => {
-      setExpandedAgent(agentName);
+      // leaderboard coming soon
       switchTab('agents');
     },
     [switchTab],
@@ -780,7 +838,7 @@ export default function EvolutionPage() {
 
   // ─── Auto-detect milestones from feed ──────────────────
   const autoMilestones = useMemo(() => {
-    const milestones: { type: string; title: string; detail: string; agentName: string; timestamp: string }[] = [];
+    const milestones: { type: string; title: string; detail: string; agentName?: string; timestamp?: string }[] = [];
     const geneCounts: Record<string, number> = {};
     const agentPublished: Record<string, boolean> = {};
     const geneAdopters: Record<string, Set<string>> = {};
@@ -789,7 +847,7 @@ export default function EvolutionPage() {
 
     for (const e of feed) {
       if (e.type === 'capsule') {
-        const key = e.geneTitle;
+        const key = e.geneTitle || '';
         geneCounts[key] = (geneCounts[key] || 0) + 1;
         const count = geneCounts[key];
         if (count === 10 || count === 50 || count === 100 || count === 500) {
@@ -817,7 +875,7 @@ export default function EvolutionPage() {
           geneStreaks[key] = 0;
         }
       }
-      if (e.type === 'publish' && !agentPublished[e.agentName]) {
+      if (e.type === 'publish' && e.agentName && !agentPublished[e.agentName]) {
         agentPublished[e.agentName] = true;
         milestones.push({
           type: 'first_publish',
@@ -827,9 +885,9 @@ export default function EvolutionPage() {
           timestamp: e.timestamp,
         });
       }
-      if (e.type === 'import') {
+      if (e.type === 'import' && e.geneTitle) {
         if (!geneAdopters[e.geneTitle]) geneAdopters[e.geneTitle] = new Set();
-        geneAdopters[e.geneTitle].add(e.agentName);
+        geneAdopters[e.geneTitle].add(e.agentName || '');
         const adopters = geneAdopters[e.geneTitle].size;
         if (adopters === 3 || adopters === 5 || adopters === 10) {
           milestones.push({
@@ -924,25 +982,6 @@ export default function EvolutionPage() {
     }
   };
 
-  // ─── Skill star handler ──────────────────────────────
-  const handleSkillStar = async (skillId: string) => {
-    if (!isAuthenticated) {
-      window.location.href = '/auth';
-      return;
-    }
-    try {
-      const token = JSON.parse(localStorage.getItem('prismer_auth') || '{}')?.token;
-      const res = await fetch(`/api/im/skills/${skillId}/star`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      });
-      const data = await res.json();
-      addToast(data.ok ? 'Skill starred!' : data.error || 'Failed to star', data.ok ? 'success' : 'error');
-    } catch {
-      addToast('Failed to star skill', 'error');
-    }
-  };
-
   // ─── Filtered timeline ────────────────────────────────
   const filteredTimeline = timelineFeed.filter((e) => {
     if (timelineFilter && e.type !== timelineFilter) return false;
@@ -958,7 +997,7 @@ export default function EvolutionPage() {
   // Group timeline by date
   const timelineGroups: { date: string; events: FeedEvent[] }[] = [];
   for (const event of filteredTimeline) {
-    const date = formatDate(event.timestamp);
+    const date = formatDate(event.timestamp || '');
     const last = timelineGroups[timelineGroups.length - 1];
     if (last && last.date === date) {
       last.events.push(event);
@@ -997,7 +1036,7 @@ export default function EvolutionPage() {
         lastSeen: '',
       };
     const a = agentMap[e.agentName];
-    if (!a.lastSeen || e.timestamp > a.lastSeen) a.lastSeen = e.timestamp;
+    if (e.timestamp && (!a.lastSeen || e.timestamp > a.lastSeen)) a.lastSeen = e.timestamp;
     if (e.type === 'capsule') {
       a.capsules++;
       if (e.outcome === 'success') a.successes++;
@@ -1010,61 +1049,50 @@ export default function EvolutionPage() {
     if (e.type === 'import') a.imported++;
     if (e.geneCategory) a.categories[e.geneCategory] = (a.categories[e.geneCategory] || 0) + 1;
   }
-  // Ranking: §7.3 — capsules*1 + published*10 + imported_by_others*5 + success_rate*50
-  const agents = Object.values(agentMap).sort((a, b) => {
-    const sr = (ag: typeof a) => (ag.successes + ag.failures > 0 ? ag.successes / (ag.successes + ag.failures) : 0);
-    const score = (ag: typeof a) => ag.capsules * 1.0 + ag.published * 10.0 + ag.imported * 5.0 + sr(ag) * 50.0;
-    return score(b) - score(a);
-  });
+  // Ranking: capsules*1 + published*10 + imported*5 + success_rate*50
+  const agents = Object.values(agentMap).sort((a, b) => agentScore(b) - agentScore(a));
 
   const geneTotalPages = Math.ceil(geneTotal / GENE_LIMIT);
   const skillTotalPages = Math.ceil(skillTotal / SKILL_LIMIT);
+
+  // Pre-compute agent heatmap data to avoid running aggregation inside render loop
+  const agentHeatmaps = useMemo(() => {
+    const map: Record<string, { date: string; count: number }[]> = {};
+    for (const a of agents.slice(0, 10)) {
+      map[a.name] = aggregateAgentHeatmap(feed, a.name);
+    }
+    return map;
+  }, [agents, feed]);
+
+  // Max capsules across agents for radar normalization
+  const maxAgentCapsules = useMemo(() => Math.max(...agents.slice(0, 10).map((a) => a.capsules), 1), [agents]);
 
   // ═══════════════════════════════════════════════════════
   // RENDER
   // ═══════════════════════════════════════════════════════
 
   return (
-    <div className={`max-w-7xl mx-auto px-4 sm:px-6 ${activeTab === 'overview' ? 'py-2' : 'py-4 sm:py-8'}`}>
-      {/* Header — compact when Map tab is active */}
-      {activeTab !== 'overview' ? (
-        <div className="text-center mb-6">
-          <div className="flex items-center justify-center gap-2 mb-2">
+    <div className={`max-w-7xl mx-auto px-4 sm:px-6 py-4 sm:py-8`}>
+      {/* Header */}
+      <div className="flex items-start sm:items-center justify-between mb-4 sm:mb-6">
+        <div>
+          <h1
+            className={`text-xl sm:text-2xl md:text-3xl font-bold mb-1 sm:mb-2 ${isDark ? 'text-white' : 'text-zinc-900'}`}
+          >
+            Evolution
+          </h1>
+          <div className={`flex items-center gap-2 text-xs sm:text-sm ${isDark ? 'text-zinc-400' : 'text-zinc-600'}`}>
             <span className="relative flex h-2 w-2">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
               <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-400" />
             </span>
-            <span
-              className={`text-xs font-medium uppercase tracking-wider ${isDark ? 'text-emerald-400/70' : 'text-emerald-600/70'}`}
-            >
-              Evolution Active
-            </span>
+            Cross-Agent Learning Network
           </div>
-          <h1 className={`text-3xl sm:text-4xl font-bold mb-2 ${isDark ? 'text-white' : 'text-zinc-900'}`}>
-            Evolution
-          </h1>
-          <p className={`max-w-lg mx-auto text-sm ${isDark ? 'text-zinc-400' : 'text-zinc-600'}`}>
-            Watch agents evolve in real-time. Browse skills, install genes, track outcomes.
-          </p>
         </div>
-      ) : (
-        <div className="flex items-center justify-center gap-2 mb-3">
-          <span className="relative flex h-2 w-2">
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-            <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-400" />
-          </span>
-          <span
-            className={`text-xs font-medium uppercase tracking-wider ${isDark ? 'text-emerald-400/70' : 'text-emerald-600/70'}`}
-          >
-            Evolution Map
-          </span>
-        </div>
-      )}
+      </div>
 
       {/* Tab Bar */}
-      <div
-        className={`relative flex gap-1 p-1 rounded-xl ${activeTab === 'overview' ? 'mb-2' : 'mb-8'} ${glass(isDark)}`}
-      >
+      <div className={`relative flex gap-1 p-1 rounded-xl mb-6 sm:mb-8 ${glass(isDark)}`}>
         {TABS.map((tab) => {
           const Icon = tab.icon;
           const isActive = activeTab === tab.key;
@@ -1118,191 +1146,33 @@ export default function EvolutionPage() {
             onGeneClick={(id) => setGeneDetailId(id)}
             onSkillClick={(id) => setSkillDetailId(id)}
             onGeneImport={handleImport}
-            onGeneFork={(gene) => setForkGene(gene)}
+            onGeneFork={(gene: any) => setForkGene(gene as PublicGene)}
             onSkillInstall={handleSkillInstall}
-            onSkillStar={handleSkillStar}
+            onSkillUninstall={async (slugOrId: string) => {
+              if (!isAuthenticated) {
+                window.location.href = '/auth';
+                return;
+              }
+              try {
+                const token = JSON.parse(localStorage.getItem('prismer_auth') || '{}')?.token;
+                const res = await fetch(`/api/im/skills/${slugOrId}/install`, {
+                  method: 'DELETE',
+                  headers: { Authorization: `Bearer ${token}` },
+                });
+                const data = await res.json();
+                addToast(data.ok ? 'Skill uninstalled' : data.error || 'Failed', data.ok ? 'success' : 'error');
+              } catch {
+                addToast('Uninstall failed', 'error');
+              }
+            }}
             isAuthenticated={isAuthenticated}
           />
         )}
 
         {/* ═══════════════════════════════════════════════ */}
-        {/* TAB: LEADERBOARD                               */}
+        {/* TAB: LEADERBOARD (Coming Soon — v1.8)          */}
         {/* ═══════════════════════════════════════════════ */}
-        {activeTab === 'leaderboard' && (
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            {/* Top Genes */}
-            <div className={`rounded-2xl p-5 ${glass(isDark)}`}>
-              <div className="flex items-center gap-2 mb-4">
-                <Dna size={16} className="text-violet-400" />
-                <h3 className={`text-sm font-semibold ${isDark ? 'text-zinc-100' : 'text-zinc-900'}`}>Top Genes</h3>
-              </div>
-              <div className="space-y-2">
-                {hotGenes.slice(0, 10).map((g, i) => {
-                  const total = g.success_count + g.failure_count;
-                  const sr = total > 0 ? Math.round((g.success_count / total) * 100) : 0;
-                  const catHex = CAT_COLORS[g.category]?.hex || '#71717a';
-                  return (
-                    <div
-                      key={g.gene_id || g.id || i}
-                      className={`flex items-center gap-3 px-3 py-2.5 rounded-xl cursor-pointer transition-colors ${isDark ? 'hover:bg-white/[0.06]' : 'hover:bg-black/[0.04]'}`}
-                      onClick={() => switchTab('overview')}
-                    >
-                      <span
-                        className={`text-sm font-bold tabular-nums w-6 text-right ${isDark ? 'text-zinc-600' : 'text-zinc-400'}`}
-                      >
-                        {i + 1}
-                      </span>
-                      <div className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ backgroundColor: catHex }} />
-                      <div className="flex-1 min-w-0">
-                        <div className={`text-sm font-medium truncate ${isDark ? 'text-zinc-200' : 'text-zinc-700'}`}>
-                          {g.title || g.gene_id || g.id}
-                        </div>
-                        <div className={`text-[10px] ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>
-                          {total} runs · {g.used_by_count || 0} agents
-                        </div>
-                      </div>
-                      <div className="text-right shrink-0">
-                        <div
-                          className={`text-sm font-bold tabular-nums ${sr >= 70 ? 'text-emerald-400' : sr >= 40 ? 'text-amber-400' : 'text-red-400'}`}
-                        >
-                          {sr}%
-                        </div>
-                        <div className={`text-[9px] ${isDark ? 'text-zinc-600' : 'text-zinc-400'}`}>success</div>
-                      </div>
-                    </div>
-                  );
-                })}
-                {hotGenes.length === 0 && (
-                  <div className={`text-center py-8 text-sm ${isDark ? 'text-zinc-600' : 'text-zinc-400'}`}>
-                    No genes yet
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Top Agents */}
-            <div className={`rounded-2xl p-5 ${glass(isDark)}`}>
-              <div className="flex items-center gap-2 mb-4">
-                <Users size={16} className="text-cyan-400" />
-                <h3 className={`text-sm font-semibold ${isDark ? 'text-zinc-100' : 'text-zinc-900'}`}>Top Agents</h3>
-              </div>
-              <div className="space-y-2">
-                {agents.slice(0, 10).map((a, i) => {
-                  const sr =
-                    a.successes + a.failures > 0 ? Math.round((a.successes / (a.successes + a.failures)) * 100) : 0;
-                  const score = Math.round(a.capsules * 1.0 + a.published * 10.0 + a.imported * 5.0 + sr * 0.5);
-                  return (
-                    <div
-                      key={a.name}
-                      className={`flex items-center gap-3 px-3 py-2.5 rounded-xl transition-colors ${isDark ? 'hover:bg-white/[0.06]' : 'hover:bg-black/[0.04]'}`}
-                    >
-                      <span
-                        className={`text-sm font-bold tabular-nums w-6 text-right ${i === 0 ? 'text-amber-400' : i === 1 ? 'text-zinc-400' : i === 2 ? 'text-orange-400' : isDark ? 'text-zinc-600' : 'text-zinc-400'}`}
-                      >
-                        {i + 1}
-                      </span>
-                      <div
-                        className={`w-7 h-7 rounded-full flex items-center justify-center text-[10px] font-bold ${isDark ? 'bg-white/[0.08] text-zinc-300' : 'bg-black/[0.06] text-zinc-600'}`}
-                      >
-                        {a.name.slice(0, 2).toUpperCase()}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className={`text-sm font-medium truncate ${isDark ? 'text-zinc-200' : 'text-zinc-700'}`}>
-                          {a.name}
-                        </div>
-                        <div className={`text-[10px] ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>
-                          {a.capsules} runs · {a.published} published · {sr}% success
-                        </div>
-                      </div>
-                      <div className="text-right shrink-0">
-                        <div className={`text-sm font-bold tabular-nums ${isDark ? 'text-zinc-200' : 'text-zinc-700'}`}>
-                          {score}
-                        </div>
-                        <div className={`text-[9px] ${isDark ? 'text-zinc-600' : 'text-zinc-400'}`}>score</div>
-                      </div>
-                    </div>
-                  );
-                })}
-                {agents.length === 0 && (
-                  <div className={`text-center py-8 text-sm ${isDark ? 'text-zinc-600' : 'text-zinc-400'}`}>
-                    No agents yet
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Platform Stats + Top Skills */}
-            <div className="space-y-6">
-              <div className={`rounded-2xl p-5 ${glass(isDark)}`}>
-                <div className="flex items-center gap-2 mb-4">
-                  <TrendingUp size={16} className="text-emerald-400" />
-                  <h3 className={`text-sm font-semibold ${isDark ? 'text-zinc-100' : 'text-zinc-900'}`}>
-                    Platform Stats
-                  </h3>
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                  {[
-                    { label: 'Genes', value: stats.total_genes, color: 'text-violet-400' },
-                    { label: 'Executions', value: stats.total_capsules, color: 'text-cyan-400' },
-                    {
-                      label: 'Avg Success',
-                      value: `${Math.round(stats.avg_success_rate * 100)}%`,
-                      color: 'text-emerald-400',
-                    },
-                    { label: 'Active Agents', value: stats.active_agents, color: 'text-amber-400' },
-                  ].map((kpi) => (
-                    <div
-                      key={kpi.label}
-                      className={`p-3 rounded-xl ${isDark ? 'bg-white/[0.04] border border-white/[0.06]' : 'bg-black/[0.03] border border-black/[0.04]'}`}
-                    >
-                      <div className={`text-lg font-bold tabular-nums ${kpi.color}`}>{kpi.value}</div>
-                      <div className={`text-[10px] mt-0.5 ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>
-                        {kpi.label}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-              <div className={`rounded-2xl p-5 ${glass(isDark)}`}>
-                <div className="flex items-center gap-2 mb-4">
-                  <Sparkles size={16} className="text-amber-400" />
-                  <h3 className={`text-sm font-semibold ${isDark ? 'text-zinc-100' : 'text-zinc-900'}`}>
-                    Trending Skills
-                  </h3>
-                </div>
-                <div className="space-y-2">
-                  {trendingSkills.slice(0, 5).map((sk, i) => (
-                    <div
-                      key={sk.slug}
-                      className={`flex items-center gap-3 px-3 py-2 rounded-xl cursor-pointer transition-colors ${isDark ? 'hover:bg-white/[0.06]' : 'hover:bg-black/[0.04]'}`}
-                      onClick={() => switchTab('library')}
-                    >
-                      <span
-                        className={`text-sm font-bold tabular-nums w-6 text-right ${isDark ? 'text-zinc-600' : 'text-zinc-400'}`}
-                      >
-                        {i + 1}
-                      </span>
-                      <div className="flex-1 min-w-0">
-                        <div className={`text-sm font-medium truncate ${isDark ? 'text-zinc-200' : 'text-zinc-700'}`}>
-                          {sk.name}
-                        </div>
-                        <div className={`text-[10px] ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>{sk.category}</div>
-                      </div>
-                      <div className={`text-xs tabular-nums ${isDark ? 'text-zinc-400' : 'text-zinc-500'}`}>
-                        {sk.installs} installs
-                      </div>
-                    </div>
-                  ))}
-                  {trendingSkills.length === 0 && (
-                    <div className={`text-center py-6 text-sm ${isDark ? 'text-zinc-600' : 'text-zinc-400'}`}>
-                      No skills yet
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
+        {activeTab === 'agents' && <LeaderboardTab isDark={isDark} isAuthenticated={isAuthenticated} />}
 
         {/* ═══════════════════════════════════════════════ */}
         {/* TAB 2: SKILLS (legacy, hidden)                 */}
@@ -1359,7 +1229,6 @@ export default function EvolutionPage() {
                   className={`px-3 py-2 rounded-lg text-xs font-medium border shrink-0 ${isDark ? 'bg-zinc-900/60 border-white/10 text-zinc-300' : 'bg-white/60 border-zinc-200/60 text-zinc-700'}`}
                 >
                   <option value="most_installed">Most Installed</option>
-                  <option value="most_starred">Most Stars</option>
                   <option value="newest">Newest</option>
                   <option value="name">Name</option>
                 </select>
@@ -1595,7 +1464,7 @@ export default function EvolutionPage() {
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                 {(() => {
-                  const maxExec = Math.max(...genes.map((g) => g.success_count + g.failure_count), 1);
+                  const maxExec = Math.max(...genes.map((g) => (g.success_count || 0) + (g.failure_count || 0)), 1);
                   return genes.map((gene) => (
                     <GeneCard
                       key={getGeneId(gene)}
@@ -1737,9 +1606,9 @@ export default function EvolutionPage() {
 
                     {/* Events */}
                     {group.events.map((event, i) => {
-                      const cfg = FEED_ICONS[event.type] || FEED_ICONS.capsule;
+                      const cfg = FEED_ICONS[event.type || 'capsule'] || FEED_ICONS.capsule;
                       const Icon = cfg.icon;
-                      const catColor = CAT_COLORS[event.geneCategory]?.hex || '#71717a';
+                      const catColor = CAT_COLORS[event.geneCategory || '']?.hex || '#71717a';
                       const isFailure = event.type === 'capsule' && event.outcome === 'failure';
 
                       return (
@@ -1794,7 +1663,7 @@ export default function EvolutionPage() {
                               </p>
                             )}
                             <p className={`text-[10px] mt-0.5 ${isDark ? 'text-zinc-700' : 'text-zinc-400'}`}>
-                              <TimeAgo ts={event.timestamp} />
+                              <TimeAgo ts={event.timestamp || ''} />
                             </p>
                           </div>
 
@@ -1855,311 +1724,16 @@ export default function EvolutionPage() {
             )}
           </div>
         )}
-
-        {/* ═══════════════════════════════════════════════ */}
-        {/* TAB 5: AGENTS                                  */}
-        {/* ═══════════════════════════════════════════════ */}
-        {activeTab === 'agents' && (
-          <div>
-            {agents.length === 0 ? (
-              <div className={`text-center py-20 ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>
-                <Users className="w-8 h-8 mx-auto mb-3 opacity-40" />
-                <p className="text-sm">Agent data will appear here as agents participate in evolution.</p>
-              </div>
-            ) : (
-              <div className="space-y-3">
-                {(() => {
-                  const maxCapsules = Math.max(...agents.map((a) => a.capsules), 1);
-                  const maxPublished = Math.max(...agents.map((a) => a.published), 1);
-                  const medalColors = [
-                    'from-amber-400 to-yellow-500',
-                    'from-zinc-300 to-zinc-400',
-                    'from-orange-400 to-amber-600',
-                  ];
-                  return agents.slice(0, 20).map((agent, rank) => {
-                    const total = agent.successes + agent.failures;
-                    const successRate = total > 0 ? Math.round((agent.successes / total) * 100) : 0;
-                    const isTop3 = rank < 3;
-                    const isExpanded = expandedAgent === agent.name;
-                    const catEntries = Object.entries(agent.categories).sort((a, b) => b[1] - a[1]);
-                    const catTotal = catEntries.reduce((s, [, v]) => s + v, 0);
-
-                    // Contribution score (§7.3: capsules*1 + published*10 + imported*5 + success_rate*50)
-                    const score =
-                      agent.capsules * 1.0 + agent.published * 10.0 + agent.imported * 5.0 + (successRate / 100) * 50.0;
-
-                    // Radar dimensions (0-100 scale)
-                    const radarDims = [
-                      {
-                        label: 'Repair',
-                        value: Math.round(((agent.categories['repair'] || 0) / Math.max(catTotal, 1)) * 100),
-                        color: '#f97316',
-                      },
-                      {
-                        label: 'Optimize',
-                        value: Math.round(((agent.categories['optimize'] || 0) / Math.max(catTotal, 1)) * 100),
-                        color: '#06b6d4',
-                      },
-                      {
-                        label: 'Innovate',
-                        value: Math.round(((agent.categories['innovate'] || 0) / Math.max(catTotal, 1)) * 100),
-                        color: '#8b5cf6',
-                      },
-                      { label: 'Activity', value: Math.round((agent.capsules / maxCapsules) * 100), color: '#22c55e' },
-                      {
-                        label: 'Impact',
-                        value: Math.round((agent.published / Math.max(maxPublished, 1)) * 100),
-                        color: '#eab308',
-                      },
-                    ];
-
-                    // Recent activity for this agent
-                    const agentActivity = feed.filter((e) => e.agentName === agent.name).slice(0, 8);
-
-                    return (
-                      <div
-                        key={agent.name}
-                        className={`rounded-xl transition-all cursor-pointer ${glass(isDark)} ${isTop3 ? 'ring-1 ring-inset' : ''}`}
-                        style={
-                          isTop3
-                            ? {
-                                boxShadow: `0 0 20px ${rank === 0 ? 'rgba(251,191,36,0.08)' : rank === 1 ? 'rgba(161,161,170,0.06)' : 'rgba(251,146,60,0.06)'}`,
-                              }
-                            : {}
-                        }
-                        onClick={() => setExpandedAgent(isExpanded ? null : agent.name)}
-                      >
-                        <div className="flex items-center gap-4 p-4">
-                          {/* Rank */}
-                          <div
-                            className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 font-bold text-sm ${
-                              isTop3
-                                ? `bg-gradient-to-br ${medalColors[rank]} text-white`
-                                : isDark
-                                  ? 'bg-zinc-800 text-zinc-400'
-                                  : 'bg-zinc-100 text-zinc-600'
-                            }`}
-                          >
-                            {isTop3 ? <Trophy className="w-4 h-4" /> : `#${rank + 1}`}
-                          </div>
-
-                          {/* Info */}
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2">
-                              <h3 className={`font-bold text-sm truncate ${isDark ? 'text-white' : 'text-zinc-900'}`}>
-                                {agent.name}
-                              </h3>
-                              {agent.published > 0 && (
-                                <span
-                                  className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${isDark ? 'bg-violet-500/15 text-violet-300' : 'bg-violet-100 text-violet-600'}`}
-                                >
-                                  Publisher
-                                </span>
-                              )}
-                              {/* Activity status based on last seen */}
-                              {agent.lastSeen && (
-                                <span
-                                  className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${
-                                    Date.now() - new Date(agent.lastSeen).getTime() < 86400000
-                                      ? isDark
-                                        ? 'bg-emerald-500/15 text-emerald-300'
-                                        : 'bg-emerald-100 text-emerald-600'
-                                      : isDark
-                                        ? 'bg-zinc-700/60 text-zinc-500'
-                                        : 'bg-zinc-100 text-zinc-400'
-                                  }`}
-                                >
-                                  {Date.now() - new Date(agent.lastSeen).getTime() < 86400000 ? 'Active' : 'Idle'}
-                                </span>
-                              )}
-                            </div>
-                            <div
-                              className={`flex items-center gap-3 mt-1 text-xs ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}
-                            >
-                              <span>{agent.capsules} capsules</span>
-                              <span>{agent.published} published</span>
-                              {agent.imported > 0 && <span>{agent.imported} imported</span>}
-                              <span
-                                className={
-                                  successRate >= 70
-                                    ? 'text-emerald-400'
-                                    : successRate >= 40
-                                      ? 'text-amber-400'
-                                      : 'text-red-400'
-                                }
-                              >
-                                {successRate}% success
-                              </span>
-                            </div>
-                          </div>
-
-                          {/* Category distribution bar */}
-                          <div className="hidden sm:flex items-center gap-1 shrink-0">
-                            <div
-                              className="w-32 h-3 rounded-full overflow-hidden flex"
-                              style={{ backgroundColor: isDark ? 'rgb(39,39,42)' : 'rgb(228,228,231)' }}
-                            >
-                              {catEntries.map(([cat, count]) => (
-                                <div
-                                  key={cat}
-                                  className="h-full first:rounded-l-full last:rounded-r-full"
-                                  style={{
-                                    width: `${(count / catTotal) * 100}%`,
-                                    backgroundColor: CAT_COLORS[cat]?.hex || '#71717a',
-                                  }}
-                                />
-                              ))}
-                            </div>
-                            <div className="flex gap-1 ml-1">
-                              {catEntries.slice(0, 3).map(([cat]) => (
-                                <span
-                                  key={cat}
-                                  className="w-2 h-2 rounded-full"
-                                  style={{ backgroundColor: CAT_COLORS[cat]?.hex || '#71717a' }}
-                                />
-                              ))}
-                            </div>
-                          </div>
-
-                          <ChevronDown
-                            className={`w-4 h-4 shrink-0 transition-transform duration-300 ${isDark ? 'text-zinc-600' : 'text-zinc-400'} ${isExpanded ? 'rotate-180' : ''}`}
-                          />
-                        </div>
-
-                        {/* Expanded detail */}
-                        {isExpanded && (
-                          <div
-                            className={`px-4 pb-4 pt-0 border-t ${isDark ? 'border-white/5' : 'border-zinc-200/50'}`}
-                          >
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-4">
-                              {/* Radar chart (SVG) */}
-                              <div>
-                                <h4
-                                  className={`text-xs font-bold uppercase tracking-wider mb-3 ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}
-                                >
-                                  Capability Profile
-                                </h4>
-                                <RadarChart dimensions={radarDims} isDark={isDark} size={160} />
-                                <div
-                                  className={`mt-3 text-xs text-center ${isDark ? 'text-zinc-600' : 'text-zinc-400'}`}
-                                >
-                                  Score: <span className="font-bold">{Math.round(score)}</span>
-                                </div>
-                              </div>
-
-                              {/* Recent activity */}
-                              <div>
-                                <h4
-                                  className={`text-xs font-bold uppercase tracking-wider mb-3 ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}
-                                >
-                                  Recent Activity
-                                </h4>
-                                {agentActivity.length === 0 ? (
-                                  <p className={`text-xs ${isDark ? 'text-zinc-600' : 'text-zinc-400'}`}>
-                                    No recent activity
-                                  </p>
-                                ) : (
-                                  <div className="space-y-1.5">
-                                    {agentActivity.map((e, i) => {
-                                      const cfg = FEED_ICONS[e.type] || FEED_ICONS.capsule;
-                                      const Icon = cfg.icon;
-                                      return (
-                                        <div key={i} className="flex items-center gap-2">
-                                          <Icon className={`w-3 h-3 shrink-0 ${cfg.color}`} />
-                                          <span
-                                            className={`text-xs truncate flex-1 ${isDark ? 'text-zinc-400' : 'text-zinc-600'}`}
-                                          >
-                                            {e.type} {e.geneTitle}
-                                          </span>
-                                          <TimeAgo
-                                            ts={e.timestamp}
-                                            className={`text-[10px] shrink-0 ${isDark ? 'text-zinc-700' : 'text-zinc-400'}`}
-                                          />
-                                        </div>
-                                      );
-                                    })}
-                                  </div>
-                                )}
-                              </div>
-                            </div>
-
-                            {/* Published Genes (§7.4 Gene库) */}
-                            {agent.genes.length > 0 && (
-                              <div className="mt-4">
-                                <h4
-                                  className={`text-xs font-bold uppercase tracking-wider mb-2 ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}
-                                >
-                                  Published Genes ({agent.genes.length})
-                                </h4>
-                                <div className="flex flex-wrap gap-1.5">
-                                  {agent.genes.map((g) => (
-                                    <span
-                                      key={g}
-                                      className={`text-[10px] font-medium px-2 py-1 rounded-md ${isDark ? 'bg-cyan-500/10 text-cyan-300 border border-cyan-500/20' : 'bg-cyan-50 text-cyan-700 border border-cyan-200'}`}
-                                    >
-                                      {g}
-                                    </span>
-                                  ))}
-                                </div>
-                              </div>
-                            )}
-
-                            {/* Agent links */}
-                            <div className="flex gap-2 mt-3">
-                              <Link
-                                href={`/im?user=${agent.name}`}
-                                className={`flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg transition-colors ${isDark ? 'bg-white/5 text-zinc-300 hover:bg-white/10' : 'bg-zinc-100 text-zinc-700 hover:bg-zinc-200'}`}
-                              >
-                                <MessageSquare className="w-3.5 h-3.5" /> Send Message
-                              </Link>
-                              <Link
-                                href={`/park?agent=${agent.name}`}
-                                className={`flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg transition-colors ${isDark ? 'bg-white/5 text-zinc-300 hover:bg-white/10' : 'bg-zinc-100 text-zinc-700 hover:bg-zinc-200'}`}
-                              >
-                                <Map className="w-3.5 h-3.5" /> View in Park
-                              </Link>
-                            </div>
-
-                            {/* Category breakdown */}
-                            {catEntries.length > 0 && (
-                              <div className={`mt-4 pt-3 border-t ${isDark ? 'border-white/5' : 'border-zinc-200/50'}`}>
-                                <div className="flex items-center gap-4">
-                                  <span
-                                    className={`text-[10px] uppercase tracking-wider font-semibold ${isDark ? 'text-zinc-600' : 'text-zinc-400'}`}
-                                  >
-                                    Focus
-                                  </span>
-                                  {catEntries.map(([cat, count]) => (
-                                    <span key={cat} className="flex items-center gap-1">
-                                      <span
-                                        className="w-2 h-2 rounded-full"
-                                        style={{ backgroundColor: CAT_COLORS[cat]?.hex || '#71717a' }}
-                                      />
-                                      <span className={`text-xs ${isDark ? 'text-zinc-400' : 'text-zinc-600'}`}>
-                                        {cat}{' '}
-                                        <span className="font-semibold">{Math.round((count / catTotal) * 100)}%</span>
-                                      </span>
-                                    </span>
-                                  ))}
-                                </div>
-                              </div>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  });
-                })()}
-              </div>
-            )}
-          </div>
-        )}
       </div>
 
       {/* ═══════════════════════════════════════════════ */}
       {/* TAB 6: MY EVOLUTION                             */}
       {/* ═══════════════════════════════════════════════ */}
-      {activeTab === 'my' && <MyEvolutionPanel isDark={isDark} isAuthenticated={isAuthenticated} />}
+      {activeTab === 'my' && (
+        isAuthenticated
+          ? <WorkspaceTab isDark={isDark} />
+          : <MyEvolutionPanel isDark={isDark} isAuthenticated={isAuthenticated} />
+      )}
 
       {/* CTA */}
       {!isAuthenticated && activeTab === 'library' && (
@@ -2213,19 +1787,16 @@ export default function EvolutionPage() {
                 <X className="w-4 h-4" />
               </button>
               <div className="flex items-center gap-2 mb-1">
-                <span
-                  className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${
-                    skillDetail.source === 'awesome-openclaw'
-                      ? isDark
-                        ? 'bg-emerald-500/15 text-emerald-300'
-                        : 'bg-emerald-100 text-emerald-600'
-                      : isDark
-                        ? 'bg-zinc-700/60 text-zinc-400'
-                        : 'bg-zinc-100 text-zinc-500'
-                  }`}
-                >
-                  {skillDetail.source === 'awesome-openclaw' ? 'Verified' : 'Community'}
-                </span>
+                {(() => {
+                  const badge = getSourceBadge(skillDetail.source, isDark);
+                  return (
+                    <span
+                      className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${badge?.className || (isDark ? 'bg-zinc-700/60 text-zinc-400' : 'bg-zinc-100 text-zinc-500')}`}
+                    >
+                      {badge?.label || 'Community'}
+                    </span>
+                  );
+                })()}
                 {skillDetail.geneId && (
                   <span
                     className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${isDark ? 'bg-cyan-500/15 text-cyan-300' : 'bg-cyan-100 text-cyan-600'}`}
@@ -2265,14 +1836,6 @@ export default function EvolutionPage() {
                     {(skillDetail.installs || 0).toLocaleString()}
                   </p>
                 </div>
-                <div>
-                  <p className={`text-[10px] uppercase tracking-wider ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>
-                    Stars
-                  </p>
-                  <p className={`text-sm font-medium ${isDark ? 'text-zinc-200' : 'text-zinc-800'}`}>
-                    {(skillDetail.stars || 0).toLocaleString()}
-                  </p>
-                </div>
               </div>
               {skillDetail.tags?.length > 0 && (
                 <div className="flex flex-wrap gap-1 mb-4">
@@ -2286,15 +1849,31 @@ export default function EvolutionPage() {
                   ))}
                 </div>
               )}
-              {skillDetail.sourceUrl && (
-                <a
-                  href={skillDetail.sourceUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1.5 text-sm text-violet-400 hover:text-violet-300 mb-4"
-                >
-                  <ExternalLink className="w-3.5 h-3.5" /> View Source
-                </a>
+              {/* Action buttons */}
+              {isAuthenticated && (
+                <div className={`flex gap-2 mb-4 pt-3 border-t ${isDark ? 'border-white/5' : 'border-zinc-200/60'}`}>
+                  <button
+                    onClick={() => handleSkillInstall(skillDetail.id)}
+                    className="flex items-center gap-1.5 text-sm font-medium px-3 py-1.5 rounded-lg bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 transition-colors"
+                  >
+                    <Download className="w-3.5 h-3.5" /> Install
+                  </button>
+
+                  {skillDetail.sourceUrl && (
+                    <a
+                      href={skillDetail.sourceUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex items-center gap-1.5 text-sm font-medium px-3 py-1.5 rounded-lg transition-colors"
+                      style={{
+                        color: isDark ? '#a78bfa' : '#7c3aed',
+                        background: isDark ? 'rgba(167,139,250,0.1)' : 'rgba(124,58,237,0.06)',
+                      }}
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" /> Source
+                    </a>
+                  )}
+                </div>
               )}
               {skillDetail.geneId && (
                 <button
@@ -2369,9 +1948,9 @@ export default function EvolutionPage() {
             ? {
                 id: forkGene.gene_id || forkGene.id || '',
                 title: forkGene.title,
-                category: forkGene.category,
-                signals_match: forkGene.signals_match || forkGene.signals,
-                strategy: forkGene.strategy,
+                category: forkGene.category || '',
+                signals_match: forkGene.signals_match || forkGene.signals || [],
+                strategy: forkGene.strategy || [],
               }
             : null
         }
@@ -2767,9 +2346,9 @@ function OverviewTab({
           <h3 className={`text-lg font-bold mb-4 ${isDark ? 'text-white' : 'text-zinc-900'}`}>Hot Genes</h3>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {hotGenes.slice(0, 3).map((gene) => {
-              const cat = CAT_COLORS[gene.category] || CAT_COLORS.repair;
-              const totalUses = gene.success_count + gene.failure_count;
-              const successRate = totalUses > 0 ? Math.round((gene.success_count / totalUses) * 100) : 0;
+              const cat = CAT_COLORS[gene.category || ''] || CAT_COLORS.repair;
+              const totalUses = (gene.success_count || 0) + (gene.failure_count || 0);
+              const successRate = totalUses > 0 ? Math.round(((gene.success_count || 0) / totalUses) * 100) : 0;
               return (
                 <TiltCard key={getGeneId(gene)} glowColor={cat.glow} maxTilt={3} className="rounded-xl h-full">
                   <div
@@ -2923,9 +2502,9 @@ function OverviewTab({
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             {milestones.slice(0, 3).map((event, i) => {
-              const cfg = FEED_ICONS[event.type] || FEED_ICONS.capsule;
+              const cfg = FEED_ICONS[event.type || 'capsule'] || FEED_ICONS.capsule;
               const Icon = cfg.icon;
-              const catColor = CAT_COLORS[event.geneCategory]?.hex || '#71717a';
+              const catColor = CAT_COLORS[event.geneCategory || '']?.hex || '#71717a';
               return (
                 <div key={i} className={`rounded-xl p-4 ${glass(isDark)}`}>
                   <div className="flex items-center gap-2 mb-2">
@@ -2948,7 +2527,7 @@ function OverviewTab({
                     by {event.agentName} {event.score != null && `(${Math.round(event.score * 100)}%)`}
                   </p>
                   <p className={`text-[10px] mt-1 ${isDark ? 'text-zinc-600' : 'text-zinc-400'}`}>
-                    <TimeAgo ts={event.timestamp} />
+                    <TimeAgo ts={event.timestamp || ''} />
                   </p>
                 </div>
               );
@@ -3028,7 +2607,7 @@ function OverviewTab({
           </div>
           <div className="divide-y divide-transparent max-h-64 overflow-y-auto custom-scrollbar">
             {feed.slice(0, 5).map((event, i) => {
-              const cfg = FEED_ICONS[event.type] || FEED_ICONS.capsule;
+              const cfg = FEED_ICONS[event.type || 'capsule'] || FEED_ICONS.capsule;
               const Icon = cfg.icon;
               return (
                 <div
@@ -3050,7 +2629,7 @@ function OverviewTab({
                     <span className="font-medium">{event.geneTitle}</span>
                   </p>
                   <TimeAgo
-                    ts={event.timestamp}
+                    ts={event.timestamp || ''}
                     className={`text-[10px] shrink-0 ${isDark ? 'text-zinc-600' : 'text-zinc-400'}`}
                   />
                 </div>
@@ -3193,9 +2772,6 @@ function SkillCard({
             <span className={`flex items-center gap-1 text-xs ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>
               <Download className="w-3 h-3" /> {(skill.installs || 0).toLocaleString()}
             </span>
-            <span className={`flex items-center gap-1 text-xs ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>
-              <Star className="w-3 h-3" /> {(skill.stars || 0).toLocaleString()}
-            </span>
           </div>
           <div className="flex items-center gap-2">
             {skill.sourceUrl && (
@@ -3253,9 +2829,9 @@ function GeneCard({
   onAgentClick?: (name: string) => void;
 }) {
   const [copied, setCopied] = useState(false);
-  const cat = CAT_COLORS[gene.category] || CAT_COLORS.repair;
-  const totalUses = gene.success_count + gene.failure_count;
-  const successRate = totalUses > 0 ? Math.round((gene.success_count / totalUses) * 100) : 0;
+  const cat = CAT_COLORS[gene.category || ''] || CAT_COLORS.repair;
+  const totalUses = (gene.success_count || 0) + (gene.failure_count || 0);
+  const successRate = totalUses > 0 ? Math.round(((gene.success_count || 0) / totalUses) * 100) : 0;
   const pqi = computePQI(gene, maxExecutions);
   const isSeed = gene.is_seed || gene.visibility === 'seed' || gene.created_by?.includes('seed');
   const signals = getSignals(gene);
@@ -3428,7 +3004,7 @@ function GeneCard({
                 >
                   Preconditions
                 </p>
-                {gene.preconditions.map((p, i) => (
+                {gene.preconditions.map((p: string, i: number) => (
                   <p key={i} className={`text-xs ${isDark ? 'text-zinc-400' : 'text-zinc-600'}`}>
                     {p}
                   </p>
@@ -3621,11 +3197,11 @@ function LineageTree({
   function renderNodes(node: TreeNode): React.ReactNode[] {
     const nodes: React.ReactNode[] = [];
     const g = node.gene;
-    const total = g.success_count + g.failure_count;
+    const total = g.success_count + (g.failure_count || 0);
     const sr = total > 0 ? Math.round((g.success_count / total) * 100) : 0;
     const isCurrent = g.id === gene.id;
     const isRoot = g.id === root.id && ancestors.length > 0;
-    const cat = CAT_COLORS[g.category] || CAT_COLORS.repair;
+    const cat = CAT_COLORS[g.category || ''] || CAT_COLORS.repair;
     const nx = node.x + offsetX - NODE_W / 2;
     const ny = node.y + offsetY;
 
@@ -3704,8 +3280,8 @@ function LineageTree({
           Evolution Tree
         </h4>
         <span className={`text-[10px] ${isDark ? 'text-zinc-600' : 'text-zinc-400'}`}>
-          {totalNodes} variants · {allNodes.reduce((s, g) => s + g.success_count + g.failure_count, 0).toLocaleString()}{' '}
-          total runs
+          {totalNodes} variants ·{' '}
+          {allNodes.reduce((s, g) => s + g.success_count + (g.failure_count || 0), 0).toLocaleString()} total runs
         </span>
       </div>
       <div className="p-2 flex justify-center" style={{ minWidth: Math.max(svgW, 200) }}>
@@ -3942,9 +3518,9 @@ function GeneDetailModal({
     );
   }
 
-  const cat = CAT_COLORS[gene.category] || CAT_COLORS.repair;
-  const totalUses = gene.success_count + gene.failure_count;
-  const successRate = totalUses > 0 ? Math.round((gene.success_count / totalUses) * 100) : 0;
+  const cat = CAT_COLORS[gene.category || ''] || CAT_COLORS.repair;
+  const totalUses = (gene.success_count || 0) + (gene.failure_count || 0);
+  const successRate = totalUses > 0 ? Math.round(((gene.success_count || 0) / totalUses) * 100) : 0;
   const pqi = computePQI(gene, totalUses);
   const signals = getSignals(gene);
   const steps = getSteps(gene);
@@ -4103,7 +3679,7 @@ function GeneDetailModal({
               Preconditions
             </h4>
             <div className="space-y-1">
-              {gene.preconditions.map((p, i) => (
+              {gene.preconditions.map((p: string, i: number) => (
                 <p key={i} className={`text-xs ${isDark ? 'text-zinc-400' : 'text-zinc-600'}`}>
                   {p}
                 </p>

@@ -105,13 +105,13 @@ async function withdrawLocal(
       return { ok: true, data: localResult };
     }
 
-    // 2. Fallback to backend (warm migration) — skip in self-host mode
-    const backendBase = await getBackendApiBase();
-    if (backendBase && authHeader) {
+    // 2. Fallback to backend (warm migration)
+    if (authHeader) {
       const backendResult = await withdrawBackend(request, authHeader);
       if (backendResult.ok && backendResult.data?.found && backendResult.data?.hqcc_content) {
         console.log(`[ContextAPI] Backend HIT, writing back to local: ${request.url.substring(0, 60)}`);
 
+        // 3. Background write-back to local cache
         contextCacheService
           .deposit({
             userId,
@@ -320,7 +320,6 @@ async function depositLocal(
   userId: string,
   authHeader?: string | null,
 ): Promise<{ ok: boolean; data: DepositResponse | null; error?: string }> {
-  const backendBase = await getBackendApiBase();
   try {
     // 1. Write to local Prisma (primary, sync)
     const result = await contextCacheService.deposit({
@@ -335,8 +334,8 @@ async function depositLocal(
 
     console.log(`[ContextAPI] Local deposit ${result.status}: ${request.url?.substring(0, 60)}`);
 
-    // 2. Background dual-write to backend (skip in self-host mode)
-    if (backendBase && authHeader) {
+    // 2. Background dual-write to backend (for backward compat)
+    if (authHeader) {
       depositBackend(request, authHeader).catch((err) =>
         console.error('[ContextAPI] Backend dual-write failed (non-blocking):', err),
       );
@@ -354,8 +353,8 @@ async function depositLocal(
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : String(err);
     console.error(`[ContextAPI] Local deposit error:`, errorMsg);
-    // Fallback to backend on local error (skip in self-host mode)
-    if (backendBase && authHeader) {
+    // Fallback to backend on local error
+    if (authHeader) {
       return depositBackend(request, authHeader);
     }
     return { ok: false, data: null, error: errorMsg };

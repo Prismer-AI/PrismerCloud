@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { recordUsageBackground, generateTaskId, PRICING } from '@/lib/usage-recorder';
 import { apiGuard } from '@/lib/api-guard';
 import type { AuthInfo } from '@/lib/api-guard';
+import { logger } from '@/lib/logger';
 
 /**
  * IM API Route — In-process integration
@@ -91,7 +92,13 @@ async function callIMApp(ctx: ProxyContext): Promise<Response> {
   const forwardHeaders = new Headers();
   response.headers.forEach((value, key) => {
     // Forward rate limit, cache, and custom headers
-    if (key.startsWith('x-') || key === 'cache-control' || key === 'retry-after') {
+    if (
+      key.startsWith('x-') ||
+      key === 'cache-control' ||
+      key === 'retry-after' ||
+      key === 'deprecation' ||
+      key === 'sunset'
+    ) {
       forwardHeaders.set(key, value);
     }
   });
@@ -139,9 +146,12 @@ async function handleAgentRegistration(responseData: any, auth: AuthInfo | null)
       'agent_register',
       responseData.data.imUserId,
     );
-    console.log(`[IM Route] Granted 10000 credits to user ${userId} for new agent ${responseData.data.username}`);
+    logger.info(
+      { module: 'IM Route', userId, agent: responseData.data.username },
+      'Granted 10000 credits for new agent registration',
+    );
   } catch (err) {
-    console.error('[IM Route] Failed to grant agent registration credits:', err);
+    logger.error({ module: 'IM Route', err }, 'Failed to grant agent registration credits');
   }
 }
 
@@ -164,17 +174,32 @@ function recordIMUsage(operation: string, ctx: ProxyContext, responseData: any, 
   const taskType: string = 'send';
   let totalCredits = 0;
 
-  if (operation.includes('messages') && ctx.method === 'POST') {
-    totalCredits = PRICING.IM_SEND_MESSAGE_COST || 0.001;
-  } else if (operation.includes('workspace/init') || (operation === 'groups' && ctx.method === 'POST')) {
-    totalCredits = PRICING.IM_WORKSPACE_INIT_COST || 0.01;
-  } else if (operation.includes('direct/') && operation.includes('/messages') && ctx.method === 'POST') {
-    totalCredits = PRICING.IM_SEND_MESSAGE_COST || 0.001;
-  } else if (operation.includes('groups/') && operation.includes('/messages') && ctx.method === 'POST') {
-    totalCredits = PRICING.IM_SEND_MESSAGE_COST || 0.001;
-  } else {
-    return; // Read operations are free
+  // Credit cost mapping (mirrors IM-layer credit-billing middleware)
+  const costMap: Array<[RegExp, string, number]> = [
+    [/messages/, 'POST', 0.001],
+    [/direct\/.*\/messages/, 'POST', 0.001],
+    [/groups\/.*\/messages/, 'POST', 0.001],
+    [/workspace\/init/, 'POST', 0.01],
+    [/groups$/, 'POST', 0.01],
+    [/evolution\/analyze/, 'POST', 0.001],
+    [/evolution\/record/, 'POST', 0.001],
+    [/evolution\/report/, 'POST', 0.002],
+    [/evolution\/genes$/, 'POST', 0.005],
+    [/evolution\/sync/, 'POST', 0.001],
+    [/memory\/files/, 'POST', 0.001],
+    [/recall/, 'GET', 0.001],
+    [/skills\/.*\/install/, 'POST', 0.002],
+    [/tasks$/, 'POST', 0.001],
+    [/reports$/, 'POST', 0.01],
+  ];
+
+  for (const [pattern, method, cost] of costMap) {
+    if (pattern.test(operation) && ctx.method === method) {
+      totalCredits = cost;
+      break;
+    }
   }
+  if (totalCredits === 0) return; // Free operation
 
   // Build input value with agent meta
   const inputValue = `${ctx.path} [user:${auth.userId}, auth:${auth.authType}]`;
@@ -209,20 +234,51 @@ async function handleRequest(request: NextRequest, params: { path: string[] }): 
     // Public endpoints bypass auth (no login required)
     const isPublicEvolution =
       path.startsWith('evolution/public/') ||
+      (path.startsWith('evolution/leaderboard/') && method === 'GET' && path !== 'evolution/leaderboard/agents/me') ||
+      (path.startsWith('evolution/profile/') && method === 'GET') ||
+      (path === 'evolution/benchmark' && method === 'GET') ||
       path === 'evolution/map' ||
       path === 'evolution/stories' ||
-      (path === 'evolution/metrics' && method === 'GET');
-    const isPublicSkills = path.startsWith('skills/') && (method === 'GET' || /\/install$|\/star$/.test(path));
+      (path === 'evolution/metrics' && method === 'GET') ||
+      (path.startsWith('evolution/highlights/') && method === 'GET') ||
+      (path === 'evolution/card/render' && method === 'POST');
+    // Public skills routes: search, stats, categories, trending, detail, related
+    // Auth-required: installed, created, content, install, uninstall, star, import
+    const isPublicSkills =
+      path.startsWith('skills/') &&
+      method === 'GET' &&
+      path !== 'skills/installed' &&
+      path !== 'skills/created' &&
+      !path.endsWith('/content');
+    // Public community routes: posts list, post detail, comments, stats, search, tags, hot, boards, suggest, autocomplete
+    // Auth-required: create/update/delete post/comment, vote, bookmark, notifications
+    const isPublicCommunity =
+      method === 'GET' &&
+      (path === 'community/posts' ||
+        /^community\/posts\/[^/]+$/.test(path) ||
+        /^community\/posts\/[^/]+\/comments$/.test(path) ||
+        path === 'community/stats' ||
+        path === 'community/search' ||
+        path.startsWith('community/tags/') ||
+        path === 'community/hot' ||
+        path === 'community/search/suggest' ||
+        path.startsWith('community/boards') ||
+        path.startsWith('community/autocomplete/'));
 
     // Health, register, SSE sync/stream, and public read endpoints bypass apiGuard
-    if (!isHealthCheck && !isRegister && !isSyncStream && !isPublicEvolution && !isPublicSkills) {
+    if (!isHealthCheck && !isRegister && !isSyncStream && !isPublicEvolution && !isPublicSkills && !isPublicCommunity) {
       const guard = await apiGuard(request, { tier: 'tracked' });
       if (!guard.ok) return guard.response;
       auth = guard.auth;
 
-      // For API Key users, replace auth header with IM JWT
+      // Replace auth header with IM JWT (both API Key and platform JWT users)
       if (guard.auth.authType === 'api_key' && guard.auth.imToken) {
         authHeader = `Bearer ${guard.auth.imToken}`;
+      } else if (guard.auth.authType === 'jwt') {
+        // Platform JWT is signed by backend — IM server uses a different secret.
+        // Generate an IM-compatible JWT so Hono authMiddleware can verify it.
+        const { generateIMTokenForUser } = await import('@/lib/api-guard');
+        authHeader = `Bearer ${generateIMTokenForUser(guard.auth.userId, guard.auth.email)}`;
       }
     } else if (isRegister && authHeader) {
       // Register with API Key: optional auth for binding agent to human
@@ -266,7 +322,7 @@ async function handleRequest(request: NextRequest, params: { path: string[] }): 
 
     return response;
   } catch (error) {
-    console.error('[IM Route] Error:', error);
+    logger.error({ module: 'IM Route', err: error }, 'Request handling error');
     return NextResponse.json(
       {
         success: false,

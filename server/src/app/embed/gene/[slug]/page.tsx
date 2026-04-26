@@ -101,7 +101,7 @@ export default function GeneEmbedPage() {
         {/* Footer */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <a
-            href="/evolution"
+            href={`https://prismer.cloud/evolution`}
             target="_blank"
             rel="noopener noreferrer"
             style={{ fontSize: 10, color: '#3f3f46', textDecoration: 'none' }}
@@ -109,7 +109,7 @@ export default function GeneEmbedPage() {
             Powered by Prismer
           </a>
           <a
-            href="/evolution"
+            href={`https://prismer.cloud/evolution`}
             target="_blank"
             rel="noopener noreferrer"
             style={{ fontSize: 10, color: '#8b5cf6', textDecoration: 'none', fontWeight: 600 }}

@@ -10,6 +10,7 @@ import type { IncomingMessage } from 'node:http';
 import type Redis from 'ioredis';
 
 import { verifyToken } from '../auth/jwt';
+import { config } from '../config';
 import { WebSocketTransport } from './transport';
 import { RoomManager, type ConnectedClient } from './rooms';
 import {
@@ -24,7 +25,10 @@ import {
   type ConversationJoinPayload,
   type AgentHeartbeatPayload,
   type AgentCapabilityDeclarePayload,
+  type AckPayload,
+  type ReconnectPayload,
 } from './events';
+import { AckTracker } from './ack-tracker';
 import { MessageService } from '../services/message.service';
 import { ConversationService } from '../services/conversation.service';
 import { PresenceService } from '../services/presence.service';
@@ -43,26 +47,23 @@ export interface WebSocketDeps {
 }
 
 export function setupWebSocket(wss: WebSocketServer, deps: WebSocketDeps): void {
-  const {
-    rooms,
-    messageService,
-    conversationService,
-    presenceService,
-    agentService,
-    streamService,
-  } = deps;
+  const { rooms, messageService, conversationService, presenceService, agentService, streamService } = deps;
+
+  // Shared ACK tracker for all connections on this Pod
+  const ackTracker = new AckTracker();
+  rooms.setAckTracker(ackTracker);
 
   wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
     let client: ConnectedClient | null = null;
     let authTimeout: ReturnType<typeof setTimeout>;
 
-    // Require authentication within 10 seconds
+    // Require authentication within configured timeout (default 10s)
     authTimeout = setTimeout(() => {
       if (!client) {
         ws.send(JSON.stringify(ServerEvents.error('Authentication timeout')));
         ws.close(4001, 'Authentication timeout');
       }
-    }, 10_000);
+    }, config.ws.authTimeoutMs);
 
     // Check for token in query string (for initial connection)
     const url = new URL(req.url || '/', 'http://localhost');
@@ -82,6 +83,7 @@ export function setupWebSocket(wss: WebSocketServer, deps: WebSocketDeps): void 
 
     ws.on('close', () => {
       if (client) {
+        ackTracker.handleDisconnect(client.userId);
         rooms.removeClient(client);
         presenceService.setOffline(client.userId);
         console.log(`[WS] Disconnected: ${client.username} (${client.userId})`);
@@ -108,11 +110,15 @@ export function setupWebSocket(wss: WebSocketServer, deps: WebSocketDeps): void 
         return;
       }
 
+      if (type === 'ack') {
+        const { ackId } = payload as AckPayload;
+        if (ackId) ackTracker.ack(ackId);
+        return;
+      }
+
       // All other events require authentication
       if (!client) {
-        ws.send(
-          JSON.stringify(ServerEvents.error('Not authenticated', 'AUTH_REQUIRED', requestId))
-        );
+        ws.send(JSON.stringify(ServerEvents.error('Not authenticated', 'AUTH_REQUIRED', requestId)));
         return;
       }
 
@@ -124,31 +130,22 @@ export function setupWebSocket(wss: WebSocketServer, deps: WebSocketDeps): void 
         'typing.start': () => handleTyping(payload as TypingPayload, true),
         'typing.stop': () => handleTyping(payload as TypingPayload, false),
         'presence.update': () => handlePresenceUpdate(payload as PresenceUpdatePayload),
-        'conversation.join': () =>
-          handleConversationJoin(payload as ConversationJoinPayload, requestId),
-        'conversation.leave': () =>
-          handleConversationLeave(payload as ConversationJoinPayload, requestId),
+        'conversation.join': () => handleConversationJoin(payload as ConversationJoinPayload, requestId),
+        'conversation.leave': () => handleConversationLeave(payload as ConversationJoinPayload, requestId),
         'agent.heartbeat': () => handleAgentHeartbeat(payload as AgentHeartbeatPayload),
         'agent.capability.declare': () =>
           handleAgentCapabilityDeclare(payload as AgentCapabilityDeclarePayload, requestId),
+        reconnect: () => handleReconnect(payload as ReconnectPayload, requestId),
       };
 
       const handler = handlers[type as string];
       if (handler) {
         Promise.resolve(handler()).catch((err) => {
           console.error(`[WS] Error handling ${type}:`, err);
-          ws.send(
-            JSON.stringify(
-              ServerEvents.error(`Internal error handling ${type}`, 'INTERNAL', requestId)
-            )
-          );
+          ws.send(JSON.stringify(ServerEvents.error(`Internal error handling ${type}`, 'INTERNAL', requestId)));
         });
       } else {
-        ws.send(
-          JSON.stringify(
-            ServerEvents.error(`Unknown event type: ${type}`, 'UNKNOWN_EVENT', requestId)
-          )
-        );
+        ws.send(JSON.stringify(ServerEvents.error(`Unknown event type: ${type}`, 'UNKNOWN_EVENT', requestId)));
       }
     }
 
@@ -172,6 +169,9 @@ export function setupWebSocket(wss: WebSocketServer, deps: WebSocketDeps): void 
         ws.send(JSON.stringify(ServerEvents.authenticated(payload.sub, requestId)));
         console.log(`[WS] Authenticated: ${payload.username} (${payload.sub})`);
 
+        // Deliver any unacked messages from previous connection
+        deliverUnackedMessages(payload.sub);
+
         // Auto-join user's conversations
         autoJoinConversations(payload.sub);
       } catch (err) {
@@ -188,6 +188,44 @@ export function setupWebSocket(wss: WebSocketServer, deps: WebSocketDeps): void 
       } catch (err) {
         console.error('[WS] Error auto-joining conversations:', err);
       }
+    }
+
+    // ─── ACK / Reconnect helpers ───────────────────────────────
+
+    function deliverUnackedMessages(userId: string) {
+      const undelivered = ackTracker.getUndelivered(userId);
+      if (undelivered.length === 0) return;
+
+      console.log(`[WS] Delivering ${undelivered.length} unacked messages to ${userId}`);
+      for (const msg of undelivered) {
+        const retryPayload = { ...msg.payload, ackId: msg.ackId, isRetry: true };
+        ws.send(JSON.stringify(retryPayload));
+        // Re-track for ACK on this new connection
+        msg.retries++;
+        ackTracker.track(userId, retryPayload);
+      }
+    }
+
+    async function handleReconnect(payload: ReconnectPayload, requestId?: string) {
+      if (!client) return;
+
+      // Deliver unacked messages (in case authenticate didn't catch them all)
+      deliverUnackedMessages(client.userId);
+
+      // Tell the client to use /sync for any gap beyond what ACK covers
+      ws.send(
+        JSON.stringify(
+          ServerEvents.reconnectAck(
+            {
+              userId: client.userId,
+              undeliveredCount: 0, // Already delivered above
+              syncAdvised: true,
+            },
+            requestId,
+          ),
+        ),
+      );
+      console.log(`[WS] Reconnect handled for ${client.username} (${client.userId})`);
     }
 
     // ─── Message handlers ────────────────────────────────────
@@ -210,7 +248,7 @@ export function setupWebSocket(wss: WebSocketServer, deps: WebSocketDeps): void 
       // Build metadata with routing info
       const messageMetadata = msg.metadata ? JSON.parse(msg.metadata) : {};
       if (routing && routing.targets.length > 0) {
-        messageMetadata.routeTargets = routing.targets.map(t => t.userId);
+        messageMetadata.routeTargets = routing.targets.map((t) => t.userId);
         messageMetadata.routingMode = routing.mode;
       }
 
@@ -226,7 +264,7 @@ export function setupWebSocket(wss: WebSocketServer, deps: WebSocketDeps): void 
           metadata: messageMetadata,
           parentId: msg.parentId ?? undefined,
           createdAt: msg.createdAt.toISOString(),
-        })
+        }),
       );
     }
 
@@ -256,7 +294,7 @@ export function setupWebSocket(wss: WebSocketServer, deps: WebSocketDeps): void 
           senderId: client.userId,
           chunk: payload.chunk,
           index: payload.index,
-        })
+        }),
       );
     }
 
@@ -281,7 +319,7 @@ export function setupWebSocket(wss: WebSocketServer, deps: WebSocketDeps): void 
           conversationId: result.conversationId,
           messageId: sendResult.message.id,
           finalContent: result.finalContent,
-        })
+        }),
       );
     }
 
@@ -294,7 +332,7 @@ export function setupWebSocket(wss: WebSocketServer, deps: WebSocketDeps): void 
           userId: client.userId,
           isTyping,
         }),
-        client.userId
+        client.userId,
       );
     }
 
@@ -306,7 +344,7 @@ export function setupWebSocket(wss: WebSocketServer, deps: WebSocketDeps): void 
           userId: client.userId,
           status: payload.status,
           lastSeen: Date.now(),
-        })
+        }),
       );
     }
 
@@ -329,10 +367,7 @@ export function setupWebSocket(wss: WebSocketServer, deps: WebSocketDeps): void 
       });
     }
 
-    async function handleAgentCapabilityDeclare(
-      payload: AgentCapabilityDeclarePayload,
-      requestId?: string
-    ) {
+    async function handleAgentCapabilityDeclare(payload: AgentCapabilityDeclarePayload, requestId?: string) {
       if (!client) return;
       await agentService.declareCapabilities(client.userId, payload.capabilities);
       ws.send(
@@ -341,8 +376,8 @@ export function setupWebSocket(wss: WebSocketServer, deps: WebSocketDeps): void 
             agentId: client.userId,
             name: client.username,
             capabilities: payload.capabilities,
-          })
-        )
+          }),
+        ),
       );
     }
   });

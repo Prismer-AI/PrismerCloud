@@ -22,6 +22,10 @@ const eslintConfig = defineConfig([
       "boundaries/ignore": [
         // IM route handler is the only bridge — it calls app.fetch() in-process
         "src/app/api/im/**",
+        // .well-known handlers need direct Prisma access (DID, AASA)
+        "src/app/.well-known/**",
+        // /u/[userId] landing page — lightweight IM user lookup for Universal Link
+        "src/app/u/**",
         // instrumentation.ts bootstraps IM server at startup
         "src/instrumentation.ts",
       ],

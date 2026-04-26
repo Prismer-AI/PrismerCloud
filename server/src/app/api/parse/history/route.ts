@@ -3,17 +3,20 @@ import { getUserFromAuth } from '@/lib/auth-utils';
 import { ensureNacosConfig } from '@/lib/nacos-config';
 import { query, queryOne } from '@/lib/db';
 import type { RowDataPacket } from 'mysql2/promise';
+import { createModuleLogger } from '@/lib/logger';
+
+const log = createModuleLogger('ParseHistory');
 
 /**
  * GET /api/parse/history
- * 
+ *
  * 获取用户的 Parse 任务历史
- * 
+ *
  * Query params:
  * - page: 页码 (默认 1)
  * - limit: 每页数量 (默认 20，最大 100)
  * - status: 筛选状态 'completed' | 'failed' | 'processing' (可选)
- * 
+ *
  * Response:
  * - data: ParseHistoryItem[]
  * - pagination: { page, limit, total, totalPages }
@@ -21,22 +24,28 @@ import type { RowDataPacket } from 'mysql2/promise';
 export async function GET(request: NextRequest) {
   try {
     await ensureNacosConfig();
-    
+
     const authHeader = request.headers.get('authorization');
     if (!authHeader) {
-      return NextResponse.json({
-        success: false,
-        error: { code: 'UNAUTHORIZED', message: 'Authorization header required' }
-      }, { status: 401 });
+      return NextResponse.json(
+        {
+          success: false,
+          error: { code: 'UNAUTHORIZED', message: 'Authorization header required' },
+        },
+        { status: 401 },
+      );
     }
 
     // 验证用户
     const authResult = await getUserFromAuth(authHeader);
     if (!authResult.success || !authResult.user) {
-      return NextResponse.json({
-        success: false,
-        error: { code: 'INVALID_TOKEN', message: authResult.error || 'Invalid token' }
-      }, { status: 401 });
+      return NextResponse.json(
+        {
+          success: false,
+          error: { code: 'INVALID_TOKEN', message: authResult.error || 'Invalid token' },
+        },
+        { status: 401 },
+      );
     }
 
     const userId = authResult.user.id;
@@ -84,13 +93,13 @@ export async function GET(request: NextRequest) {
       ORDER BY created_at DESC 
       LIMIT ${limit} OFFSET ${offset}
     `;
-    
+
     const records = await query<ParseHistoryRow[]>(sql, params);
 
     // 格式化响应
     const data = records.map(formatParseHistoryItem);
 
-    console.log(`[Parse History] User: ${userId}, Found: ${data.length}/${total}`);
+    log.info({ userId, found: data.length, total }, 'Parse history loaded');
 
     return NextResponse.json({
       success: true,
@@ -99,16 +108,18 @@ export async function GET(request: NextRequest) {
         page,
         limit,
         total,
-        totalPages: Math.ceil(total / limit)
-      }
+        totalPages: Math.ceil(total / limit),
+      },
     });
-
   } catch (error) {
-    console.error('[Parse History] Error:', error);
-    return NextResponse.json({
-      success: false,
-      error: { code: 'INTERNAL_ERROR', message: 'Failed to fetch parse history' }
-    }, { status: 500 });
+    log.error({ err: error }, 'Parse history error');
+    return NextResponse.json(
+      {
+        success: false,
+        error: { code: 'INTERNAL_ERROR', message: 'Failed to fetch parse history' },
+      },
+      { status: 500 },
+    );
   }
 }
 
@@ -134,16 +145,16 @@ interface ParseHistoryRow extends RowDataPacket {
 interface ParseHistoryItem {
   id: string;
   taskId: string;
-  inputType: string;  // 'file', 'url', 'base64'
+  inputType: string; // 'file', 'url', 'base64'
   inputValue: string; // 文件名或 URL
   pages: number;
   images: number;
-  mode: string;       // 'fast', 'hires', 'auto'
+  mode: string; // 'fast', 'hires', 'auto'
   outputTokens: number;
   credits: number;
   status: 'completed' | 'processing' | 'failed';
   processingTimeMs: number;
-  createdAt: string;  // ISO string
+  createdAt: string; // ISO string
   // 结果获取端点
   endpoints?: {
     result: string;

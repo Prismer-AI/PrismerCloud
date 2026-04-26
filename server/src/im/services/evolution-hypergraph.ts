@@ -5,6 +5,8 @@
  * and hypergraph queries for candidate gene discovery.
  */
 
+import { nanoid } from 'nanoid';
+
 import prisma from '../db';
 import type { SignalTag } from '../types/index';
 
@@ -32,6 +34,14 @@ export async function getAgentMode(agentId: string): Promise<'standard' | 'hyper
 }
 
 // ===== Hypergraph Layer (§5 SUPERGRAPH.md) =====
+
+/**
+ * Hypergraph atom `kind` values (`im_atoms.kind`):
+ * - `agent`, `gene`, `outcome` — execution capsule context
+ * - `signal_type`, `provider`, `stage`, `severity` — signal tagging
+ * - `memory` — memory file id (see {@link createMemoryAtom})
+ * - `signal` — discrete signal values for memory↔signal hyperedges (see {@link linkMemoryToSignals})
+ */
 
 /**
  * Register atoms and return their IDs (upsert: create if not exist).
@@ -83,13 +93,13 @@ export async function writeHypergraphLayer(
   // 2. Upsert atoms
   const atomMap = await upsertAtoms(atomDefs);
 
-  // 3. Generate capsule ID for hyperedge (use latest capsule)
+  // 3. Generate capsule ID for hyperedge (use latest capsule, any mode — always-write system)
   const latestCapsule = await prisma.iMEvolutionCapsule.findFirst({
-    where: { ownerAgentId: agentId, geneId, mode: 'hypergraph' },
+    where: { ownerAgentId: agentId, geneId },
     orderBy: { createdAt: 'desc' },
     select: { id: true },
   });
-  if (!latestCapsule) return; // shouldn't happen, capsule was just created
+  if (!latestCapsule) return;
 
   const hyperedgeId = latestCapsule.id;
 
@@ -193,4 +203,82 @@ export async function queryHypergraphCandidates(signalTags: SignalTag[]): Promis
   }
 
   return [...geneIds];
+}
+
+/**
+ * Create a memory atom in the hypergraph.
+ * Called when memoryType is 'feedback' or 'project' during memory_write.
+ *
+ * `memoryPath` and `scope` are part of the public API for future `im_atoms` labeling / scoping;
+ * the current schema stores `kind` + `value` only.
+ */
+export async function createMemoryAtom(
+  memoryFileId: string,
+  memoryPath: string,
+  scope: string = 'global',
+): Promise<void> {
+  void memoryPath;
+  void scope;
+  try {
+    const existing = await prisma.iMAtom.findFirst({
+      where: { kind: 'memory', value: memoryFileId },
+    });
+    if (existing) return;
+
+    await prisma.iMAtom.create({
+      data: {
+        kind: 'memory',
+        value: memoryFileId,
+      },
+    });
+  } catch (err) {
+    console.error('[Hypergraph] Create memory atom error:', err);
+  }
+}
+
+/**
+ * Link a memory atom to related signal atoms via hyperedge.
+ * Used to connect memory files to the evolution signal graph.
+ */
+export async function linkMemoryToSignals(
+  memoryFileId: string,
+  signalValues: string[],
+  scope: string = 'global',
+): Promise<void> {
+  void scope;
+  try {
+    const memoryAtom = await prisma.iMAtom.findFirst({
+      where: { kind: 'memory', value: memoryFileId },
+    });
+    if (!memoryAtom) return;
+
+    for (const sig of signalValues.slice(0, 5)) {
+      const signalAtom = await prisma.iMAtom.findFirst({
+        where: { kind: 'signal', value: sig },
+      });
+      if (!signalAtom) continue;
+
+      const existingEdge = await prisma.iMHyperedge.findFirst({
+        where: {
+          atoms: {
+            some: { atomId: memoryAtom.id },
+          },
+        },
+      });
+
+      if (!existingEdge) {
+        const edge = await prisma.iMHyperedge.create({
+          data: { id: nanoid(), type: 'memory_signal' },
+        });
+        await prisma.iMHyperedgeAtom.createMany({
+          data: [
+            { hyperedgeId: edge.id, atomId: memoryAtom.id, role: 'memory' },
+            { hyperedgeId: edge.id, atomId: signalAtom.id, role: 'signal' },
+          ],
+        });
+      }
+    }
+  } catch (err) {
+    console.error('[Hypergraph] Link memory to signals error:', err);
+  }
 }

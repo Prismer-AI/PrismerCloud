@@ -26,7 +26,7 @@ export function createSecurityRouter() {
    */
   router.get('/:id/security', async (c) => {
     const user = c.get('user');
-    const conversationId = c.req.param('id')!;
+    const conversationId = c.req.param('id');
     if (!(await isParticipant(conversationId, user.imUserId))) {
       return c.json<ApiResponse>({ ok: false, error: 'Not a participant' }, 403);
     }
@@ -36,7 +36,7 @@ export function createSecurityRouter() {
     if (!security) {
       return c.json<ApiResponse>({
         ok: true,
-        data: { conversationId, signingPolicy: 'optional', encryptionMode: 'none', keys: [] },
+        data: { conversationId, signingPolicy: 'recommended', encryptionMode: 'none', keys: [] },
       });
     }
     return c.json<ApiResponse>({
@@ -55,7 +55,7 @@ export function createSecurityRouter() {
    */
   router.patch('/:id/security', async (c) => {
     const user = c.get('user');
-    const conversationId = c.req.param('id')!;
+    const conversationId = c.req.param('id');
     if (!(await isParticipant(conversationId, user.imUserId))) {
       return c.json<ApiResponse>({ ok: false, error: 'Not a participant' }, 403);
     }
@@ -93,7 +93,7 @@ export function createSecurityRouter() {
    */
   router.post('/:id/keys', async (c) => {
     const user = c.get('user');
-    const conversationId = c.req.param('id')!;
+    const conversationId = c.req.param('id');
     if (!(await isParticipant(conversationId, user.imUserId))) {
       return c.json<ApiResponse>({ ok: false, error: 'Not a participant' }, 403);
     }
@@ -134,7 +134,7 @@ export function createSecurityRouter() {
    */
   router.get('/:id/keys', async (c) => {
     const user = c.get('user');
-    const conversationId = c.req.param('id')!;
+    const conversationId = c.req.param('id');
     if (!(await isParticipant(conversationId, user.imUserId))) {
       return c.json<ApiResponse>({ ok: false, error: 'Not a participant' }, 403);
     }
@@ -151,8 +151,8 @@ export function createSecurityRouter() {
    */
   router.delete('/:id/keys/:keyUserId', async (c) => {
     const user = c.get('user');
-    const conversationId = c.req.param('id')!;
-    const keyUserId = c.req.param('keyUserId')!;
+    const conversationId = c.req.param('id');
+    const keyUserId = c.req.param('keyUserId');
 
     // Only key owner or admin can revoke
     if (user.imUserId !== keyUserId && user.role !== 'admin') {

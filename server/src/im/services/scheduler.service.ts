@@ -14,8 +14,12 @@
 
 import type { TaskService } from './task.service';
 import type { EvolutionService } from './evolution.service';
+import { shouldDream, runDream } from './memory-dream';
+import { KnowledgeLinkService } from './knowledge-link.service';
+import { ContactService } from './contact.service';
+import { createModuleLogger } from '../../lib/logger';
 
-const LOG = '[Scheduler]';
+const log = createModuleLogger('Scheduler');
 
 /** Default tick interval: 10 seconds */
 const DEFAULT_TICK_INTERVAL_MS = 10_000;
@@ -32,6 +36,21 @@ const REPORT_PROCESS_INTERVAL_MS = 300_000;
 /** Signal clustering interval: 1 hour */
 const CLUSTER_INTERVAL_MS = 3_600_000;
 
+/** Memory dream interval: 6 hours */
+const DREAM_INTERVAL_MS = 6 * 3_600_000;
+
+/** Knowledge link prune interval: 24 hours */
+const PRUNE_INTERVAL_MS = 24 * 3_600_000;
+
+/** Leaderboard computation check interval: 10 minutes */
+const LEADERBOARD_CHECK_INTERVAL_MS = 10 * 60 * 1000;
+
+/** Community karma settlement interval: 1 hour */
+const KARMA_SETTLEMENT_INTERVAL_MS = 3_600_000;
+
+/** Friend request expiry sweep interval: 6 hours */
+const FRIEND_EXPIRE_INTERVAL_MS = 6 * 3_600_000;
+
 export interface SchedulerConfig {
   tickIntervalMs?: number;
   enabled?: boolean;
@@ -45,6 +64,11 @@ export class SchedulerService {
   private creditReturnTimer: ReturnType<typeof setInterval> | null = null;
   private reportProcessTimer: ReturnType<typeof setInterval> | null = null;
   private clusterTimer: ReturnType<typeof setInterval> | null = null;
+  private dreamTimer: ReturnType<typeof setInterval> | null = null;
+  private pruneTimer: ReturnType<typeof setInterval> | null = null;
+  private leaderboardTimer: ReturnType<typeof setInterval> | null = null;
+  private karmaTimer: ReturnType<typeof setInterval> | null = null;
+  private friendExpireTimer: ReturnType<typeof setInterval> | null = null;
   private running = false;
   private tickIntervalMs: number;
 
@@ -76,7 +100,22 @@ export class SchedulerService {
     // Signal clustering: group co-occurring signals for better gene matching
     this.clusterTimer = setInterval(() => this.computeClusters(), CLUSTER_INTERVAL_MS);
 
-    console.log(`${LOG} Started (tick=${this.tickIntervalMs}ms)`);
+    // Memory dream: consolidate agent memories periodically
+    this.dreamTimer = setInterval(() => this.runDreamSweep(), DREAM_INTERVAL_MS);
+
+    // Knowledge link pruning: remove weak links
+    this.pruneTimer = setInterval(() => this.pruneWeakLinks(), PRUNE_INTERVAL_MS);
+
+    // Daily leaderboard V2 computation (check every 10 minutes, run at UTC 00:05)
+    this.leaderboardTimer = setInterval(() => this.computeLeaderboard(), LEADERBOARD_CHECK_INTERVAL_MS);
+
+    // Community karma settlement: settle deferred karma entries every hour
+    this.karmaTimer = setInterval(() => this.settleCommunityKarma(), KARMA_SETTLEMENT_INTERVAL_MS);
+
+    // Friend request expiry: expire pending requests older than 30 days
+    this.friendExpireTimer = setInterval(() => this.expireFriendRequests(), FRIEND_EXPIRE_INTERVAL_MS);
+
+    log.info(`Started (tick=${this.tickIntervalMs}ms)`);
   }
 
   /**
@@ -106,8 +145,28 @@ export class SchedulerService {
       clearInterval(this.clusterTimer);
       this.clusterTimer = null;
     }
+    if (this.dreamTimer) {
+      clearInterval(this.dreamTimer);
+      this.dreamTimer = null;
+    }
+    if (this.pruneTimer) {
+      clearInterval(this.pruneTimer);
+      this.pruneTimer = null;
+    }
+    if (this.leaderboardTimer) {
+      clearInterval(this.leaderboardTimer);
+      this.leaderboardTimer = null;
+    }
+    if (this.karmaTimer) {
+      clearInterval(this.karmaTimer);
+      this.karmaTimer = null;
+    }
+    if (this.friendExpireTimer) {
+      clearInterval(this.friendExpireTimer);
+      this.friendExpireTimer = null;
+    }
 
-    console.log(`${LOG} Stopped`);
+    log.info('Stopped');
   }
 
   /**
@@ -117,10 +176,10 @@ export class SchedulerService {
     try {
       const dispatched = await this.taskService.dispatchDueTasks();
       if (dispatched > 0) {
-        console.log(`${LOG} Tick: dispatched ${dispatched} task(s)`);
+        log.info(`Tick: dispatched ${dispatched} task(s)`);
       }
     } catch (err) {
-      console.error(`${LOG} Tick error:`, err);
+      log.error({ err }, 'Tick error');
     }
   }
 
@@ -131,10 +190,10 @@ export class SchedulerService {
     try {
       const handled = await this.taskService.handleTimeouts();
       if (handled > 0) {
-        console.log(`${LOG} Timeout sweep: handled ${handled} task(s)`);
+        log.info(`Timeout sweep: handled ${handled} task(s)`);
       }
     } catch (err) {
-      console.error(`${LOG} Timeout sweep error:`, err);
+      log.error({ err }, 'Timeout sweep error');
     }
   }
 
@@ -146,10 +205,10 @@ export class SchedulerService {
     try {
       const rewarded = await this.evolutionService.scanCreditReturns();
       if (rewarded > 0) {
-        console.log(`${LOG} Credit return scan: granted ${rewarded} reward(s)`);
+        log.info(`Credit return scan: granted ${rewarded} reward(s)`);
       }
     } catch (err) {
-      console.error(`${LOG} Credit return scan error:`, err);
+      log.error({ err }, 'Credit return scan error');
     }
   }
 
@@ -161,10 +220,10 @@ export class SchedulerService {
     try {
       const processed = await this.evolutionService.processPendingReports();
       if (processed > 0) {
-        console.log(`${LOG} Pending reports: processed ${processed}`);
+        log.info(`Pending reports: processed ${processed}`);
       }
     } catch (err) {
-      console.error(`${LOG} Pending report processing error:`, err);
+      log.error({ err }, 'Pending report processing error');
     }
   }
 
@@ -176,10 +235,160 @@ export class SchedulerService {
     try {
       const computed = await this.evolutionService.computeSignalClusters();
       if (computed > 0) {
-        console.log(`${LOG} Signal clustering: ${computed} clusters`);
+        log.info(`Signal clustering: ${computed} clusters`);
       }
     } catch (err) {
-      console.error(`${LOG} Clustering error:`, err);
+      log.error({ err }, 'Clustering error');
+    }
+  }
+
+  /**
+   * Sweep agents for memory dream consolidation.
+   */
+  private async runDreamSweep(): Promise<void> {
+    try {
+      // Find agents with enough memory files
+      const candidates = await (
+        await import('../db')
+      ).default.iMMemoryFile.groupBy({
+        by: ['ownerId'],
+        _count: true,
+        having: { ownerId: { _count: { gte: 3 } } },
+      });
+
+      let dreamCount = 0;
+      for (const c of candidates.slice(0, 50)) {
+        const { ready } = await shouldDream(c.ownerId);
+        if (ready) {
+          const result = await runDream(c.ownerId);
+          if (result.triggered) dreamCount++;
+        }
+      }
+      if (dreamCount > 0) {
+        log.info(`Dream sweep: ${dreamCount} agent(s) consolidated`);
+      }
+    } catch (err) {
+      log.error({ err }, 'Dream sweep error');
+    }
+  }
+
+  /**
+   * Prune weak knowledge links (strength < 0.1).
+   */
+  private async pruneWeakLinks(): Promise<void> {
+    try {
+      const kls = new KnowledgeLinkService();
+      const count = await kls.pruneWeakLinks();
+      if (count > 0) {
+        log.info(`Pruned ${count} weak knowledge links`);
+      }
+    } catch (err) {
+      log.error({ err }, 'Prune weak links error');
+    }
+  }
+
+  /**
+   * Settle deferred community karma entries.
+   */
+  private async settleCommunityKarma(): Promise<void> {
+    try {
+      const { CommunityKarmaService } = await import('./community-karma.service');
+      const prisma = (await import('../db')).default;
+      const karmaService = new CommunityKarmaService(prisma as any);
+      const settled = await karmaService.settlePendingKarma();
+      if (settled > 0) {
+        log.info(`Community karma: settled ${settled} deferred entries`);
+      }
+    } catch (err) {
+      log.error({ err }, 'Community karma settlement error');
+    }
+  }
+
+  private leaderboardRanDate = '';
+
+  /**
+   * Daily leaderboard V2 computation.
+   * Normal schedule: UTC 00:05-00:15.
+   * Catch-up: if the process starts after the window, run once on first check.
+   */
+  private async computeLeaderboard(): Promise<void> {
+    const now = new Date();
+    const today = new Date().toISOString().slice(0, 10);
+    const hour = now.getUTCHours();
+    const minute = now.getUTCMinutes();
+
+    const inWindow = hour === 0 && minute >= 5 && minute < 15;
+    if (hour > 0 || minute >= 15) {
+      // Past today's window — check if we need a catch-up run
+      if (this.leaderboardRanDate !== today) {
+        const needsCatchUp = await this.needsLeaderboardCatchUp(now);
+        if (needsCatchUp) {
+          log.info('Leaderboard catch-up: no snapshot found for today, running now...');
+          await this.runLeaderboardPipeline();
+        }
+        this.leaderboardRanDate = today;
+      }
+      return;
+    }
+
+    if (inWindow && this.leaderboardRanDate !== today) {
+      await this.runLeaderboardPipeline();
+      this.leaderboardRanDate = today;
+    }
+  }
+
+  private async runLeaderboardPipeline(): Promise<void> {
+    log.info('Starting daily leaderboard computation...');
+    const { computeTokenBaselines, computeValueMetrics } = await import('./value-metrics.service');
+    const { computeLeaderboardSnapshot } = await import('./leaderboard.service');
+
+    // Step 1: Token baselines (best-effort, snapshot computation does not depend on this)
+    try {
+      await computeTokenBaselines();
+    } catch (e) {
+      log.error({ err: e }, 'Token baselines failed (non-blocking)');
+    }
+
+    // Step 2: Value metrics (best-effort, enriches snapshots but not required)
+    for (const period of ['weekly', 'monthly', 'alltime'] as const) {
+      try {
+        await computeValueMetrics(period);
+      } catch (e) {
+        log.error({ err: e }, `Value metrics (${period}) failed (non-blocking)`);
+      }
+    }
+
+    // Step 3: Leaderboard snapshots (core — must run independently of steps 1-2)
+    for (const period of ['weekly', 'monthly', 'alltime'] as const) {
+      try {
+        await computeLeaderboardSnapshot(period);
+      } catch (e) {
+        log.error({ err: e }, `Leaderboard snapshot (${period}) failed`);
+      }
+    }
+
+    log.info('Daily leaderboard computation complete');
+  }
+
+  private async needsLeaderboardCatchUp(now: Date): Promise<boolean> {
+    try {
+      const prisma = (await import('../db')).default;
+      const todayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+      const count = await prisma.iMLeaderboardSnapshot.count({
+        where: { snapshotDate: { gte: todayStart } },
+      });
+      return count === 0;
+    } catch {
+      return false;
+    }
+  }
+
+  private async expireFriendRequests(): Promise<void> {
+    try {
+      const cs = new ContactService();
+      await cs.expirePendingRequests(30);
+    } catch (e) {
+      log.error({ err: e }, 'Friend request expiry sweep failed');
     }
   }
 

@@ -67,6 +67,27 @@ export const ServerEvents = {
     return makeEvent('message.edit', msg);
   },
 
+  /** v1.8.2: Reaction add/remove on a message. Distinct from message.edit (which signals content change). */
+  messageReaction(data: {
+    messageId: string;
+    conversationId: string;
+    emoji: string;
+    userId: string;
+    action: 'add' | 'remove';
+    /** Full reaction state after the change: { emoji: [userId, ...] } */
+    reactions: Record<string, string[]>;
+  }) {
+    return makeEvent('message.reaction', data);
+  },
+
+  messageDelivered(data: { conversationId: string; messageIds: string[]; deliveredBy: string; deliveredAt: string }) {
+    return makeEvent('message.delivered', data);
+  },
+
+  messageRead(data: { conversationId: string; readBy: string; readAt: string; lastReadMessageId?: string }) {
+    return makeEvent('message.read', data);
+  },
+
   messageDeleted(data: { id: string; conversationId: string }) {
     return makeEvent('message.deleted', data);
   },
@@ -105,6 +126,71 @@ export const ServerEvents = {
 
   agentStatus(data: { agentId: string; status: AgentStatus; load?: number }) {
     return makeEvent('agent.status', data);
+  },
+
+  contactRequest(data: {
+    requestId: string;
+    fromUserId: string;
+    toUserId: string;
+    fromUsername?: string;
+    fromDisplayName?: string;
+    reason?: string;
+    source?: string;
+  }) {
+    return makeEvent('contact.request', { ...data, createdAt: new Date().toISOString() });
+  },
+
+  contactAccepted(data: {
+    fromUserId: string;
+    toUserId: string;
+    conversationId: string;
+    username?: string;
+    displayName?: string;
+  }) {
+    return makeEvent('contact.accepted', { ...data, acceptedAt: new Date().toISOString() });
+  },
+
+  contactRejected(data: { fromUserId: string; toUserId: string; requestId: string }) {
+    return makeEvent('contact.rejected', { ...data, rejectedAt: new Date().toISOString() });
+  },
+
+  contactRemoved(data: { userId: string; removedUserId: string }) {
+    return makeEvent('contact.removed', { ...data, removedAt: new Date().toISOString() });
+  },
+
+  contactBlocked(data: { userId: string; blockedUserId: string }) {
+    return makeEvent('contact.blocked', { ...data, blockedAt: new Date().toISOString() });
+  },
+
+  /** Someone replied to your community post */
+  communityReply(data: { postId: string; postTitle: string; commentId: string; actorId: string }) {
+    return makeEvent('community.reply', data);
+  },
+
+  /** Someone upvoted your post or comment */
+  communityVote(data: {
+    targetType: 'post' | 'comment';
+    targetId: string;
+    postId: string;
+    postTitle: string;
+    actorId: string;
+    value: 1 | -1;
+  }) {
+    return makeEvent('community.vote', data);
+  },
+
+  /** Your comment was marked best answer */
+  communityAnswerAccepted(data: { postId: string; postTitle: string; commentId: string; actorId: string }) {
+    return makeEvent('community.answer.accepted', data);
+  },
+
+  /** Reserved: @mention in community content */
+  communityMention(data: { postId?: string; commentId?: string; actorId: string; snippet: string }) {
+    return makeEvent('community.mention', data);
+  },
+
+  reconnectAck(data: { userId: string; undeliveredCount: number; syncAdvised: boolean }, requestId?: string) {
+    return makeEvent('reconnect.ack', data, requestId);
   },
 
   pong(requestId?: string) {
@@ -164,4 +250,15 @@ export interface AgentHeartbeatPayload {
 
 export interface AgentCapabilityDeclarePayload {
   capabilities: AgentCapability[];
+}
+
+// ─── ACK / Reconnect payloads ────────────────────────────────
+
+export interface AckPayload {
+  ackId: string;
+}
+
+export interface ReconnectPayload {
+  lastEventTime?: number; // Timestamp of last received event
+  lastSyncCursor?: number; // Last sync cursor for /sync recovery
 }

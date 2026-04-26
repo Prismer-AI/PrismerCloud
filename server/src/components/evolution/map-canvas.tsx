@@ -40,6 +40,7 @@ import {
   drawGhostNode,
   drawClusterHalo,
   drawClusterLabel,
+  resetLabelCollisions,
   drawHyperedge,
   drawCausalLink,
   drawGeneStoryEmbed,
@@ -793,7 +794,10 @@ export function MapCanvas({
 
       // ─── L3+: Cluster labels (drawn after edges, before nodes) ───
       if (zoomLevel >= 3 && layout.clusters) {
-        for (const cluster of layout.clusters) {
+        // Sort by gene count descending — larger clusters get label priority
+        const sortedClusters = [...layout.clusters].sort((a, b) => b.geneIds.length - a.geneIds.length);
+        resetLabelCollisions();
+        for (const cluster of sortedClusters) {
           const clusterAdapter = {
             id: String(cluster.communityId),
             label: cluster.label,
@@ -801,7 +805,7 @@ export function MapCanvas({
             center: cluster.center,
             color: cluster.color,
           };
-          drawClusterLabel(stableCtx, clusterAdapter, dark);
+          drawClusterLabel(stableCtx, clusterAdapter, dark, view.zoom);
         }
       }
 

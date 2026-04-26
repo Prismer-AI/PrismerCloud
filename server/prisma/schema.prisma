@@ -26,36 +26,60 @@ datasource db {
 // ==============================================================================
 
 model IMUser {
-  id            String    @id @default(cuid())
-  username      String    @unique
-  displayName   String
-  passwordHash  String?
-  role          String    @default("human")      // human | agent | admin
-  agentType     String?                          // assistant | specialist | orchestrator | tool | bot
-  avatarUrl     String?
-  metadata      String?                          // JSON
-  userId        String?                          // 关联主应用用户（可多个 agent 共享同一 userId）
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  id           String   @id @default(cuid())
+  username     String   @unique
+  displayName  String
+  passwordHash String?
+  role         String   @default("human") // human | agent | admin
+  agentType    String? // assistant | specialist | orchestrator | tool | bot
+  avatarUrl    String?
+  metadata     String? // JSON
+  userId       String? // 关联主应用用户（可多个 agent 共享同一 userId）
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
   // Security (v1.7.2)
-  trustTier       Int       @default(0)            // 0-4 trust level
+  trustTier       Int       @default(0) // 0-4 trust level
   violationCount  Int       @default(0)
   suspendedUntil  DateTime?
   lastViolationAt DateTime?
+  // Moderation (v1.7.3)
+  reportBanUntil  DateTime?
+  quarantineCount Int       @default(0)
+  publishCount    Int       @default(0)
+  banned          Boolean   @default(false)
+  bannedAt        DateTime?
+  banReason       String?
+  // AIP Layer 1: DID identity
+  primaryDid      String?   @unique // did:key:z6Mk...
+  delegatedBy     String? // Delegator's DID
 
-  agentCard     IMAgentCard?
-  identityKey   IMIdentityKey?
-  participations IMParticipant[]
-  sentMessages  IMMessage[]
+  // Contact system (v1.8.0 P9)
+  institution     String?
+  description     String?
+  lastSeenAt      DateTime?
+
+  agentCard            IMAgentCard?
+  identityKey          IMIdentityKey?
+  participations       IMParticipant[]
+  sentMessages         IMMessage[]
   createdConversations IMConversation[]
-  readCursors   IMReadCursor[]
-  bindings      IMBinding[]
-  credit        IMCredit?
-  fileUploads   IMFileUpload[]
+  readCursors          IMReadCursor[]
+  bindings             IMBinding[]
+  credit               IMCredit?
+  fileUploads          IMFileUpload[]
+
+  // Contact system relations (v1.8.0 P9)
+  friendRequestsSent     IMFriendRequest[]   @relation("FriendRequestsSent")
+  friendRequestsReceived IMFriendRequest[]   @relation("FriendRequestsReceived")
+  contactsOwned          IMContactRelation[] @relation("ContactsOwned")
+  contactsOf             IMContactRelation[] @relation("ContactsOf")
+  blocksOwned            IMBlock[]           @relation("BlocksOwned")
+  blockedBy              IMBlock[]           @relation("BlockedBy")
 
   @@index([role])
   @@index([userId])
+  @@index([primaryDid])
   @@map("im_users")
 }
 
@@ -69,20 +93,71 @@ model IMAgentCard {
   name            String
   description     String    @default("")
   agentType       String    @default("assistant")
-  capabilities    String    @default("[]")        // JSON: AgentCapability[]
+  capabilities    String    @default("[]") // JSON: AgentCapability[]
   protocolVersion String    @default("1.0")
-  endpoint        String?                         // HTTP endpoint for direct invocation
-  metadata        String    @default("{}")        // JSON
+  endpoint        String? // HTTP endpoint for direct invocation
+  metadata        String    @default("{}") // JSON
   lastHeartbeat   DateTime?
-  status          String    @default("offline")   // online | busy | idle | offline
-  load            Float     @default(0)           // 0-1 utilization
+  status          String    @default("offline") // online | busy | idle | offline
+  load            Float     @default(0) // 0-1 utilization
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
-  imUser          IMUser    @relation(fields: [imUserId], references: [id], onDelete: Cascade)
+  // AIP Layer 2: DID Document
+  did            String? // Agent's did:key
+  didDocumentUrl String? // did:web resolution URL
+
+  imUser IMUser @relation(fields: [imUserId], references: [id], onDelete: Cascade)
 
   @@index([status])
   @@map("im_agent_cards")
+}
+
+// ==============================================================================
+// AIP Layer 3-4: Agent Credentials, DID Mappings, Revocation
+// ==============================================================================
+
+model IMAgentCredential {
+  id             String    @id @default(cuid())
+  holderDid      String
+  credentialType String // AgentDelegation | TaskCompletion | Reputation | Capability
+  issuerDid      String
+  credential     String // Full VC JSON-LD (with proof)
+  validFrom      DateTime
+  validUntil     DateTime?
+  revoked        Boolean   @default(false)
+  createdAt      DateTime  @default(now())
+
+  @@index([holderDid])
+  @@index([issuerDid])
+  @@index([credentialType])
+  @@map("im_agent_credentials")
+}
+
+model IMDIDMapping {
+  id        String   @id @default(cuid())
+  did       String   @unique
+  imUserId  String
+  didMethod String // "key" | "web"
+  isPrimary Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([imUserId])
+  @@map("im_did_mappings")
+}
+
+model IMRevocationEntry {
+  id              String   @id @default(cuid())
+  issuerDid       String
+  targetDid       String
+  credentialId    String?
+  reason          String
+  statusListIndex Int
+  createdAt       DateTime @default(now())
+
+  @@unique([issuerDid, targetDid, credentialId])
+  @@index([targetDid])
+  @@map("im_revocation_entries")
 }
 
 // ==============================================================================
@@ -91,21 +166,21 @@ model IMAgentCard {
 
 model IMConversation {
   id            String    @id @default(cuid())
-  type          String    @default("direct")     // direct | group | channel
+  type          String    @default("direct") // direct | group | channel
   title         String?
   description   String?
-  status        String    @default("active")     // active | archived | deleted
-  metadata      String    @default("{}")         // JSON
+  status        String    @default("active") // active | archived | deleted
+  metadata      String    @default("{}") // JSON
   createdById   String
-  workspaceId   String?   @unique                // 可选：关联 Workspace (1:1)
+  workspaceId   String?   @unique // 可选：关联 Workspace (1:1)
   lastMessageAt DateTime?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
-  createdBy     IMUser    @relation(fields: [createdById], references: [id])
-  participants  IMParticipant[]
-  messages      IMMessage[]
-  readCursors   IMReadCursor[]
+  createdBy    IMUser          @relation(fields: [createdById], references: [id])
+  participants IMParticipant[]
+  messages     IMMessage[]
+  readCursors  IMReadCursor[]
 
   @@index([status])
   @@index([createdById])
@@ -118,15 +193,18 @@ model IMConversation {
 // ==============================================================================
 
 model IMParticipant {
-  id              String    @id @default(cuid())
-  conversationId  String
-  imUserId        String
-  role            String    @default("member")   // owner | admin | member | observer
-  joinedAt        DateTime  @default(now())
-  leftAt          DateTime?
+  id             String    @id @default(cuid())
+  conversationId String
+  imUserId       String
+  role           String    @default("member") // owner | admin | member | observer
+  joinedAt       DateTime  @default(now())
+  leftAt         DateTime?
+  pinned    Boolean   @default(false)
+  muted     Boolean   @default(false)
+  pinnedAt  DateTime?
 
-  conversation    IMConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  imUser          IMUser    @relation(fields: [imUserId], references: [id], onDelete: Cascade)
+  conversation IMConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  imUser       IMUser         @relation(fields: [imUserId], references: [id], onDelete: Cascade)
 
   @@unique([conversationId, imUserId])
   @@index([imUserId])
@@ -138,34 +216,67 @@ model IMParticipant {
 // ==============================================================================
 
 model IMMessage {
-  id              String    @id @default(cuid())
-  conversationId  String
-  senderId        String
-  type            String    @default("text")     // text | markdown | code | image | file | tool_call | tool_result | system_event | thinking
-  content         String    @default("")
-  metadata        String    @default("{}")       // JSON: MessageMetadata
-  parentId        String?                        // For threading
-  status          String    @default("sent")     // sending | sent | delivered | read | failed
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  id             String   @id @default(cuid())
+  conversationId String
+  senderId       String
+  type           String   @default("text") // text | markdown | code | image | file | tool_call | tool_result | system_event | thinking
+  content        String   @default("")
+  metadata       String   @default("{}") // JSON: MessageMetadata
+  parentId       String? // For threading
+  quotedMessageId String? // Quote reply reference (v1.8.2, distinct from parentId threading)
+  status         String   @default("sent") // sending | sent | delivered | read | failed
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
   // E2E Encryption Layer 2: Signing & Integrity (v1.7.2)
-  secVersion      Int?                           // Security protocol version (null = legacy unsigned)
-  senderKeyId     String?                        // Identity key ID used for signing
-  sequence        Int?                           // Monotonic per (senderId, conversationId)
-  contentHash     String?                        // SHA-256(body) hex
-  prevHash        String?                        // Previous message's contentHash
-  signature       String?                        // Ed25519 signature (Base64)
+  secVersion  Int? // Security protocol version (null = legacy unsigned)
+  senderKeyId String? // Identity key ID used for signing
+  sequence    Int? // Monotonic per (senderId, conversationId)
+  contentHash String? // SHA-256(body) hex
+  prevHash    String? // Previous message's contentHash
+  signature   String? // Ed25519 signature (Base64)
 
-  conversation    IMConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  sender          IMUser    @relation(fields: [senderId], references: [id])
+  // AIP Layer 2: DID-based signing
+  senderDid       String? // did:key:z6Mk... (preferred over senderKeyId)
+  delegationProof String? // JSON: simplified delegation chain proof
+
+  // E2E Layer 5: encryption first-class field (S5 fix)
+  encrypted Boolean @default(false)
+
+  conversation IMConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender       IMUser         @relation(fields: [senderId], references: [id])
+  reactions    IMMessageReaction[]
 
   @@index([conversationId])
   @@index([senderId])
   @@index([createdAt])
   @@index([parentId])
+  @@index([quotedMessageId])
+  @@index([senderDid])
   @@index([conversationId, senderId, sequence])
   @@map("im_messages")
+}
+
+// ==============================================================================
+// 消息反应 (Reactions, v1.8.2)
+// ==============================================================================
+//
+// 独立表存储反应，避免在 message.metadata JSON 上做读-改-写造成的丢失更新竞态。
+// 复合唯一键保证 idempotent add；删除使用 deleteMany 同样 idempotent。
+
+model IMMessageReaction {
+  id        String   @id @default(cuid())
+  messageId String
+  userId    String
+  emoji     String
+  createdAt DateTime @default(now())
+
+  message IMMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, userId, emoji])
+  @@index([messageId])
+  @@index([userId])
+  @@map("im_message_reactions")
 }
 
 // ==============================================================================
@@ -173,14 +284,14 @@ model IMMessage {
 // ==============================================================================
 
 model IMReadCursor {
-  id              String    @id @default(cuid())
-  conversationId  String
-  imUserId        String
-  lastReadAt      DateTime  @default(now())
-  lastReadMsgId   String?
+  id             String   @id @default(cuid())
+  conversationId String
+  imUserId       String
+  lastReadAt     DateTime @default(now())
+  lastReadMsgId  String?
 
-  conversation    IMConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  imUser          IMUser    @relation(fields: [imUserId], references: [id], onDelete: Cascade)
+  conversation IMConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  imUser       IMUser         @relation(fields: [imUserId], references: [id], onDelete: Cascade)
 
   @@unique([conversationId, imUserId])
   @@index([imUserId])
@@ -194,7 +305,7 @@ model IMReadCursor {
 model IMWebhook {
   id            String    @id @default(cuid())
   url           String
-  events        String    @default("[]")         // JSON: string[]
+  events        String    @default("[]") // JSON: string[]
   secret        String?
   active        Boolean   @default(true)
   createdById   String
@@ -212,35 +323,35 @@ model IMWebhook {
 // ==============================================================================
 
 model IMBinding {
-  id              String    @id @default(cuid())
-  imUserId        String
-  platform        String                           // telegram | discord | slack
-  status          String    @default("pending")    // pending | active | failed | revoked
+  id       String @id @default(cuid())
+  imUserId String
+  platform String // telegram | discord | slack
+  status   String @default("pending") // pending | active | failed | revoked
 
   // 平台侧信息
-  externalId      String?                          // 平台用户ID (Telegram chat_id, Discord user_id)
-  externalName    String?                          // 平台用户名
+  externalId   String? // 平台用户ID (Telegram chat_id, Discord user_id)
+  externalName String? // 平台用户名
 
   // 认证信息
-  botToken        String?                          // Bot Token
-  webhookUrl      String?                          // Webhook URL
-  channelId       String?                          // channel/chat ID
+  botToken   String? // Bot Token
+  webhookUrl String? // Webhook URL
+  channelId  String? // channel/chat ID
 
   // 验证
   verificationCode String?
-  verifiedAt      DateTime?
+  verifiedAt       DateTime?
 
   // 能力
-  capabilities    String    @default("[]")         // JSON: ["receive_message","send_message"]
+  capabilities String @default("[]") // JSON: ["receive_message","send_message"]
 
   // 配置
-  config          String    @default("{}")         // JSON
+  config String @default("{}") // JSON
 
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  imUser          IMUser    @relation(fields: [imUserId], references: [id], onDelete: Cascade)
-  bridgeMessages  IMBridgeMessage[]
+  imUser         IMUser            @relation(fields: [imUserId], references: [id], onDelete: Cascade)
+  bridgeMessages IMBridgeMessage[]
 
   @@unique([imUserId, platform])
   @@index([platform, status])
@@ -252,24 +363,24 @@ model IMBinding {
 // ==============================================================================
 
 model IMBridgeMessage {
-  id                String    @id @default(cuid())
-  bindingId         String
-  direction         String                           // inbound | outbound
+  id        String @id @default(cuid())
+  bindingId String
+  direction String // inbound | outbound
 
   // IM 侧
-  imMessageId       String?
-  imConversationId  String?
+  imMessageId      String?
+  imConversationId String?
 
   // 外部侧
   externalMessageId String?
 
   // 状态
-  status            String    @default("sent")       // sent | delivered | failed
-  errorMessage      String?
+  status       String  @default("sent") // sent | delivered | failed
+  errorMessage String?
 
-  createdAt         DateTime  @default(now())
+  createdAt DateTime @default(now())
 
-  binding           IMBinding @relation(fields: [bindingId], references: [id], onDelete: Cascade)
+  binding IMBinding @relation(fields: [bindingId], references: [id], onDelete: Cascade)
 
   @@index([bindingId])
   @@index([imMessageId])
@@ -281,16 +392,16 @@ model IMBridgeMessage {
 // ==============================================================================
 
 model IMCredit {
-  id              String    @id @default(cuid())
-  imUserId        String    @unique
-  balance         Float     @default(100000)       // 注册即送 100000 credits ≈ 1 亿条消息 (0.001/条)
-  totalEarned     Float     @default(0)
-  totalSpent      Float     @default(0)
+  id          String @id @default(cuid())
+  imUserId    String @unique
+  balance     Float  @default(100000) // 注册即送 100000 credits ≈ 1 亿条消息 (0.001/条)
+  totalEarned Float  @default(0)
+  totalSpent  Float  @default(0)
 
-  updatedAt       DateTime  @updatedAt
+  updatedAt DateTime @updatedAt
 
-  imUser          IMUser    @relation(fields: [imUserId], references: [id])
-  transactions    IMCreditTransaction[]
+  imUser       IMUser                @relation(fields: [imUserId], references: [id])
+  transactions IMCreditTransaction[]
 
   @@map("im_credits")
 }
@@ -300,18 +411,18 @@ model IMCredit {
 // ==============================================================================
 
 model IMCreditTransaction {
-  id              String    @id @default(cuid())
-  creditId        String
-  type            String                           // usage | topup | refund | bonus
-  amount          Float                            // 正=收入, 负=支出
-  balanceAfter    Float
-  description     String?
-  referenceType   String?                          // message | workspace | binding
-  referenceId     String?
+  id            String  @id @default(cuid())
+  creditId      String
+  type          String // usage | topup | refund | bonus
+  amount        Float // 正=收入, 负=支出
+  balanceAfter  Float
+  description   String?
+  referenceType String? // message | workspace | binding
+  referenceId   String?
 
-  createdAt       DateTime  @default(now())
+  createdAt DateTime @default(now())
 
-  credit          IMCredit  @relation(fields: [creditId], references: [id])
+  credit IMCredit @relation(fields: [creditId], references: [id])
 
   @@index([creditId])
   @@map("im_credit_transactions")
@@ -322,20 +433,20 @@ model IMCreditTransaction {
 // ==============================================================================
 
 model ContextCache {
-  id            String    @id @default(cuid())
-  userId        String                          // Cloud user ID (from apiGuard)
-  rawLink       String                          // URL or input identifier
-  rawLinkHash   String    @unique               // SHA-256(rawLink), computed in service
-  contentUri    String?                         // prismer://{visibility}/{short_id}/{content_id}
-  hqccContent   String    @default("")          // Compressed content (up to 100MB)
-  intrContent   String?                         // Raw/intermediate content (up to 100MB)
-  visibility    String    @default("private")   // public | private | unlisted
-  meta          String    @default("{}")        // JSON metadata
-  tags          String    @default("[]")        // JSON: string[] — search tags
-  sizeBytes     Int       @default(0)           // Total content bytes (for 100MB gate)
-  expiresAt     DateTime?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  id          String    @id @default(cuid())
+  userId      String // Cloud user ID (from apiGuard)
+  rawLink     String // URL or input identifier
+  rawLinkHash String    @unique // SHA-256(rawLink), computed in service
+  contentUri  String? // prismer://{visibility}/{short_id}/{content_id}
+  hqccContent String    @default("") // Compressed content (up to 100MB)
+  intrContent String? // Raw/intermediate content (up to 100MB)
+  visibility  String    @default("private") // public | private | unlisted
+  meta        String    @default("{}") // JSON metadata
+  tags        String    @default("[]") // JSON: string[] — search tags
+  sizeBytes   Int       @default(0) // Total content bytes (for 100MB gate)
+  expiresAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
   @@index([userId])
   @@index([userId, visibility])
@@ -348,21 +459,21 @@ model ContextCache {
 // ==============================================================================
 
 model IMFileUpload {
-  id            String    @id @default(cuid())
-  imUserId      String
-  uploadId      String    @unique               // S3 upload ID or local ID
-  fileName      String
-  fileSize      Int                              // bytes
-  mimeType      String
-  sha256        String?                          // integrity check
-  s3Key         String?                          // S3 object key
-  cdnUrl        String?                          // CDN delivery URL
-  status        String    @default("pending")    // pending | uploaded | confirmed | failed
-  expiresAt     DateTime?                        // presigned URL expiry
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  id        String    @id @default(cuid())
+  imUserId  String
+  uploadId  String    @unique // S3 upload ID or local ID
+  fileName  String
+  fileSize  Int // bytes
+  mimeType  String
+  sha256    String? // integrity check
+  s3Key     String? // S3 object key
+  cdnUrl    String? // CDN delivery URL
+  status    String    @default("pending") // pending | uploaded | confirmed | failed
+  expiresAt DateTime? // presigned URL expiry
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
 
-  imUser        IMUser    @relation(fields: [imUserId], references: [id], onDelete: Cascade)
+  imUser IMUser @relation(fields: [imUserId], references: [id], onDelete: Cascade)
 
   @@index([imUserId])
   @@index([status])
@@ -374,12 +485,12 @@ model IMFileUpload {
 // ==============================================================================
 
 model IMSyncEvent {
-  id              Int      @id @default(autoincrement())
-  type            String                            // message.new | message.edit | message.delete | conversation.create | conversation.update
-  data            String   @default("{}")           // JSON
-  conversationId  String?
-  imUserId        String
-  createdAt       DateTime @default(now())
+  id             Int      @id @default(autoincrement())
+  type           String // message.new | message.edit | message.delete | conversation.create | conversation.update
+  data           String   @default("{}") // JSON
+  conversationId String?
+  imUserId       String
+  createdAt      DateTime @default(now())
 
   @@index([imUserId])
   @@index([conversationId])
@@ -391,73 +502,81 @@ model IMSyncEvent {
 // ==============================================================================
 
 model IMTask {
-  id            String    @id @default(cuid())
+  id String @id @default(cuid())
 
   // Task content
-  title         String
-  description   String?
-  capability    String?                          // Required agent capability
-  input         String    @default("{}")         // JSON: task input
-  contextUri    String?                          // prismer:// reference
+  title       String
+  description String?
+  capability  String? // Required agent capability
+  input       String  @default("{}") // JSON: task input
+  contextUri  String? // prismer:// reference
 
   // Participants
-  creatorId     String                           // Who created (human or agent)
-  assigneeId    String?                          // Who is executing
+  creatorId  String // Who created (human or agent)
+  assigneeId String? // Who is executing
+  scope      String  @default("global") // Workspace scope
+  conversationId String? // Associated conversation (v1.8.2)
 
-  // State machine: pending → assigned → running → completed | failed | cancelled
-  status        String    @default("pending")
+  // State machine: pending → assigned → running → review → completed | failed | cancelled
+  status        String @default("pending")
+  progress      Float? // 0.0-1.0 numeric progress (v1.8.2)
+  statusMessage String? // Human-readable status update (v1.8.2)
 
   // Scheduling
-  scheduleType  String?                          // NULL (immediate) | once | interval | cron
-  scheduleAt    DateTime?                        // once: target time
-  scheduleCron  String?                          // cron: expression (e.g. "0 9 * * *")
-  intervalMs    Int?                             // interval: milliseconds between runs
-  nextRunAt     DateTime?                        // Next dispatch time (scheduler uses this)
-  lastRunAt     DateTime?
-  runCount      Int       @default(0)
-  maxRuns       Int?                             // NULL = unlimited
+  scheduleType String? // NULL (immediate) | once | interval | cron
+  scheduleAt   DateTime? // once: target time
+  scheduleCron String? // cron: expression (e.g. "0 9 * * *")
+  intervalMs   Int? // interval: milliseconds between runs
+  nextRunAt    DateTime? // Next dispatch time (scheduler uses this)
+  lastRunAt    DateTime?
+  runCount     Int       @default(0)
+  maxRuns      Int? // NULL = unlimited
 
   // Result
-  result        String?                          // JSON: execution result
-  resultUri     String?                          // prismer:// result reference
-  error         String?
+  result    String? // JSON: execution result
+  resultUri String? // prismer:// result reference
+  error     String?
 
   // Economy
-  budget        Float?                           // Max credits budget
-  cost          Float     @default(0)            // Actual cost
+  budget Float? // Max credits budget
+  cost   Float  @default(0) // Actual cost
 
   // Timeout / Retry
-  timeoutMs     Int       @default(300000)       // 5 min default
-  deadline      DateTime?
-  maxRetries    Int       @default(0)            // OpenClaw retry.max alignment
-  retryDelayMs  Int       @default(60000)        // Exponential backoff base (ms)
-  retryCount    Int       @default(0)            // Current retry count
+  timeoutMs    Int       @default(300000) // 5 min default
+  deadline     DateTime?
+  completedAt  DateTime? // When task reached completed state (v1.8.2)
+  maxRetries   Int       @default(0) // OpenClaw retry.max alignment
+  retryDelayMs Int       @default(60000) // Exponential backoff base (ms)
+  retryCount   Int       @default(0) // Current retry count
 
   // Metadata
-  metadata      String    @default("{}")         // JSON: session_target, delivery, wake_mode, etc.
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  metadata  String   @default("{}") // JSON: session_target, delivery, wake_mode, etc.
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  logs          IMTaskLog[]
+  logs IMTaskLog[]
 
   @@index([status])
   @@index([assigneeId, status])
   @@index([capability, status])
   @@index([scheduleType, nextRunAt, status])
   @@index([creatorId])
+  @@index([creatorId, scope, status])
+  @@index([conversationId])
+  @@index([completedAt])
   @@map("im_tasks")
 }
 
 model IMTaskLog {
-  id            String    @id @default(cuid())
-  taskId        String
-  actorId       String?                          // Who performed the action
-  action        String                           // created | assigned | claimed | started | progress | completed | failed | cancelled | dispatched | retried
-  message       String?
-  metadata      String    @default("{}")         // JSON
-  createdAt     DateTime  @default(now())
+  id        String   @id @default(cuid())
+  taskId    String
+  actorId   String? // Who performed the action
+  action    String // created | assigned | claimed | started | progress | completed | failed | cancelled | dispatched | retried
+  message   String?
+  metadata  String   @default("{}") // JSON
+  createdAt DateTime @default(now())
 
-  task          IMTask    @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  task IMTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
 
   @@index([taskId, createdAt])
   @@map("im_task_logs")
@@ -468,16 +587,21 @@ model IMTaskLog {
 // ==============================================================================
 
 model IMIdentityKey {
-  id              String    @id @default(cuid())
-  imUserId        String    @unique
-  publicKey       String                           // Base64 Ed25519 public key (32 bytes)
-  keyId           String                           // SHA-256(publicKey)[0:8] hex (16 chars)
-  attestation     String?                          // Server Ed25519 signature (Base64)
-  derivationMode  String    @default("generated")  // generated | derived | imported
-  registeredAt    DateTime  @default(now())
-  revokedAt       DateTime?                        // null = active
+  id             String    @id @default(cuid())
+  imUserId       String    @unique
+  publicKey      String // Base64 Ed25519 public key (32 bytes)
+  keyId          String // SHA-256(publicKey)[0:8] hex (16 chars)
+  attestation    String? // Server Ed25519 signature (Base64)
+  derivationMode String    @default("generated") // generated | derived | imported
+  registeredAt   DateTime  @default(now())
+  revokedAt      DateTime? // null = active
 
-  imUser          IMUser    @relation(fields: [imUserId], references: [id], onDelete: Cascade)
+  // AIP Layer 1-2: DID identity
+  didKey          String? @unique // did:key:z6Mk... (computed from publicKey)
+  didDocument     String? // Cached DID Document JSON-LD
+  didDocumentHash String? // SHA-256(didDocument) for cache validation
+
+  imUser IMUser @relation(fields: [imUserId], references: [id], onDelete: Cascade)
 
   @@index([keyId])
   @@map("im_identity_keys")
@@ -488,14 +612,14 @@ model IMIdentityKey {
 // ==============================================================================
 
 model IMKeyAuditLog {
-  id              Int       @id @default(autoincrement())
-  imUserId        String
-  action          String                           // register | rotate | revoke
-  publicKey       String                           // Base64 Ed25519 public key
-  keyId           String                           // SHA-256(publicKey)[0:8] hex
-  attestation     String    @default("")           // Server signature
-  prevLogHash     String?                          // SHA-256 of previous log entry (hash chain)
-  createdAt       DateTime  @default(now())
+  id          Int      @id @default(autoincrement())
+  imUserId    String
+  action      String // register | rotate | revoke
+  publicKey   String // Base64 Ed25519 public key
+  keyId       String // SHA-256(publicKey)[0:8] hex
+  attestation String   @default("") // Server signature
+  prevLogHash String? // SHA-256 of previous log entry (hash chain)
+  createdAt   DateTime @default(now())
 
   @@index([imUserId, createdAt])
   @@index([keyId])
@@ -507,14 +631,14 @@ model IMKeyAuditLog {
 // ==============================================================================
 
 model IMConversationSecurity {
-  id              String    @id @default(cuid())
-  conversationId  String    @unique
-  signingPolicy   String    @default("optional")   // optional | recommended | required
-  encryptionMode  String    @default("none")       // none | available | required
-  ephemeralKeys   String    @default("[]")         // JSON: [{ userId, publicKey, algorithm, createdAt }]
-  lastSequences   String    @default("{}")         // JSON: { senderId: { highestSeq, windowBitmap } }
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  id             String   @id @default(cuid())
+  conversationId String   @unique
+  signingPolicy  String   @default("recommended") // optional | recommended | required
+  encryptionMode String   @default("none") // none | available | required
+  ephemeralKeys  String   @default("[]") // JSON: [{ userId, publicKey, algorithm, createdAt }]
+  lastSequences  String   @default("{}") // JSON: { senderId: { highestSeq, windowBitmap } }
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
   @@map("im_conversation_security")
 }
@@ -524,13 +648,13 @@ model IMConversationSecurity {
 // ==============================================================================
 
 model IMCompactionSummary {
-  id                String    @id @default(cuid())
+  id                String   @id @default(cuid())
   conversationId    String
-  summary           String    @default("")           // Markdown structured summary
-  messageRangeStart String?                          // First compressed message ID
-  messageRangeEnd   String?                          // Last compressed message ID
-  tokenCount        Int       @default(0)
-  createdAt         DateTime  @default(now())
+  summary           String   @default("") // Markdown structured summary
+  messageRangeStart String? // First compressed message ID
+  messageRangeEnd   String? // Last compressed message ID
+  tokenCount        Int      @default(0)
+  createdAt         DateTime @default(now())
 
   @@index([conversationId])
   @@map("im_compaction_summaries")
@@ -541,15 +665,20 @@ model IMCompactionSummary {
 // ==============================================================================
 
 model IMMemoryFile {
-  id          String    @id @default(cuid())
-  ownerId     String                                 // user or agent ID
-  ownerType   String    @default("agent")            // 'user' | 'agent'
-  scope       String    @default("global")           // 'global' | workspace/project ID
-  path        String    @default("MEMORY.md")        // file path: 'MEMORY.md', 'patterns.md', etc.
-  content     String    @default("")                 // Markdown content
-  version     Int       @default(1)                  // Optimistic lock
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  id        String   @id @default(cuid())
+  ownerId   String // user or agent ID
+  ownerType String   @default("agent") // 'user' | 'agent'
+  scope     String   @default("global") // 'global' | workspace/project ID
+  path      String   @default("MEMORY.md") // file path: 'MEMORY.md', 'patterns.md', etc.
+  content   String   @default("") // Markdown content
+  version   Int      @default(1) // Optimistic lock
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  memoryType         String? // 'feedback' | 'project' | 'reference' | 'insight'
+  description        String? // Short description for search indexing
+  lastConsolidatedAt DateTime? // Last Dream consolidation timestamp
+  stale              Boolean   @default(false) // Stale flag for aging
 
   @@unique([ownerId, scope, path])
   @@index([ownerId, ownerType])
@@ -565,34 +694,35 @@ model IMMemoryFile {
 // ==============================================================================
 
 model IMGene {
-  id              String    @id                          // "seed_repair_timeout_v1"
-  category        String                                 // "repair" | "optimize" | "innovate"
-  title           String    @default("")
-  description     String    @default("")
-  strategySteps   String    @default("[]")               // JSON: string[]
-  preconditions   String    @default("[]")               // JSON: string[]
-  constraints     String    @default("{}")               // JSON: { max_credits, max_retries, ... }
-  visibility      String    @default("private")          // "seed" | "private" | "canary" | "published" | "quarantined"
-  ownerAgentId    String                                 // Agent who owns or created this gene
-  parentId        String?                                // Fork/distillation lineage
-  generation      Int       @default(1)
-  forkCount       Int       @default(0)
-  successCount    Int       @default(0)                  // Denormalized from capsules
-  failureCount    Int       @default(0)
-  lastUsedAt      DateTime?
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  id            String    @id // "seed_repair_timeout_v1"
+  category      String // "repair" | "optimize" | "innovate"
+  title         String    @default("")
+  description   String    @default("")
+  strategySteps String    @default("[]") // JSON: string[]
+  preconditions String    @default("[]") // JSON: string[]
+  constraints   String    @default("{}") // JSON: { max_credits, max_retries, ... }
+  visibility    String    @default("private") // "seed" | "private" | "canary" | "published" | "quarantined"
+  ownerAgentId  String // Agent who owns or created this gene
+  parentId      String? // Fork/distillation lineage
+  generation    Int       @default(1)
+  forkCount     Int       @default(0)
+  successCount  Int       @default(0) // Denormalized from capsules
+  failureCount  Int       @default(0)
+  qualityScore  Float     @default(0.01)
+  lastUsedAt    DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
   // Circuit Breaker (Fix: DB-persisted, multi-pod safe)
-  breakerState     String    @default("closed")          // "closed" | "open" | "half_open"
+  breakerState     String    @default("closed") // "closed" | "open" | "half_open"
   breakerFailCount Int       @default(0)
-  breakerStateAt   DateTime?                             // when state last changed
+  breakerStateAt   DateTime? // when state last changed
 
-  scope           String    @default("global")           // "global" | "ws_{workspaceId}" — data domain isolation
-  encrypted       Boolean   @default(false)              // true = strategy/description are client-encrypted
-  encryptionKeyId String?                                // identity key ID used for encryption
+  scope           String  @default("global") // "global" | "ws_{workspaceId}" — data domain isolation
+  encrypted       Boolean @default(false) // true = strategy/description are client-encrypted
+  encryptionKeyId String? // identity key ID used for encryption
 
-  signalLinks     IMGeneSignal[]
+  signalLinks IMGeneSignal[]
 
   @@index([ownerAgentId])
   @@index([category])
@@ -603,12 +733,12 @@ model IMGene {
 }
 
 model IMGeneSignal {
-  geneId          String
-  signalId        String                                 // Signal key: "error:timeout" (type field)
-  affinity        Float     @default(1.0)                // Match weight
-  signalTags      String?                                // v0.3.0: JSON SignalTag[] — null = compat mode
+  geneId     String
+  signalId   String // Signal key: "error:timeout" (type field)
+  affinity   Float   @default(1.0) // Match weight
+  signalTags String? // v0.3.0: JSON SignalTag[] — null = compat mode
 
-  gene            IMGene    @relation(fields: [geneId], references: [id], onDelete: Cascade)
+  gene IMGene @relation(fields: [geneId], references: [id], onDelete: Cascade)
 
   @@id([geneId, signalId])
   @@index([signalId])
@@ -620,24 +750,24 @@ model IMGeneSignal {
 // ==============================================================================
 
 model IMEvolutionEdge {
-  id              String    @id @default(cuid())
-  ownerAgentId    String                           // Agent who owns this edge
-  signalKey       String                           // Normalized signal combination "api_timeout|task.failed"
-  geneId          String                           // Gene ID (references memory file path)
-  successCount    Int       @default(0)
-  failureCount    Int       @default(0)
-  lastScore       Float?                           // Most recent outcome score (0-1)
-  lastUsedAt      DateTime?
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  id           String    @id @default(cuid())
+  ownerAgentId String // Agent who owns this edge
+  signalKey    String // Normalized signal combination "api_timeout|task.failed"
+  geneId       String // Gene ID (references memory file path)
+  successCount Int       @default(0)
+  failureCount Int       @default(0)
+  lastScore    Float? // Most recent outcome score (0-1)
+  lastUsedAt   DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 
   // v0.3.0: Signal architecture fields
-  signalType      String?                          // Coarse type key (= SignalTag.type), used for cross-granularity global prior
-  bimodalityIndex Float     @default(0)            // Overdispersion-based bimodality detector [0,1]
-  taskSuccessRate Float?                           // Final task success rate (separate from routing weight)
-  coverageLevel   Int       @default(0)            // Match granularity: 0=coarse 1=medium 2=fine
-  mode            String    @default("standard")   // 'standard' | 'hypergraph'
-  scope           String    @default("global")     // "global" | "ws_{workspaceId}"
+  signalType      String? // Coarse type key (= SignalTag.type), used for cross-granularity global prior
+  bimodalityIndex Float   @default(0) // Overdispersion-based bimodality detector [0,1]
+  taskSuccessRate Float? // Final task success rate (separate from routing weight)
+  coverageLevel   Int     @default(0) // Match granularity: 0=coarse 1=medium 2=fine
+  mode            String  @default("standard") // 'standard' | 'hypergraph'
+  scope           String  @default("global") // "global" | "ws_{workspaceId}"
 
   @@unique([ownerAgentId, signalKey, geneId, mode, scope])
   @@index([ownerAgentId])
@@ -652,21 +782,25 @@ model IMEvolutionEdge {
 // ==============================================================================
 
 model IMEvolutionCapsule {
-  id              String    @id @default(cuid())
-  ownerAgentId    String                           // Agent who executed
-  geneId          String                           // Gene used
-  signalKey       String                           // Signals that triggered
-  triggerSignals  String    @default("[]")         // JSON: string[] — original signals
-  outcome         String    @default("pending")    // success | failed | pending
-  score           Float?                           // 0-1 outcome score
-  summary         String    @default("")           // One-line result description
-  costCredits     Float     @default(0)            // Credits consumed
-  metadata        String    @default("{}")         // JSON: additional context
-  provider        String?                          // Provider tag for provider-scoped freeze (e.g. "openai", "exa")
-  mode            String    @default("standard")   // 'standard' | 'hypergraph'
-  scope           String    @default("global")     // "global" | "ws_{workspaceId}"
-  encrypted       Boolean   @default(false)        // true = summary is client-encrypted ciphertext
-  createdAt       DateTime  @default(now())
+  id             String   @id @default(cuid())
+  ownerAgentId   String // Agent who executed
+  geneId         String // Gene used
+  signalKey      String // Signals that triggered
+  triggerSignals String   @default("[]") // JSON: string[] — original signals
+  outcome        String   @default("pending") // success | failed | pending
+  score          Float? // 0-1 outcome score
+  summary        String   @default("") // One-line result description
+  costCredits    Float    @default(0) // Credits consumed
+  metadata       String   @default("{}") // JSON: additional context
+  provider       String? // Provider tag for provider-scoped freeze (e.g. "openai", "exa")
+  mode           String   @default("standard") // 'standard' | 'hypergraph'
+  scope          String   @default("global") // "global" | "ws_{workspaceId}"
+  encrypted      Boolean  @default(false) // true = summary is client-encrypted ciphertext
+  createdAt      DateTime @default(now())
+
+  reflection       String? // LLM-generated failure analysis
+  transitionReason String? // 'gene_applied' | 'fallback_relaxed' | 'baseline' | etc.
+  contextSnapshot  String? // JSON: { signals, fallbackUsed, memoryCount, tasksPending, sessionDuration }
 
   @@index([ownerAgentId])
   @@index([geneId])
@@ -682,21 +816,26 @@ model IMEvolutionCapsule {
 // ==============================================================================
 
 model IMEvolutionMetrics {
-  id                Int       @id @default(autoincrement())
-  ts                DateTime  @default(now())
-  window            String    @default("1h")
-  mode              String    @default("standard")
-  scope             String    @default("global")
-  ssr               Float?
-  cs                Int?
-  rp                Float?
-  regp              Float?
-  gd                Float?
-  er                Float?
-  totalCapsules     Int       @default(0)
-  successCapsules   Int       @default(0)
-  uniqueGenesUsed   Int       @default(0)
-  uniqueAgents      Int       @default(0)
+  id              Int      @id @default(autoincrement())
+  ts              DateTime @default(now())
+  window          String   @default("1h")
+  mode            String   @default("standard")
+  scope           String   @default("global")
+  ssr             Float?
+  cs              Int?
+  rp              Float?
+  regp            Float?
+  gd              Float?
+  er              Float?
+  totalCapsules   Int      @default(0)
+  successCapsules Int      @default(0)
+  uniqueGenesUsed Int      @default(0)
+  uniqueAgents    Int      @default(0)
+
+  // v1.7.3: North-star metrics
+  repeatRate Float? // Same agent+signal recurring across sessions (>1h gap)
+  frrApprox  Float? // First-round resolution rate (approx)
+  errApprox  Float? // Error reduction rate (approx)
 
   @@index([ts, mode])
   @@index([scope, ts])
@@ -708,10 +847,10 @@ model IMEvolutionMetrics {
 // ==============================================================================
 
 model IMAtom {
-  id        Int       @id @default(autoincrement())
+  id        Int               @id @default(autoincrement())
   kind      String
   value     String
-  createdAt DateTime  @default(now())
+  createdAt DateTime          @default(now())
   atoms     IMHyperedgeAtom[]
 
   @@unique([kind, value])
@@ -719,9 +858,9 @@ model IMAtom {
 }
 
 model IMHyperedge {
-  id        String    @id
-  type      String    @default("execution")
-  createdAt DateTime  @default(now())
+  id        String            @id
+  type      String            @default("execution")
+  createdAt DateTime          @default(now())
   atoms     IMHyperedgeAtom[]
 
   @@index([type])
@@ -744,9 +883,9 @@ model IMHyperedgeAtom {
 model IMCausalLink {
   causeId   String
   effectId  String
-  linkType  String    @default("learning")
-  strength  Float     @default(1.0)
-  createdAt DateTime  @default(now())
+  linkType  String   @default("learning")
+  strength  Float    @default(1.0)
+  createdAt DateTime @default(now())
 
   @@id([causeId, effectId])
   @@index([effectId])
@@ -758,40 +897,41 @@ model IMCausalLink {
 // ==============================================================================
 
 model IMSkill {
-  id            String    @id @default(cuid())
-  slug          String    @unique                    // url-safe identifier: "timeout-recovery"
-  name          String                               // Human readable name
-  description   String    @default("")               // One-line description
-  category      String    @default("general")        // coding, devops, search, browser, ai, cli, security, etc.
-  tags          String    @default("[]")             // JSON: string[] — freeform tags
-  author        String    @default("")               // Author name or handle
-  source        String    @default("community")      // clawhub | awesome-openclaw | community | prismer
-  sourceUrl     String    @default("")               // Link to original (GitHub, ClawHub, etc.)
-  sourceId      String    @default("")               // External ID for dedup (e.g. "openclaw:author/skill-name")
-  content       String    @default("")               // Full SKILL.md content or strategy text
-  installs      Int       @default(0)                // Number of times installed/used
-  stars         Int       @default(0)                // Community rating
-  status        String    @default("active")         // active | deprecated | pending_review
-  geneId        String?                              // Linked Gene ID if converted to evolution gene
-  metadata      String    @default("{}")             // JSON: extra data (sourceGdi, downloads, etc.)
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  id           String   @id @default(cuid())
+  slug         String   @unique // url-safe identifier: "timeout-recovery"
+  name         String // Human readable name
+  description  String   @default("") // One-line description
+  category     String   @default("general") // coding, devops, search, browser, ai, cli, security, etc.
+  tags         String   @default("[]") // JSON: string[] — freeform tags
+  author       String   @default("") // Author name or handle
+  source       String   @default("community") // clawhub | awesome-openclaw | community | prismer
+  sourceUrl    String   @default("") // Link to original (GitHub, ClawHub, etc.)
+  sourceId     String   @default("") // External ID for dedup (e.g. "openclaw:author/skill-name")
+  content      String   @default("") // Full SKILL.md content or strategy text
+  installs     Int      @default(0) // Number of times installed/used
+  stars        Int      @default(0) // Community rating
+  qualityScore Float    @default(0.01)
+  status       String   @default("active") // active | deprecated | pending_review
+  geneId       String? // Linked Gene ID if converted to evolution gene
+  metadata     String   @default("{}") // JSON: extra data (sourceGdi, downloads, etc.)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
   // v1.7.2: Skill Ecosystem enhancements
-  packageUrl    String?                              // CDN URL for tarball bundle (multi-file skills)
-  packageHash   String?                              // SHA-256 of tarball
-  packageSize   Int?                                 // Package size in bytes
-  fileCount     Int       @default(1)                // Number of files in bundle
-  compatibility String    @default("[]")             // JSON: platform[] (claude-code, opencode, openclaw, prismer-sdk)
-  signals       String    @default("[]")             // JSON: SignalTag[] — trigger signals for Gene conversion
-  requires      String    @default("{}")             // JSON: { env: string[], bins: string[], capabilities: string[] }
-  version       String    @default("1.0.0")          // Semantic version
-  ownerAgentId  String?                              // Creator agent ID (null = imported from external)
-  forkedFrom    String?                              // Source skill ID if forked
-  forkCount     Int       @default(0)
-  license       String    @default("MIT")
-  securityStatus String   @default("pending")        // pending | clean | suspicious | malicious
-  changelog     String    @default("")
+  packageUrl     String? // CDN URL for tarball bundle (multi-file skills)
+  packageHash    String? // SHA-256 of tarball
+  packageSize    Int? // Package size in bytes
+  fileCount      Int     @default(1) // Number of files in bundle
+  compatibility  String  @default("[]") // JSON: platform[] (claude-code, opencode, openclaw, prismer-sdk)
+  signals        String  @default("[]") // JSON: SignalTag[] — trigger signals for Gene conversion
+  requires       String  @default("{}") // JSON: { env: string[], bins: string[], capabilities: string[] }
+  version        String  @default("1.0.0") // Semantic version
+  ownerAgentId   String? // Creator agent ID (null = imported from external)
+  forkedFrom     String? // Source skill ID if forked
+  forkCount      Int     @default(0)
+  license        String  @default("MIT")
+  securityStatus String  @default("pending") // pending | clean | suspicious | malicious
+  changelog      String  @default("")
 
   @@index([category])
   @@index([source])
@@ -802,19 +942,45 @@ model IMSkill {
   @@map("im_skills")
 }
 
+// ==============================================================================
+// v1.7.3 — Content Reports (Data Governance)
+// ==============================================================================
+
+model IMReport {
+  id            String    @id @default(cuid())
+  reporterId    String
+  targetType    String // "gene" | "skill"
+  targetId      String
+  reason        String // spam | inappropriate | misleading | broken | other
+  reasonDetail  String?
+  status        String    @default("pending") // pending | upheld | dismissed
+  frozenCredits Float     @default(0)
+  resolvedBy    String?
+  resolvedAt    DateTime?
+  createdAt     DateTime  @default(now())
+
+  @@unique([reporterId, targetType, targetId])
+  @@index([status])
+  @@index([targetType, targetId])
+  @@index([reporterId])
+  @@map("im_reports")
+}
+
 // ─── Agent-Skill Installation Records ─────────────────────────────
 model IMAgentSkill {
   id          String    @id @default(cuid())
-  agentId     String                                 // Installer agent ID
-  skillId     String                                 // Skill ID
-  geneId      String?                                // Auto-created Gene ID from install
+  agentId     String // Installer agent ID
+  skillId     String // Skill ID
+  geneId      String? // Auto-created Gene ID from install
+  scope       String    @default("global") // Workspace scope
   installedAt DateTime  @default(now())
-  updatedAt   DateTime?                              // Version update timestamp
-  config      String    @default("{}")               // JSON: agent-specific config
-  status      String    @default("active")           // active | disabled | uninstalled
-  version     String?                                // Installed version
+  updatedAt   DateTime? // Version update timestamp
+  config      String    @default("{}") // JSON: agent-specific config
+  status      String    @default("active") // active | disabled | uninstalled
+  version     String? // Installed version
 
-  @@unique([agentId, skillId])
+  @@unique([agentId, skillId, scope])
+  @@index([agentId, scope, status])
   @@index([agentId])
   @@index([skillId])
   @@map("im_agent_skills")
@@ -823,17 +989,17 @@ model IMAgentSkill {
 // ─── Unmatched Signals (evolution frontier) ────────────────────────
 
 model IMUnmatchedSignal {
-  id          String   @id @default(cuid())
-  signalKey   String                           // signal_type level coarse key (anti-fragmentation, see §4.5)
-  signals     String   @default("[]")          // JSON: string[] — original signals (compat)
-  signalTags  String?                          // v0.3.0: JSON SignalTag[] — null = old string[] format
-  agentId     String                           // Agent who encountered this
-  context     String   @default("{}")          // JSON: error message, task context, etc.
-  count       Int      @default(1)             // Times this signal was unmatched
-  resolvedBy  String?                          // Gene ID that was later created for this
-  scope       String   @default("global")     // "global" | "ws_{workspaceId}"
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id         String   @id @default(cuid())
+  signalKey  String // signal_type level coarse key (anti-fragmentation, see §4.5)
+  signals    String   @default("[]") // JSON: string[] — original signals (compat)
+  signalTags String? // v0.3.0: JSON SignalTag[] — null = old string[] format
+  agentId    String // Agent who encountered this
+  context    String   @default("{}") // JSON: error message, task context, etc.
+  count      Int      @default(1) // Times this signal was unmatched
+  resolvedBy String? // Gene ID that was later created for this
+  scope      String   @default("global") // "global" | "ws_{workspaceId}"
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
 
   @@unique([signalKey, agentId, scope])
   @@index([signalKey])
@@ -849,7 +1015,7 @@ model IMEvolutionAchievement {
   badgeKey   String
   unlockedAt DateTime @default(now())
   metadata   String   @default("{}")
-  scope      String   @default("global")     // "global" | "ws_{workspaceId}"
+  scope      String   @default("global") // "global" | "ws_{workspaceId}"
 
   @@unique([agentId, badgeKey, scope])
   @@index([agentId])
@@ -859,15 +1025,15 @@ model IMEvolutionAchievement {
 // ─── Evolution ACL (fine-grained sharing) ────────────────────────
 
 model IMEvolutionACL {
-  id            String    @id @default(cuid())
-  resourceType  String                               // "gene" | "workspace" | "capsule_set"
-  resourceId    String                               // gene ID, workspace ID, or scope string
-  subjectType   String                               // "user" | "agent" | "workspace"
-  subjectId     String                               // user/agent/workspace ID
-  permission    String                               // "read" | "write" | "fork" | "admin"
-  grantedBy     String                               // who granted this access
-  createdAt     DateTime  @default(now())
-  expiresAt     DateTime?                            // optional TTL
+  id           String    @id @default(cuid())
+  resourceType String // "gene" | "workspace" | "capsule_set"
+  resourceId   String // gene ID, workspace ID, or scope string
+  subjectType  String // "user" | "agent" | "workspace"
+  subjectId    String // user/agent/workspace ID
+  permission   String // "read" | "write" | "fork" | "admin"
+  grantedBy    String // who granted this access
+  createdAt    DateTime  @default(now())
+  expiresAt    DateTime? // optional TTL
 
   @@unique([resourceType, resourceId, subjectType, subjectId, permission])
   @@index([resourceId])
@@ -878,15 +1044,15 @@ model IMEvolutionACL {
 // ─── Signal Clusters (co-occurrence based grouping) ──────────────
 
 model IMSignalCluster {
-  id            String    @id @default(cuid())
-  clusterKey    String    @unique               // "error:connection" — human-readable label
-  memberSignals String    @default("[]")        // JSON: ["error:timeout", "error:connection_refused"]
-  frequency     Int       @default(0)           // Total occurrences of this cluster
-  agentCount    Int       @default(0)           // Distinct agents that triggered
-  topGeneId     String?                         // Most successful gene for this cluster
-  topGeneRate   Float?                          // Success rate of topGene
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  id            String   @id @default(cuid())
+  clusterKey    String   @unique // "error:connection" — human-readable label
+  memberSignals String   @default("[]") // JSON: ["error:timeout", "error:connection_refused"]
+  frequency     Int      @default(0) // Total occurrences of this cluster
+  agentCount    Int      @default(0) // Distinct agents that triggered
+  topGeneId     String? // Most successful gene for this cluster
+  topGeneRate   Float? // Success rate of topGene
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
   @@index([frequency])
   @@map("im_signal_clusters")
@@ -897,11 +1063,11 @@ model IMSignalCluster {
 // ==============================================================================
 
 model IMRateLimit {
-  id           String   @id @default(cuid())
-  imUserId     String
-  action       String                          // message.send | tool_call | conversation.create | agent.register
-  windowStart  DateTime
-  count        Int      @default(0)
+  id          String   @id @default(cuid())
+  imUserId    String
+  action      String // message.send | tool_call | conversation.create | agent.register
+  windowStart DateTime
+  count       Int      @default(0)
 
   @@unique([imUserId, action, windowStart])
   @@index([imUserId, action])
@@ -909,12 +1075,12 @@ model IMRateLimit {
 }
 
 model IMViolation {
-  id         String   @id @default(cuid())
-  imUserId   String
-  type       String                            // spam | abuse | impersonation | policy_violation | tier_demotion
-  evidence   String   @default("{}")           // JSON
-  action     String                            // warn | throttle | suspend | ban
-  createdAt  DateTime @default(now())
+  id        String   @id @default(cuid())
+  imUserId  String
+  type      String // spam | abuse | impersonation | policy_violation | tier_demotion
+  evidence  String   @default("{}") // JSON
+  action    String // warn | throttle | suspend | ban
+  createdAt DateTime @default(now())
 
   @@index([imUserId])
   @@map("im_violations")
@@ -923,10 +1089,10 @@ model IMViolation {
 model IMConversationPolicy {
   id             String   @id @default(cuid())
   conversationId String
-  rule           String                        // allow | deny
-  subjectType    String                        // user | role | trustTier
+  rule           String // allow | deny
+  subjectType    String // user | role | trustTier
   subjectId      String
-  action         String                        // send | read | invite | admin
+  action         String // send | read | invite | admin
   createdAt      DateTime @default(now())
 
   @@unique([conversationId, subjectType, subjectId, action])
@@ -939,9 +1105,9 @@ model IMConversationPolicy {
 model IMSubscription {
   id              String    @id @default(cuid())
   subscriberId    String
-  events          String    @default("[]")         // JSON: string[] — event type patterns ["task.created", "agent.*"]
-  filter          String    @default("{}")         // JSON: filter criteria { capability?, agentId?, source? }
-  delivery        String    @default("message")    // "message" | "webhook" | "sync"
+  events          String    @default("[]") // JSON: string[] — event type patterns ["task.created", "agent.*"]
+  filter          String    @default("{}") // JSON: filter criteria { capability?, agentId?, source? }
+  delivery        String    @default("message") // "message" | "webhook" | "sync"
   webhookUrl      String?
   webhookSecret   String?
   minIntervalMs   Int       @default(0)
@@ -958,4 +1124,430 @@ model IMSubscription {
   @@index([active])
   @@index([expiresAt])
   @@map("im_subscriptions")
+}
+
+// ==============================================================================
+// v1.7.4 — Leaderboard Snapshots (weekly aggregation for ranked boards)
+// ==============================================================================
+
+model IMLeaderboardSnapshot {
+  id           Int      @id @default(autoincrement())
+  period       String   @default("weekly") // weekly | monthly | alltime
+  domain       String   @default("general") // coding | research | ops | general
+  snapshotDate DateTime @default(now())
+
+  // Agent Improvement Board
+  agentId       String
+  agentName     String @default("")
+  ownerUsername String @default("")
+  err           Float? // Error Reduction Rate
+  sessionCount  Int    @default(0)
+  successRate   Float? // Overall success rate
+  geneHitRate   Float? // % of /analyze returning apply_gene
+  trendData     String @default("[]") // JSON: last 4 weeks ERR values for sparkline
+
+  // Gene Impact Board (per-gene rows use geneId, agentId="__gene__")
+  geneId        String?
+  geneName      String  @default("")
+  adopters      Int     @default(0) // Distinct agents using this gene
+  avgImpact     Float? // Avg outcome improvement across adopters
+  geneCreatorId String?
+
+  // Contributor Board (per-contributor rows use agentId="__contributor__")
+  genesPublished Int @default(0)
+  genesAdopted   Int @default(0) // By OTHER agents
+  agentsHelped   Int @default(0)
+
+  // Ranking
+  rank      Int    @default(0)
+  boardType String @default("agent") // agent | gene | contributor
+
+  // V2 value metrics
+  tokenSaved    Float?
+  moneySaved    Float?
+  co2Reduced    Float?
+  devHoursSaved Float?
+  percentile    Float?
+  growthRate    Float?
+  prevRank      Int?
+
+  @@index([period, domain, boardType, snapshotDate])
+  @@index([agentId, period])
+  @@index([boardType, rank, snapshotDate])
+  @@map("im_leaderboard_snapshots")
+}
+
+// ==============================================================================
+// v1.8.0 — Value Metrics (token/cost savings per entity per period)
+// ==============================================================================
+
+model IMValueMetrics {
+  id           Int      @id @default(autoincrement())
+  entityType   String // 'agent' | 'creator'
+  entityId     String
+  period       String // 'weekly' | 'monthly' | 'alltime'
+  snapshotDate DateTime
+
+  tokenSaved    Float @default(0)
+  moneySaved    Float @default(0)
+  co2Reduced    Float @default(0)
+  devHoursSaved Float @default(0)
+
+  errorPatterns Int @default(0)
+  agentsHelped  Int @default(0)
+  adoptionCount Int @default(0)
+
+  rankByValue  Int?
+  rankByImpact Int?
+  percentile   Float?
+
+  prevPeriodValue Float?
+  growthRate      Float?
+
+  scope String @default("global")
+
+  @@index([entityType, period, snapshotDate])
+  @@index([entityType, entityId, period])
+  @@index([period, rankByValue, snapshotDate])
+  @@map("im_value_metrics")
+}
+
+// ==============================================================================
+// v1.8.0 — Anti-Cheat Log (rule violations for leaderboard integrity)
+// ==============================================================================
+
+model IMAntiCheatLog {
+  id         Int       @id @default(autoincrement())
+  ruleKey    String
+  entityType String
+  entityId   String
+  detail     String
+  action     String
+  reviewedBy String?
+  reviewedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([ruleKey, createdAt])
+  @@index([entityId])
+  @@map("im_anti_cheat_log")
+}
+
+// ==============================================================================
+// v1.8.0 — Token Baseline (avg tokens without gene for savings calculation)
+// ==============================================================================
+
+model IMTokenBaseline {
+  id              Int      @id @default(autoincrement())
+  signalKey       String   @unique
+  avgTokensNoGene Float
+  sampleCount     Int
+  updatedAt       DateTime @updatedAt
+
+  @@map("im_token_baseline")
+}
+
+// ==============================================================================
+// v1.8.0 — Knowledge Links (Memory ↔ Evolution bidirectional associations)
+// ==============================================================================
+
+model IMKnowledgeLink {
+  id         String   @id @default(cuid())
+  sourceType String // 'memory' | 'gene' | 'capsule' | 'signal'
+  sourceId   String
+  targetType String
+  targetId   String
+  linkType   String   @default("related") // 'related' | 'derived_from' | 'applied_in' | 'contradicts'
+  strength   Float    @default(1.0)
+  scope      String   @default("global")
+  createdAt  DateTime @default(now())
+
+  @@unique([sourceType, sourceId, targetType, targetId, linkType])
+  @@index([sourceType, sourceId])
+  @@index([targetType, targetId])
+  @@index([scope])
+  @@map("im_knowledge_links")
+}
+
+// ==============================================================================
+// v1.8.0 P8 — Community (Evolution Community Forum)
+// ==============================================================================
+
+model IMCommunityPost {
+  id            String   @id @default(cuid())
+  boardId       String? // nullable — pure tag system; legacy boards stored as tags
+  authorId      String
+  authorType    String   @default("human") // 'human' | 'agent'
+
+  title         String
+  content       String
+  contentHtml   String?
+  contentJson   String?  // ProseMirror JSON for WYSIWYG editor round-trip
+
+  tags          Json?
+  postType      String   @default("discussion") // 'discussion' | 'battleReport' | 'milestone' | 'geneRelease' | 'help' | 'idea' | 'changelog'
+  status        String   @default("active") // 'active' | 'solved' | 'planned' | 'shipped' | 'archived' | 'hidden'
+
+  linkedGeneIds   Json?
+  linkedSkillIds  Json?
+  linkedAgentId   String?
+  linkedCapsuleId String?
+
+  attachments     Json?
+
+  upvotes       Int      @default(0)
+  downvotes     Int      @default(0)
+  commentCount  Int      @default(0)
+  viewCount     Int      @default(0)
+  bookmarkCount Int      @default(0)
+
+  solvedAt      DateTime?
+  bestAnswerId  String?
+
+  deletedAt     DateTime?
+  deletedBy     String?
+
+  pinned        Boolean  @default(false)
+  featured      Boolean  @default(false)
+  autoGenerated Boolean  @default(false)
+  scope         String   @default("global")
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([boardId, createdAt])
+  @@index([boardId, upvotes])
+  @@index([authorId, createdAt])
+  @@index([status, boardId])
+  @@index([linkedAgentId])
+  @@index([deletedAt])
+  @@map("im_community_posts")
+}
+
+model IMCommunityComment {
+  id          String   @id @default(cuid())
+  postId      String
+  parentId    String?
+  authorId    String
+  authorType  String   @default("human")
+
+  content     String
+  contentHtml String?
+
+  commentType String   @default("reply") // 'reply' | 'answer'
+
+  upvotes     Int      @default(0)
+  downvotes   Int      @default(0)
+
+  isBestAnswer Boolean @default(false)
+  autoGenerated Boolean @default(false)
+
+  linkedGeneIds Json?
+  metrics       Json?
+
+  deletedAt   DateTime?
+  deletedBy   String?
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([postId, createdAt])
+  @@index([postId, upvotes])
+  @@index([postId, isBestAnswer])
+  @@index([authorId])
+  @@index([deletedAt])
+  @@map("im_community_comments")
+}
+
+model IMCommunityVote {
+  id          String   @id @default(cuid())
+  userId      String
+  targetType  String // 'post' | 'comment'
+  targetId    String
+  value       Int // +1 or -1
+
+  createdAt   DateTime @default(now())
+
+  @@unique([userId, targetType, targetId])
+  @@index([targetType, targetId])
+  @@map("im_community_votes")
+}
+
+model IMCommunityBookmark {
+  id          String   @id @default(cuid())
+  userId      String
+  postId      String
+
+  createdAt   DateTime @default(now())
+
+  @@unique([userId, postId])
+  @@index([userId, createdAt])
+  @@map("im_community_bookmarks")
+}
+
+model IMCommunityFollow {
+  id            String   @id @default(cuid())
+  followerId    String
+  followingId   String
+  followingType String   @default("user") // 'user' | 'agent' | 'gene' | 'board'
+
+  createdAt     DateTime @default(now())
+
+  @@unique([followerId, followingId, followingType])
+  @@index([followingId, followingType])
+  @@map("im_community_follows")
+}
+
+model IMCommunityTag {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  postCount Int      @default(0)
+  trending  Boolean  @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([postCount])
+  @@index([name])
+  @@map("im_community_tags")
+}
+
+model IMCommunityPostTag {
+  id     String @id @default(cuid())
+  postId String
+  tagId  String
+
+  @@unique([postId, tagId])
+  @@index([postId])
+  @@index([tagId])
+  @@map("im_community_post_tags")
+}
+
+// ── Community v1.5: Dynamic Boards ──────────────────────────────────
+
+model IMCommunityBoard {
+  id              String   @id @default(cuid())
+  slug            String   @unique // URL path: "showcase", "rust-agents"
+  name            String   // display name
+  description     String?  // board description (Markdown)
+  icon            String?  // emoji or icon key
+
+  creatorId       String   // im_users.id
+  isSystem        Boolean  @default(false)
+
+  rules           String?  // JSON: { allowedPostTypes?, requireTags?, approvalRequired? }
+
+  postCount       Int      @default(0)
+  subscriberCount Int      @default(0)
+
+  status          String   @default("active") // 'active' | 'archived' | 'hidden'
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([status, postCount])
+  @@index([creatorId])
+  @@map("im_community_boards")
+}
+
+model IMCommunityBoardAdmin {
+  id        String   @id @default(cuid())
+  boardId   String
+  userId    String
+  role      String   @default("moderator") // 'owner' | 'moderator'
+
+  createdAt DateTime @default(now())
+
+  @@unique([boardId, userId])
+  @@index([userId])
+  @@map("im_community_board_admins")
+}
+
+// ── Community v1.5: User Profile ────────────────────────────────────
+
+model IMCommunityProfile {
+  id             String    @id // = im_users.id (1:1)
+  bio            String?
+  website        String?
+
+  postCount      Int       @default(0)
+  commentCount   Int       @default(0)
+  karmaTotal     Int       @default(0)
+  followerCount  Int       @default(0)
+  followingCount Int       @default(0)
+
+  lastActiveAt   DateTime?
+  streakDays     Int       @default(0)
+
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@map("im_community_profiles")
+}
+
+// ── Community v1.5: Drafts ──────────────────────────────────────────
+
+model IMCommunityDraft {
+  id          String   @id @default(cuid())
+  authorId    String
+  boardSlug   String?
+  title       String?
+  contentJson String?  // editor JSON snapshot
+  content     String?  // Markdown snapshot
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  expiresAt   DateTime // 7 days TTL
+
+  @@index([authorId, updatedAt])
+  @@map("im_community_drafts")
+}
+
+// ==============================================================================
+// Contact System (v1.8.0 P9)
+// ==============================================================================
+
+model IMFriendRequest {
+  id          String   @id @default(cuid())
+  fromUserId  String
+  toUserId    String
+  reason      String?
+  source      String?   // search | qr_code | group | recommendation
+  status      String   @default("pending") // pending | accepted | rejected | expired
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  fromUser IMUser @relation("FriendRequestsSent", fields: [fromUserId], references: [id])
+  toUser   IMUser @relation("FriendRequestsReceived", fields: [toUserId], references: [id])
+
+  @@unique([fromUserId, toUserId, status])
+  @@index([toUserId, status])
+  @@index([fromUserId, status])
+  @@map("im_friend_requests")
+}
+
+model IMContactRelation {
+  userId    String
+  contactId String
+  remark    String?
+  createdAt DateTime @default(now())
+
+  user    IMUser @relation("ContactsOwned", fields: [userId], references: [id])
+  contact IMUser @relation("ContactsOf", fields: [contactId], references: [id])
+
+  @@id([userId, contactId])
+  @@index([contactId])
+  @@map("im_contacts")
+}
+
+model IMBlock {
+  userId    String
+  blockedId String
+  reason    String?
+  createdAt DateTime @default(now())
+
+  user    IMUser @relation("BlocksOwned", fields: [userId], references: [id])
+  blocked IMUser @relation("BlockedBy", fields: [blockedId], references: [id])
+
+  @@id([userId, blockedId])
+  @@map("im_blocks")
 }

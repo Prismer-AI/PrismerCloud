@@ -97,7 +97,7 @@ source /path/to/src/im/sql/002_verify_tables.sql;
 ## 测试环境示例
 
 假设测试环境配置：
-- Host: `your-db-host`
+- Host: `test-db.prismer.dev`
 - Port: `3306`
 - User: `prismer_test`
 - Password: `test_password`
@@ -106,13 +106,13 @@ source /path/to/src/im/sql/002_verify_tables.sql;
 ```bash
 # 方式一
 ./run-migration.sh all \
-  -h your-db-host \
+  -h test-db.prismer.dev \
   -u prismer_test \
   -p test_password \
   -d prismer_cloud_test
 
 # 方式二
-mysql -h your-db-host -u prismer_test -p prismer_cloud_test < 001_create_tables.sql
+mysql -h test-db.prismer.dev -u prismer_test -p prismer_cloud_test < 001_create_tables.sql
 # 输入密码后执行
 ```
 

@@ -7,13 +7,44 @@
  */
 import type Redis from 'ioredis';
 import prisma from '../db';
+import { createModuleLogger } from '@/lib/logger';
+
+const log = createModuleLogger('RateLimit');
 
 // Rate limits per trust tier (requests per minute)
 const TIER_LIMITS: Record<number, Record<string, number>> = {
-  0: { 'message.send': 10, tool_call: 2, 'conversation.create': 2, 'agent.register': 1, 'file.upload': 2 },
-  1: { 'message.send': 60, tool_call: 10, 'conversation.create': 10, 'agent.register': 5, 'file.upload': 10 },
-  2: { 'message.send': 300, tool_call: 50, 'conversation.create': 30, 'agent.register': 10, 'file.upload': 30 },
-  3: { 'message.send': 1000, tool_call: 200, 'conversation.create': 100, 'agent.register': 20, 'file.upload': 100 },
+  0: {
+    'message.send': 10,
+    tool_call: 2,
+    'conversation.create': 2,
+    'agent.register': 1,
+    'file.upload': 2,
+    'api.write': 20,
+  },
+  1: {
+    'message.send': 60,
+    tool_call: 10,
+    'conversation.create': 10,
+    'agent.register': 5,
+    'file.upload': 10,
+    'api.write': 120,
+  },
+  2: {
+    'message.send': 300,
+    tool_call: 50,
+    'conversation.create': 30,
+    'agent.register': 10,
+    'file.upload': 30,
+    'api.write': 600,
+  },
+  3: {
+    'message.send': 1000,
+    tool_call: 200,
+    'conversation.create': 100,
+    'agent.register': 20,
+    'file.upload': 100,
+    'api.write': 2000,
+  },
 };
 
 const WINDOW_MS = 60_000;
@@ -26,8 +57,13 @@ const memCounters = new Map<string, { count: number; windowStart: number }>();
 // Violation dedup (in-memory is fine — per-pod dedup is acceptable)
 const recentViolations = new Map<string, number>();
 
+// Non-production multiplier: raise all limits 10x in dev/test so integration tests
+// (which run many requests in quick succession) don't hit 429s.
+const DEV_MULTIPLIER = process.env.NODE_ENV === 'production' ? 1 : 10;
+
 function getLimit(tier: number, action: string): number {
-  return (TIER_LIMITS[tier] ?? TIER_LIMITS[0])[action] ?? 60;
+  const base = (TIER_LIMITS[tier] ?? TIER_LIMITS[0])[action] ?? 60;
+  return base * DEV_MULTIPLIER;
 }
 
 function currentWindow(): number {
@@ -44,9 +80,9 @@ export class RateLimiterService {
     if (this._cleanupTimer.unref) this._cleanupTimer.unref();
 
     if (this._redis) {
-      console.log('[RateLimit] Using Redis-backed rate limiting (cross-pod consistent)');
+      log.info('Using Redis-backed rate limiting (cross-pod consistent)');
     } else {
-      console.log('[RateLimit] Using in-memory rate limiting (single-pod only)');
+      log.info('Using in-memory rate limiting (single-pod only)');
     }
   }
 
@@ -157,11 +193,11 @@ export class RateLimiterService {
               action: 'demote',
             },
           });
-          console.log(`[RateLimit] Demoted ${userId}: tier ${user.trustTier} → ${user.trustTier - 1}`);
+          log.warn({ userId, from: user.trustTier, to: user.trustTier - 1 }, 'User demoted');
         }
       }
     } catch (err) {
-      console.error('[RateLimit] Violation record failed:', err);
+      log.error({ err }, 'Violation record failed');
     }
   }
 

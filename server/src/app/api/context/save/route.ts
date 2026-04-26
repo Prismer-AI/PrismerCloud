@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { deposit } from '@/lib/context-api';
-import {
-  generateTaskId,
-  createSaveUsageRecord,
-  recordUsageBackground
-} from '@/lib/usage-recorder';
+import { generateTaskId, createSaveUsageRecord, recordUsageBackground } from '@/lib/usage-recorder';
 import { apiGuard } from '@/lib/api-guard';
+import { metrics } from '@/lib/metrics';
+import { createModuleLogger } from '@/lib/logger';
+
+const log = createModuleLogger('Save');
 
 /**
  * POST /api/context/save
@@ -28,6 +28,7 @@ interface SaveItem {
 }
 
 export async function POST(request: NextRequest) {
+  const reqStart = Date.now();
   // Auth validation (tracked — no balance check, save is free)
   const guard = await apiGuard(request, { tier: 'tracked' });
   if (!guard.ok) return guard.response;
@@ -41,18 +42,24 @@ export async function POST(request: NextRequest) {
     // 2. 检测模式: 单条 vs 批量
     const isBatch = Array.isArray(body.items);
 
+    let result: NextResponse;
     if (isBatch) {
-      return handleBatchSave(request, body.items, authHeader, userId);
+      result = await handleBatchSave(request, body.items, authHeader, userId);
     } else {
-      return handleSingleSave(request, body, authHeader, userId);
+      result = await handleSingleSave(request, body, authHeader, userId);
     }
-
+    metrics.recordRequest('/api/context/save', Date.now() - reqStart, result.status);
+    return result;
   } catch (error) {
-    console.error('[Save API] Error:', error);
-    return NextResponse.json({
-      success: false,
-      error: { code: 'INTERNAL_ERROR', message: 'Failed to process request' }
-    }, { status: 500 });
+    log.error({ err: error }, 'Save error');
+    metrics.recordRequest('/api/context/save', Date.now() - reqStart, 500);
+    return NextResponse.json(
+      {
+        success: false,
+        error: { code: 'INTERNAL_ERROR', message: 'Failed to process request' },
+      },
+      { status: 500 },
+    );
   }
 }
 
@@ -63,7 +70,7 @@ async function handleSingleSave(
   request: NextRequest,
   body: any,
   authHeader: string,
-  userId: string
+  userId: string,
 ): Promise<NextResponse> {
   const startTime = Date.now();
   const { url, hqcc, raw, meta, visibility } = body;
@@ -71,13 +78,16 @@ async function handleSingleSave(
 
   // 验证必填字段
   if (!url || !hqcc) {
-    return NextResponse.json({
-      success: false,
-      error: {
-        code: 'INVALID_INPUT',
-        message: 'url and hqcc are required'
-      }
-    }, { status: 400 });
+    return NextResponse.json(
+      {
+        success: false,
+        error: {
+          code: 'INVALID_INPUT',
+          message: 'url and hqcc are required',
+        },
+      },
+      { status: 400 },
+    );
   }
 
   try {
@@ -90,21 +100,24 @@ async function handleSingleSave(
         meta: {
           ...meta,
           source: meta?.source || 'save_api',
-          saved_at: new Date().toISOString()
-        }
+          saved_at: new Date().toISOString(),
+        },
       },
       authHeader,
-      userId
+      userId,
     );
 
     if (!result.ok) {
-      return NextResponse.json({
-        success: false,
-        error: {
-          code: 'DEPOSIT_ERROR',
-          message: result.error || 'Failed to deposit content'
-        }
-      }, { status: 500 });
+      return NextResponse.json(
+        {
+          success: false,
+          error: {
+            code: 'DEPOSIT_ERROR',
+            message: result.error || 'Failed to deposit content',
+          },
+        },
+        { status: 500 },
+      );
     }
 
     // 记录使用量
@@ -113,9 +126,9 @@ async function handleSingleSave(
         taskId,
         url,
         itemCount: 1,
-        processingTimeMs: Date.now() - startTime
+        processingTimeMs: Date.now() - startTime,
       }),
-      authHeader
+      authHeader,
     );
 
     return NextResponse.json({
@@ -123,15 +136,17 @@ async function handleSingleSave(
       status: result.data?.status || 'created',
       url,
       content_uri: result.data?.content_uri,
-      visibility: result.data?.visibility
+      visibility: result.data?.visibility,
     });
-
   } catch (error) {
-    console.error('[handleSingleSave] Error:', error);
-    return NextResponse.json({
-      success: false,
-      error: { code: 'PROCESS_ERROR', message: 'Failed to save content' }
-    }, { status: 500 });
+    log.error({ err: error }, 'handleSingleSave error');
+    return NextResponse.json(
+      {
+        success: false,
+        error: { code: 'PROCESS_ERROR', message: 'Failed to save content' },
+      },
+      { status: 500 },
+    );
   }
 }
 
@@ -143,49 +158,58 @@ async function handleBatchSave(
   request: NextRequest,
   items: SaveItem[],
   authHeader: string,
-  userId: string
+  userId: string,
 ): Promise<NextResponse> {
   const startTime = Date.now();
   const taskId = generateTaskId('save_batch');
 
   // 验证 items
   if (!items || items.length === 0) {
-    return NextResponse.json({
-      success: false,
-      error: {
-        code: 'INVALID_INPUT',
-        message: 'items array is required and cannot be empty'
-      }
-    }, { status: 400 });
+    return NextResponse.json(
+      {
+        success: false,
+        error: {
+          code: 'INVALID_INPUT',
+          message: 'items array is required and cannot be empty',
+        },
+      },
+      { status: 400 },
+    );
   }
 
   if (items.length > 50) {
-    return NextResponse.json({
-      success: false,
-      error: {
-        code: 'BATCH_TOO_LARGE',
-        message: 'Maximum 50 items per batch request'
-      }
-    }, { status: 400 });
+    return NextResponse.json(
+      {
+        success: false,
+        error: {
+          code: 'BATCH_TOO_LARGE',
+          message: 'Maximum 50 items per batch request',
+        },
+      },
+      { status: 400 },
+    );
   }
 
   // 验证每个 item
   for (const item of items) {
     if (!item.url || !item.hqcc) {
-      return NextResponse.json({
-        success: false,
-        error: {
-          code: 'INVALID_INPUT',
-          message: 'Each item must have url and hqcc'
-        }
-      }, { status: 400 });
+      return NextResponse.json(
+        {
+          success: false,
+          error: {
+            code: 'INVALID_INPUT',
+            message: 'Each item must have url and hqcc',
+          },
+        },
+        { status: 400 },
+      );
     }
   }
 
   try {
     // 并发 deposit (同 withdrawBatch 策略，避免后端 batch bug)
     const settled = await Promise.allSettled(
-      items.map(item =>
+      items.map((item) =>
         deposit(
           {
             url: item.url,
@@ -195,13 +219,13 @@ async function handleBatchSave(
             meta: {
               ...item.meta,
               source: item.meta?.source || 'save_api',
-              saved_at: new Date().toISOString()
-            }
+              saved_at: new Date().toISOString(),
+            },
           },
           authHeader,
-          userId
-        )
-      )
+          userId,
+        ),
+      ),
     );
 
     const results = items.map((item, i) => {
@@ -210,29 +234,32 @@ async function handleBatchSave(
         return {
           url: item.url,
           status: result.value.data?.status || 'created',
-          content_uri: result.value.data?.content_uri
+          content_uri: result.value.data?.content_uri,
         };
       }
       return {
         url: item.url,
         status: 'failed',
-        error: result.status === 'fulfilled' ? result.value.error : String(result.reason)
+        error: result.status === 'fulfilled' ? result.value.error : String(result.reason),
       };
     });
 
-    const created = results.filter(r => r.status === 'created').length;
-    const updated = results.filter(r => r.status === 'updated').length;
-    const failed = results.filter(r => r.status === 'failed').length;
+    const created = results.filter((r) => r.status === 'created').length;
+    const updated = results.filter((r) => r.status === 'updated').length;
+    const failed = results.filter((r) => r.status === 'failed').length;
 
     // 记录使用量
     recordUsageBackground(
       createSaveUsageRecord({
         taskId,
-        url: items.map(i => i.url).join(', ').substring(0, 200),
+        url: items
+          .map((i) => i.url)
+          .join(', ')
+          .substring(0, 200),
         itemCount: items.length,
-        processingTimeMs: Date.now() - startTime
+        processingTimeMs: Date.now() - startTime,
       }),
-      authHeader
+      authHeader,
     );
 
     return NextResponse.json({
@@ -242,18 +269,17 @@ async function handleBatchSave(
         total: items.length,
         created,
         updated,
-        failed
-      }
+        failed,
+      },
     });
-
   } catch (error) {
-    console.error('[handleBatchSave] Error:', error);
-    return NextResponse.json({
-      success: false,
-      error: { code: 'PROCESS_ERROR', message: 'Failed to save content batch' }
-    }, { status: 500 });
+    log.error({ err: error }, 'handleBatchSave error');
+    return NextResponse.json(
+      {
+        success: false,
+        error: { code: 'PROCESS_ERROR', message: 'Failed to save content batch' },
+      },
+      { status: 500 },
+    );
   }
 }
-
-
-

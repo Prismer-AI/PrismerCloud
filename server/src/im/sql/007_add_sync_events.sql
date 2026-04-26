@@ -16,7 +16,7 @@ SET NAMES utf8mb4;
 CREATE TABLE IF NOT EXISTS `im_sync_events` (
   `id`              INT          NOT NULL AUTO_INCREMENT,
   `type`            VARCHAR(50)  NOT NULL COMMENT 'message.new | message.edit | message.delete | conversation.create | conversation.update | conversation.archive | participant.add | participant.remove',
-  `data`            TEXT         NOT NULL COMMENT 'JSON payload',
+  `data`            TEXT         NOT NULL DEFAULT ('{}') COMMENT 'JSON payload',
   `conversationId`  VARCHAR(30)  DEFAULT NULL,
   `imUserId`        VARCHAR(30)  NOT NULL COMMENT 'Target user who should see this event',
   `createdAt`       DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),

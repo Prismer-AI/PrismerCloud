@@ -10,10 +10,15 @@
  */
 
 export async function register() {
-  if (
-    process.env.NEXT_RUNTIME === 'nodejs' &&
-    process.env.IM_SERVER_ENABLED !== 'false'
-  ) {
+  if (process.env.NEXT_RUNTIME === 'nodejs' && process.env.IM_SERVER_ENABLED !== 'false') {
+    // Load Nacos config BEFORE IM server so DB/Redis env vars are set
+    try {
+      const { ensureNacosConfig } = await import('./lib/nacos-config');
+      await ensureNacosConfig();
+    } catch (e) {
+      console.warn('[Instrumentation] Nacos config load failed, using defaults:', e instanceof Error ? e.message : e);
+    }
+
     const { bootstrapIMServer } = await import('./im/bootstrap');
     await bootstrapIMServer();
   }

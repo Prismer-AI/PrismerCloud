@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Bell, Code, LogOut, ChevronDown, Sun, Moon, Github, Menu, X } from 'lucide-react';
+import { Bell, Code, LogOut, ChevronDown, Sun, Moon, Github, Menu, X, UserCircle, Dna, LayoutDashboard } from 'lucide-react';
 import { useApp } from '@/contexts/app-context';
 import { useTheme } from '@/contexts/theme-context';
 
@@ -13,14 +13,12 @@ function getNotificationAuthHeaders(): Record<string, string> {
     const authStored = localStorage.getItem('prismer_auth');
     if (authStored) {
       const authData = JSON.parse(authStored);
-      if (authData.token && authData.expiresAt > Date.now())
-        return { 'Authorization': `Bearer ${authData.token}` };
+      if (authData.token && authData.expiresAt > Date.now()) return { Authorization: `Bearer ${authData.token}` };
     }
     const apiKeyStored = localStorage.getItem('prismer_active_api_key');
     if (apiKeyStored) {
       const keyData = JSON.parse(apiKeyStored);
-      if (keyData.key && keyData.status === 'ACTIVE')
-        return { 'Authorization': `Bearer ${keyData.key}` };
+      if (keyData.key && keyData.status === 'ACTIVE') return { Authorization: `Bearer ${keyData.key}` };
     }
   } catch {}
   return {};
@@ -35,6 +33,7 @@ function getAvatarUrl(email: string): string {
 const NAV_ITEMS = [
   { href: '/playground', label: 'Playground' },
   { href: '/evolution', label: 'Evolution' },
+  { href: '/community', label: 'Community' },
   { href: '/docs', label: 'Docs' },
   { href: '/#pricing', label: 'Pricing' },
 ];
@@ -68,7 +67,7 @@ export function Navbar() {
       } else if (delta > 0) {
         setHeaderVisible(false); // scrolling DOWN → hide
       } else {
-        setHeaderVisible(true);  // scrolling UP → show
+        setHeaderVisible(true); // scrolling UP → show
       }
       lastScrollY.current = currentY;
     };
@@ -84,15 +83,19 @@ export function Navbar() {
   // Lock body scroll when mobile menu is open
   useEffect(() => {
     document.body.style.overflow = mobileMenuOpen ? 'hidden' : '';
-    return () => { document.body.style.overflow = ''; };
+    return () => {
+      document.body.style.overflow = '';
+    };
   }, [mobileMenuOpen]);
 
   // Fetch initial unread count
   useEffect(() => {
     if (!showAuthenticatedUI) return;
     fetch('/api/notifications', { headers: getNotificationAuthHeaders() })
-      .then(res => res.json())
-      .then(data => { if (data.success) setUnreadCount(data.unreadCount || 0); })
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success) setUnreadCount(data.unreadCount || 0);
+      })
       .catch(() => {});
   }, [showAuthenticatedUI]);
 
@@ -104,9 +107,7 @@ export function Navbar() {
   };
 
   // Build nav items — Dashboard only when authenticated
-  const allNavItems = showAuthenticatedUI
-    ? [{ href: '/dashboard', label: 'Dashboard' }, ...NAV_ITEMS]
-    : NAV_ITEMS;
+  const allNavItems = showAuthenticatedUI ? [{ href: '/dashboard', label: 'Dashboard' }, ...NAV_ITEMS] : NAV_ITEMS;
 
   function isNavActive(href: string): boolean {
     if (href === '/#pricing') return false;
@@ -119,22 +120,25 @@ export function Navbar() {
       <Link
         href={href}
         className={`relative px-3 py-1.5 rounded-md text-sm font-medium transition-all duration-200
-          ${active
-            ? isDark
-              ? 'text-white'
-              : 'text-[var(--prismer-primary)]'
-            : isDark
-              ? 'text-zinc-400 hover:text-white hover:bg-white/5'
-              : 'text-zinc-600 hover:text-zinc-900 hover:bg-[var(--prismer-primary)]/5'
+          ${
+            active
+              ? isDark
+                ? 'text-white'
+                : 'text-[var(--prismer-primary)]'
+              : isDark
+                ? 'text-zinc-400 hover:text-white hover:bg-white/5'
+                : 'text-zinc-600 hover:text-zinc-900 hover:bg-[var(--prismer-primary)]/5'
           }`}
       >
         {label}
         {active && (
-          <span className={`absolute -bottom-0.5 left-1/2 -translate-x-1/2 w-4/5 h-0.5 rounded-full
+          <span
+            className={`absolute -bottom-0.5 left-1/2 -translate-x-1/2 w-4/5 h-0.5 rounded-full
             animate-in fade-in zoom-in-50 duration-300
-            ${isDark
-              ? 'bg-gradient-to-r from-violet-400 to-violet-600'
-              : 'bg-gradient-to-r from-[var(--prismer-primary)] to-[var(--prismer-primary-light)]'
+            ${
+              isDark
+                ? 'bg-gradient-to-r from-violet-400 to-violet-600'
+                : 'bg-gradient-to-r from-[var(--prismer-primary)] to-[var(--prismer-primary-light)]'
             }`}
           />
         )}
@@ -143,13 +147,15 @@ export function Navbar() {
   };
 
   return (
-    <nav className={`fixed top-0 left-0 right-0 z-50 px-3 sm:px-5 pt-3 transition-transform duration-300 ${effectiveHeaderVisible ? 'translate-y-0' : '-translate-y-full'}`}>
+    <nav
+      className={`fixed top-0 left-0 right-0 z-50 px-3 sm:px-5 pt-3 transition-transform duration-300 ${effectiveHeaderVisible ? 'translate-y-0' : '-translate-y-full'}`}
+    >
       {/* Floating container — frosted glass */}
-      <div className={`rounded-2xl backdrop-blur-xl backdrop-saturate-150 border shadow-lg ${
-        isDark
-          ? 'bg-zinc-950/60 border-white/10 shadow-black/25'
-          : 'bg-white/65 border-white/40 shadow-black/[0.08]'
-      }`}>
+      <div
+        className={`rounded-2xl backdrop-blur-xl backdrop-saturate-150 border shadow-lg ${
+          isDark ? 'bg-zinc-950/60 border-white/10 shadow-black/25' : 'bg-white/65 border-white/40 shadow-black/[0.08]'
+        }`}
+      >
         {/* Main bar */}
         <div className="px-4 h-14 flex items-center justify-between">
           {/* LEFT: Logo */}
@@ -161,18 +167,20 @@ export function Navbar() {
                 className="w-7 h-7 object-contain"
               />
             </div>
-            <span className={`font-bold text-lg tracking-tight transition-colors ${
-              isDark
-                ? 'text-white group-hover:text-violet-400'
-                : 'text-zinc-900 group-hover:text-[var(--prismer-primary)]'
-            }`}>
+            <span
+              className={`font-bold text-lg tracking-tight transition-colors ${
+                isDark
+                  ? 'text-white group-hover:text-violet-400'
+                  : 'text-zinc-900 group-hover:text-[var(--prismer-primary)]'
+              }`}
+            >
               Prismer Cloud
             </span>
           </Link>
 
           {/* CENTER: Desktop Nav Links */}
           <div className="hidden md:flex items-center gap-1">
-            {allNavItems.map(item => (
+            {allNavItems.map((item) => (
               <NavLink key={item.href} href={item.href} label={item.label} />
             ))}
           </div>
@@ -181,7 +189,7 @@ export function Navbar() {
           <div className="flex items-center gap-1.5 shrink-0">
             {/* GitHub icon (desktop) */}
             <a
-              href="https://github.com/Prismer-AI/Prismer"
+              href="https://github.com/Prismer-AI/PrismerCloud"
               target="_blank"
               rel="noopener noreferrer"
               className={`hidden md:flex p-2 rounded-lg transition-all duration-200 ${
@@ -220,7 +228,7 @@ export function Navbar() {
                     Sign In
                   </Link>
                   <Link
-                    href="/auth"
+                    href="/auth?redirect=/dashboard?tab=keys"
                     className="relative group px-4 py-1.5 rounded-full text-sm font-bold text-white overflow-hidden bg-[var(--prismer-primary)] border border-[var(--prismer-primary-light)]/30 hover:border-[var(--prismer-primary-light)] transition-all duration-300"
                   >
                     <span className="absolute inset-0 bg-gradient-to-r from-[var(--prismer-primary)] to-[var(--prismer-primary-light)] opacity-0 group-hover:opacity-100 transition-opacity duration-300"></span>
@@ -240,7 +248,9 @@ export function Navbar() {
                         setShowProfileMenu(false);
                       }}
                       className={`relative p-2 rounded-lg transition-colors ${
-                        isDark ? 'text-zinc-400 hover:text-white hover:bg-white/5' : 'text-zinc-600 hover:text-zinc-900 hover:bg-[var(--prismer-primary)]/5'
+                        isDark
+                          ? 'text-zinc-400 hover:text-white hover:bg-white/5'
+                          : 'text-zinc-600 hover:text-zinc-900 hover:bg-[var(--prismer-primary)]/5'
                       }`}
                     >
                       <Bell className="w-[18px] h-[18px]" />
@@ -283,18 +293,22 @@ export function Navbar() {
                           }
                         }}
                       />
-                      <ChevronDown className={`w-3 h-3 transition-transform duration-200 ${showProfileMenu ? 'rotate-180' : ''} ${
-                        isDark ? 'text-zinc-500' : 'text-zinc-400'
-                      }`} />
+                      <ChevronDown
+                        className={`w-3 h-3 transition-transform duration-200 ${showProfileMenu ? 'rotate-180' : ''} ${
+                          isDark ? 'text-zinc-500' : 'text-zinc-400'
+                        }`}
+                      />
                     </button>
 
                     {showProfileMenu && (
-                      <div className={`absolute right-0 top-full mt-2 w-48 border rounded-xl shadow-xl overflow-hidden animate-in fade-in slide-in-from-top-2 duration-200 ${
-                        isDark
-                          ? 'bg-zinc-900 border-white/10'
-                          : 'bg-white border-[var(--prismer-primary)]/10'
-                      }`}>
-                        <div className={`px-4 py-3 border-b ${isDark ? 'border-white/5' : 'border-[var(--prismer-primary)]/10'}`}>
+                      <div
+                        className={`absolute right-0 top-full mt-2 w-56 border rounded-xl shadow-xl overflow-hidden animate-in fade-in slide-in-from-top-2 duration-200 ${
+                          isDark ? 'bg-zinc-900 border-white/10' : 'bg-white border-[var(--prismer-primary)]/10'
+                        }`}
+                      >
+                        <div
+                          className={`px-4 py-3 border-b ${isDark ? 'border-white/5' : 'border-[var(--prismer-primary)]/10'}`}
+                        >
                           <p className="text-xs text-zinc-500">Signed in as</p>
                           <p className={`text-sm font-bold truncate ${isDark ? 'text-white' : 'text-zinc-900'}`}>
                             {user?.email || 'User'}
@@ -303,19 +317,39 @@ export function Navbar() {
                         <div className="p-1">
                           <Link
                             href="/dashboard"
+                            onClick={() => setShowProfileMenu(false)}
                             className={`w-full text-left px-3 py-2 text-sm rounded-lg transition-colors flex items-center gap-2 ${
-                              isDark ? 'text-zinc-300 hover:bg-white/5' : 'text-zinc-700 hover:bg-[var(--prismer-primary)]/5'
+                              isDark
+                                ? 'text-zinc-300 hover:bg-white/5'
+                                : 'text-zinc-700 hover:bg-[var(--prismer-primary)]/5'
                             }`}
                           >
+                            <LayoutDashboard className="w-4 h-4 shrink-0 opacity-80" />
                             Dashboard
                           </Link>
                           <Link
-                            href="/playground"
+                            href="/community/my"
+                            onClick={() => setShowProfileMenu(false)}
                             className={`w-full text-left px-3 py-2 text-sm rounded-lg transition-colors flex items-center gap-2 ${
-                              isDark ? 'text-zinc-300 hover:bg-white/5' : 'text-zinc-700 hover:bg-[var(--prismer-primary)]/5'
+                              isDark
+                                ? 'text-zinc-300 hover:bg-white/5'
+                                : 'text-zinc-700 hover:bg-[var(--prismer-primary)]/5'
                             }`}
                           >
-                            Playground
+                            <UserCircle className="w-4 h-4 shrink-0 opacity-80" />
+                            My Community
+                          </Link>
+                          <Link
+                            href="/evolution"
+                            onClick={() => setShowProfileMenu(false)}
+                            className={`w-full text-left px-3 py-2 text-sm rounded-lg transition-colors flex items-center gap-2 ${
+                              isDark
+                                ? 'text-zinc-300 hover:bg-white/5'
+                                : 'text-zinc-700 hover:bg-[var(--prismer-primary)]/5'
+                            }`}
+                          >
+                            <Dna className="w-4 h-4 shrink-0 opacity-80" />
+                            Evolution Space
                           </Link>
                           <div className={`h-px my-1 ${isDark ? 'bg-white/5' : 'bg-[var(--prismer-primary)]/10'}`} />
                           <button
@@ -354,9 +388,11 @@ export function Navbar() {
             mobileMenuOpen ? 'max-h-[600px] opacity-100' : 'max-h-0 opacity-0'
           }`}
         >
-          <div className={`px-4 py-4 space-y-1 border-t ${
-            isDark ? 'border-white/5' : 'border-[var(--prismer-primary)]/10'
-          }`}>
+          <div
+            className={`px-4 py-4 space-y-1 border-t ${
+              isDark ? 'border-white/5' : 'border-[var(--prismer-primary)]/10'
+            }`}
+          >
             {/* Nav items */}
             {allNavItems.map((item, index) => (
               <Link
@@ -386,7 +422,7 @@ export function Navbar() {
             {/* GitHub + Theme toggle row */}
             <div className="flex items-center gap-3 px-4 py-2">
               <a
-                href="https://github.com/Prismer-AI/Prismer"
+                href="https://github.com/Prismer-AI/PrismerCloud"
                 target="_blank"
                 rel="noopener noreferrer"
                 className={`flex items-center gap-2 text-sm transition-colors ${
@@ -427,7 +463,7 @@ export function Navbar() {
                   Sign In
                 </Link>
                 <Link
-                  href="/auth"
+                  href="/auth?redirect=/dashboard?tab=keys"
                   onClick={() => setMobileMenuOpen(false)}
                   className="block text-center py-2.5 rounded-lg text-sm font-bold text-white bg-[var(--prismer-primary)] hover:bg-[var(--prismer-primary-light)] transition-colors"
                 >
@@ -453,6 +489,26 @@ export function Navbar() {
                     </p>
                   </div>
                 </div>
+                <Link
+                  href="/community/my"
+                  onClick={() => setMobileMenuOpen(false)}
+                  className={`flex items-center gap-2 px-3 py-2.5 rounded-lg text-sm font-medium ${
+                    isDark ? 'text-zinc-300 hover:bg-white/5' : 'text-zinc-700 hover:bg-[var(--prismer-primary)]/5'
+                  }`}
+                >
+                  <UserCircle className="w-4 h-4 shrink-0" />
+                  My Community
+                </Link>
+                <Link
+                  href="/evolution"
+                  onClick={() => setMobileMenuOpen(false)}
+                  className={`flex items-center gap-2 px-3 py-2.5 rounded-lg text-sm font-medium ${
+                    isDark ? 'text-zinc-300 hover:bg-white/5' : 'text-zinc-700 hover:bg-[var(--prismer-primary)]/5'
+                  }`}
+                >
+                  <Dna className="w-4 h-4 shrink-0" />
+                  Evolution Space
+                </Link>
                 <button
                   onClick={handleLogout}
                   className="w-full text-left px-3 py-2 text-sm text-red-500 hover:bg-red-500/10 rounded-lg transition-colors flex items-center gap-2"
@@ -497,8 +553,8 @@ function NotificationDropdown({
   // Fetch notifications
   useEffect(() => {
     fetch('/api/notifications', { headers: getNotificationAuthHeaders() })
-      .then(res => res.json())
-      .then(data => {
+      .then((res) => res.json())
+      .then((data) => {
         if (data.success) {
           setNotifications(data.data || []);
           onUnreadCountChange(data.unreadCount || 0);
@@ -540,7 +596,10 @@ function NotificationDropdown({
 
   const dismiss = async (id: string) => {
     try {
-      const res = await fetch(`/api/notifications?id=${id}`, { method: 'DELETE', headers: getNotificationAuthHeaders() });
+      const res = await fetch(`/api/notifications?id=${id}`, {
+        method: 'DELETE',
+        headers: getNotificationAuthHeaders(),
+      });
       const data = await res.json();
       if (data.success) {
         setNotifications(data.data || []);
@@ -564,15 +623,14 @@ function NotificationDropdown({
       }`}
     >
       {/* Header */}
-      <div className={`px-4 py-3 flex items-center justify-between border-b ${
-        isDark ? 'border-white/5' : 'border-zinc-200'
-      }`}>
+      <div
+        className={`px-4 py-3 flex items-center justify-between border-b ${
+          isDark ? 'border-white/5' : 'border-zinc-200'
+        }`}
+      >
         <h3 className={`text-sm font-bold ${isDark ? 'text-white' : 'text-zinc-900'}`}>Notifications</h3>
-        {notifications.some(n => !n.read) && (
-          <button
-            onClick={markAllRead}
-            className="text-xs text-violet-400 hover:text-violet-300 transition-colors"
-          >
+        {notifications.some((n) => !n.read) && (
+          <button onClick={markAllRead} className="text-xs text-violet-400 hover:text-violet-300 transition-colors">
             Mark all read
           </button>
         )}
@@ -589,22 +647,24 @@ function NotificationDropdown({
             No notifications
           </div>
         ) : (
-          notifications.map(n => (
+          notifications.map((n) => (
             <div
               key={n.id}
               className={`px-4 py-3 flex gap-3 group transition-colors ${
-                !n.read
-                  ? isDark ? 'bg-white/[0.02]' : 'bg-violet-50/50'
-                  : ''
+                !n.read ? (isDark ? 'bg-white/[0.02]' : 'bg-violet-50/50') : ''
               } ${isDark ? 'hover:bg-white/[0.03]' : 'hover:bg-zinc-50'}`}
             >
-              <div className={`mt-0.5 w-2 h-2 rounded-full shrink-0 ${
-                !n.read ? 'bg-violet-400' : isDark ? 'bg-zinc-700' : 'bg-zinc-300'
-              }`} />
+              <div
+                className={`mt-0.5 w-2 h-2 rounded-full shrink-0 ${
+                  !n.read ? 'bg-violet-400' : isDark ? 'bg-zinc-700' : 'bg-zinc-300'
+                }`}
+              />
               <div className="flex-1 min-w-0">
                 <p className={`text-sm font-medium ${isDark ? 'text-zinc-200' : 'text-zinc-800'}`}>
-                  <span className={typeColors[n.type] || typeColors.info}>{n.type === 'error' ? '!' : n.type === 'warning' ? '!' : ''}</span>
-                  {' '}{n.title}
+                  <span className={typeColors[n.type] || typeColors.info}>
+                    {n.type === 'error' ? '!' : n.type === 'warning' ? '!' : ''}
+                  </span>{' '}
+                  {n.title}
                 </p>
                 <p className={`text-xs mt-0.5 ${isDark ? 'text-zinc-500' : 'text-zinc-500'}`}>{n.message}</p>
                 <p className={`text-xs mt-1 ${isDark ? 'text-zinc-600' : 'text-zinc-400'}`}>{n.time}</p>

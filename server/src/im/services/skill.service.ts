@@ -11,6 +11,7 @@
 
 import prisma from '../db';
 import yaml from 'yaml';
+import { bumpSkillOnInstall, decaySkillOnUninstall, bumpSkillOnStar, bumpSkillOnFork } from './quality-score.service';
 
 const LOG = '[SkillService]';
 
@@ -59,7 +60,7 @@ export interface SkillSearchOptions {
   category?: string;
   source?: string;
   compatibility?: string;
-  sort: 'newest' | 'most_installed' | 'most_starred' | 'name' | 'relevance';
+  sort: 'newest' | 'most_installed' | 'most_starred' | 'name' | 'relevance' | 'recommended';
   page: number;
   limit: number;
   /** @internal — used to prevent infinite recursion on FULLTEXT fallback */
@@ -95,7 +96,7 @@ export class SkillService {
       return this._fulltextSearch(opts);
     }
 
-    const where: Record<string, unknown> = { status: 'active' };
+    const where: Record<string, unknown> = { status: 'active', qualityScore: { gte: 0.005 } };
 
     if (opts.category) where.category = opts.category;
     if (opts.source) where.source = opts.source;
@@ -122,7 +123,8 @@ export class SkillService {
     // Determine sort order
     const orderBy: Record<string, string> = {};
     const useRelevanceSort = opts.sort === 'relevance';
-    if (!useRelevanceSort) {
+    const useRecommendedSort = opts.sort === 'recommended';
+    if (!useRelevanceSort && !useRecommendedSort) {
       switch (opts.sort) {
         case 'most_installed':
           orderBy.installs = 'desc';
@@ -137,11 +139,14 @@ export class SkillService {
           orderBy.createdAt = 'desc';
           break;
       }
+    } else if (useRecommendedSort) {
+      // Initial Prisma sort by qualityScore; post-fetch re-ranking applied below
+      orderBy.qualityScore = 'desc';
     }
 
-    // If relevance sort, over-fetch for in-memory re-ranking
-    const fetchLimit = useRelevanceSort ? Math.min(opts.limit * 5, 200) : opts.limit;
-    const fetchSkip = useRelevanceSort ? 0 : (opts.page - 1) * opts.limit;
+    // If relevance or recommended sort, over-fetch for in-memory re-ranking
+    const fetchLimit = useRelevanceSort || useRecommendedSort ? Math.min(opts.limit * 5, 200) : opts.limit;
+    const fetchSkip = useRelevanceSort || useRecommendedSort ? 0 : (opts.page - 1) * opts.limit;
 
     const [skills, total] = await Promise.all([
       prisma.iMSkill.findMany({
@@ -206,6 +211,31 @@ export class SkillService {
       scored.sort((a: any, b: any) => b.score - a.score);
       const start = (opts.page - 1) * opts.limit;
       result = scored.slice(start, start + opts.limit).map((s: any) => s.skill);
+    }
+
+    // Recommended: composite re-ranking by qualityScore + installs + recency
+    if (useRecommendedSort) {
+      const maxInstalls = Math.max(...result.map((s: any) => s.installs), 1);
+      const now = Date.now();
+      const DAY_90 = 90 * 24 * 60 * 60 * 1000;
+      const COLD_START = 10; // skills need ≥10 installs to reach full weight
+      result.sort((a: any, b: any) => {
+        const dampenA = Math.min(1, ((a.installs || 0) + 0.5) / COLD_START);
+        const dampenB = Math.min(1, ((b.installs || 0) + 0.5) / COLD_START);
+        const scoreA =
+          ((a.qualityScore ?? 0.01) * 0.6 +
+            (a.installs / maxInstalls) * 0.3 +
+            Math.max(0, 1 - (now - new Date(a.createdAt).getTime()) / DAY_90) * 0.1) *
+          dampenA;
+        const scoreB =
+          ((b.qualityScore ?? 0.01) * 0.6 +
+            (b.installs / maxInstalls) * 0.3 +
+            Math.max(0, 1 - (now - new Date(b.createdAt).getTime()) / DAY_90) * 0.1) *
+          dampenB;
+        return scoreB - scoreA;
+      });
+      const start = (opts.page - 1) * opts.limit;
+      result = result.slice(start, start + opts.limit);
     }
 
     return { skills: result, total };
@@ -289,6 +319,8 @@ export class SkillService {
       where: { id },
       data: { stars: { increment: 1 } },
     });
+    // Bump quality score on star
+    bumpSkillOnStar(id).catch(() => {});
   }
 
   /**
@@ -500,6 +532,9 @@ export class SkillService {
     author: string;
     content?: string;
     sourceUrl?: string;
+    signals?: string[];
+    ownerAgentId?: string;
+    forkedFrom?: string;
   }): Promise<SkillDetail> {
     const slug = this.toSlug(input.name, 'community');
     const skill = await prisma.iMSkill.create({
@@ -514,9 +549,57 @@ export class SkillService {
         sourceUrl: input.sourceUrl || '',
         sourceId: `community:${slug}`,
         content: input.content || '',
+        signals: input.signals?.length ? JSON.stringify(input.signals.map((s) => ({ type: s }))) : '[]',
+        ownerAgentId: input.ownerAgentId || null,
+        ...(input.forkedFrom ? { forkedFrom: input.forkedFrom } : {}),
       },
     });
+
+    // Bump quality score of the source skill when forked
+    if (input.forkedFrom) {
+      bumpSkillOnFork(input.forkedFrom).catch(() => {});
+    }
+
+    // Increment owner's publishCount when an active skill is created
+    if (input.ownerAgentId && skill.status === 'active') {
+      await prisma.iMUser
+        .update({
+          where: { id: input.ownerAgentId },
+          data: { publishCount: { increment: 1 } },
+        })
+        .catch(() => {});
+    }
+
     return this.toDetail(skill);
+  }
+
+  /**
+   * Get skills created by a specific agent.
+   */
+  async getCreatedByAgent(agentId: string): Promise<SkillInfo[]> {
+    const skills = await prisma.iMSkill.findMany({
+      where: { ownerAgentId: agentId, status: 'active' },
+      orderBy: { createdAt: 'desc' },
+      select: {
+        id: true,
+        slug: true,
+        name: true,
+        description: true,
+        category: true,
+        tags: true,
+        author: true,
+        source: true,
+        sourceUrl: true,
+        installs: true,
+        stars: true,
+        status: true,
+        geneId: true,
+        signals: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+    return skills.map((s: (typeof skills)[number]) => ({ ...s, tags: this.parseTags(s.tags) }));
   }
 
   /**
@@ -577,6 +660,7 @@ export class SkillService {
   async installSkill(
     agentId: string,
     skillIdOrSlug: string,
+    scope: string = 'global',
   ): Promise<{
     agentSkill: any;
     gene: any | null;
@@ -591,7 +675,7 @@ export class SkillService {
 
     // 2. Check if already installed and active
     const existing = await prisma.iMAgentSkill.findUnique({
-      where: { agentId_skillId: { agentId, skillId: skill.id } },
+      where: { agentId_skillId_scope: { agentId, skillId: skill.id, scope } },
     });
     if (existing?.status === 'active') {
       return { agentSkill: existing, gene: null, skill, installGuide: this.generateInstallGuide(skill) };
@@ -616,7 +700,7 @@ export class SkillService {
     // 5. Create Gene if skill has signals + strategy (use full agentId for uniqueness)
     let gene = null;
     if (signals.length > 0 && strategy.length > 0) {
-      const geneId = `skill_${skill.slug}_${agentId}`;
+      const geneId = `skill_${skill.slug}_${agentId}_${scope}`;
       try {
         gene = await prisma.iMGene.create({
           data: {
@@ -649,14 +733,16 @@ export class SkillService {
 
     // 6. Create/update agent-skill record
     const agentSkill = await prisma.iMAgentSkill.upsert({
-      where: { agentId_skillId: { agentId, skillId: skill.id } },
-      create: { agentId, skillId: skill.id, geneId: gene?.id, version: skill.version, status: 'active' },
+      where: { agentId_skillId_scope: { agentId, skillId: skill.id, scope } },
+      create: { agentId, skillId: skill.id, scope, geneId: gene?.id, version: skill.version, status: 'active' },
       update: { geneId: gene?.id, version: skill.version, status: 'active', updatedAt: new Date() },
     });
 
     // 7. Increment install count only on first install (not re-activation)
     if (!isReinstall) {
       await prisma.iMSkill.update({ where: { id: skill.id }, data: { installs: { increment: 1 } } });
+      // Bump quality score on first install
+      bumpSkillOnInstall(skill.id).catch(() => {});
     }
 
     console.log(
@@ -668,7 +754,7 @@ export class SkillService {
   /**
    * Uninstall a skill for an agent. Marks the agent-skill record as 'uninstalled'.
    */
-  async uninstallSkill(agentId: string, skillIdOrSlug: string): Promise<boolean> {
+  async uninstallSkill(agentId: string, skillIdOrSlug: string, scope: string = 'global'): Promise<boolean> {
     const skill = await prisma.iMSkill.findFirst({
       where: { OR: [{ id: skillIdOrSlug }, { slug: skillIdOrSlug }] },
     });
@@ -676,7 +762,7 @@ export class SkillService {
 
     // Find the agent-skill record to get geneId before updating
     const agentSkill = await prisma.iMAgentSkill.findUnique({
-      where: { agentId_skillId: { agentId, skillId: skill.id } },
+      where: { agentId_skillId_scope: { agentId, skillId: skill.id, scope } },
     });
     if (!agentSkill || agentSkill.status !== 'active') return false;
 
@@ -696,6 +782,9 @@ export class SkillService {
         .catch(() => {});
     }
 
+    // Decay quality score on uninstall
+    decaySkillOnUninstall(skill.id).catch(() => {});
+
     console.log(`${LOG} Uninstalled skill "${skill.slug}" for agent ${agentId.slice(-8)}`);
     return true;
   }
@@ -703,9 +792,11 @@ export class SkillService {
   /**
    * Get all installed (active) skills for an agent, with skill and gene details.
    */
-  async getInstalledSkills(agentId: string): Promise<any[]> {
+  async getInstalledSkills(agentId: string, scope?: string): Promise<any[]> {
+    const where: any = { agentId, status: 'active' };
+    if (scope) where.scope = scope;
     const records = await prisma.iMAgentSkill.findMany({
-      where: { agentId, status: 'active' },
+      where,
       orderBy: { installedAt: 'desc' },
     });
 

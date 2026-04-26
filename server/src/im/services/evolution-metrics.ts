@@ -63,7 +63,7 @@ export async function collectMetrics(
   // 4. Exploration rate
   const allEdges = await prisma.iMEvolutionEdge.findMany({
     where: { mode, scope: 'global' },
-    select: { successCount: true, failureCount: true },
+    select: { ownerAgentId: true, geneId: true, successCount: true, failureCount: true },
   });
   const exploringCount = allEdges.filter(
     (e: { successCount: number; failureCount: number }) => e.successCount + e.failureCount < 10,
@@ -143,6 +143,82 @@ export async function collectMetrics(
     regp = regretCount > 0 ? Math.round((regretSum / regretCount) * 1000) / 1000 : null;
   }
 
+  // ── North-star metrics (v1.7.3) ────────────────────────────
+
+  // 8. Repeat Error Rate: same agent+signalKey recurring with >1h gap
+  let repeatRate: number | null = null;
+  try {
+    const pairStats = await prisma.iMEvolutionCapsule.groupBy({
+      by: ['ownerAgentId', 'signalKey'],
+      where: { scope: 'global', createdAt: { gte: since }, outcome: { in: ['success', 'failed'] } },
+      _count: true,
+      _min: { createdAt: true },
+      _max: { createdAt: true },
+    });
+    const totalPairs = pairStats.length;
+    const repeatedPairs = pairStats.filter((p: any) => {
+      const minT = p._min.createdAt?.getTime() || 0;
+      const maxT = p._max.createdAt?.getTime() || 0;
+      return p._count > 1 && maxT - minT > 3600_000;
+    }).length;
+    repeatRate = totalPairs > 0 ? Math.round((repeatedPairs / totalPairs) * 1000) / 1000 : null;
+  } catch {
+    /* groupBy may not be supported in all envs */
+  }
+
+  // 9. FRR Approx: first capsule per (agent, signalKey) being success
+  let frrApprox: number | null = null;
+  try {
+    // For each (agent, signalKey), find the earliest capsule and check outcome
+    const firstCapsules = await prisma.iMEvolutionCapsule.findMany({
+      where: { scope: 'global', createdAt: { gte: since }, outcome: { in: ['success', 'failed'] } },
+      orderBy: { createdAt: 'asc' },
+      select: { ownerAgentId: true, signalKey: true, outcome: true },
+      take: 10000, // Safety cap to prevent unbounded memory usage
+    });
+    const seen = new Set<string>();
+    let firstSuccess = 0;
+    let firstTotal = 0;
+    for (const c of firstCapsules) {
+      const key = `${c.ownerAgentId}:${c.signalKey}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      firstTotal++;
+      if (c.outcome === 'success') firstSuccess++;
+    }
+    frrApprox = firstTotal > 0 ? Math.round((firstSuccess / firstTotal) * 1000) / 1000 : null;
+  } catch {
+    /* best-effort */
+  }
+
+  // 10. ERR Approx: success rate with prior edge data vs without
+  let errApprox: number | null = null;
+  try {
+    // Capsules where the gene had ≥3 prior executions vs <3
+    const capsuleWithHistory = capsules.filter((c: any) => {
+      const edgeKey = `${c.ownerAgentId}:${c.geneId}`;
+      const edge = allEdges.find((e: any) => e.ownerAgentId === c.ownerAgentId && e.geneId === c.geneId);
+      return edge && edge.successCount + edge.failureCount >= 3;
+    });
+    const capsuleWithout = capsules.filter((c: any) => {
+      const edge = allEdges.find((e: any) => e.ownerAgentId === c.ownerAgentId && e.geneId === c.geneId);
+      return !edge || edge.successCount + edge.failureCount < 3;
+    });
+    const rateWith =
+      capsuleWithHistory.length > 0
+        ? capsuleWithHistory.filter((c: any) => c.outcome === 'success').length / capsuleWithHistory.length
+        : 0;
+    const rateWithout =
+      capsuleWithout.length > 0
+        ? capsuleWithout.filter((c: any) => c.outcome === 'success').length / capsuleWithout.length
+        : 0;
+    if (rateWithout > 0 && capsuleWithHistory.length >= 5 && capsuleWithout.length >= 5) {
+      errApprox = Math.round(((rateWith - rateWithout) / rateWithout) * 1000) / 1000;
+    }
+  } catch {
+    /* best-effort */
+  }
+
   // Write snapshot
   await prisma.iMEvolutionMetrics.create({
     data: {
@@ -159,6 +235,9 @@ export async function collectMetrics(
       successCapsules: success,
       uniqueGenesUsed: uniqueGenes,
       uniqueAgents: uniqueAgents,
+      repeatRate,
+      frrApprox,
+      errApprox,
     },
   });
 
@@ -171,6 +250,7 @@ export async function collectMetrics(
 export async function getMetricsComparison(): Promise<{
   standard: Record<string, unknown> | null;
   hypergraph: Record<string, unknown> | null;
+  graph: { atomCount: number; hyperedgeCount: number; causalLinkCount: number };
   verdict: string;
 }> {
   const [std, hyper] = await Promise.all([
@@ -192,9 +272,23 @@ export async function getMetricsComparison(): Promise<{
     }
   }
 
+  // Hypergraph structure stats (parallel observation layer)
+  let graph = { atomCount: 0, hyperedgeCount: 0, causalLinkCount: 0 };
+  try {
+    const [atomCount, hyperedgeCount, causalLinkCount] = await Promise.all([
+      prisma.iMAtom.count(),
+      prisma.iMHyperedge.count(),
+      prisma.iMCausalLink.count(),
+    ]);
+    graph = { atomCount, hyperedgeCount, causalLinkCount };
+  } catch {
+    /* tables may not exist */
+  }
+
   return {
     standard: std as Record<string, unknown> | null,
     hypergraph: hyper as Record<string, unknown> | null,
+    graph,
     verdict,
   };
 }

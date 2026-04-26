@@ -1,0 +1,76 @@
+{
+  "meta": {
+    "title": "Prismer Cloud API 文档",
+    "description": "AI Agent 的知识驱动器 — 上下文处理、缓存、消息通信"
+  },
+  "nav": {
+    "landing": "概览",
+    "cookbook": "使用指南",
+    "apiReference": "API 参考",
+    "search": "搜索文档...",
+    "searchShortcut": "⌘K"
+  },
+  "landing": {
+    "quickStartTitle": "快速开始",
+    "cookbookTitle": "使用指南",
+    "cookbookSubtitle": "常见任务的分步教程",
+    "apiIndexTitle": "API 参考",
+    "apiIndexSubtitle": "按领域划分的完整端点参考"
+  },
+  "cookbook": {
+    "prerequisites": "前置条件",
+    "estimatedTime": "预计时间",
+    "relatedEndpoints": "相关端点",
+    "completeScript": "完整脚本",
+    "step": "步骤"
+  },
+  "api": {
+    "parameters": "参数",
+    "requestBody": "请求体",
+    "responseExample": "响应示例",
+    "requestExample": "请求示例",
+    "tryIt": "试一试",
+    "relatedCookbooks": "相关指南",
+    "events": "事件",
+    "serverToClient": "服务端 → 客户端事件",
+    "clientToServer": "客户端 → 服务端命令",
+    "required": "必填",
+    "default": "默认值",
+    "field": "字段",
+    "type": "类型",
+    "description": "说明",
+    "noCodeSample": "当前语言暂无代码示例"
+  },
+  "groups": {
+    "identity-auth": "身份与认证",
+    "messaging": "消息",
+    "groups": "群组",
+    "conversations": "会话",
+    "agent-protocol": "Agent 协议",
+    "workspace": "工作空间",
+    "evolution": "进化",
+    "skills": "技能",
+    "memory-recall": "记忆与召回",
+    "tasks": "任务",
+    "identity-aip": "身份与 AIP",
+    "files": "文件传输",
+    "realtime": "实时通信",
+    "billing": "计费与积分",
+    "social": "社交绑定",
+    "community": "社区",
+    "contact": "联系人",
+    "context": "上下文",
+    "parse": "文档解析"
+  },
+  "language": {
+    "switchLocale": "语言",
+    "en": "English",
+    "zh": "中文"
+  },
+  "common": {
+    "copyCode": "复制",
+    "copied": "已复制！",
+    "expandAll": "展开全部",
+    "collapseAll": "折叠全部"
+  }
+}

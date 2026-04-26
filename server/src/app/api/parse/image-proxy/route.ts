@@ -1,13 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { createModuleLogger } from '@/lib/logger';
 
-const ALLOWED_ORIGINS = (process.env.IMAGE_PROXY_ORIGINS || 'localhost').split(',').map(s => s.trim());
+const log = createModuleLogger('ParseImageProxy');
+
+const ALLOWED_ORIGINS = ['cdn.prismer.ai', 'parser.prismer.dev', 'parser.prismer.app', 'localhost'];
 
 /**
  * GET /api/parse/image-proxy?url=<encoded-image-url>
  *
  * Proxies parser/CDN image URLs so the browser can load them same-origin.
  * Avoids CORS or "image cannot be accessed" when Parse result images
- * point to CDN or parser service.
+ * point to cdn.prismer.ai or parser service.
  *
  * Only allows URLs from ALLOWED_ORIGINS. No auth required (URL is opaque).
  */
@@ -16,7 +19,7 @@ export async function GET(request: NextRequest) {
   if (!urlParam) {
     return NextResponse.json(
       { success: false, error: { code: 'MISSING_URL', message: 'Query param url is required' } },
-      { status: 400 }
+      { status: 400 },
     );
   }
 
@@ -26,32 +29,30 @@ export async function GET(request: NextRequest) {
   } catch {
     return NextResponse.json(
       { success: false, error: { code: 'INVALID_URL', message: 'Invalid url parameter' } },
-      { status: 400 }
+      { status: 400 },
     );
   }
 
   const host = targetUrl.hostname.toLowerCase();
-  const allowed = ALLOWED_ORIGINS.some(
-    (origin) => host === origin || host.endsWith('.' + origin)
-  );
+  const allowed = ALLOWED_ORIGINS.some((origin) => host === origin || host.endsWith('.' + origin));
   if (!allowed) {
     return NextResponse.json(
       { success: false, error: { code: 'URL_NOT_ALLOWED', message: 'Image URL must be from allowed parser/CDN host' } },
-      { status: 403 }
+      { status: 403 },
     );
   }
 
   try {
     const res = await fetch(targetUrl.toString(), {
       method: 'GET',
-      headers: { 'Accept': 'image/*' },
-      next: { revalidate: 3600 }
+      headers: { Accept: 'image/*' },
+      next: { revalidate: 3600 },
     });
 
     if (!res.ok) {
       return NextResponse.json(
         { success: false, error: { code: 'UPSTREAM_ERROR', message: `Upstream returned ${res.status}` } },
-        { status: res.status }
+        { status: res.status },
       );
     }
 
@@ -62,14 +63,14 @@ export async function GET(request: NextRequest) {
       status: 200,
       headers: {
         'Content-Type': contentType,
-        'Cache-Control': 'public, max-age=3600'
-      }
+        'Cache-Control': 'public, max-age=3600',
+      },
     });
   } catch (err) {
-    console.error('[Parse image-proxy] Fetch failed:', err);
+    log.error({ err }, 'Fetch failed');
     return NextResponse.json(
       { success: false, error: { code: 'FETCH_FAILED', message: 'Failed to fetch image' } },
-      { status: 502 }
+      { status: 502 },
     );
   }
 }

@@ -10,6 +10,7 @@ import { ConversationModel, type CreateConversationInput } from '../models/conve
 import { ParticipantModel } from '../models/participant';
 import type { ConversationStatus, ParticipantRole } from '../types/index';
 import type { SyncService } from './sync.service';
+import prisma from '../db';
 
 export interface CreateDirectInput {
   createdBy: string;
@@ -79,6 +80,11 @@ export class ConversationService {
       role: 'member',
     });
 
+    // v1.8.0 S3: Create security record with 'recommended' signing policy
+    await prisma.iMConversationSecurity.create({
+      data: { conversationId: conv.id, signingPolicy: 'recommended', encryptionMode: 'none' },
+    }).catch(() => {}); // Ignore if already exists (race condition guard)
+
     // Sync event for both participants
     const participants = [input.createdBy, input.otherUserId];
     await this.writeSyncForParticipants(
@@ -121,6 +127,11 @@ export class ConversationService {
         });
       }
     }
+
+    // v1.8.0 S3: Create security record with 'recommended' signing policy
+    await prisma.iMConversationSecurity.create({
+      data: { conversationId: conv.id, signingPolicy: 'recommended', encryptionMode: 'none' },
+    }).catch(() => {});
 
     // Sync event for all members
     const allMembers = [input.createdBy, ...input.memberIds.filter(m => m !== input.createdBy)];

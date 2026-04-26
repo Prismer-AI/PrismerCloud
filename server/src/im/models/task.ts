@@ -11,10 +11,12 @@ export interface CreateTaskData {
   title: string;
   description?: string;
   capability?: string;
-  input?: string;         // JSON
+  input?: string; // JSON
   contextUri?: string;
   creatorId: string;
   assigneeId?: string;
+  scope?: string;
+  conversationId?: string;
   status?: TaskStatus;
   scheduleType?: ScheduleType;
   scheduleAt?: Date;
@@ -27,7 +29,7 @@ export interface CreateTaskData {
   maxRetries?: number;
   retryDelayMs?: number;
   budget?: number;
-  metadata?: string;      // JSON
+  metadata?: string; // JSON
 }
 
 export interface TaskListFilter {
@@ -35,6 +37,8 @@ export interface TaskListFilter {
   capability?: string;
   assigneeId?: string;
   creatorId?: string;
+  scope?: string;
+  conversationId?: string;
   scheduleType?: ScheduleType;
   limit?: number;
   cursor?: string;
@@ -45,7 +49,7 @@ export interface CreateTaskLogData {
   actorId?: string;
   action: string;
   message?: string;
-  metadata?: string;      // JSON
+  metadata?: string; // JSON
 }
 
 export class TaskModel {
@@ -59,6 +63,8 @@ export class TaskModel {
         contextUri: data.contextUri,
         creatorId: data.creatorId,
         assigneeId: data.assigneeId,
+        scope: data.scope ?? 'global',
+        conversationId: data.conversationId,
         status: data.status ?? 'pending',
         scheduleType: data.scheduleType,
         scheduleAt: data.scheduleAt,
@@ -88,6 +94,8 @@ export class TaskModel {
     if (filter.capability) where.capability = filter.capability;
     if (filter.assigneeId) where.assigneeId = filter.assigneeId;
     if (filter.creatorId) where.creatorId = filter.creatorId;
+    if (filter.scope) where.scope = filter.scope;
+    if (filter.conversationId) where.conversationId = filter.conversationId;
     if (filter.scheduleType) where.scheduleType = filter.scheduleType;
 
     return prisma.iMTask.findMany({
@@ -138,10 +146,7 @@ export class TaskModel {
         scheduleType: { not: null },
         nextRunAt: { lte: new Date() },
         status: { in: ['pending', 'assigned'] },
-        OR: [
-          { maxRuns: null },
-          { runCount: { lt: prisma.iMTask.fields?.maxRuns as unknown as number ?? 999999 } },
-        ],
+        OR: [{ maxRuns: null }, { runCount: { lt: (prisma.iMTask.fields?.maxRuns as unknown as number) ?? 999999 } }],
       },
       orderBy: { nextRunAt: 'asc' },
       take: limit,
@@ -200,6 +205,102 @@ export class TaskModel {
     return tasks.filter((t: any) => {
       if (!t.lastRunAt) return false;
       return now - t.lastRunAt.getTime() > t.timeoutMs;
+    });
+  }
+
+  // ─── Marketplace ──────────────────────────────────────────
+
+  /**
+   * Browse marketplace: pending tasks with no assignee.
+   */
+  async browseMarketplace(opts: { capability?: string; minReward?: number; sort: 'reward' | 'newest'; limit: number }) {
+    const where: Record<string, unknown> = {
+      status: 'pending',
+      assigneeId: null,
+      scheduleType: null, // Exclude scheduled tasks from marketplace
+    };
+    if (opts.capability) where.capability = { contains: opts.capability };
+    if (opts.minReward) where.budget = { gte: opts.minReward };
+
+    return prisma.iMTask.findMany({
+      where,
+      orderBy: opts.sort === 'reward' ? { budget: 'desc' } : { createdAt: 'desc' },
+      take: opts.limit,
+    });
+  }
+
+  /**
+   * Atomically mark a task as rewarded.
+   * Uses a conditional update: only succeeds if metadata does NOT already contain "rewarded":true.
+   * Returns the updated task, or null if already rewarded (concurrent call won).
+   */
+  async atomicReward(taskId: string, newMetadata: string) {
+    try {
+      return await prisma.iMTask.update({
+        where: {
+          id: taskId,
+          NOT: { metadata: { contains: '"rewarded":true' } },
+        },
+        data: { metadata: newMetadata },
+      });
+    } catch {
+      return null; // Already rewarded or not found
+    }
+  }
+
+  /**
+   * Atomically mark a task as refunded.
+   * Uses a conditional update: only succeeds if metadata does NOT already contain "refunded":true.
+   * Returns the updated task, or null if already refunded (concurrent call won).
+   */
+  async atomicRefund(taskId: string, newMetadata: string) {
+    try {
+      return await prisma.iMTask.update({
+        where: {
+          id: taskId,
+          NOT: { metadata: { contains: '"refunded":true' } },
+        },
+        data: { metadata: newMetadata },
+      });
+    } catch {
+      return null; // Already refunded or not found
+    }
+  }
+
+  /**
+   * Find subtasks by parentTaskId stored in metadata JSON.
+   * Uses string contains as initial filter, then validates in application layer.
+   */
+  async findByParentTaskId(parentTaskId: string) {
+    const candidates = await prisma.iMTask.findMany({
+      where: {
+        metadata: { contains: parentTaskId },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    // Filter in application layer to avoid false positives from string contains
+    return candidates.filter((t: any) => {
+      try {
+        const meta = JSON.parse(t.metadata || '{}');
+        return meta.parentTaskId === parentTaskId;
+      } catch {
+        return false;
+      }
+    });
+  }
+
+  /**
+   * Count recent completed tasks by agent + capability.
+   */
+  async countRecentCompleted(agentId: string, capability: string, since: Date): Promise<number> {
+    return prisma.iMTask.count({
+      where: {
+        assigneeId: agentId,
+        capability,
+        status: 'completed',
+        updatedAt: { gte: since },
+      },
     });
   }
 

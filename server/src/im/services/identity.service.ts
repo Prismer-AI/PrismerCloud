@@ -15,7 +15,9 @@ import {
   createAttestation,
   computeAuditLogHash,
   generateKeyPair,
+  publicKeyToDIDKey,
 } from '../crypto';
+import { buildDIDDocument, hashDIDDocument } from './did.service';
 import type { IdentityKeyInfo, KeyAuditEntry } from '../types';
 
 // Server identity key — generated once at startup, used for attestations.
@@ -35,6 +37,15 @@ function getServerKeyPair() {
         publicKey: Buffer.from(pubBytes).toString('base64'),
         privateKey: envPriv,
       };
+    } else if (
+      process.env.NODE_ENV === 'production' ||
+      process.env.APP_ENV === 'test' ||
+      process.env.APP_ENV === 'prod'
+    ) {
+      throw new Error(
+        '[Identity] FATAL: IM_SERVER_SIGNING_KEY must be set in non-dev environments. ' +
+          "Generate with: node -e \"console.log(require('crypto').randomBytes(32).toString('base64'))\"",
+      );
     } else {
       // Generate ephemeral key for dev/test
       _serverKeyPair = generateKeyPair();
@@ -45,12 +56,19 @@ function getServerKeyPair() {
 }
 
 export class IdentityService {
-
   /**
    * Get the server's public key (for clients to verify attestations).
    */
   getServerPublicKey(): string {
     return getServerKeyPair().publicKey;
+  }
+
+  /**
+   * Get the server's private key for server-attested signing.
+   * Used internally by delegation/credential services — never exposed via API.
+   */
+  getServerPrivateKey(): string {
+    return getServerKeyPair().privateKey;
   }
 
   /**
@@ -82,13 +100,7 @@ export class IdentityService {
     const action = existing ? 'rotate' : 'register';
 
     // Create server attestation
-    const attestation = createAttestation(
-      serverKey.privateKey,
-      imUserId,
-      publicKeyBase64,
-      action,
-      now.toISOString(),
-    );
+    const attestation = createAttestation(serverKey.privateKey, imUserId, publicKeyBase64, action, now.toISOString());
 
     // Get last audit log entry for hash chain
     const lastLog = await prisma.iMKeyAuditLog.findFirst({
@@ -106,6 +118,12 @@ export class IdentityService {
         })
       : null;
 
+    // AIP: Compute did:key and DID Document
+    const didKey = publicKeyToDIDKey(publicKeyBase64);
+    const didDoc = buildDIDDocument({ publicKeyBase64 });
+    const didDocJson = JSON.stringify(didDoc);
+    const didDocHash = hashDIDDocument(didDoc);
+
     // Upsert key + audit log atomically
     const [identityKey] = await prisma.$transaction([
       prisma.iMIdentityKey.upsert({
@@ -117,6 +135,9 @@ export class IdentityService {
           attestation,
           derivationMode,
           registeredAt: now,
+          didKey,
+          didDocument: didDocJson,
+          didDocumentHash: didDocHash,
         },
         update: {
           publicKey: publicKeyBase64,
@@ -125,6 +146,9 @@ export class IdentityService {
           derivationMode,
           registeredAt: now,
           revokedAt: null,
+          didKey,
+          didDocument: didDocJson,
+          didDocumentHash: didDocHash,
         },
       }),
       prisma.iMKeyAuditLog.create({
@@ -137,6 +161,11 @@ export class IdentityService {
           prevLogHash,
           createdAt: now,
         },
+      }),
+      // AIP: Update user's primaryDid
+      prisma.iMUser.update({
+        where: { id: imUserId },
+        data: { primaryDid: didKey },
       }),
     ]);
 
@@ -186,7 +215,8 @@ export class IdentityService {
         })
       : null;
 
-    await prisma.$transaction([
+    // Build transaction ops: revoke key + audit log + AIP revocation entry
+    const txOps: any[] = [
       prisma.iMIdentityKey.update({
         where: { imUserId },
         data: { revokedAt: now },
@@ -202,7 +232,38 @@ export class IdentityService {
           createdAt: now,
         },
       }),
-    ]);
+    ];
+
+    // AIP: Write revocation entry if the key has a DID
+    if (existing.didKey) {
+      const serverDid = this.getServerDID();
+      // Get next statusListIndex
+      const maxEntry = await prisma.iMRevocationEntry.findFirst({
+        orderBy: { statusListIndex: 'desc' },
+        select: { statusListIndex: true },
+      });
+      const nextIndex = (maxEntry?.statusListIndex ?? -1) + 1;
+
+      txOps.push(
+        prisma.iMRevocationEntry.create({
+          data: {
+            issuerDid: serverDid,
+            targetDid: existing.didKey,
+            reason: 'key_revoked',
+            statusListIndex: nextIndex,
+          },
+        }),
+      );
+      // Clear user's primaryDid
+      txOps.push(
+        prisma.iMUser.update({
+          where: { id: imUserId },
+          data: { primaryDid: null },
+        }),
+      );
+    }
+
+    await prisma.$transaction(txOps);
   }
 
   /**
@@ -226,6 +287,25 @@ export class IdentityService {
     });
     if (!key) return null;
     return this.toIdentityKeyInfo(key);
+  }
+
+  /**
+   * Lookup a key by DID (AIP preferred path for signature verification).
+   */
+  async lookupByDID(didKey: string): Promise<IdentityKeyInfo | null> {
+    const key = await prisma.iMIdentityKey.findFirst({
+      where: { didKey, revokedAt: null },
+    });
+    if (!key) return null;
+    return this.toIdentityKeyInfo(key);
+  }
+
+  /**
+   * Get the server's did:key (computed from the server signing key).
+   */
+  getServerDID(): string {
+    const serverKey = getServerKeyPair();
+    return publicKeyToDIDKey(serverKey.publicKey);
   }
 
   /**
@@ -288,11 +368,48 @@ export class IdentityService {
     return { valid: true, entries: logs.length };
   }
 
+  /**
+   * Check if a user's identity key needs rotation.
+   * Thresholds: 1000 signed messages OR 24 hours since registration.
+   * Returns { needed, reason } advisory — actual rotation is triggered by the caller.
+   */
+  async checkKeyRotation(imUserId: string): Promise<{ needed: boolean; reason?: string }> {
+    const key = await prisma.iMIdentityKey.findUnique({ where: { imUserId } });
+    if (!key || key.revokedAt) return { needed: false };
+
+    // Check age: 24 hours
+    const ageMs = Date.now() - key.registeredAt.getTime();
+    const MAX_AGE_MS = 24 * 60 * 60 * 1000;
+    if (ageMs > MAX_AGE_MS) {
+      return { needed: true, reason: 'key_age_exceeded_24h' };
+    }
+
+    // Check message count: 1000 signed messages
+    const orConditions: any[] = [{ senderKeyId: key.keyId }];
+    if (key.didKey) orConditions.push({ senderDid: key.didKey });
+
+    const signedCount = await prisma.iMMessage.count({
+      where: {
+        senderId: imUserId,
+        OR: orConditions,
+      },
+    });
+    const MAX_MESSAGES = 1000;
+    if (signedCount >= MAX_MESSAGES) {
+      return { needed: true, reason: `signed_message_count_${signedCount}_exceeds_${MAX_MESSAGES}` };
+    }
+
+    return { needed: false };
+  }
+
   private toIdentityKeyInfo(key: any): IdentityKeyInfo {
     return {
       imUserId: key.imUserId,
       publicKey: key.publicKey,
       keyId: key.keyId,
+      didKey: key.didKey ?? undefined,
+      didDocument: key.didDocument ?? undefined,
+      didDocumentHash: key.didDocumentHash ?? undefined,
       attestation: key.attestation,
       derivationMode: key.derivationMode,
       registeredAt: key.registeredAt,

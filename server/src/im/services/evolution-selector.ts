@@ -93,13 +93,17 @@ export function betaSample(alpha: number, beta: number): number {
 
   // Jöhnk's algorithm: numerically stable for small α, β (exploration-heavy cold-start)
   if (alpha < 1 && beta < 1) {
-    while (true) {
+    for (let iter = 0; iter < 1000; iter++) {
       const u = Math.random();
       const v = Math.random();
       const x = Math.pow(u, 1 / alpha);
       const y = Math.pow(v, 1 / beta);
       if (x + y <= 1) return x / (x + y);
     }
+    // Fallback: Gamma-ratio method if Jöhnk rejection sampling exhausted
+    const gx = gammaSample(alpha);
+    const gy = gammaSample(beta);
+    return gx / (gx + gy);
   }
 
   // Gamma-ratio method for α ≥ 1 or β ≥ 1
@@ -147,8 +151,8 @@ export function updateBimodalityIndex(
   if (N < windowSize * 2) return 0; // Need at least 2 windows
 
   const p = recentOutcomes.reduce((a, b) => a + b, 0) / N;
-  // Extreme ranges cannot distinguish bimodal from unimodal
-  if (p < 0.05 || p > 0.95) return 0;
+  // Extreme ranges (including p=0 or p=1) cannot distinguish bimodal from unimodal
+  if (p <= 0 || p >= 1 || p < 0.05 || p > 0.95) return 0;
 
   const windowRates: number[] = [];
   for (let i = 0; i + windowSize <= N; i += windowSize) {
@@ -162,6 +166,9 @@ export function updateBimodalityIndex(
 
   // Overdispersion ratio: 1.0 = pure random, >>1 = context-dependent (hidden bimodal)
   const overdispersion = crossWindowVar / (expectedVar + 1e-6);
+
+  // Guard against NaN/Infinity from degenerate inputs
+  if (!isFinite(overdispersion)) return 1.0;
 
   // Normalize: [1×, 10×] overdispersion → [0, 1]
   return Math.min(1.0, Math.max(0, (overdispersion - 1) / 9));
@@ -197,9 +204,10 @@ abstract class BaseSelectorImpl implements GeneSelector {
       if (edgeData) {
         const n = edgeData.success + edgeData.failure;
 
-        // Ban check: success rate < 18% with enough data
+        // Ban check: success rate below threshold with enough data
+        const effectiveBan = input.banThreshold ?? BAN_THRESHOLD;
         const p = (edgeData.success + 1) / (n + 2);
-        if (n >= 5 && p < BAN_THRESHOLD) continue;
+        if (n >= 5 && p < effectiveBan) continue;
       }
 
       // Hierarchical Bayesian: blend global and local posteriors
@@ -223,10 +231,15 @@ abstract class BaseSelectorImpl implements GeneSelector {
         memoryScore = this.computeMemoryScore(alphaCombined, betaCombined, edgeData?.lastUsedAt ?? null);
       }
 
-      // Confidence: use both local and global data
+      // Confidence: Thompson-backed value × sample-size discount
+      // memoryScore is already betaSample(alpha, beta) — use it instead of naive N/10
       const localN = edgeData ? edgeData.success + edgeData.failure : 0;
       const globalN = (globalEdge?._sum?.successCount || 0) + (globalEdge?._sum?.failureCount || 0);
-      const confidence = Math.min((localN + globalN) / 10, 1.0);
+      const sampleDiscount = Math.min((localN + globalN) / 20, 1.0);
+      // Cross-agent transferability: other agents' executions boost confidence
+      const otherAgentN = Math.max(0, globalN - localN);
+      const transferabilityBonus = otherAgentN >= 10 ? 0.1 : otherAgentN >= 5 ? 0.05 : 0;
+      const confidence = Math.min(memoryScore * sampleDiscount + transferabilityBonus, 1.0);
 
       // Context match bonus
       const eventProviders = new Set(signalTags.map((t) => t.provider).filter(Boolean));
@@ -248,14 +261,32 @@ abstract class BaseSelectorImpl implements GeneSelector {
       // genes never get selected and thus never accumulate data.
       const matchLayerBonus = coverage.layer === 'exact' ? 0.15 : coverage.layer === 'semantic' ? 0.05 : 0;
 
+      // Tech stack mismatch penalty: if event signals include a techStack hint,
+      // penalize genes whose signals_match reference a different tech stack.
+      // Soft penalty (not hard filter) for backward compatibility.
+      let techStackPenalty = 1.0;
+      const eventTechStack = signalTags.find((t) => t.techStack)?.techStack;
+      if (eventTechStack) {
+        const KNOWN_STACKS = ['typescript', 'javascript', 'python', 'swift', 'rust', 'go', 'java', 'ruby'];
+        const geneSignalTypes = gene.signals_match.map((s: SignalTag) => s.type.toLowerCase());
+        const geneHasTechHint = geneSignalTypes.some((t) => KNOWN_STACKS.some((stack) => t.includes(stack)));
+        if (geneHasTechHint) {
+          const geneMatchesTech = geneSignalTypes.some((t) => t.includes(eventTechStack));
+          if (!geneMatchesTech) {
+            techStackPenalty = 0.1; // Heavy penalty for wrong tech stack
+          }
+        }
+      }
+
       // Multi-dimensional rank score
       const rankScore =
-        coverageScore * 0.35 +
-        memoryScore * 0.25 +
-        confidence * 0.15 +
-        contextBonus * 0.15 +
-        qualityBonus * 0.1 +
-        matchLayerBonus;
+        (coverageScore * 0.35 +
+          memoryScore * 0.25 +
+          confidence * 0.15 +
+          contextBonus * 0.15 +
+          qualityBonus * 0.1 +
+          matchLayerBonus) *
+        techStackPenalty;
 
       scored.push({
         gene,
@@ -306,9 +337,24 @@ class LaplaceSelector extends BaseSelectorImpl {
   }
 }
 
+/**
+ * GreedySelector: pure exploitation, no exploration.
+ * Picks the gene with highest point estimate (alpha / (alpha + beta)).
+ * Use EVOLUTION_DETERMINISTIC=true for benchmark reproducibility (G1 v1.8.2).
+ */
+class GreedySelector extends BaseSelectorImpl {
+  readonly name = 'greedy';
+
+  protected computeMemoryScore(alphaCombined: number, betaCombined: number, _lastUsedAt: Date | null): number {
+    return alphaCombined / (alphaCombined + betaCombined);
+  }
+}
+
 /** Factory: create selector from env var */
 export function createGeneSelector(): GeneSelector {
-  return process.env.EVOLUTION_SELECTOR === 'laplace' ? new LaplaceSelector() : new ThompsonSelector();
+  if (process.env.EVOLUTION_DETERMINISTIC === 'true') return new GreedySelector();
+  if (process.env.EVOLUTION_SELECTOR === 'laplace') return new LaplaceSelector();
+  return new ThompsonSelector();
 }
 
 /** Logged once per process to avoid spamming */
@@ -523,18 +569,24 @@ export async function selectGene(
     };
   }
 
-  // Hypergraph mode: narrow candidate set via inverted index (§5.3 SUPERGRAPH)
+  // Hypergraph candidate narrowing — always attempt as supplementary signal source.
+  // In standard mode: used as bonus (boosts matching genes), not filter.
+  // In hypergraph mode: used as hard filter (narrows candidate set).
   let hypergraphCandidateIds: Set<string> | null = null;
-  if (agentMode === 'hypergraph') {
-    try {
-      const hgCandidates = await queryHypergraphCandidates(signalTags);
-      if (hgCandidates.length > 0) {
+  try {
+    const hgCandidates = await queryHypergraphCandidates(signalTags);
+    if (hgCandidates.length > 0) {
+      if (agentMode === 'hypergraph') {
+        // Hard filter: only consider hypergraph-matched genes
         hypergraphCandidateIds = new Set(hgCandidates);
         console.log(`[Evolution] Hypergraph narrowed candidates: ${genes.length} → ${hgCandidates.length}`);
+      } else {
+        // Soft signal: hypergraph matches get a coverage bonus (see scoring below)
+        hypergraphCandidateIds = new Set(hgCandidates);
       }
-    } catch {
-      /* non-blocking */
     }
+  } catch {
+    /* non-blocking */
   }
 
   // Build edge lookup: geneId → edge data (accumulate matching edges by signal overlap)
@@ -669,6 +721,124 @@ export async function selectGene(
     semanticCache,
   });
 
+  // 3.4b Hypergraph bonus: genes matched via inverted index get a small score boost.
+  if (hypergraphCandidateIds && hypergraphCandidateIds.size > 0) {
+    for (const s of scored) {
+      if (hypergraphCandidateIds.has(s.gene.id)) {
+        s.score += 0.05;
+      }
+    }
+  }
+
+  // v1.8.0 Phase 2a.3 + 2d.1 + 2d.2: Parallelized enrichment queries
+  // Three independent DB queries run in parallel to minimize selector latency.
+  if (scored.length > 0) {
+    const scoredGeneIds = scored.map((s) => s.gene.id);
+    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+
+    const [reflectionsResult, contextResult, bimodalResult] = await Promise.all([
+      // 2a.3: Reflection-informed confidence adjustment
+      process.env.FF_EVOLUTION_REFLECTION !== 'false'
+        ? prisma.iMEvolutionCapsule
+            .findMany({
+              where: {
+                geneId: { in: scoredGeneIds },
+                signalKey,
+                reflection: { not: null },
+                createdAt: { gte: sevenDaysAgo },
+              },
+              select: { geneId: true, outcome: true, reflection: true },
+              orderBy: { createdAt: 'desc' },
+              take: 15,
+            })
+            .catch(() => [] as Array<{ geneId: string; outcome: string; reflection: string | null }>)
+        : Promise.resolve([] as Array<{ geneId: string; outcome: string; reflection: string | null }>),
+
+      // 2d.1: Contextual Thompson Sampling — per-signalType (α,β)
+      signalType
+        ? prisma.iMEvolutionEdge
+            .groupBy({
+              by: ['geneId'],
+              where: {
+                signalType,
+                scope,
+                geneId: { in: scoredGeneIds },
+              },
+              _sum: { successCount: true, failureCount: true },
+            })
+            .catch(() => [] as any[])
+        : Promise.resolve([] as any[]),
+
+      // 2d.2: Bimodality utilization (scoped to current signalKey)
+      prisma.iMEvolutionEdge
+        .findMany({
+          where: {
+            geneId: { in: scoredGeneIds },
+            ownerAgentId: agentId,
+            signalKey,
+            bimodalityIndex: { gt: 0.6 },
+            scope,
+          },
+          select: { geneId: true, bimodalityIndex: true },
+        })
+        .catch(() => [] as Array<{ geneId: string; bimodalityIndex: number | null }>),
+    ]);
+
+    // Apply 2a.3: reflection penalty
+    if (reflectionsResult.length > 0) {
+      const failureByGene = new Map<string, number>();
+      for (const r of reflectionsResult) {
+        if (r.outcome === 'failed' && r.reflection) {
+          failureByGene.set(r.geneId, (failureByGene.get(r.geneId) || 0) + 1);
+        }
+      }
+      for (const s of scored) {
+        const failCount = failureByGene.get(s.gene.id) || 0;
+        if (failCount > 0) {
+          const penalty = Math.min(failCount * 0.1, 0.3);
+          s.confidence *= 1 - penalty;
+          s.score *= 1 - penalty * 0.5;
+        }
+      }
+    }
+
+    // Apply 2d.1: contextual Thompson Sampling blend
+    if (contextResult.length > 0) {
+      const ctxMap = new Map<string, { s: number; f: number }>(
+        contextResult.map((e: any) => [
+          e.geneId as string,
+          { s: (e._sum?.successCount || 0) as number, f: (e._sum?.failureCount || 0) as number },
+        ]),
+      );
+      for (const s of scored) {
+        const ctx = ctxMap.get(s.gene.id);
+        if (ctx && ctx.s + ctx.f >= 3) {
+          const ctxRate = (ctx.s + 1) / (ctx.s + ctx.f + 2);
+          const globalRate = s.confidence;
+          const blendWeight = Math.min((ctx.s + ctx.f) / 10, 0.6);
+          s.confidence = ctxRate * blendWeight + globalRate * (1 - blendWeight);
+          s.score += (ctxRate - 0.5) * 0.1;
+        }
+      }
+    }
+
+    // Apply 2d.2: bimodality exploration bonus
+    if (bimodalResult.length > 0) {
+      const bimodalMap = new Map<string, number>(
+        bimodalResult.map((b: { geneId: string; bimodalityIndex: number | null }) => [
+          b.geneId,
+          b.bimodalityIndex ?? 0,
+        ]),
+      );
+      for (const s of scored) {
+        const bIdx = bimodalMap.get(s.gene.id);
+        if (bIdx !== undefined && bIdx > 0.6) {
+          s.score += bIdx * 0.2;
+        }
+      }
+    }
+  }
+
   // 3.5 Diagnostic Gene boost (§3.4.4): if no fine-match genes exist,
   // boost diagnostic genes as "first responders" for high-cardinality signals.
   // When the best fine-match score is low, a diagnostic gene's routing ability matters more.
@@ -735,14 +905,73 @@ export async function selectGene(
   scored.sort((a, b) => b.score - a.score);
 
   if (scored.length === 0) {
+    // ── 4-level Fallback Strategy (v1.8.0 P3) ──
+    // Level 2: Relax ban threshold (0.18 → 0.05) and re-score
+    const relaxedScored = deps.selector.score({
+      genes,
+      signalTags,
+      edgeMap,
+      globalEdges: globalEdges as any[],
+      wGlobal,
+      breakerCheck: (geneId: string) => {
+        const data = breakerMap.get(geneId) ?? { state: 'closed', stateAt: null };
+        return checkCircuitBreakerData(data.state, data.stateAt);
+      },
+      semanticCache,
+      banThreshold: 0.05,
+    });
+    if (relaxedScored.length > 0) {
+      relaxedScored.sort((a, b) => b.score - a.score);
+      const best = relaxedScored[0];
+      return {
+        action: 'apply_gene',
+        gene_id: best.gene.id,
+        gene: best.gene,
+        strategy: best.gene.strategy,
+        confidence: best.confidence * 0.6,
+        signals: signalTags,
+        coverageScore: best.coverageScore,
+        alternatives: [],
+        reason: 'fallback: relaxed ban threshold',
+        fallback: 'relaxed_ban',
+      };
+    }
+
+    // Level 3: Hypergraph neighbor expansion (distance 2) — with ban/breaker guard
+    if (hypergraphCandidateIds && hypergraphCandidateIds.size > 0) {
+      const neighborGene = genes.find((g) => {
+        if (!hypergraphCandidateIds!.has(g.id)) return false;
+        const data = breakerMap.get(g.id) ?? { state: 'closed', stateAt: null };
+        if (!checkCircuitBreakerData(data.state, data.stateAt).allowed) return false;
+        const successRate = (g.success_count ?? 0) / Math.max((g.success_count ?? 0) + (g.failure_count ?? 0), 1);
+        return successRate >= 0.05;
+      });
+      if (neighborGene) {
+        return {
+          action: 'apply_gene',
+          gene_id: neighborGene.id,
+          gene: neighborGene,
+          strategy: neighborGene.strategy,
+          confidence: 0.2,
+          signals: signalTags,
+          coverageScore: 0,
+          alternatives: [],
+          reason: 'fallback: hypergraph neighbor',
+          fallback: 'hypergraph_neighbor',
+        };
+      }
+    }
+
+    // Level 4: Baseline — no gene, suggest creation
     const suggestion = buildCreateSuggestion(signalTags, genes);
     await trackUnmatchedSignals(signalTags, agentId, scope);
     return {
       action: 'create_suggested',
       confidence: 0,
       signals: signalTags,
-      reason: 'no matching genes (all banned or no overlap)',
+      reason: 'all fallback levels exhausted; using baseline behavior',
       suggestion,
+      fallback: 'baseline',
     };
   }
 
