@@ -253,7 +253,6 @@ export interface EdgePath {
   beta: number;
   bimodalityIndex?: number;
   coverageLevel?: number;
-  taskSuccessRate?: number;
   sx: number;
   sy: number;
   gx: number;
