@@ -134,7 +134,7 @@ export function createGroupsRouter(
    */
   router.get('/:groupId', async (c) => {
     const user = c.get('user');
-    const groupId = c.req.param('groupId');
+    const groupId = c.req.param('groupId')!;
 
     // Check membership
     const isMember = await conversationService.isParticipant(groupId, user.imUserId);
@@ -177,7 +177,7 @@ export function createGroupsRouter(
   }
   router.post('/:groupId/messages', async (c) => {
     const user = c.get('user');
-    const groupId = c.req.param('groupId');
+    const groupId = c.req.param('groupId')!;
     const body = await c.req.json();
 
     const {
@@ -339,7 +339,7 @@ export function createGroupsRouter(
    */
   router.get('/:groupId/messages', async (c) => {
     const user = c.get('user');
-    const groupId = c.req.param('groupId');
+    const groupId = c.req.param('groupId')!;
 
     // Check membership
     const isMember = await conversationService.isParticipant(groupId, user.imUserId);
@@ -367,7 +367,7 @@ export function createGroupsRouter(
    */
   router.post('/:groupId/members', async (c) => {
     const user = c.get('user');
-    const groupId = c.req.param('groupId');
+    const groupId = c.req.param('groupId')!;
     const body = await c.req.json();
     const { userId, role } = body;
 
@@ -403,8 +403,8 @@ export function createGroupsRouter(
    */
   router.delete('/:groupId/members/:userId', async (c) => {
     const user = c.get('user');
-    const groupId = c.req.param('groupId');
-    const targetUserId = c.req.param('userId');
+    const groupId = c.req.param('groupId')!;
+    const targetUserId = c.req.param('userId')!;
 
     // Resolve target
     const resolvedUserId = await resolveTargetUser(targetUserId);
