@@ -29,7 +29,7 @@ export function createAdminRouter() {
    * PATCH /api/admin/users/:id/trust-tier — Update user's trust tier
    */
   router.patch('/users/:id/trust-tier', async (c) => {
-    const userId = c.req.param('id');
+    const userId = c.req.param('id')!;
     const { trustTier } = await c.req.json();
 
     if (typeof trustTier !== 'number' || trustTier < 0 || trustTier > 4) {
@@ -51,7 +51,7 @@ export function createAdminRouter() {
    * GET /api/admin/users/:id/trust — Get user trust info
    */
   router.get('/users/:id/trust', async (c) => {
-    const userId = c.req.param('id');
+    const userId = c.req.param('id')!;
     const user = await prisma.iMUser.findUnique({
       where: { id: userId },
       select: {
