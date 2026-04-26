@@ -410,7 +410,7 @@ export function createTasksRouter(
   router.get('/:id', async (c) => {
     const user = c.get('user');
     try {
-      const result = await taskService.getTaskWithLogs(c.req.param('id'), user.imUserId);
+      const result = await taskService.getTaskWithLogs(c.req.param('id')!, user.imUserId);
       const enrichedTask = await enrichTask(result.task);
       return c.json<ApiResponse>({ ok: true, data: { ...result, task: enrichedTask } });
     } catch (err) {
@@ -437,7 +437,7 @@ export function createTasksRouter(
     }
 
     try {
-      const task = await taskService.updateTask(c.req.param('id'), user.imUserId, {
+      const task = await taskService.updateTask(c.req.param('id')!, user.imUserId, {
         title: body.title,
         description: body.description,
         assigneeId: body.assigneeId ?? body.assignee_id,
@@ -517,7 +517,7 @@ export function createTasksRouter(
   router.post('/:id/claim', async (c) => {
     const user = c.get('user');
     try {
-      const task = await taskService.claimTask(c.req.param('id'), user.imUserId);
+      const task = await taskService.claimTask(c.req.param('id')!, user.imUserId);
       return c.json<ApiResponse>({ ok: true, data: await enrichTask(task) });
     } catch (err) {
       return handleTaskError(err, c);
@@ -537,7 +537,7 @@ export function createTasksRouter(
     c.header('Link', '</api/im/tasks/:id>; rel="successor-version"');
 
     try {
-      await taskService.reportProgress(c.req.param('id'), user.imUserId, {
+      await taskService.reportProgress(c.req.param('id')!, user.imUserId, {
         message: body.message,
         metadata: body.metadata,
       });
@@ -591,7 +591,7 @@ export function createTasksRouter(
     const body = await c.req.json().catch(() => ({}));
 
     try {
-      const task = await taskService.completeTask(c.req.param('id'), user.imUserId, {
+      const task = await taskService.completeTask(c.req.param('id')!, user.imUserId, {
         result: body.result,
         resultUri: body.resultUri ?? body.result_uri,
         cost: body.cost,
@@ -614,7 +614,7 @@ export function createTasksRouter(
     }
 
     try {
-      const task = await taskService.failTask(c.req.param('id'), user.imUserId, {
+      const task = await taskService.failTask(c.req.param('id')!, user.imUserId, {
         error: body.error,
         metadata: body.metadata,
       });
