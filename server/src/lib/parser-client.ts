@@ -1,7 +1,7 @@
 /**
  * Parser Service Client
  * 
- * 封装与 parser.prismer.dev OCR 服务的通信
+ * 封装与 Parser OCR 服务的通信 (PARSER_API_URL)
  * 
  * 服务能力:
  * - Fast 模式: PyMuPDF CPU 快速解析 (~15页/秒)
@@ -136,7 +136,11 @@ export interface TaskResult extends ParseResult {
  */
 async function getParserBaseUrl(): Promise<string> {
   await ensureNacosConfig();
-  return process.env.PARSER_API_URL || 'https://parser.prismer.dev';
+  const url = process.env.PARSER_API_URL;
+  if (!url) {
+    throw new Error('Parse service not configured. Set PARSER_API_URL in your .env file.');
+  }
+  return url;
 }
 
 /**
@@ -157,7 +161,7 @@ function mapOptionsToBackend(options: ParseOptions): Record<string, string> {
 }
 
 // CDN Base URL for S3 images
-const IMAGE_CDN_BASE = 'https://cdn.prismer.ai/parser';
+const IMAGE_CDN_BASE = process.env.CDN_BASE_URL || '';
 
 /**
  * 后端 detection 原始格式
