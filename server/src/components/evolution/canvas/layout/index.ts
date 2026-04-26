@@ -57,13 +57,16 @@ function createRng(seed: number): () => number {
     state ^= state << 13;
     state ^= state >> 17;
     state ^= state << 5;
-    return (state >>> 0) / 4294967296;
+    return ((state >>> 0) / 4294967296);
   };
 }
 
 // ─── Main layout function ────────────────────────────────────
 
-export function computeLayout(data: EvolutionMapData, _config: LayoutConfig): MapLayout {
+export function computeLayout(
+  data: EvolutionMapData,
+  _config: LayoutConfig,
+): MapLayout {
   const { signals, genes, edges } = data;
 
   // Handle empty data
@@ -84,13 +87,17 @@ export function computeLayout(data: EvolutionMapData, _config: LayoutConfig): Ma
   const communities = detectDomains(edges, genes, signals);
 
   // Step 2: Gene layout
-  const { positions: genePositions, clusterCenters } = computeGeneLayout(genes, communities, edges);
+  const { positions: genePositions, clusterCenters } = computeGeneLayout(
+    genes,
+    communities,
+    edges,
+  );
 
   // Step 3: Signal layout
   const signalPositions = computeSignalLayout(signals, edges, genePositions);
 
   // Step 4: Build GeneNode[]
-  const geneNodes: GeneNode[] = genes.map((gene) => {
+  const geneNodes: GeneNode[] = genes.map(gene => {
     const pos = genePositions.get(gene.id) ?? { x: 0, y: 0 };
     const communityId = communities.geneCommunities.get(gene.id);
     const membership = communities.communityMembership.get(gene.id);
@@ -114,7 +121,7 @@ export function computeLayout(data: EvolutionMapData, _config: LayoutConfig): Ma
   });
 
   // Step 5: Build SignalNode[]
-  const signalNodes: SignalNode[] = signals.map((signal) => {
+  const signalNodes: SignalNode[] = signals.map(signal => {
     const pos = signalPositions.get(signal.key);
     return {
       key: signal.key,
@@ -155,12 +162,20 @@ export function computeLayout(data: EvolutionMapData, _config: LayoutConfig): Ma
     const gy = gPos.y;
 
     // Bezier control points: midpoint with perpendicular offset
-    const { cp1x, cp1y, cp2x, cp2y } = computeBezierControlPoints(sx, sy, gx, gy, edge.signalKey, edge.geneId);
+    const { cp1x, cp1y, cp2x, cp2y } = computeBezierControlPoints(
+      sx, sy, gx, gy, edge.signalKey, edge.geneId,
+    );
 
     // Visual properties
-    const lineWidth = Math.min(1 + Math.log2(edge.totalObs + 1) * 1.2, MAX_LINE_WIDTH);
+    const lineWidth = Math.min(
+      1 + Math.log2(edge.totalObs + 1) * 1.2,
+      MAX_LINE_WIDTH,
+    );
     const color = confidenceToColor(edge.confidence);
-    const opacity = Math.min(MIN_OPACITY + Math.min(edge.totalObs / 30, 0.6), MAX_OPACITY);
+    const opacity = Math.min(
+      MIN_OPACITY + Math.min(edge.totalObs / 30, 0.6),
+      MAX_OPACITY,
+    );
 
     const edgePath: EdgePath = {
       signalKey: edge.signalKey,
@@ -173,15 +188,8 @@ export function computeLayout(data: EvolutionMapData, _config: LayoutConfig): Ma
       beta: edge.beta,
       bimodalityIndex: edge.bimodalityIndex,
       coverageLevel: edge.coverageLevel,
-      taskSuccessRate: edge.taskSuccessRate,
-      sx,
-      sy,
-      gx,
-      gy,
-      cp1x,
-      cp1y,
-      cp2x,
-      cp2y,
+      sx, sy, gx, gy,
+      cp1x, cp1y, cp2x, cp2y,
       lineWidth,
       color,
       opacity,
@@ -223,10 +231,8 @@ export function computeLayout(data: EvolutionMapData, _config: LayoutConfig): Ma
  * perpendicularly by a deterministic amount seeded by the edge identity.
  */
 function computeBezierControlPoints(
-  sx: number,
-  sy: number,
-  gx: number,
-  gy: number,
+  sx: number, sy: number,
+  gx: number, gy: number,
   signalKey: string,
   geneId: string,
 ): { cp1x: number; cp1y: number; cp2x: number; cp2y: number } {
@@ -266,14 +272,10 @@ function computeBezierControlPoints(
  * Used by hit-testing to find the closest point on an edge path.
  */
 export function getPointOnBezier(
-  sx: number,
-  sy: number,
-  cp1x: number,
-  cp1y: number,
-  cp2x: number,
-  cp2y: number,
-  gx: number,
-  gy: number,
+  sx: number, sy: number,
+  cp1x: number, cp1y: number,
+  cp2x: number, cp2y: number,
+  gx: number, gy: number,
   t: number,
 ): { x: number; y: number } {
   const t2 = t * t;
@@ -329,10 +331,8 @@ function computeBounds(
   geneNodes: GeneNode[],
   signalNodes: SignalNode[],
 ): { minX: number; maxX: number; minY: number; maxY: number } {
-  let minX = Infinity,
-    maxX = -Infinity;
-  let minY = Infinity,
-    maxY = -Infinity;
+  let minX = Infinity, maxX = -Infinity;
+  let minY = Infinity, maxY = -Infinity;
 
   for (const node of geneNodes) {
     const left = node.x - node.width / 2;
