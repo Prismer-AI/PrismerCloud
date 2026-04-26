@@ -18,9 +18,13 @@
  * Usage: npx tsx scripts/benchmark-evolution-h2h.ts
  */
 
-const PRISMER_BASE = 'https://cloud.prismer.dev';
-const PRISMER_KEY = 'sk-prismer-live-REDACTED-SET-VIA-ENV';
-const EVOMAP_BASE = 'https://evomap.ai';
+const PRISMER_BASE = process.env.PRISMER_BASE_URL || 'https://cloud.prismer.dev';
+const PRISMER_KEY = process.env.PRISMER_API_KEY_TEST || process.env.PRISMER_API_KEY || '';
+if (!PRISMER_KEY) {
+  console.error('Set PRISMER_API_KEY_TEST or PRISMER_API_KEY before running this benchmark.');
+  process.exit(1);
+}
+const EVOMAP_BASE = process.env.EVOMAP_BASE_URL || 'https://evomap.ai';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 

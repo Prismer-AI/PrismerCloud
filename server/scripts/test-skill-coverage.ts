@@ -5,10 +5,12 @@
  * Usage: npx tsx scripts/test-skill-coverage.ts
  */
 
-const BASE = 'https://cloud.prismer.dev';
-const API_KEY =
-  process.env.PRISMER_API_KEY_TEST ||
-  'sk-prismer-live-REDACTED-SET-VIA-ENV';
+const BASE = process.env.PRISMER_BASE_URL || 'https://cloud.prismer.dev';
+const API_KEY = process.env.PRISMER_API_KEY_TEST || process.env.PRISMER_API_KEY;
+if (!API_KEY) {
+  console.error('Set PRISMER_API_KEY_TEST or PRISMER_API_KEY before running this script.');
+  process.exit(1);
+}
 
 let passed = 0;
 let failed = 0;

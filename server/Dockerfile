@@ -8,12 +8,18 @@ WORKDIR /app
 RUN apk add --no-cache libc6-compat
 
 # 复制依赖文件
+# self-host repo gitignores package-lock.json, so we use npm install (falls back gracefully)
 COPY package.json package-lock.json* ./
 
-# 使用 npm 安装依赖
-# 清理 npm ci 产生的损坏符号链接（core-js 等包在 overlay2 上会出问题）
+# 安装依赖 — 优先用 lockfile (npm ci) 如果存在，否则回退到 npm install
+# 清理产生的损坏符号链接（core-js 等包在 overlay2 上会出问题）
 # Alpine BusyBox find 不支持 -xtype，用 -L -type l 替代（-L 跟随链接后仍为 l 说明目标不存在）
-RUN npm ci && find /app/node_modules -L -type l -delete 2>/dev/null; true
+RUN if [ -f package-lock.json ]; then \
+      npm ci; \
+    else \
+      npm install --no-audit --no-fund; \
+    fi && \
+    find /app/node_modules -L -type l -delete 2>/dev/null; true
 
 # 构建应用
 FROM base AS builder

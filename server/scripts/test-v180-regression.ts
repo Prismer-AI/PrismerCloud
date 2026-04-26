@@ -24,13 +24,16 @@ const BASE_URLS: Record<string, string> = {
   prod: 'https://prismer.cloud',
 };
 
-const API_KEYS: Record<string, string> = {
-  test: 'sk-prismer-live-REDACTED-SET-VIA-ENV',
-  prod: 'sk-prismer-live-REDACTED-SET-VIA-ENV',
-};
-
 const BASE = process.env.BASE_URL || BASE_URLS[ENV] || BASE_URLS.local;
-const API_KEY = process.env.API_KEY || API_KEYS[ENV] || '';
+const API_KEY =
+  process.env.API_KEY ||
+  process.env[`PRISMER_API_KEY_${ENV.toUpperCase()}`] ||
+  process.env.PRISMER_API_KEY ||
+  '';
+if (ENV !== 'local' && !API_KEY) {
+  console.error(`Set API_KEY or PRISMER_API_KEY_${ENV.toUpperCase()} for env=${ENV}.`);
+  process.exit(1);
+}
 
 // ============================================================================
 // Test Infrastructure
