@@ -23,10 +23,9 @@ let pool: Pool | null = null;
  * 
  * 注意：使用前必须确保 Nacos 配置已加载（调用 ensureNacosConfig）
  * 
- * 数据库配置来源 (APP_ENV → Namespace → Database)：
- * - prod  → bd5fb394... → prismer_cloud@databaes-2.c6tm6c0ik291...
- * - test  → a1ce57f2... → prismer_cloud@REDACTED-DB-HOST
- * - dev   → a49fb6f9... → prismer_cloud@REDACTED-DB-HOST
+ * 数据库配置来源：
+ * - REMOTE_MYSQL_HOST/PORT/USER/PASSWORD/DATABASE 环境变量
+ * - 或通过 Nacos 配置中心加载
  */
 export function getPool(): Pool {
   if (!pool) {
@@ -127,14 +126,10 @@ export async function withTransaction<T>(
 }
 
 /**
- * 生成 UUID
+ * 生成 UUID (cryptographically secure)
  */
 export function generateUUID(): string {
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-    const r = (Math.random() * 16) | 0;
-    const v = c === 'x' ? r : (r & 0x3) | 0x8;
-    return v.toString(16);
-  });
+  return crypto.randomUUID();
 }
 
 /**
