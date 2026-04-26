@@ -10,7 +10,7 @@ const log = createModuleLogger('ParseStream');
  * GET /api/parse/stream/{taskId}
  *
  * SSE 实时进度流
- * 转发后端 parser.prismer.dev 的 SSE 流
+ * 转发后端 Parser 服务的 SSE 流
  *
  * 事件类型:
  * - progress: 处理进度更新
