@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Exa from 'exa-js';
 import { ensureNacosConfig } from '@/lib/nacos-config';
-import { metrics } from '@/lib/metrics';
 import { apiGuard } from '@/lib/api-guard';
+import { metrics } from '@/lib/metrics';
 import { exaBreaker } from '@/lib/circuit-breaker';
 import { checkRateLimit, rateLimitResponse, rateLimitHeaders } from '@/lib/rate-limit';
 import { createModuleLogger } from '@/lib/logger';
@@ -42,7 +42,13 @@ export async function POST(request: NextRequest) {
     const SEARCH_API_KEY = getSearchApiKey();
 
     if (!SEARCH_API_KEY) {
-      return NextResponse.json({ error: 'Search API key not configured' }, { status: 500 });
+      return NextResponse.json(
+        {
+          error:
+            'Web search not available. Set EXASEARCH_API_KEY in your .env file. Get one at https://dashboard.exa.ai/api-keys',
+        },
+        { status: 503 },
+      );
     }
 
     const body = await request.json();
@@ -53,6 +59,7 @@ export async function POST(request: NextRequest) {
     }
 
     const searchClient = new Exa(SEARCH_API_KEY);
+    (searchClient as any).headers.set('x-exa-integration', 'prismercloud');
 
     // Strict configuration as specified
     // Request 15 results to have buffer after filtering low-quality ones
