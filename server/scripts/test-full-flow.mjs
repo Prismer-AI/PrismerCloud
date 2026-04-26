@@ -20,7 +20,7 @@
  */
 
 const BASE = 'https://prismer.cloud';
-const API_KEY = 'sk-prismer-live-REDACTED-SET-VIA-ENV';
+const API_KEY = (process.env.PRISMER_API_KEY || process.env.PRISMER_API_KEY_TEST || '');
 
 let passed = 0;
 let failed = 0;

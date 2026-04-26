@@ -17,7 +17,7 @@ import { extractMeta } from '../src/lib/context-meta';
 const BASE = process.env.PRISMER_BASE_URL || 'https://cloud.prismer.dev';
 const API_KEY =
   process.env.PRISMER_API_KEY_TEST ||
-  'sk-prismer-live-REDACTED-SET-VIA-ENV';
+  (process.env.PRISMER_API_KEY || process.env.PRISMER_API_KEY_TEST || '');
 
 let passed = 0;
 let failed = 0;

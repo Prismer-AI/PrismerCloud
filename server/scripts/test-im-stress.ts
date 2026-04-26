@@ -47,8 +47,8 @@ const WS_URLS: Record<string, string> = {
 };
 
 const API_KEYS: Record<string, string> = {
-  test: 'sk-prismer-live-REDACTED-SET-VIA-ENV',
-  prod: 'sk-prismer-live-REDACTED-SET-VIA-ENV',
+  test: (process.env.PRISMER_API_KEY || process.env.PRISMER_API_KEY_TEST || ''),
+  prod: (process.env.PRISMER_API_KEY || process.env.PRISMER_API_KEY_TEST || ''),
 };
 
 const BASE = BASE_URLS[ENV];

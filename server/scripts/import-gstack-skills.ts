@@ -29,7 +29,7 @@ const BASE_URL = ENV_MAP[envArg] || ENV_MAP.test;
 const API_KEY =
   process.env.PRISMER_API_KEY ||
   process.env.PRISMER_API_KEY_TEST ||
-  'sk-prismer-live-REDACTED-SET-VIA-ENV';
+  (process.env.PRISMER_API_KEY || process.env.PRISMER_API_KEY_TEST || '');
 
 // Use /api/im/ prefix for Next.js proxy, /api/ for standalone
 const API_PREFIX = BASE_URL.includes('localhost:3200') ? '/api' : '/api/im';

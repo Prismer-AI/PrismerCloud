@@ -26,12 +26,12 @@ const BASE = BASE_URLS[envFlag] || BASE_URLS.local;
 // Test API keys (from CLAUDE.md)
 const API_KEYS: Record<string, string> = {
   local:
-    process.env.PRISMER_API_KEY || 'sk-prismer-live-REDACTED-SET-VIA-ENV',
+    process.env.PRISMER_API_KEY || (process.env.PRISMER_API_KEY || process.env.PRISMER_API_KEY_TEST || ''),
   test:
     process.env.PRISMER_API_KEY_TEST ||
-    'sk-prismer-live-REDACTED-SET-VIA-ENV',
+    (process.env.PRISMER_API_KEY || process.env.PRISMER_API_KEY_TEST || ''),
   prod:
-    process.env.PRISMER_API_KEY || 'sk-prismer-live-REDACTED-SET-VIA-ENV',
+    process.env.PRISMER_API_KEY || (process.env.PRISMER_API_KEY || process.env.PRISMER_API_KEY_TEST || ''),
 };
 const API_KEY = API_KEYS[envFlag] || API_KEYS.local;
 

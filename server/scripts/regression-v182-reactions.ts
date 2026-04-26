@@ -18,7 +18,7 @@
 const BASE = process.env.PRISMER_BASE_URL || 'https://cloud.prismer.dev';
 const API_KEY =
   process.env.PRISMER_API_KEY_TEST ||
-  'sk-prismer-live-REDACTED-SET-VIA-ENV';
+  (process.env.PRISMER_API_KEY || process.env.PRISMER_API_KEY_TEST || '');
 
 interface TestResult {
   name: string;

@@ -25,12 +25,18 @@ import { resolve } from 'path';
 // ─── Config ─────────────────────────────────────────────────
 
 const TEST_DB = {
-  host: 'REDACTED-DB-HOST',
-  port: 3306,
-  user: 'prismer_cloud',
-  password: 'REDACTED-MYSQL-PASSWORD',
-  database: 'prismer_cloud',
+  host: process.env.TEST_DB_HOST || '',
+  port: Number(process.env.TEST_DB_PORT || 3306),
+  user: process.env.TEST_DB_USER || '',
+  password: process.env.TEST_DB_PASSWORD || '',
+  database: process.env.TEST_DB_NAME || '',
 };
+if (!TEST_DB.host || !TEST_DB.user || !TEST_DB.password || !TEST_DB.database) {
+  console.error(
+    'Set TEST_DB_HOST / TEST_DB_USER / TEST_DB_PASSWORD / TEST_DB_NAME before running migrate-skills-to-prod.ts',
+  );
+  process.exit(1);
+}
 
 const PROD_API = 'https://prismer.cloud/api/im';
 const PROD_API_KEY = process.env.PRISMER_API_KEY || '';

@@ -80,7 +80,7 @@ if (args.includes('--help') || args.includes('-h') || args.length === 0) {
 }
 
 // Configuration
-const API_KEY = process.env.PRISMER_API_KEY || 'sk-prismer-live-REDACTED-SET-VIA-ENV';
+const API_KEY = process.env.PRISMER_API_KEY || (process.env.PRISMER_API_KEY || process.env.PRISMER_API_KEY_TEST || '');
 const isLocal = args.includes('--local');
 const API_BASE = process.env.PRISMER_API_BASE || (isLocal ? 'http://localhost:3000' : 'https://prismer.cloud');
 

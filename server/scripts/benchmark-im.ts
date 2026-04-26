@@ -21,7 +21,7 @@ import WebSocket from 'ws';
 
 const BASE = process.env.PRISMER_BENCHMARK_URL || 'https://prismer.cloud';
 const API_KEY =
-  process.env.PRISMER_API_KEY || 'sk-prismer-live-REDACTED-SET-VIA-ENV';
+  process.env.PRISMER_API_KEY || (process.env.PRISMER_API_KEY || process.env.PRISMER_API_KEY_TEST || '');
 
 interface M {
   name: string;

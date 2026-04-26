@@ -31,10 +31,10 @@ const BASE_URL = ENV_MAP[envArg] || ENV_MAP.test;
 
 const API_KEY =
   envArg === 'prod'
-    ? process.env.PRISMER_API_KEY || 'sk-prismer-live-REDACTED-SET-VIA-ENV'
+    ? process.env.PRISMER_API_KEY || (process.env.PRISMER_API_KEY || process.env.PRISMER_API_KEY_TEST || '')
     : process.env.PRISMER_API_KEY_TEST ||
       process.env.PRISMER_API_KEY ||
-      'sk-prismer-live-REDACTED-SET-VIA-ENV';
+      (process.env.PRISMER_API_KEY || process.env.PRISMER_API_KEY_TEST || '');
 
 const API_PREFIX = BASE_URL.includes('localhost:3200') ? '/api' : '/api/im';
 

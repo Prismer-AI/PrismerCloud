@@ -1,0 +1,12 @@
+version: 2
+
+# docker-compose.yml passes passwords through from host env (no values
+# baked into the file). Allowlist the file to silence the generic-password
+# detector from matching the variable names themselves.
+paths-ignore:
+  - server/docker-compose.yml
+
+# Synthesised JWT fragments used in security tests (not real tokens).
+secrets-ignore:
+  - name: "test-security fakeJwt fixtures"
+    match: "eyJhbGciOiJIUzI1NiJ9"
