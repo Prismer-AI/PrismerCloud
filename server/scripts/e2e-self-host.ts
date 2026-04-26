@@ -183,9 +183,13 @@ async function testAuth() {
   });
 
   await test('Login with default admin', async () => {
+    const adminPassword = process.env.INIT_ADMIN_PASSWORD;
+    if (!adminPassword) {
+      throw new Error('Set INIT_ADMIN_PASSWORD before running self-host e2e');
+    }
     const { status, data } = await api('POST', '/auth/login', {
-      email: 'admin@localhost',
-      password: 'PASSWORD-NOT-SET',
+      email: process.env.INIT_ADMIN_EMAIL || 'admin@localhost',
+      password: adminPassword,
     });
     assertEqual(status, 200, 'status');
     assert(data.success || data.data?.token || data.token, `login failed: ${JSON.stringify(data)}`);
