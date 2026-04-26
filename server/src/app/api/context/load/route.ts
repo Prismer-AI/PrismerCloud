@@ -30,6 +30,11 @@ function calculateSavings(originalText: string | null, compressedText: string | 
   };
 }
 
+/** Internal base URL for service-to-service calls. Never derived from request headers. */
+function getInternalBaseUrl(): string {
+  return process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000';
+}
+
 /**
  * POST /api/context/load
  * POST /api/context/load?stream=true
@@ -159,9 +164,7 @@ async function handleSingleUrl(
 ): Promise<NextResponse> {
   const startTime = Date.now();
   const authHeader = request.headers.get('authorization');
-  const host = request.headers.get('host') || new URL(request.url).host;
-  const protocol = request.headers.get('x-forwarded-proto') || 'https';
-  const baseUrl = `${protocol}://${host}`;
+  const baseUrl = getInternalBaseUrl();
   const strategy = processing?.strategy || 'auto';
   const taskId = generateTaskId('load_url');
 
@@ -224,26 +227,30 @@ async function handleSingleUrl(
 
     const contentRes = await fetch(`${baseUrl}/api/content`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...(authHeader ? { 'Authorization': authHeader } : {}) },
       body: JSON.stringify({ urls: [url] }),
     });
 
     if (!contentRes.ok) {
       const errorData = await contentRes.json().catch(() => ({}));
-      log.error({ errorData }, 'Content fetch failed');
+      log.error({ errorData, status: contentRes.status }, 'Content fetch failed');
+      const reason =
+        contentRes.status === 503
+          ? errorData.error || 'Content fetching service not configured'
+          : 'Failed to fetch URL content';
       return NextResponse.json({
-        success: true,
-        requestId: `load_${Date.now().toString(36)}`,
+        success: false,
+        requestId: taskId,
         mode: 'single_url',
         result: {
           url,
           cached: false,
           hqcc: null,
-          error: 'Failed to fetch URL content',
+          error: reason,
         },
         cost: { credits: 0, cached: false },
         processingTime: Date.now() - startTime,
-      });
+      }, { status: contentRes.status === 503 ? 503 : 200 });
     }
 
     const contentData = await contentRes.json();
@@ -292,7 +299,7 @@ async function handleSingleUrl(
 
     const compressRes = await fetch(`${baseUrl}/api/compress`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...(authHeader ? { 'Authorization': authHeader } : {}) },
       body: JSON.stringify({
         content: content.text,
         url: content.url || url,
@@ -422,9 +429,7 @@ async function handleBatchUrls(
 ): Promise<NextResponse> {
   const startTime = Date.now();
   const authHeader = request.headers.get('authorization');
-  const host = request.headers.get('host') || new URL(request.url).host;
-  const protocol = request.headers.get('x-forwarded-proto') || 'https';
-  const baseUrl = `${protocol}://${host}`;
+  const baseUrl = getInternalBaseUrl();
   const maxConcurrent = processing?.maxConcurrent || 3;
   const strategy = processing?.strategy || 'auto';
   const taskId = generateTaskId('load_batch');
@@ -483,7 +488,7 @@ async function handleBatchUrls(
         // 批量获取内容
         const contentRes = await fetch(`${baseUrl}/api/content`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...(authHeader ? { 'Authorization': authHeader } : {}) },
           body: JSON.stringify({ urls: uncachedUrls }),
         });
 
@@ -506,7 +511,7 @@ async function handleBatchUrls(
               try {
                 const compressRes = await fetch(`${baseUrl}/api/compress`, {
                   method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
+                  headers: { 'Content-Type': 'application/json', ...(authHeader ? { 'Authorization': authHeader } : {}) },
                   body: JSON.stringify({
                     content: content.text,
                     url: content.url || url,
@@ -674,9 +679,7 @@ async function handleQuery(
   try {
     // Step 0: 本地缓存搜索 (fast, ~10ms)
     const searchTopK = search?.topK || 15;
-    const host = request.headers.get('host') || new URL(request.url).host;
-    const protocol = request.headers.get('x-forwarded-proto') || 'https';
-    const baseUrl = `${protocol}://${host}`;
+    const baseUrl = getInternalBaseUrl();
 
     let localResults: Array<{ url: string; title: string; hqcc: string; cached: true; score: number; meta: any }> = [];
     if (userId) {
@@ -704,7 +707,7 @@ async function handleQuery(
     // Step 1: Exa 外部搜索
     const searchRes = await fetch(`${baseUrl}/api/search`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...(authHeader ? { 'Authorization': authHeader } : {}) },
       body: JSON.stringify({ query }),
     });
 
@@ -790,7 +793,7 @@ async function handleQuery(
         try {
           const compressRes = await fetch(`${baseUrl}/api/compress`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', ...(authHeader ? { 'Authorization': authHeader } : {}) },
             body: JSON.stringify({
               content: result.text,
               url: result.url,
