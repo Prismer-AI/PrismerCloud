@@ -63,37 +63,7 @@ export function drawClusterHalo(
   ctx.restore();
 }
 
-/**
- * Collision-aware cluster labels.
- *
- * Maintains a list of already-drawn label rects per frame.
- * Call `resetLabelCollisions()` at the start of each frame,
- * then `drawClusterLabel()` for each cluster — labels that would
- * overlap a previously drawn label are silently skipped.
- */
-const drawnLabelRects: Array<{ x1: number; y1: number; x2: number; y2: number }> = [];
-
-export function resetLabelCollisions() {
-  drawnLabelRects.length = 0;
-}
-
-function rectsOverlap(
-  a: { x1: number; y1: number; x2: number; y2: number },
-  b: { x1: number; y1: number; x2: number; y2: number },
-  pad = 8,
-): boolean {
-  return a.x1 - pad < b.x2 && a.x2 + pad > b.x1 && a.y1 - pad < b.y2 && a.y2 + pad > b.y1;
-}
-
-export function drawClusterLabel(
-  ctx: CanvasRenderingContext2D,
-  cluster: ClusterInfo,
-  isDark: boolean,
-  zoom: number = 1,
-) {
-  // Suppress labels for clusters with < 2 genes — visual noise at L3
-  if (cluster.geneIds.length < 2) return;
-
+export function drawClusterLabel(ctx: CanvasRenderingContext2D, cluster: ClusterInfo, isDark: boolean) {
   ctx.save();
 
   const cx = cluster.center.x;
@@ -101,39 +71,17 @@ export function drawClusterLabel(
   const label = cluster.label.toUpperCase();
   const count = `${cluster.geneIds.length} genes`;
 
-  // Screen-space scaling — labels stay constant size on screen
-  const s = 1 / zoom;
-  const fontSize = 13 * s;
-  const countFontSize = 9 * s;
-  const padX = 12 * s;
-  const padY = 6 * s;
-
-  ctx.font = `700 ${fontSize}px -apple-system, "Segoe UI", sans-serif`;
+  // ─── Large label pill ────────────────────────────────────────
+  ctx.font = '700 14px -apple-system, "Segoe UI", sans-serif';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
 
   const metrics = ctx.measureText(label);
-  const pillW = metrics.width + padX * 2;
-  const pillH = fontSize + padY * 2;
+  const pillW = metrics.width + 24;
+  const pillH = 28;
   const pillY = cy;
 
-  // Collision check: skip if overlapping any previously drawn label
-  const rect = {
-    x1: cx - pillW / 2,
-    y1: pillY - pillH / 2,
-    x2: cx + pillW / 2,
-    y2: pillY + pillH / 2 + (countFontSize + 8 * s),
-  };
-
-  for (const existing of drawnLabelRects) {
-    if (rectsOverlap(rect, existing, 4 * s)) {
-      ctx.restore();
-      return; // skip this label — would overlap
-    }
-  }
-  drawnLabelRects.push(rect);
-
-  // Pill background — frosted glass
+  // Pill background — strong frosted glass
   ctx.globalAlpha = isDark ? 0.7 : 0.8;
   ctx.fillStyle = isDark ? 'rgba(9,9,11,0.6)' : 'rgba(255,255,255,0.7)';
   ctx.beginPath();
@@ -143,7 +91,7 @@ export function drawClusterLabel(
   // Pill border with cluster color
   const baseColor = cluster.color || CLUSTER_HALO_COLORS[0];
   ctx.strokeStyle = baseColor + '40';
-  ctx.lineWidth = 0.5 * s;
+  ctx.lineWidth = 1;
   ctx.stroke();
 
   // Label text — high contrast
@@ -153,9 +101,9 @@ export function drawClusterLabel(
 
   // Gene count below label
   ctx.globalAlpha = isDark ? 0.5 : 0.5;
-  ctx.font = `${countFontSize}px -apple-system, sans-serif`;
+  ctx.font = '10px -apple-system, sans-serif';
   ctx.fillStyle = isDark ? '#a1a1aa' : '#71717a';
-  ctx.fillText(count, cx, pillY + pillH / 2 + 8 * s);
+  ctx.fillText(count, cx, pillY + pillH / 2 + 12);
 
   ctx.restore();
 }
