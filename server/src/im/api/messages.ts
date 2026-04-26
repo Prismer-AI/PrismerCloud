@@ -93,7 +93,7 @@ export function createMessagesRouter(
    */
   router.get('/:conversationId', async (c) => {
     const user = c.get('user');
-    const conversationId = c.req.param('conversationId');
+    const conversationId = c.req.param('conversationId')!;
 
     // Check participation (use imUserId for resolved identity)
     const isMember = await conversationService.isParticipant(conversationId, user.imUserId);
@@ -153,7 +153,7 @@ export function createMessagesRouter(
   }
   router.post('/:conversationId', async (c) => {
     const user = c.get('user');
-    const conversationId = c.req.param('conversationId');
+    const conversationId = c.req.param('conversationId')!;
     const body = await c.req.json();
 
     const {
@@ -333,8 +333,8 @@ export function createMessagesRouter(
    */
   router.patch('/:conversationId/:messageId', async (c) => {
     const user = c.get('user');
-    const conversationId = c.req.param('conversationId');
-    const messageId = c.req.param('messageId');
+    const conversationId = c.req.param('conversationId')!;
+    const messageId = c.req.param('messageId')!;
     const body = await c.req.json();
 
     const msg = await messageService.getById(messageId);
@@ -381,8 +381,8 @@ export function createMessagesRouter(
    */
   router.delete('/:conversationId/:messageId', async (c) => {
     const user = c.get('user');
-    const conversationId = c.req.param('conversationId');
-    const messageId = c.req.param('messageId');
+    const conversationId = c.req.param('conversationId')!;
+    const messageId = c.req.param('messageId')!;
 
     const msg = await messageService.getById(messageId);
     if (!msg) {
