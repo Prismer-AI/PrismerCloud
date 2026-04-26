@@ -29,8 +29,6 @@ export const config = {
   },
 
   jwt: {
-    // Use getter: JWT_SECRET may be injected by Nacos AFTER module load.
-    // apiGuard (proxy layer) reads env dynamically — IM must match.
     get secret() {
       return process.env.JWT_SECRET || process.env.NEXTAUTH_SECRET || 'dev-secret-change-me';
     },
@@ -49,9 +47,9 @@ export const config = {
   },
 
   cors: {
-    origins: (process.env.CORS_ORIGINS || 'http://localhost:3000,http://localhost:3100,http://localhost:3200').split(
-      ',',
-    ),
+    origins: (
+      process.env.CORS_ORIGINS || 'http://localhost:3000,http://localhost:3100,http://localhost:3200'
+    ).split(','),
   },
 
   webhook: {
@@ -62,7 +60,7 @@ export const config = {
 
   s3: {
     region: process.env.AWS_S3_REGION || process.env.AWS_REGION || 'us-east-1',
-    bucket: process.env.AWS_S3_BUCKET || 'pro-prismer-slide',
+    bucket: process.env.AWS_S3_BUCKET || '',
     accessKeyId: process.env.AWS_S3_ACCESS_KEY_ID || process.env.AWS_ACCESS_KEY_ID || '',
     secretAccessKey: process.env.AWS_S3_SECRET_ACCESS_KEY || process.env.AWS_SECRET_ACCESS_KEY || '',
     endpoint: process.env.AWS_S3_ENDPOINT || undefined,
