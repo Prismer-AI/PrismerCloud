@@ -94,6 +94,32 @@ export const FEATURE_FLAGS = {
   get NOTIFICATIONS_LOCAL(): boolean {
     return process.env.FF_NOTIFICATIONS_LOCAL === 'true';
   },
+
+  /**
+   * Auth (self-host mode)
+   * /api/auth/* → local pc_users table + JWT signing
+   * When false, proxies to backend Go service
+   */
+  get AUTH_LOCAL(): boolean {
+    return process.env.FF_AUTH_LOCAL === 'true';
+  },
+
+  /**
+   * Unlimited credits (self-host mode)
+   * When true, new users get 999999 credits and balance checks are skipped
+   */
+  get UNLIMITED_CREDITS(): boolean {
+    return process.env.UNLIMITED_CREDITS === 'true';
+  },
+
+  /**
+   * Disable authentication (self-host mode)
+   * When true, all API requests are treated as the default admin user.
+   * WARNING: Only use in private/local deployments!
+   */
+  get AUTH_DISABLED(): boolean {
+    return process.env.AUTH_DISABLED === 'true';
+  },
 };
 
 /**
@@ -108,7 +134,8 @@ export function isAnyLocalEnabled(): boolean {
     FEATURE_FLAGS.BILLING_LOCAL ||
     FEATURE_FLAGS.API_KEYS_LOCAL ||
     FEATURE_FLAGS.CONTEXT_CACHE_LOCAL ||
-    FEATURE_FLAGS.NOTIFICATIONS_LOCAL
+    FEATURE_FLAGS.NOTIFICATIONS_LOCAL ||
+    FEATURE_FLAGS.AUTH_LOCAL
   );
 }
 
@@ -125,6 +152,9 @@ export function getEnabledFlags(): string[] {
   if (FEATURE_FLAGS.API_KEYS_LOCAL) flags.push('API_KEYS_LOCAL');
   if (FEATURE_FLAGS.CONTEXT_CACHE_LOCAL) flags.push('CONTEXT_CACHE_LOCAL');
   if (FEATURE_FLAGS.NOTIFICATIONS_LOCAL) flags.push('NOTIFICATIONS_LOCAL');
+  if (FEATURE_FLAGS.AUTH_LOCAL) flags.push('AUTH_LOCAL');
+  if (FEATURE_FLAGS.UNLIMITED_CREDITS) flags.push('UNLIMITED_CREDITS');
+  if (FEATURE_FLAGS.AUTH_DISABLED) flags.push('AUTH_DISABLED');
   return flags;
 }
 
@@ -141,6 +171,9 @@ export function logFeatureFlags(): void {
     API_KEYS_LOCAL: FEATURE_FLAGS.API_KEYS_LOCAL,
     CONTEXT_CACHE_LOCAL: FEATURE_FLAGS.CONTEXT_CACHE_LOCAL,
     NOTIFICATIONS_LOCAL: FEATURE_FLAGS.NOTIFICATIONS_LOCAL,
+    AUTH_LOCAL: FEATURE_FLAGS.AUTH_LOCAL,
+    UNLIMITED_CREDITS: FEATURE_FLAGS.UNLIMITED_CREDITS,
+    AUTH_DISABLED: FEATURE_FLAGS.AUTH_DISABLED,
   });
 }
 
