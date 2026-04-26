@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Exa from 'exa-js';
 import { ensureNacosConfig } from '@/lib/nacos-config';
-import { metrics } from '@/lib/metrics';
 import { apiGuard } from '@/lib/api-guard';
+import { metrics } from '@/lib/metrics';
 import { exaBreaker } from '@/lib/circuit-breaker';
 import { checkRateLimit, rateLimitResponse, rateLimitHeaders } from '@/lib/rate-limit';
 import { createModuleLogger } from '@/lib/logger';
@@ -42,7 +42,13 @@ export async function POST(request: NextRequest) {
     const CONTENT_API_KEY = getContentApiKey();
 
     if (!CONTENT_API_KEY) {
-      return NextResponse.json({ error: 'Content API key not configured' }, { status: 500 });
+      return NextResponse.json(
+        {
+          error:
+            'Content fetching not available. Set EXASEARCH_API_KEY in your .env file. Get one at https://dashboard.exa.ai/api-keys',
+        },
+        { status: 503 },
+      );
     }
 
     const body = await request.json();
@@ -52,16 +58,41 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'URLs array is required' }, { status: 400 });
     }
 
-    // Validate all URLs
+    // Validate all URLs — block private/internal networks
     for (const url of urls) {
       try {
-        new URL(url);
+        const parsed = new URL(url);
+        if (!['http:', 'https:'].includes(parsed.protocol)) {
+          return NextResponse.json(
+            { error: `Invalid URL scheme: ${parsed.protocol} (only http/https allowed)` },
+            { status: 400 }
+          );
+        }
+        const host = parsed.hostname.toLowerCase();
+        if (
+          host === 'localhost' ||
+          host === '127.0.0.1' ||
+          host === '::1' ||
+          host === '0.0.0.0' ||
+          host.startsWith('10.') ||
+          host.startsWith('172.') ||
+          host.startsWith('192.168.') ||
+          host.startsWith('169.254.') ||
+          host.endsWith('.internal') ||
+          host.endsWith('.local')
+        ) {
+          return NextResponse.json(
+            { error: `Blocked URL: private/internal network addresses are not allowed` },
+            { status: 400 }
+          );
+        }
       } catch {
         return NextResponse.json({ error: `Invalid URL: ${url}` }, { status: 400 });
       }
     }
 
     const contentClient = new Exa(CONTENT_API_KEY);
+    (contentClient as any).headers.set('x-exa-integration', 'prismercloud');
 
     log.debug({ urlCount: urls.length, urls }, 'Fetching content');
 
