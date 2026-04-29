@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/prismer-ai-prismercloud-badge.png)](https://mseep.ai/app/prismer-ai-prismercloud)
+
 
 
 <p align="center">
