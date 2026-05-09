@@ -1,0 +1,43 @@
+name: Phase A Contract CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/phase_a_protocol_contract.md"
+      - "services/**"
+      - "server/prisma/schema.prisma"
+      - "scripts/phase_a/schema_contract_guard.sh"
+      - ".github/workflows/phase_a_contract_ci.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "docs/phase_a_protocol_contract.md"
+      - "services/**"
+      - "server/prisma/schema.prisma"
+      - "scripts/phase_a/schema_contract_guard.sh"
+      - ".github/workflows/phase_a_contract_ci.yml"
+
+jobs:
+  contract-guard:
+    name: Contract Guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: services/go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Run protocol contract guard
+        run: bash scripts/phase_a/schema_contract_guard.sh
+      - name: Run Go tests
+        working-directory: services
+        run: go test ./...
+      - name: Install server dependencies
+        working-directory: server
+        run: npm install
+      - name: Run TypeScript contract tests
+        working-directory: server
+        run: node --import tsx --test src/lib/contracts/wsMessage.test.ts

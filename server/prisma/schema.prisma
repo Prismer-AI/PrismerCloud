@@ -55,9 +55,9 @@ model IMUser {
   delegatedBy     String? // Delegator's DID
 
   // Contact system (v1.8.0 P9)
-  institution     String?
-  description     String?
-  lastSeenAt      DateTime?
+  institution String?
+  description String?
+  lastSeenAt  DateTime?
 
   agentCard            IMAgentCard?
   identityKey          IMIdentityKey?
@@ -199,9 +199,9 @@ model IMParticipant {
   role           String    @default("member") // owner | admin | member | observer
   joinedAt       DateTime  @default(now())
   leftAt         DateTime?
-  pinned    Boolean   @default(false)
-  muted     Boolean   @default(false)
-  pinnedAt  DateTime?
+  pinned         Boolean   @default(false)
+  muted          Boolean   @default(false)
+  pinnedAt       DateTime?
 
   conversation IMConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   imUser       IMUser         @relation(fields: [imUserId], references: [id], onDelete: Cascade)
@@ -216,17 +216,17 @@ model IMParticipant {
 // ==============================================================================
 
 model IMMessage {
-  id             String   @id @default(cuid())
-  conversationId String
-  senderId       String
-  type           String   @default("text") // text | markdown | code | image | file | tool_call | tool_result | system_event | thinking
-  content        String   @default("")
-  metadata       String   @default("{}") // JSON: MessageMetadata
-  parentId       String? // For threading
+  id              String   @id @default(cuid())
+  conversationId  String
+  senderId        String
+  type            String   @default("text") // text | markdown | code | image | file | tool_call | tool_result | system_event | thinking
+  content         String   @default("")
+  metadata        String   @default("{}") // JSON: MessageMetadata
+  parentId        String? // For threading
   quotedMessageId String? // Quote reply reference (v1.8.2, distinct from parentId threading)
-  status         String   @default("sent") // sending | sent | delivered | read | failed
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  status          String   @default("sent") // sending | sent | delivered | read | failed
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
   // E2E Encryption Layer 2: Signing & Integrity (v1.7.2)
   secVersion  Int? // Security protocol version (null = legacy unsigned)
@@ -243,8 +243,8 @@ model IMMessage {
   // E2E Layer 5: encryption first-class field (S5 fix)
   encrypted Boolean @default(false)
 
-  conversation IMConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  sender       IMUser         @relation(fields: [senderId], references: [id])
+  conversation IMConversation      @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender       IMUser              @relation(fields: [senderId], references: [id])
   reactions    IMMessageReaction[]
 
   @@index([conversationId])
@@ -513,12 +513,16 @@ model IMTask {
 
   // Participants
   creatorId  String // Who created (human or agent)
-  assigneeId String? // Who is executing
-  scope      String  @default("global") // Workspace scope
+  creatorDid String? // Phase A: creator DID, preferred over creatorId when present
+
+  assigneeId     String? // Who is executing (legacy compatibility)
+  assigneeDid    String? // Phase A: W3C DID, preferred over assigneeId
+  assigneeType   String? // Phase A: HUMAN | AGENT | SUB_AGENT
+  scope          String  @default("global") // Workspace scope
   conversationId String? // Associated conversation (v1.8.2)
 
   // State machine: pending → assigned → running → review → completed | failed | cancelled
-  status        String @default("pending")
+  status        String  @default("pending")
   progress      Float? // 0.0-1.0 numeric progress (v1.8.2)
   statusMessage String? // Human-readable status update (v1.8.2)
 
@@ -541,6 +545,11 @@ model IMTask {
   budget Float? // Max credits budget
   cost   Float  @default(0) // Actual cost
 
+  // Phase A runtime / approval routing
+  runtimeId         String?
+  requiresApproval  Boolean @default(false)
+  pendingApprovalId String?
+
   // Timeout / Retry
   timeoutMs    Int       @default(300000) // 5 min default
   deadline     DateTime?
@@ -554,16 +563,21 @@ model IMTask {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  logs IMTaskLog[]
+  logs       IMTaskLog[]
+  executions IMTaskExecution[]
+  approvals  IMTaskApproval[]
 
   @@index([status])
   @@index([assigneeId, status])
+  @@index([assigneeDid, status])
+  @@index([creatorDid])
   @@index([capability, status])
   @@index([scheduleType, nextRunAt, status])
   @@index([creatorId])
   @@index([creatorId, scope, status])
   @@index([conversationId])
   @@index([completedAt])
+  @@index([runtimeId])
   @@map("im_tasks")
 }
 
@@ -580,6 +594,148 @@ model IMTaskLog {
 
   @@index([taskId, createdAt])
   @@map("im_task_logs")
+}
+
+// ==============================================================================
+// v1.9.0 — Phase A Runtime Registry
+// ==============================================================================
+
+model IMRuntime {
+  id            String  @id @default(cuid())
+  ownerDid      String
+  ownerImUserId String?
+
+  type      String @default("local") // local | cloud | edge
+  did       String @unique
+  publicKey String
+
+  hostname String?
+  os       String?
+  arch     String?
+  version  String?
+  endpoint String?
+
+  capabilities    String    @default("[]") // JSON: [{ key, version, path }]
+  status          String    @default("offline") // online | busy | idle | offline
+  load            Float     @default(0)
+  lastHeartbeatAt DateTime?
+  registeredAt    DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  sessions   IMDaemonSession[]
+  executions IMTaskExecution[]
+
+  @@index([ownerDid, status])
+  @@index([status, lastHeartbeatAt])
+  @@index([type, status])
+  @@map("im_runtimes")
+}
+
+model IMDaemonSession {
+  id                String    @id @default(cuid())
+  runtimeId         String
+  startedAt         DateTime  @default(now())
+  terminatedAt      DateTime?
+  terminationReason String? // graceful | crash | network_lost | server_kicked
+  version           String
+  pid               Int?
+  remoteAddr        String?
+  userAgent         String?
+  taskCount         Int       @default(0)
+  logBytes          Int       @default(0)
+
+  runtime IMRuntime @relation(fields: [runtimeId], references: [id], onDelete: Cascade)
+
+  @@index([runtimeId, startedAt])
+  @@map("im_daemon_sessions")
+}
+
+model IMTaskExecution {
+  id          String    @id @default(cuid())
+  taskId      String
+  runtimeId   String
+  attempt     Int       @default(1)
+  status      String    @default("dispatched") // dispatched | running | succeeded | failed | cancelled | timeout
+  startedAt   DateTime  @default(now())
+  acceptedAt  DateTime?
+  completedAt DateTime?
+  exitCode    Int?
+  durationMs  Int?
+
+  capabilityUsed String?
+  cliPath        String?
+  cliVersion     String?
+
+  logsRef   String?
+  resultRef String?
+
+  cpuSeconds  Float?
+  memoryBytes Int?
+
+  task    IMTask    @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  runtime IMRuntime @relation(fields: [runtimeId], references: [id])
+
+  @@index([taskId, attempt])
+  @@index([runtimeId, status])
+  @@index([startedAt])
+  @@map("im_task_executions")
+}
+
+model IMExecutionStreamCursor {
+  executionId      String
+  streamId         String
+  lastCommittedSeq Int      @default(0)
+  updatedAt        DateTime @updatedAt
+
+  @@id([executionId, streamId])
+  @@index([executionId])
+  @@map("im_execution_stream_cursors")
+}
+
+model IMTaskApproval {
+  id                String    @id @default(cuid())
+  taskId            String?
+  kind              String
+  action            String
+  payload           String    @default("{}")
+  requestedByDid    String
+  requestedAt       DateTime  @default(now())
+  approverDid       String?
+  approverImUserId  String?
+  status            String    @default("pending") // pending | approved | rejected | expired
+  decidedAt         DateTime?
+  decisionReason    String?
+  requestSignature  String
+  decisionSignature String?
+  delegationProof   String?
+  expiresAt         DateTime?
+  metadata          String    @default("{}")
+
+  task IMTask? @relation(fields: [taskId], references: [id], onDelete: SetNull)
+
+  @@index([taskId])
+  @@index([approverDid, status])
+  @@index([requestedByDid])
+  @@index([status, expiresAt])
+  @@map("im_task_approvals")
+}
+
+model IMSigningKey {
+  id         String    @id @default(cuid())
+  did        String
+  keyVersion Int       @default(1)
+  publicKey  String
+  algorithm  String    @default("ed25519")
+  keyId      String?   @unique
+  revokedAt  DateTime?
+  expiresAt  DateTime?
+  createdAt  DateTime  @default(now())
+  metadata   String    @default("{}")
+
+  @@unique([did, keyVersion])
+  @@index([did, revokedAt])
+  @@index([expiresAt])
+  @@map("im_signing_keys")
 }
 
 // ==============================================================================
@@ -1273,46 +1429,46 @@ model IMKnowledgeLink {
 // ==============================================================================
 
 model IMCommunityPost {
-  id            String   @id @default(cuid())
-  boardId       String? // nullable — pure tag system; legacy boards stored as tags
-  authorId      String
-  authorType    String   @default("human") // 'human' | 'agent'
+  id         String  @id @default(cuid())
+  boardId    String? // nullable — pure tag system; legacy boards stored as tags
+  authorId   String
+  authorType String  @default("human") // 'human' | 'agent'
 
-  title         String
-  content       String
-  contentHtml   String?
-  contentJson   String?  // ProseMirror JSON for WYSIWYG editor round-trip
+  title       String
+  content     String
+  contentHtml String?
+  contentJson String? // ProseMirror JSON for WYSIWYG editor round-trip
 
-  tags          Json?
-  postType      String   @default("discussion") // 'discussion' | 'battleReport' | 'milestone' | 'geneRelease' | 'help' | 'idea' | 'changelog'
-  status        String   @default("active") // 'active' | 'solved' | 'planned' | 'shipped' | 'archived' | 'hidden'
+  tags     Json?
+  postType String @default("discussion") // 'discussion' | 'battleReport' | 'milestone' | 'geneRelease' | 'help' | 'idea' | 'changelog'
+  status   String @default("active") // 'active' | 'solved' | 'planned' | 'shipped' | 'archived' | 'hidden'
 
   linkedGeneIds   Json?
   linkedSkillIds  Json?
   linkedAgentId   String?
   linkedCapsuleId String?
 
-  attachments     Json?
+  attachments Json?
 
-  upvotes       Int      @default(0)
-  downvotes     Int      @default(0)
-  commentCount  Int      @default(0)
-  viewCount     Int      @default(0)
-  bookmarkCount Int      @default(0)
+  upvotes       Int @default(0)
+  downvotes     Int @default(0)
+  commentCount  Int @default(0)
+  viewCount     Int @default(0)
+  bookmarkCount Int @default(0)
 
-  solvedAt      DateTime?
-  bestAnswerId  String?
+  solvedAt     DateTime?
+  bestAnswerId String?
 
-  deletedAt     DateTime?
-  deletedBy     String?
+  deletedAt DateTime?
+  deletedBy String?
 
-  pinned        Boolean  @default(false)
-  featured      Boolean  @default(false)
-  autoGenerated Boolean  @default(false)
-  scope         String   @default("global")
+  pinned        Boolean @default(false)
+  featured      Boolean @default(false)
+  autoGenerated Boolean @default(false)
+  scope         String  @default("global")
 
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([boardId, createdAt])
   @@index([boardId, upvotes])
@@ -1324,31 +1480,31 @@ model IMCommunityPost {
 }
 
 model IMCommunityComment {
-  id          String   @id @default(cuid())
-  postId      String
-  parentId    String?
-  authorId    String
-  authorType  String   @default("human")
+  id         String  @id @default(cuid())
+  postId     String
+  parentId   String?
+  authorId   String
+  authorType String  @default("human")
 
   content     String
   contentHtml String?
 
-  commentType String   @default("reply") // 'reply' | 'answer'
+  commentType String @default("reply") // 'reply' | 'answer'
 
-  upvotes     Int      @default(0)
-  downvotes   Int      @default(0)
+  upvotes   Int @default(0)
+  downvotes Int @default(0)
 
-  isBestAnswer Boolean @default(false)
+  isBestAnswer  Boolean @default(false)
   autoGenerated Boolean @default(false)
 
   linkedGeneIds Json?
   metrics       Json?
 
-  deletedAt   DateTime?
-  deletedBy   String?
+  deletedAt DateTime?
+  deletedBy String?
 
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([postId, createdAt])
   @@index([postId, upvotes])
@@ -1359,13 +1515,13 @@ model IMCommunityComment {
 }
 
 model IMCommunityVote {
-  id          String   @id @default(cuid())
-  userId      String
-  targetType  String // 'post' | 'comment'
-  targetId    String
-  value       Int // +1 or -1
+  id         String @id @default(cuid())
+  userId     String
+  targetType String // 'post' | 'comment'
+  targetId   String
+  value      Int // +1 or -1
 
-  createdAt   DateTime @default(now())
+  createdAt DateTime @default(now())
 
   @@unique([userId, targetType, targetId])
   @@index([targetType, targetId])
@@ -1373,11 +1529,11 @@ model IMCommunityVote {
 }
 
 model IMCommunityBookmark {
-  id          String   @id @default(cuid())
-  userId      String
-  postId      String
+  id     String @id @default(cuid())
+  userId String
+  postId String
 
-  createdAt   DateTime @default(now())
+  createdAt DateTime @default(now())
 
   @@unique([userId, postId])
   @@index([userId, createdAt])
@@ -1385,12 +1541,12 @@ model IMCommunityBookmark {
 }
 
 model IMCommunityFollow {
-  id            String   @id @default(cuid())
+  id            String @id @default(cuid())
   followerId    String
   followingId   String
-  followingType String   @default("user") // 'user' | 'agent' | 'gene' | 'board'
+  followingType String @default("user") // 'user' | 'agent' | 'gene' | 'board'
 
-  createdAt     DateTime @default(now())
+  createdAt DateTime @default(now())
 
   @@unique([followerId, followingId, followingType])
   @@index([followingId, followingType])
@@ -1398,10 +1554,10 @@ model IMCommunityFollow {
 }
 
 model IMCommunityTag {
-  id        String   @id @default(cuid())
-  name      String   @unique
-  postCount Int      @default(0)
-  trending  Boolean  @default(false)
+  id        String  @id @default(cuid())
+  name      String  @unique
+  postCount Int     @default(0)
+  trending  Boolean @default(false)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1425,24 +1581,24 @@ model IMCommunityPostTag {
 // ── Community v1.5: Dynamic Boards ──────────────────────────────────
 
 model IMCommunityBoard {
-  id              String   @id @default(cuid())
-  slug            String   @unique // URL path: "showcase", "rust-agents"
-  name            String   // display name
-  description     String?  // board description (Markdown)
-  icon            String?  // emoji or icon key
+  id          String  @id @default(cuid())
+  slug        String  @unique // URL path: "showcase", "rust-agents"
+  name        String // display name
+  description String? // board description (Markdown)
+  icon        String? // emoji or icon key
 
-  creatorId       String   // im_users.id
-  isSystem        Boolean  @default(false)
+  creatorId String // im_users.id
+  isSystem  Boolean @default(false)
 
-  rules           String?  // JSON: { allowedPostTypes?, requireTags?, approvalRequired? }
+  rules String? // JSON: { allowedPostTypes?, requireTags?, approvalRequired? }
 
-  postCount       Int      @default(0)
-  subscriberCount Int      @default(0)
+  postCount       Int @default(0)
+  subscriberCount Int @default(0)
 
-  status          String   @default("active") // 'active' | 'archived' | 'hidden'
+  status String @default("active") // 'active' | 'archived' | 'hidden'
 
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([status, postCount])
   @@index([creatorId])
@@ -1450,10 +1606,10 @@ model IMCommunityBoard {
 }
 
 model IMCommunityBoardAdmin {
-  id        String   @id @default(cuid())
-  boardId   String
-  userId    String
-  role      String   @default("moderator") // 'owner' | 'moderator'
+  id      String @id @default(cuid())
+  boardId String
+  userId  String
+  role    String @default("moderator") // 'owner' | 'moderator'
 
   createdAt DateTime @default(now())
 
@@ -1465,21 +1621,21 @@ model IMCommunityBoardAdmin {
 // ── Community v1.5: User Profile ────────────────────────────────────
 
 model IMCommunityProfile {
-  id             String    @id // = im_users.id (1:1)
-  bio            String?
-  website        String?
+  id      String  @id // = im_users.id (1:1)
+  bio     String?
+  website String?
 
-  postCount      Int       @default(0)
-  commentCount   Int       @default(0)
-  karmaTotal     Int       @default(0)
-  followerCount  Int       @default(0)
-  followingCount Int       @default(0)
+  postCount      Int @default(0)
+  commentCount   Int @default(0)
+  karmaTotal     Int @default(0)
+  followerCount  Int @default(0)
+  followingCount Int @default(0)
 
-  lastActiveAt   DateTime?
-  streakDays     Int       @default(0)
+  lastActiveAt DateTime?
+  streakDays   Int       @default(0)
 
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@map("im_community_profiles")
 }
@@ -1487,16 +1643,16 @@ model IMCommunityProfile {
 // ── Community v1.5: Drafts ──────────────────────────────────────────
 
 model IMCommunityDraft {
-  id          String   @id @default(cuid())
+  id          String  @id @default(cuid())
   authorId    String
   boardSlug   String?
   title       String?
-  contentJson String?  // editor JSON snapshot
-  content     String?  // Markdown snapshot
+  contentJson String? // editor JSON snapshot
+  content     String? // Markdown snapshot
 
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  expiresAt   DateTime // 7 days TTL
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  expiresAt DateTime // 7 days TTL
 
   @@index([authorId, updatedAt])
   @@map("im_community_drafts")
@@ -1507,14 +1663,14 @@ model IMCommunityDraft {
 // ==============================================================================
 
 model IMFriendRequest {
-  id          String   @id @default(cuid())
-  fromUserId  String
-  toUserId    String
-  reason      String?
-  source      String?   // search | qr_code | group | recommendation
-  status      String   @default("pending") // pending | accepted | rejected | expired
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id         String   @id @default(cuid())
+  fromUserId String
+  toUserId   String
+  reason     String?
+  source     String? // search | qr_code | group | recommendation
+  status     String   @default("pending") // pending | accepted | rejected | expired
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
 
   fromUser IMUser @relation("FriendRequestsSent", fields: [fromUserId], references: [id])
   toUser   IMUser @relation("FriendRequestsReceived", fields: [toUserId], references: [id])

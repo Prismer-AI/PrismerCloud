@@ -60,10 +60,13 @@ Phase A 上 daemon 后,WebSocket 是 orchestrator ↔ daemon ↔ web 的唯一�
 | `type` | string | ✅ | 见 §3 类型枚举, 服务端拒绝未知 type |
 | `message_class` | enum | ✅ | `stateful`/`stream`/`legacy`; 缺失视为 `legacy` (rolling upgrade compat) |
 | `timestamp_ms` | int64 | ✅ | Unix ms; 不允许 ns (会越过 JS Number.MAX_SAFE_INTEGER) |
+| `trace_id` | string | 可选 | 透传的 OpenTelemetry trace id |
 | `state_version` | int64 | stateful 必填 | > 0, 同一 execution 单调递增 |
 | `payload_hash` | string | stateful 必填 | `base64url(sha256(JCS(payload)))` |
+| `state_crc` | string | stateful 可选 | 客户端预期的 post-state CRC, 用于提前发现分歧 |
 | `stream_id` | string | stream 必填 | 同一 execution 下唯一标识一条流 |
 | `stream_seq` | int64 | stream 必填 | ≥ 0, 同一 (execution, stream_id) 下严格 +1 |
+| `idempotency_key` | string | stream 可选 | 应用层幂等 token |
 | `ack_type` | enum | ✅ | 见 §4 |
 | `signature` | string | 见 §5 | ed25519(JCS) base64url |
 | `key_id` | string | 当 signature 非空必填 | DID + key fragment, 解析成 `IMSigningKey` 行 |
@@ -228,6 +231,8 @@ v1 客户端不带 `message_class` → orchestrator 在 `Validate()` 中将 `Mes
 | C→S | `runtime.heartbeat` | stream (id=`heartbeat`) | best_effort | 20s 心跳 |
 | S→C | `runtime.heartbeat_ack` | stream | none | 心跳应答 |
 | C→S | `runtime.capability_report` | stateful | required | 上报 CLI 能力 |
+| C→S | `stream.resume_request` | stateful | required | daemon 重连后对齐各 stream 的 last_committed_seq |
+| S→C | `stream.resume_ack` | stateful | required | orchestrator 返回每条 stream 的 last_committed_seq |
 | S→C | `task.push` | stateful | required | 派发任务 |
 | C→S | `task.accepted` | stateful | required | daemon 接受 |
 | C→S | `task.rejected` | stateful | required | daemon 拒绝 |
@@ -238,7 +243,7 @@ v1 客户端不带 `message_class` → orchestrator 在 `Validate()` 中将 `Mes
 | C→S | `approval.request` | stateful | required | daemon 请求审批 |
 | S→C | `approval.decision` | stateful | required | 决策结果 |
 
-总计 **13 类**. 服务端拒绝未列出的 type.
+总计 **15 类**. 服务端拒绝未列出的 type.
 
 ---
 

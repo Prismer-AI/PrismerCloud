@@ -1,0 +1,17 @@
+version: "2"
+
+sql:
+  - engine: "sqlite"
+    schema:
+      - "db/schema/phase_a.sql"
+    queries:
+      - "db/queries/runtime.sql"
+      - "db/queries/task.sql"
+      - "db/queries/approval.sql"
+    gen:
+      go:
+        package: "sqlc"
+        out: "db/sqlc"
+        emit_json_tags: true
+        emit_interface: true
+        emit_empty_slices: true
