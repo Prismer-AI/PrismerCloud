@@ -8,6 +8,36 @@ This runbook starts the current Go-only Phase A baseline with a real WebSocket h
 - CGO available for `github.com/mattn/go-sqlite3`
 - Cached modules already present locally, or network access enabled for `go run`
 
+## Non-Sandbox Smoke Run
+
+Run the end-to-end local smoke flow from normal local terminals, not from the Codex sandbox. The smoke flow opens a listening HTTP/WebSocket port and needs unrestricted localhost networking.
+
+Terminal 1:
+
+```bash
+PRISMER_HTTP_ADDR=:8080 bash scripts/phase_a/run_orchestrator.sh
+```
+
+Terminal 2:
+
+```bash
+bash scripts/phase_a/run_daemon.sh
+```
+
+Terminal 3:
+
+```bash
+bash scripts/phase_a/demo_approval_flow.sh
+bash scripts/phase_a/demo_approval_reject_flow.sh
+```
+
+Expected result:
+
+- `/healthz` responds on `http://127.0.0.1:8080/healthz`
+- the daemon connects over `/ws/runtime`
+- the approved demo task reaches `completed`
+- the rejected demo task reaches `failed`
+
 ## Start The Orchestrator
 
 ```bash
