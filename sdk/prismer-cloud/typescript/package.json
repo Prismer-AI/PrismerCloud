@@ -36,6 +36,7 @@
   "dependencies": {
     "@clack/prompts": "^0.9.1",
     "@iarna/toml": "^2.2.5",
+    "@noble/curves": "^2.0.1",
     "@prismer/aip-sdk": "^1.8.1",
     "commander": "^12.1.0",
     "picocolors": "^1.1.1",

@@ -110,10 +110,13 @@ export class TaskModel {
   /**
    * Update task fields. Returns the updated task or null if not found.
    */
-  async update(id: string, data: Record<string, unknown>) {
+  async update(id: string, data: Record<string, unknown>, expectedStateVersion?: number) {
     try {
       return await prisma.iMTask.update({
-        where: { id },
+        where: {
+          id,
+          ...(expectedStateVersion !== undefined ? { updatedAt: new Date(expectedStateVersion) } : {}),
+        },
         data,
       });
     } catch {
@@ -125,10 +128,14 @@ export class TaskModel {
    * Atomically claim a task: set assigneeId + status='assigned' only if status='pending'.
    * Returns the updated task or null if already claimed / not found.
    */
-  async claim(id: string, assigneeId: string) {
+  async claim(id: string, assigneeId: string, expectedStateVersion?: number) {
     try {
       return await prisma.iMTask.update({
-        where: { id, status: 'pending' },
+        where: {
+          id,
+          status: 'pending',
+          ...(expectedStateVersion !== undefined ? { updatedAt: new Date(expectedStateVersion) } : {}),
+        },
         data: { assigneeId, status: 'assigned' },
       });
     } catch {

@@ -27,6 +27,7 @@ function SetupContent() {
   const source = searchParams.get('utm_source') || 'direct';
   const callbackUrl = searchParams.get('callback'); // localhost callback from CLI
   const callbackState = searchParams.get('state'); // CSRF protection
+  const daemonRequested = searchParams.get('daemon') === '1';
 
   const [state, setState] = useState<'checking' | 'not-logged-in' | 'creating' | 'ready' | 'redirecting' | 'error'>(
     'checking',
@@ -177,7 +178,9 @@ function SetupContent() {
       >
         <h1 style={{ fontSize: 28, fontWeight: 700, marginBottom: 8, color: '#fff' }}>Prismer Setup</h1>
         <p style={{ fontSize: 14, color: '#888', marginBottom: 32 }}>
-          Get your API key for Claude Code, MCP tools, and cross-agent learning
+          {daemonRequested
+            ? 'Connect this machine as a signed Phase A runtime'
+            : 'Get your API key for Claude Code, MCP tools, and cross-agent learning'}
         </p>
 
         {state === 'checking' && (
@@ -223,6 +226,7 @@ function SetupContent() {
               }}
             >
               <p style={{ fontWeight: 600, color: '#ccc', marginBottom: 8 }}>What happens next:</p>
+              {daemonRequested && <p>&#9679; CLI registers your daemon signing key</p>}
               <p>&#9679; Next session: top strategies auto-load</p>
               <p>&#9679; Each session: outcomes feed the network</p>
               <p>&#9679; Over time: your success rate improves</p>
@@ -373,7 +377,7 @@ function SetupContent() {
                 <code style={{ color: '#60a5fa' }}>/prismer-setup</code> — if using Claude Code plugin
               </p>
               <p>
-                <code style={{ color: '#60a5fa' }}>prismer setup</code> — if using CLI
+                <code style={{ color: '#60a5fa' }}>{daemonRequested ? 'prismer setup --with-daemon' : 'prismer setup'}</code> — if using CLI
               </p>
             </div>
 

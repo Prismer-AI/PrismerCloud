@@ -535,6 +535,7 @@ export interface CreateTaskInput {
 
 export interface TaskInfo {
   id: string;
+  stateVersion: number; // Millisecond version derived from updatedAt for optimistic locking
   title: string;
   description: string | null;
   capability: string | null;
@@ -582,6 +583,7 @@ export interface TaskLogEntry {
 
 export interface TaskProgressInput {
   message?: string;
+  expectedStateVersion?: number;
   metadata?: Record<string, unknown>;
 }
 
@@ -589,10 +591,13 @@ export interface TaskCompleteInput {
   result?: unknown;
   resultUri?: string;
   cost?: number;
+  expectedStateVersion?: number;
+  metadata?: Record<string, unknown>;
 }
 
 export interface TaskFailInput {
   error: string;
+  expectedStateVersion?: number;
   metadata?: Record<string, unknown>;
 }
 

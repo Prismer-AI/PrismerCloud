@@ -30,6 +30,7 @@ import { verifyToken } from '../auth/jwt';
 import { streamSSE } from 'hono/streaming';
 import { createModuleLogger } from '../../lib/logger';
 import prisma from '../db';
+import { formatTaskStateETag, parseExpectedTaskStateVersion } from '../utils/task-state-version';
 
 const log = createModuleLogger('TaskAPI');
 
@@ -53,6 +54,8 @@ function classifyTaskError(err: unknown): TaskErrorResult | null {
       return { code: 'TASK_ACCESS_DENIED', message: err.message, status: 403 };
     case 'TaskStateError':
       return { code: 'INVALID_STATE_TRANSITION', message: err.message, status: 409 };
+    case 'TaskVersionConflictError':
+      return { code: 'STATE_VERSION_CONFLICT', message: err.message, status: 409 };
     case 'TaskClaimError':
       return { code: 'TASK_CLAIM_FAILED', message: err.message, status: 409 };
     case 'InsufficientBudgetError':
@@ -79,6 +82,83 @@ function validationErr(c: any, msg: string) {
 /** Shorthand for access denied error responses. */
 function accessErr(c: any, msg: string) {
   return c.json({ ok: false, error: { code: 'TASK_ACCESS_DENIED', message: msg } }, 403);
+}
+
+function getIdempotencyKey(c: any, body?: Record<string, unknown>): string | null {
+  const raw = c.req.header('X-Idempotency-Key') ?? body?.idempotencyKey ?? body?.idempotency_key;
+  if (typeof raw !== 'string') return null;
+  const key = raw.trim();
+  if (!key) return null;
+  if (key.length > 160) {
+    throw new Error('X-Idempotency-Key must be 160 characters or fewer');
+  }
+  return key;
+}
+
+function getExpectedStateVersion(c: any, body?: Record<string, unknown>): number | undefined {
+  const raw =
+    c.req.header('If-Match') ??
+    c.req.header('X-State-Version') ??
+    body?.expectedStateVersion ??
+    body?.expected_state_version;
+  return parseExpectedTaskStateVersion(raw);
+}
+
+function setTaskStateHeaders(c: any, task: TaskInfo): void {
+  c.header('ETag', formatTaskStateETag(task.stateVersion));
+  c.header('X-State-Version', String(task.stateVersion));
+}
+
+function withIdempotencyMetadata(metadata: unknown, idempotencyKey: string | null): Record<string, unknown> | undefined {
+  const base =
+    metadata && typeof metadata === 'object' && !Array.isArray(metadata)
+      ? { ...(metadata as Record<string, unknown>) }
+      : undefined;
+  if (!idempotencyKey) return base;
+  return { ...(base ?? {}), _idempotencyKey: idempotencyKey };
+}
+
+async function findCreateReplayTaskId(creatorId: string, idempotencyKey: string): Promise<string | null> {
+  const candidates = await prisma.iMTask.findMany({
+    where: {
+      creatorId,
+      metadata: { contains: idempotencyKey },
+    },
+    orderBy: { createdAt: 'desc' },
+    take: 10,
+    select: { id: true, metadata: true },
+  });
+  return candidates.find((task: any) => metadataHasIdempotencyKey(task.metadata, idempotencyKey))?.id ?? null;
+}
+
+async function hasLifecycleReplay(
+  taskId: string,
+  actorId: string,
+  actions: string[],
+  idempotencyKey: string,
+): Promise<boolean> {
+  const candidates = await prisma.iMTaskLog.findMany({
+    where: {
+      taskId,
+      actorId,
+      action: { in: actions },
+      metadata: { contains: idempotencyKey },
+    },
+    orderBy: { createdAt: 'desc' },
+    take: 10,
+    select: { metadata: true },
+  });
+  return candidates.some((log: any) => metadataHasIdempotencyKey(log.metadata, idempotencyKey));
+}
+
+function metadataHasIdempotencyKey(raw: string | null | undefined, idempotencyKey: string): boolean {
+  if (!raw) return false;
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed?._idempotencyKey === idempotencyKey;
+  } catch {
+    return false;
+  }
 }
 
 // ─── Response enrichment (v1.8.2) ────────────────────────────
@@ -251,6 +331,12 @@ export function createTasksRouter(
   router.post('/', async (c) => {
     const user = c.get('user');
     const body = await c.req.json();
+    let idempotencyKey: string | null = null;
+    try {
+      idempotencyKey = getIdempotencyKey(c, body);
+    } catch (err) {
+      return validationErr(c, (err as Error).message);
+    }
 
     if (!body.title || typeof body.title !== 'string') {
       return validationErr(c, 'title is required');
@@ -296,6 +382,16 @@ export function createTasksRouter(
     }
 
     try {
+      if (idempotencyKey) {
+        const replayTaskId = await findCreateReplayTaskId(user.imUserId, idempotencyKey);
+        if (replayTaskId) {
+          const task = await taskService.getTask(replayTaskId, user.imUserId);
+          setTaskStateHeaders(c, task);
+          c.header('Idempotency-Replayed', 'true');
+          return c.json<ApiResponse>({ ok: true, data: await enrichTask(task), meta: { idempotentReplay: true } }, 200);
+        }
+      }
+
       const task = await taskService.createTask(user.imUserId, {
         title: body.title,
         description: body.description,
@@ -315,9 +411,10 @@ export function createTasksRouter(
         maxRetries: body.maxRetries ?? body.max_retries,
         retryDelayMs: body.retryDelayMs ?? body.retry_delay_ms,
         budget: body.budget,
-        metadata: body.metadata,
+        metadata: withIdempotencyMetadata(body.metadata, idempotencyKey),
       });
 
+      setTaskStateHeaders(c, task);
       return c.json<ApiResponse>({ ok: true, data: await enrichTask(task) }, 201);
     } catch (err) {
       const classified = classifyTaskError(err);
@@ -412,6 +509,7 @@ export function createTasksRouter(
     try {
       const result = await taskService.getTaskWithLogs(c.req.param('id')!, user.imUserId);
       const enrichedTask = await enrichTask(result.task);
+      setTaskStateHeaders(c, result.task);
       return c.json<ApiResponse>({ ok: true, data: { ...result, task: enrichedTask } });
     } catch (err) {
       return handleTaskError(err, c);
@@ -426,6 +524,12 @@ export function createTasksRouter(
   router.patch('/:id', async (c) => {
     const user = c.get('user');
     const body = await c.req.json();
+    let expectedStateVersion: number | undefined;
+    try {
+      expectedStateVersion = getExpectedStateVersion(c, body);
+    } catch (err) {
+      return validationErr(c, (err as Error).message);
+    }
 
     // Validate progress range
     if (body.progress !== undefined) {
@@ -444,8 +548,10 @@ export function createTasksRouter(
         status: body.status,
         progress: body.progress,
         statusMessage: body.statusMessage ?? body.status_message,
+        expectedStateVersion,
         metadata: body.metadata,
       });
+      setTaskStateHeaders(c, task);
       return c.json<ApiResponse>({ ok: true, data: await enrichTask(task) });
     } catch (err) {
       return handleTaskError(err, c);
@@ -459,8 +565,15 @@ export function createTasksRouter(
    */
   router.delete('/:id', async (c) => {
     const user = c.get('user');
+    let expectedStateVersion: number | undefined;
     try {
-      const task = await taskService.cancelTask(c.req.param('id'), user.imUserId);
+      expectedStateVersion = getExpectedStateVersion(c);
+    } catch (err) {
+      return validationErr(c, (err as Error).message);
+    }
+    try {
+      const task = await taskService.cancelTask(c.req.param('id'), user.imUserId, expectedStateVersion);
+      setTaskStateHeaders(c, task);
       return c.json<ApiResponse>({ ok: true, data: await enrichTask(task) });
     } catch (err) {
       return handleTaskError(err, c);
@@ -516,8 +629,29 @@ export function createTasksRouter(
    */
   router.post('/:id/claim', async (c) => {
     const user = c.get('user');
+    const body = await c.req.json().catch(() => ({}));
+    let idempotencyKey: string | null = null;
+    let expectedStateVersion: number | undefined;
     try {
-      const task = await taskService.claimTask(c.req.param('id')!, user.imUserId);
+      idempotencyKey = getIdempotencyKey(c, body);
+      expectedStateVersion = getExpectedStateVersion(c, body);
+    } catch (err) {
+      return validationErr(c, (err as Error).message);
+    }
+    try {
+      if (idempotencyKey && (await hasLifecycleReplay(c.req.param('id')!, user.imUserId, ['claimed'], idempotencyKey))) {
+        const task = await taskService.getTask(c.req.param('id')!, user.imUserId);
+        setTaskStateHeaders(c, task);
+        c.header('Idempotency-Replayed', 'true');
+        return c.json<ApiResponse>({ ok: true, data: await enrichTask(task), meta: { idempotentReplay: true } });
+      }
+      const task = await taskService.claimTask(
+        c.req.param('id')!,
+        user.imUserId,
+        withIdempotencyMetadata(undefined, idempotencyKey),
+        expectedStateVersion,
+      );
+      setTaskStateHeaders(c, task);
       return c.json<ApiResponse>({ ok: true, data: await enrichTask(task) });
     } catch (err) {
       return handleTaskError(err, c);
@@ -531,6 +665,12 @@ export function createTasksRouter(
   router.post('/:id/progress', async (c) => {
     const user = c.get('user');
     const body = await c.req.json();
+    let expectedStateVersion: number | undefined;
+    try {
+      expectedStateVersion = getExpectedStateVersion(c, body);
+    } catch (err) {
+      return validationErr(c, (err as Error).message);
+    }
 
     c.header('Deprecation', 'true');
     c.header('Sunset', '2026-07-01');
@@ -539,6 +679,7 @@ export function createTasksRouter(
     try {
       await taskService.reportProgress(c.req.param('id')!, user.imUserId, {
         message: body.message,
+        expectedStateVersion,
         metadata: body.metadata,
       });
       return c.json<ApiResponse>({
@@ -556,8 +697,15 @@ export function createTasksRouter(
    */
   router.post('/:id/approve', async (c) => {
     const user = c.get('user');
+    let expectedStateVersion: number | undefined;
     try {
-      const task = await taskService.approveTask(c.req.param('id'), user.imUserId);
+      expectedStateVersion = getExpectedStateVersion(c);
+    } catch (err) {
+      return validationErr(c, (err as Error).message);
+    }
+    try {
+      const task = await taskService.approveTask(c.req.param('id'), user.imUserId, expectedStateVersion);
+      setTaskStateHeaders(c, task);
       return c.json<ApiResponse>({ ok: true, data: await enrichTask(task) });
     } catch (err) {
       return handleTaskError(err, c);
@@ -574,9 +722,16 @@ export function createTasksRouter(
     if (!body.reason || typeof body.reason !== 'string') {
       return validationErr(c, 'reason is required');
     }
+    let expectedStateVersion: number | undefined;
+    try {
+      expectedStateVersion = getExpectedStateVersion(c, body);
+    } catch (err) {
+      return validationErr(c, (err as Error).message);
+    }
 
     try {
-      const task = await taskService.rejectTask(c.req.param('id'), user.imUserId, body.reason);
+      const task = await taskService.rejectTask(c.req.param('id'), user.imUserId, body.reason, expectedStateVersion);
+      setTaskStateHeaders(c, task);
       return c.json<ApiResponse>({ ok: true, data: await enrichTask(task) });
     } catch (err) {
       return handleTaskError(err, c);
@@ -589,13 +744,30 @@ export function createTasksRouter(
   router.post('/:id/complete', async (c) => {
     const user = c.get('user');
     const body = await c.req.json().catch(() => ({}));
+    let idempotencyKey: string | null = null;
+    let expectedStateVersion: number | undefined;
+    try {
+      idempotencyKey = getIdempotencyKey(c, body);
+      expectedStateVersion = getExpectedStateVersion(c, body);
+    } catch (err) {
+      return validationErr(c, (err as Error).message);
+    }
 
     try {
+      if (idempotencyKey && (await hasLifecycleReplay(c.req.param('id')!, user.imUserId, ['completed'], idempotencyKey))) {
+        const task = await taskService.getTask(c.req.param('id')!, user.imUserId);
+        setTaskStateHeaders(c, task);
+        c.header('Idempotency-Replayed', 'true');
+        return c.json<ApiResponse>({ ok: true, data: await enrichTask(task), meta: { idempotentReplay: true } });
+      }
       const task = await taskService.completeTask(c.req.param('id')!, user.imUserId, {
         result: body.result,
         resultUri: body.resultUri ?? body.result_uri,
         cost: body.cost,
+        expectedStateVersion,
+        metadata: withIdempotencyMetadata(body.metadata, idempotencyKey),
       });
+      setTaskStateHeaders(c, task);
       return c.json<ApiResponse>({ ok: true, data: await enrichTask(task) });
     } catch (err) {
       return handleTaskError(err, c);
@@ -608,16 +780,35 @@ export function createTasksRouter(
   router.post('/:id/fail', async (c) => {
     const user = c.get('user');
     const body = await c.req.json();
+    let idempotencyKey: string | null = null;
+    let expectedStateVersion: number | undefined;
+    try {
+      idempotencyKey = getIdempotencyKey(c, body);
+      expectedStateVersion = getExpectedStateVersion(c, body);
+    } catch (err) {
+      return validationErr(c, (err as Error).message);
+    }
 
     if (!body.error || typeof body.error !== 'string') {
       return validationErr(c, 'error message is required');
     }
 
     try {
+      if (
+        idempotencyKey &&
+        (await hasLifecycleReplay(c.req.param('id')!, user.imUserId, ['failed', 'retried'], idempotencyKey))
+      ) {
+        const task = await taskService.getTask(c.req.param('id')!, user.imUserId);
+        setTaskStateHeaders(c, task);
+        c.header('Idempotency-Replayed', 'true');
+        return c.json<ApiResponse>({ ok: true, data: await enrichTask(task), meta: { idempotentReplay: true } });
+      }
       const task = await taskService.failTask(c.req.param('id')!, user.imUserId, {
         error: body.error,
-        metadata: body.metadata,
+        expectedStateVersion,
+        metadata: withIdempotencyMetadata(body.metadata, idempotencyKey),
       });
+      setTaskStateHeaders(c, task);
       return c.json<ApiResponse>({ ok: true, data: await enrichTask(task) });
     } catch (err) {
       return handleTaskError(err, c);

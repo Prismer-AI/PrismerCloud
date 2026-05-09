@@ -2,7 +2,6 @@ package transport
 
 import (
 	"context"
-	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -15,6 +14,7 @@ import (
 	execpkg "github.com/Prismer-AI/PrismerCloud/services/orchestrator/internal/exec"
 	"github.com/Prismer-AI/PrismerCloud/services/orchestrator/internal/hub"
 	shareddb "github.com/Prismer-AI/PrismerCloud/services/shared/db"
+	"github.com/Prismer-AI/PrismerCloud/services/shared/identity"
 	"github.com/Prismer-AI/PrismerCloud/services/shared/proto"
 )
 
@@ -185,33 +185,21 @@ func (s *Session) verifyRuntimeHelloEnvelope(ctx context.Context, envelope proto
 		return ErrRuntimeSignatureRequired
 	}
 
-	key, err := s.store.GetSigningKeyByKeyID(ctx, envelope.KeyID)
+	publicKey, err := (identity.StoreKeyResolver{Store: s.store}).ActiveEd25519PublicKey(ctx, envelope.KeyID, s.now())
 	if err != nil {
-		if errors.Is(err, shareddb.ErrSigningKeyNotFound) {
+		if errors.Is(err, identity.ErrSigningKeyUnknown) ||
+			errors.Is(err, identity.ErrSigningKeyUnsupportedAlgorithm) ||
+			errors.Is(err, identity.ErrSigningKeyRevoked) ||
+			errors.Is(err, identity.ErrSigningKeyExpired) ||
+			errors.Is(err, identity.ErrSigningKeyInvalidPublicKey) {
 			return fmt.Errorf("%w: %v", ErrRuntimeSigningKeyRejected, err)
 		}
 		return err
 	}
-	if key.Algorithm != "" && key.Algorithm != "ed25519" {
-		return fmt.Errorf("%w: unsupported algorithm %s", ErrRuntimeSigningKeyRejected, key.Algorithm)
-	}
-	if key.RevokedAt != nil {
-		return fmt.Errorf("%w: key revoked", ErrRuntimeSigningKeyRejected)
-	}
-	if key.ExpiresAt != nil && key.ExpiresAt.Before(s.now()) {
-		return fmt.Errorf("%w: key expired", ErrRuntimeSigningKeyRejected)
-	}
 
-	publicKeyBytes, err := proto.DecodeBase64Any(key.PublicKey)
-	if err != nil {
-		return fmt.Errorf("%w: decode public key: %v", ErrRuntimeSigningKeyRejected, err)
-	}
-	if len(publicKeyBytes) != ed25519.PublicKeySize {
-		return fmt.Errorf("%w: unexpected public key size", ErrRuntimeSigningKeyRejected)
-	}
-	return proto.VerifyEnvelopeSignature(
+	return identity.VerifyEnvelopeSignature(
 		envelope,
-		ed25519.PublicKey(publicKeyBytes),
+		publicKey,
 		s.now(),
 		s.auth.RuntimeMaxTimeSkew,
 	)

@@ -6,6 +6,7 @@
 #   curl -fsSL https://prismer.cloud/install.sh | sh
 #   curl -fsSL https://prismer.cloud/install.sh | sh -s -- --yes
 #   curl -fsSL https://prismer.cloud/install.sh | sh -s -- --no-setup
+#   curl -fsSL https://prismer.cloud/install.sh | sh -s -- --with-daemon
 #
 # What it does:
 #   1. Detect OS / arch / shell
@@ -45,12 +46,14 @@ die()     { error "$1"; exit 1; }
 # ---- Args --------------------------------------------------------------------
 ASSUME_YES=0
 RUN_SETUP=1
+WITH_DAEMON=0
 VERBOSE=0
 LOCAL_ARTIFACTS=""
 while [ $# -gt 0 ]; do
   case "$1" in
     -y|--yes)        ASSUME_YES=1 ;;
     --no-setup)      RUN_SETUP=0 ;;
+    --with-daemon)   WITH_DAEMON=1 ;;
     -v|--verbose)    VERBOSE=1 ;;
     --local)         shift; LOCAL_ARTIFACTS="${1:-}" ;;
     --version)       printf "prismer installer %s\n" "$VERSION"; exit 0 ;;
@@ -69,6 +72,7 @@ Usage: install.sh [options]
 Options:
   -y, --yes              Non-interactive (don't prompt)
   --no-setup             Skip 'prismer setup' (browser sign-in) at the end
+  --with-daemon          Run 'prismer setup --with-daemon' after install
   --local <dir>          Install from local tgz artifacts (pre-publish testing)
   --uninstall            Remove Prismer directories and fnm
   -v, --verbose          Show all subcommand output
@@ -302,12 +306,20 @@ success "prismer CLI ready: $(command -v prismer)"
 # ---- Step 5: run setup (optional) --------------------------------------------
 if [ "$RUN_SETUP" -eq 1 ]; then
   printf "\n"
-  info "Running ${BOLD}prismer setup${RESET} — will open your browser to sign in."
+  SETUP_CMD="prismer setup"
+  if [ "$WITH_DAEMON" -eq 1 ]; then
+    SETUP_CMD="prismer setup --with-daemon"
+  fi
+  info "Running ${BOLD}${SETUP_CMD}${RESET} — will open your browser to sign in."
   if [ "$ASSUME_YES" -eq 0 ] && [ -t 0 ]; then
     printf "  %sPress Enter to continue, or Ctrl-C to skip...%s" "$DIM" "$RESET"
     read -r _ || true
   fi
-  if ! prismer setup; then
+  if [ "$WITH_DAEMON" -eq 1 ]; then
+    if ! prismer setup --with-daemon; then
+      warn "prismer setup --with-daemon exited non-zero. You can re-run it anytime: prismer setup --with-daemon"
+    fi
+  elif ! prismer setup; then
     warn "prismer setup exited non-zero. You can re-run it anytime: prismer setup"
   fi
 fi

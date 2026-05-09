@@ -4,6 +4,8 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -82,6 +84,41 @@ func TestLoadConfigFromEnvParsesSigningConfig(t *testing.T) {
 	}
 }
 
+func TestLoadConfigFromLocalDaemonConfig(t *testing.T) {
+	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey() error = %v", err)
+	}
+	configPath := filepath.Join(t.TempDir(), "config.toml")
+	privateKeyValue := base64.RawURLEncoding.EncodeToString(privateKey)
+	writeTestFile(t, configPath, `
+[default]
+api_key = "sk-prismer-live-test"
+
+[daemon]
+runtime_did = "did:key:from-config"
+key_id = "did:key:from-config#k1"
+signing_private_key = "`+privateKeyValue+`"
+orchestrator_ws_url = "wss://prismer.cloud/ws/runtime"
+`)
+	t.Setenv("PRISMER_CONFIG_PATH", configPath)
+	t.Setenv("PRISMER_DAEMON_DID", "")
+	t.Setenv("PRISMER_ORCH_WS_URL", "")
+	t.Setenv("PRISMER_DAEMON_KEY_ID", "")
+	t.Setenv("PRISMER_DAEMON_SIGNING_PRIVATE_KEY", "")
+
+	cfg, err := LoadConfigFromEnv()
+	if err != nil {
+		t.Fatalf("LoadConfigFromEnv() error = %v", err)
+	}
+	if cfg.WS.RuntimeDID != "did:key:from-config" || cfg.WS.URL != "wss://prismer.cloud/ws/runtime" {
+		t.Fatalf("unexpected config fallback: %+v", cfg.WS)
+	}
+	if cfg.WS.SigningKeyID != "did:key:from-config#k1" || len(cfg.WS.SigningPrivateKey) != ed25519.PrivateKeySize {
+		t.Fatalf("unexpected signing config fallback: %+v", cfg.WS)
+	}
+}
+
 func TestLoadConfigFromEnvParsesApprovalPolicy(t *testing.T) {
 	t.Setenv("PRISMER_DAEMON_DID", "did:key:test")
 	t.Setenv("PRISMER_ORCH_WS_URL", "ws://localhost:8080/ws/runtime")
@@ -101,5 +138,12 @@ func TestLoadConfigFromEnvParsesApprovalPolicy(t *testing.T) {
 	}
 	if cfg.ApprovalPolicy.TaskCreateBudgetOver != 2500 {
 		t.Fatalf("unexpected approval budget threshold: %+v", cfg.ApprovalPolicy)
+	}
+}
+
+func writeTestFile(t *testing.T, path string, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
 	}
 }

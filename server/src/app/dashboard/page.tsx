@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Activity,
@@ -16,8 +16,12 @@ import {
   X,
   ShieldCheck,
   Loader2,
+  Server,
+  Terminal,
   ToggleLeft,
   ToggleRight,
+  Wifi,
+  WifiOff,
   Zap,
   Dna,
   Wrench,
@@ -36,7 +40,44 @@ import { CreditPurchaseSlider } from '@/components/credit-purchase-slider';
 import { TiltCard } from '@/components/evolution/tilt-card';
 import { EvolutionGraph } from '@/components/evolution/evolution-graph';
 
-type DashboardTab = 'overview' | 'api-keys' | 'billing' | 'evolution';
+type DashboardTab = 'overview' | 'api-keys' | 'runtimes' | 'billing' | 'evolution';
+
+interface RuntimeSigningKeyData {
+  id: string;
+  did: string;
+  keyVersion: number;
+  keyId: string | null;
+  algorithm: string;
+  revokedAt: string | null;
+  expiresAt: string | null;
+  createdAt: string;
+}
+
+interface RuntimeStatusData {
+  id: string;
+  did: string;
+  type: string;
+  hostname: string | null;
+  os: string | null;
+  arch: string | null;
+  version: string | null;
+  status: string;
+  load: number;
+  lastHeartbeatAt: string | null;
+  registeredAt: string;
+  updatedAt: string;
+}
+
+interface RuntimeOverviewData {
+  runtimes: RuntimeStatusData[];
+  signingKeys: RuntimeSigningKeyData[];
+  summary: {
+    runtimeCount: number;
+    onlineCount: number;
+    signingKeyCount: number;
+    activeSigningKeys: number;
+  };
+}
 
 export default function DashboardPage() {
   const router = useRouter();
@@ -59,6 +100,8 @@ export default function DashboardPage() {
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [apiKeys, setApiKeys] = useState<ApiKeyData[]>([]);
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>([]);
+  const [runtimeOverview, setRuntimeOverview] = useState<RuntimeOverviewData | null>(null);
+  const [runtimeLoading, setRuntimeLoading] = useState(false);
 
   // UI State for Forms
   const [showAddPayment, setShowAddPayment] = useState(false);
@@ -80,11 +123,54 @@ export default function DashboardPage() {
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const hash = window.location.hash.replace('#', '');
-      if (hash === 'api-keys' || hash === 'billing' || hash === 'overview' || hash === 'evolution') {
+      if (hash === 'api-keys' || hash === 'runtimes' || hash === 'billing' || hash === 'overview' || hash === 'evolution') {
         setActiveTab(hash as DashboardTab);
       }
     }
   }, []);
+
+  const getDashboardAuthHeaders = (): Record<string, string> => {
+    try {
+      const auth = JSON.parse(localStorage.getItem('prismer_auth') || '{}');
+      if (auth.token) return { Authorization: `Bearer ${auth.token}`, 'Content-Type': 'application/json' };
+      const apiKey = JSON.parse(localStorage.getItem('prismer_active_api_key') || '{}');
+      if (apiKey.key) return { Authorization: `Bearer ${apiKey.key}`, 'Content-Type': 'application/json' };
+    } catch {}
+    return { 'Content-Type': 'application/json' };
+  };
+
+  const loadRuntimeOverview = async () => {
+    setRuntimeLoading(true);
+    try {
+      const res = await fetch('/api/runtimes', { headers: getDashboardAuthHeaders() });
+      const data = await res.json();
+      if (!res.ok || data?.success === false) {
+        throw new Error(data?.error?.message || 'Failed to load runtimes');
+      }
+      setRuntimeOverview(data.data);
+    } catch (error: any) {
+      addToast(error?.message || 'Failed to load runtimes', 'error');
+    } finally {
+      setRuntimeLoading(false);
+    }
+  };
+
+  const revokeRuntimeSigningKey = async (id: string) => {
+    try {
+      const res = await fetch(`/api/runtimes/signing-keys/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+        headers: getDashboardAuthHeaders(),
+      });
+      const data = await res.json();
+      if (!res.ok || data?.success === false) {
+        throw new Error(data?.error?.message || 'Failed to revoke signing key');
+      }
+      addToast('Runtime signing key revoked', 'info');
+      await loadRuntimeOverview();
+    } catch (error: any) {
+      addToast(error?.message || 'Failed to revoke signing key', 'error');
+    }
+  };
 
   // Initial Fetch
   useEffect(() => {
@@ -125,6 +211,11 @@ export default function DashboardPage() {
 
     fetchData();
   }, [isAuthenticated, addToast]);
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    loadRuntimeOverview();
+  }, [isAuthenticated]);
 
   // API Key Handlers
   const copyToClipboard = (text: string) => {
@@ -314,7 +405,7 @@ export default function DashboardPage() {
         <div
           className={`flex p-0.5 sm:p-1 rounded-lg overflow-x-auto scrollbar-none ${isDark ? 'bg-zinc-900 border border-white/5' : 'bg-zinc-100 border border-zinc-200'}`}
         >
-          {(['overview', 'api-keys', 'billing', 'evolution'] as const).map((tab) => (
+          {(['overview', 'api-keys', 'runtimes', 'billing', 'evolution'] as const).map((tab) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -845,6 +936,16 @@ export default function DashboardPage() {
         </div>
       )}
 
+      {activeTab === 'runtimes' && (
+        <DashboardRuntimesTab
+          isDark={isDark}
+          overview={runtimeOverview}
+          loading={runtimeLoading}
+          onRefresh={loadRuntimeOverview}
+          onRevoke={revokeRuntimeSigningKey}
+        />
+      )}
+
       {activeTab === 'billing' && (
         <div className="max-w-4xl mx-auto space-y-6 sm:space-y-8 animate-in fade-in slide-in-from-bottom-2 duration-300">
           {/* Credit Purchase Slider */}
@@ -1254,6 +1355,244 @@ export default function DashboardPage() {
       />
     </div>
   );
+}
+
+// ============================================================================
+// Dashboard Runtime Tab
+// ============================================================================
+
+function DashboardRuntimesTab({
+  isDark,
+  overview,
+  loading,
+  onRefresh,
+  onRevoke,
+}: {
+  isDark: boolean;
+  overview: RuntimeOverviewData | null;
+  loading: boolean;
+  onRefresh: () => void;
+  onRevoke: (id: string) => void;
+}) {
+  const runtimes = overview?.runtimes ?? [];
+  const signingKeys = overview?.signingKeys ?? [];
+  const onlineCount = overview?.summary.onlineCount ?? 0;
+  const activeKeys = overview?.summary.activeSigningKeys ?? 0;
+
+  return (
+    <div id="runtimes" className="max-w-5xl mx-auto space-y-4 sm:space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
+      <div
+        className={`p-4 sm:p-6 lg:p-8 rounded-xl shadow-xl ${isDark ? 'bg-zinc-900 border border-white/5' : 'bg-white border border-zinc-200'}`}
+      >
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
+          <div>
+            <h3
+              className={`text-lg sm:text-xl font-bold flex items-center gap-2 ${isDark ? 'text-white' : 'text-zinc-900'}`}
+            >
+              <Server className="w-4 h-4 sm:w-5 sm:h-5 text-cyan-500" /> Phase A Runtimes
+            </h3>
+            <p className={`text-xs sm:text-sm mt-1 ${isDark ? 'text-zinc-400' : 'text-zinc-600'}`}>
+              Signed daemon admission, key state, and heartbeat visibility.
+            </p>
+          </div>
+          <button
+            onClick={onRefresh}
+            disabled={loading}
+            className={`px-3 sm:px-4 py-2 rounded-lg text-xs sm:text-sm font-bold transition-all flex items-center gap-2 self-start sm:self-auto ${
+              isDark ? 'bg-zinc-800 text-zinc-200 hover:bg-zinc-700' : 'bg-zinc-100 text-zinc-700 hover:bg-zinc-200'
+            } disabled:opacity-60`}
+          >
+            {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+            Refresh
+          </button>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-6">
+          <RuntimeMetricCard
+            isDark={isDark}
+            icon={<Wifi className="w-4 h-4 text-emerald-500" />}
+            label="Online"
+            value={String(onlineCount)}
+          />
+          <RuntimeMetricCard
+            isDark={isDark}
+            icon={<ShieldCheck className="w-4 h-4 text-cyan-500" />}
+            label="Active Keys"
+            value={String(activeKeys)}
+          />
+          <RuntimeMetricCard
+            isDark={isDark}
+            icon={<Terminal className="w-4 h-4 text-violet-500" />}
+            label="Registered"
+            value={String(runtimes.length)}
+          />
+        </div>
+
+        {loading && !overview ? (
+          <div className="flex items-center justify-center py-16">
+            <Loader2 className="w-8 h-8 animate-spin text-violet-500" />
+          </div>
+        ) : runtimes.length === 0 && signingKeys.length === 0 ? (
+          <div
+            className={`rounded-xl border border-dashed p-6 sm:p-8 text-center ${
+              isDark ? 'border-zinc-800 bg-zinc-950/40' : 'border-zinc-200 bg-zinc-50'
+            }`}
+          >
+            <Terminal className={`w-8 h-8 mx-auto mb-3 ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`} />
+            <h4 className={`text-sm font-bold mb-2 ${isDark ? 'text-white' : 'text-zinc-900'}`}>No signed daemon yet</h4>
+            <code
+              className={`inline-block px-3 py-2 rounded-lg text-xs font-mono ${
+                isDark ? 'bg-zinc-900 text-cyan-300 border border-zinc-800' : 'bg-white text-cyan-700 border border-zinc-200'
+              }`}
+            >
+              prismer setup --with-daemon
+            </code>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <div className="space-y-3">
+              <h4 className={`text-xs font-bold uppercase tracking-wider ${isDark ? 'text-zinc-500' : 'text-zinc-500'}`}>
+                Runtime Heartbeats
+              </h4>
+              {runtimes.length === 0 ? (
+                <div className={`p-4 rounded-xl ${isDark ? 'bg-zinc-950/50 text-zinc-500' : 'bg-zinc-50 text-zinc-500'}`}>
+                  No daemon heartbeat recorded yet.
+                </div>
+              ) : (
+                runtimes.map((runtime) => <RuntimeRow key={runtime.id} runtime={runtime} isDark={isDark} />)
+              )}
+            </div>
+
+            <div className="space-y-3">
+              <h4 className={`text-xs font-bold uppercase tracking-wider ${isDark ? 'text-zinc-500' : 'text-zinc-500'}`}>
+                Signing Keys
+              </h4>
+              {signingKeys.map((keyData) => (
+                <SigningKeyRow key={keyData.id} keyData={keyData} isDark={isDark} onRevoke={onRevoke} />
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function RuntimeMetricCard({
+  isDark,
+  icon,
+  label,
+  value,
+}: {
+  isDark: boolean;
+  icon: ReactNode;
+  label: string;
+  value: string;
+}) {
+  return (
+    <div className={`p-4 rounded-xl ${isDark ? 'bg-zinc-950/50 border border-zinc-800' : 'bg-zinc-50 border border-zinc-200'}`}>
+      <div className="flex items-center justify-between mb-2">
+        <span className={`text-xs ${isDark ? 'text-zinc-500' : 'text-zinc-500'}`}>{label}</span>
+        {icon}
+      </div>
+      <p className={`text-2xl font-bold ${isDark ? 'text-white' : 'text-zinc-900'}`}>{value}</p>
+    </div>
+  );
+}
+
+function RuntimeRow({ runtime, isDark }: { runtime: RuntimeStatusData; isDark: boolean }) {
+  const online = runtime.status === 'online' || runtime.status === 'busy';
+
+  return (
+    <div className={`p-4 rounded-xl border ${isDark ? 'bg-black/30 border-zinc-800' : 'bg-white border-zinc-200'}`}>
+      <div className="flex items-start justify-between gap-3 mb-3">
+        <div className="min-w-0">
+          <p className={`font-mono text-xs truncate ${isDark ? 'text-zinc-200' : 'text-zinc-800'}`} title={runtime.did}>
+            {runtime.did}
+          </p>
+          <p className={`text-xs mt-1 ${isDark ? 'text-zinc-500' : 'text-zinc-500'}`}>
+            {[runtime.hostname, runtime.os, runtime.arch].filter(Boolean).join(' / ') || runtime.type}
+          </p>
+        </div>
+        <span
+          className={`text-[10px] px-2 py-0.5 rounded border font-bold tracking-wide flex items-center gap-1 ${
+            online
+              ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20'
+              : isDark
+                ? 'bg-zinc-800 text-zinc-500 border-zinc-700'
+                : 'bg-zinc-100 text-zinc-500 border-zinc-200'
+          }`}
+        >
+          {online ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
+          {runtime.status.toUpperCase()}
+        </span>
+      </div>
+      <div className={`grid grid-cols-2 gap-2 text-xs ${isDark ? 'text-zinc-500' : 'text-zinc-500'}`}>
+        <span>Load {Math.round((runtime.load ?? 0) * 100)}%</span>
+        <span className="text-right">v{runtime.version ?? 'unknown'}</span>
+        <span className="col-span-2">Last heartbeat {formatRuntimeDate(runtime.lastHeartbeatAt)}</span>
+      </div>
+    </div>
+  );
+}
+
+function SigningKeyRow({
+  keyData,
+  isDark,
+  onRevoke,
+}: {
+  keyData: RuntimeSigningKeyData;
+  isDark: boolean;
+  onRevoke: (id: string) => void;
+}) {
+  const expired = keyData.expiresAt ? new Date(keyData.expiresAt).getTime() <= Date.now() : false;
+  const active = !keyData.revokedAt && !expired;
+
+  return (
+    <div className={`p-4 rounded-xl border ${isDark ? 'bg-black/30 border-zinc-800' : 'bg-white border-zinc-200'}`}>
+      <div className="flex items-start justify-between gap-3 mb-3">
+        <div className="min-w-0">
+          <p className={`font-mono text-xs truncate ${isDark ? 'text-zinc-200' : 'text-zinc-800'}`} title={keyData.keyId ?? keyData.id}>
+            {keyData.keyId ?? keyData.id}
+          </p>
+          <p className={`text-xs mt-1 ${isDark ? 'text-zinc-500' : 'text-zinc-500'}`}>
+            {keyData.algorithm} / k{keyData.keyVersion}
+          </p>
+        </div>
+        <span
+          className={`text-[10px] px-2 py-0.5 rounded border font-bold tracking-wide ${
+            active
+              ? 'bg-cyan-500/10 text-cyan-500 border-cyan-500/20'
+              : isDark
+                ? 'bg-zinc-800 text-zinc-500 border-zinc-700'
+                : 'bg-zinc-100 text-zinc-500 border-zinc-200'
+          }`}
+        >
+          {active ? 'ACTIVE' : keyData.revokedAt ? 'REVOKED' : 'EXPIRED'}
+        </span>
+      </div>
+      <div className="flex items-center justify-between gap-3">
+        <span className={`text-xs ${isDark ? 'text-zinc-500' : 'text-zinc-500'}`}>
+          Created {formatRuntimeDate(keyData.createdAt)}
+        </span>
+        {active && (
+          <button
+            onClick={() => onRevoke(keyData.id)}
+            className="px-2 py-1 text-xs font-medium text-red-400 hover:text-red-300 hover:bg-red-500/10 rounded transition-colors flex items-center gap-1"
+          >
+            <Trash2 className="w-3 h-3" /> Revoke
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function formatRuntimeDate(value: string | null): string {
+  if (!value) return 'never';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'unknown';
+  return date.toLocaleString();
 }
 
 // ============================================================================

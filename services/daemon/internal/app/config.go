@@ -16,12 +16,14 @@ import (
 )
 
 func LoadConfigFromEnv() (Config, error) {
-	runtimeDID := strings.TrimSpace(os.Getenv("PRISMER_DAEMON_DID"))
+	localDaemonConfig := loadLocalDaemonConfig()
+
+	runtimeDID := envOrConfig("PRISMER_DAEMON_DID", localDaemonConfig, "runtime_did")
 	if runtimeDID == "" {
 		return Config{}, fmt.Errorf("PRISMER_DAEMON_DID required")
 	}
 
-	wsURL := strings.TrimSpace(os.Getenv("PRISMER_ORCH_WS_URL"))
+	wsURL := envOrConfig("PRISMER_ORCH_WS_URL", localDaemonConfig, "orchestrator_ws_url")
 	if wsURL == "" {
 		return Config{}, fmt.Errorf("PRISMER_ORCH_WS_URL required")
 	}
@@ -48,7 +50,7 @@ func LoadConfigFromEnv() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	signingPrivateKey, signingKeyID, err := loadSigningConfig()
+	signingPrivateKey, signingKeyID, err := loadSigningConfig(localDaemonConfig)
 	if err != nil {
 		return Config{}, err
 	}
@@ -174,9 +176,9 @@ func loadDangerousActions() map[string]struct{} {
 	return actions
 }
 
-func loadSigningConfig() (ed25519.PrivateKey, string, error) {
-	rawPrivateKey := strings.TrimSpace(os.Getenv("PRISMER_DAEMON_SIGNING_PRIVATE_KEY"))
-	keyID := strings.TrimSpace(os.Getenv("PRISMER_DAEMON_KEY_ID"))
+func loadSigningConfig(localDaemonConfig map[string]string) (ed25519.PrivateKey, string, error) {
+	rawPrivateKey := envOrConfig("PRISMER_DAEMON_SIGNING_PRIVATE_KEY", localDaemonConfig, "signing_private_key")
+	keyID := envOrConfig("PRISMER_DAEMON_KEY_ID", localDaemonConfig, "key_id")
 	if rawPrivateKey == "" && keyID == "" {
 		return nil, "", nil
 	}
@@ -220,4 +222,56 @@ func envOrDefault(key string, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func envOrConfig(envKey string, localConfig map[string]string, configKey string) string {
+	if value := strings.TrimSpace(os.Getenv(envKey)); value != "" {
+		return value
+	}
+	return strings.TrimSpace(localConfig[configKey])
+}
+
+func loadLocalDaemonConfig() map[string]string {
+	path := strings.TrimSpace(os.Getenv("PRISMER_CONFIG_PATH"))
+	if path == "" {
+		home, err := os.UserHomeDir()
+		if err != nil || home == "" {
+			return nil
+		}
+		path = home + "/.prismer/config.toml"
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	return parseTOMLSection(string(data), "daemon")
+}
+
+func parseTOMLSection(raw string, section string) map[string]string {
+	values := make(map[string]string)
+	current := ""
+	for _, line := range strings.Split(raw, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+			current = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(line, "["), "]"))
+			continue
+		}
+		if current != section {
+			continue
+		}
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := strings.TrimSpace(parts[0])
+		value := strings.TrimSpace(parts[1])
+		if unquoted, err := strconv.Unquote(value); err == nil {
+			value = unquoted
+		}
+		values[key] = value
+	}
+	return values
 }

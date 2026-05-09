@@ -31,6 +31,7 @@ import type { EvolutionService } from './evolution.service';
 import type { EventBusService } from './event-bus.service';
 import type { CreditService } from './credit.service';
 import { createModuleLogger } from '../../lib/logger';
+import { taskStateVersion } from '../utils/task-state-version';
 
 const log = createModuleLogger('TaskService');
 
@@ -47,6 +48,13 @@ export class TaskStateError extends Error {
   constructor(id: string, currentStatus: string, expectedStatus: string) {
     super(`Task ${id} is ${currentStatus}, expected ${expectedStatus}`);
     this.name = 'TaskStateError';
+  }
+}
+
+export class TaskVersionConflictError extends Error {
+  constructor(id: string, expectedStateVersion: number, currentStateVersion: number) {
+    super(`Task ${id} state version conflict: expected ${expectedStateVersion}, current ${currentStateVersion}`);
+    this.name = 'TaskVersionConflictError';
   }
 }
 
@@ -311,6 +319,7 @@ export class TaskService {
       status?: TaskStatus;
       progress?: number;
       statusMessage?: string;
+      expectedStateVersion?: number;
       metadata?: Record<string, unknown>;
     },
   ): Promise<TaskInfo> {
@@ -323,6 +332,7 @@ export class TaskService {
     if (!isCreator && !isAssignee) {
       throw new TaskAccessError(id, 'only the task creator or assignee can update this task');
     }
+    this.assertStateVersion(task, updates.expectedStateVersion);
 
     const data: Record<string, unknown> = {};
 
@@ -401,8 +411,8 @@ export class TaskService {
       return this.toTaskInfo(task);
     }
 
-    const updated = await this.taskModel.update(id, data);
-    if (!updated) throw new TaskNotFoundError(id);
+    const updated = await this.taskModel.update(id, data, updates.expectedStateVersion);
+    if (!updated) await this.throwMissingOrVersionConflict(id, updates.expectedStateVersion);
 
     // Log the update
     const logAction = data.status === 'cancelled' ? 'cancelled' : data.assigneeId ? 'assigned' : 'progress';
@@ -470,18 +480,23 @@ export class TaskService {
    * Creator approves a task in review status → completed.
    * Idempotent: re-approving a completed task returns 200.
    */
-  async approveTask(taskId: string, actorId: string): Promise<TaskInfo> {
+  async approveTask(taskId: string, actorId: string, expectedStateVersion?: number): Promise<TaskInfo> {
     const task = await this.taskModel.findById(taskId);
     if (!task) throw new TaskNotFoundError(taskId);
     if (task.creatorId !== actorId) {
       throw new TaskAccessError(taskId, 'only the task creator can approve');
     }
+    this.assertStateVersion(task, expectedStateVersion);
     // Idempotent: already completed
     if (task.status === 'completed') return this.toTaskInfo(task);
     if (task.status !== 'review') throw new TaskStateError(taskId, task.status, 'review');
 
-    const updated = await this.taskModel.update(taskId, { status: 'completed', completedAt: new Date() });
-    if (!updated) throw new TaskNotFoundError(taskId);
+    const updated = await this.taskModel.update(
+      taskId,
+      { status: 'completed', completedAt: new Date() },
+      expectedStateVersion,
+    );
+    if (!updated) await this.throwMissingOrVersionConflict(taskId, expectedStateVersion);
 
     await this.taskModel.createLog({ taskId, actorId, action: 'completed', message: 'Task approved by creator' });
     this.deps.eventBusService
@@ -513,15 +528,16 @@ export class TaskService {
    * Creator rejects a task in review status → failed.
    * Idempotent: re-rejecting a failed task returns 200.
    */
-  async rejectTask(taskId: string, actorId: string, reason: string): Promise<TaskInfo> {
+  async rejectTask(taskId: string, actorId: string, reason: string, expectedStateVersion?: number): Promise<TaskInfo> {
     const task = await this.taskModel.findById(taskId);
     if (!task) throw new TaskNotFoundError(taskId);
     if (task.creatorId !== actorId) throw new TaskAccessError(taskId, 'only the task creator can reject');
+    this.assertStateVersion(task, expectedStateVersion);
     if (task.status === 'failed') return this.toTaskInfo(task);
     if (task.status !== 'review') throw new TaskStateError(taskId, task.status, 'review');
 
-    const updated = await this.taskModel.update(taskId, { status: 'failed', error: reason });
-    if (!updated) throw new TaskNotFoundError(taskId);
+    const updated = await this.taskModel.update(taskId, { status: 'failed', error: reason }, expectedStateVersion);
+    if (!updated) await this.throwMissingOrVersionConflict(taskId, expectedStateVersion);
 
     await this.taskModel.createLog({ taskId, actorId, action: 'failed', message: `Task rejected: ${reason}` });
 
@@ -551,15 +567,16 @@ export class TaskService {
    * Idempotent: re-cancelling returns 200.
    * Cannot cancel completed or failed tasks.
    */
-  async cancelTask(taskId: string, actorId: string): Promise<TaskInfo> {
+  async cancelTask(taskId: string, actorId: string, expectedStateVersion?: number): Promise<TaskInfo> {
     const task = await this.taskModel.findById(taskId);
     if (!task) throw new TaskNotFoundError(taskId);
     if (task.creatorId !== actorId) throw new TaskAccessError(taskId, 'only the task creator can cancel');
+    this.assertStateVersion(task, expectedStateVersion);
     if (task.status === 'cancelled') return this.toTaskInfo(task);
     if (['completed', 'failed'].includes(task.status)) {
       throw new TaskStateError(taskId, task.status, 'pending, assigned, running, or review');
     }
-    return this.updateTask(taskId, actorId, { status: 'cancelled' as TaskStatus });
+    return this.updateTask(taskId, actorId, { status: 'cancelled' as TaskStatus, expectedStateVersion });
   }
 
   // ═══════════════════════════════════════════════════════════
@@ -570,9 +587,20 @@ export class TaskService {
    * Agent claims a pending task.
    * Atomic: only succeeds if task is still pending.
    */
-  async claimTask(taskId: string, agentId: string): Promise<TaskInfo> {
+  async claimTask(
+    taskId: string,
+    agentId: string,
+    metadata?: Record<string, unknown>,
+    expectedStateVersion?: number,
+  ): Promise<TaskInfo> {
     // P9: Block check — task creator may have blocked this agent
     const taskForBlockCheck = await this.taskModel.findById(taskId);
+    if (taskForBlockCheck) {
+      this.assertStateVersion(taskForBlockCheck, expectedStateVersion);
+    }
+    if (taskForBlockCheck?.assigneeId === agentId && taskForBlockCheck.status !== 'cancelled') {
+      return this.toTaskInfo(taskForBlockCheck);
+    }
     if (taskForBlockCheck) {
       const { ContactService } = await import('./contact.service');
       const contactSvc = new ContactService();
@@ -582,10 +610,11 @@ export class TaskService {
       }
     }
 
-    const claimed = await this.taskModel.claim(taskId, agentId);
+    const claimed = await this.taskModel.claim(taskId, agentId, expectedStateVersion);
     if (!claimed) {
       const existing = await this.taskModel.findById(taskId);
       if (!existing) throw new TaskNotFoundError(taskId);
+      this.assertStateVersion(existing, expectedStateVersion);
       throw new TaskClaimError(taskId);
     }
 
@@ -594,6 +623,7 @@ export class TaskService {
       actorId: agentId,
       action: 'claimed',
       message: `Task claimed by agent ${agentId}`,
+      metadata: metadata ? JSON.stringify(metadata) : undefined,
     });
 
     log.info(`Claimed: ${taskId} by ${agentId}`);
@@ -630,6 +660,7 @@ export class TaskService {
     if (task.assigneeId !== agentId) {
       throw new TaskAccessError(taskId, 'only the assigned agent can report progress');
     }
+    this.assertStateVersion(task, input.expectedStateVersion);
 
     if (task.status !== 'running' && task.status !== 'assigned') {
       throw new TaskStateError(taskId, task.status, 'running or assigned');
@@ -637,7 +668,8 @@ export class TaskService {
 
     // If task is 'assigned', transition to 'running' on first progress
     if (task.status === 'assigned') {
-      await this.taskModel.update(taskId, { status: 'running' });
+      const updated = await this.taskModel.update(taskId, { status: 'running' }, input.expectedStateVersion);
+      if (!updated) await this.throwMissingOrVersionConflict(taskId, input.expectedStateVersion);
     }
 
     await this.taskModel.createLog({
@@ -662,26 +694,41 @@ export class TaskService {
     if (task.assigneeId !== agentId) {
       throw new TaskAccessError(taskId, 'only the assigned agent can complete this task');
     }
+    this.assertStateVersion(task, input.expectedStateVersion);
+
+    if (task.status === 'completed') {
+      return this.toTaskInfo(task);
+    }
 
     if (!['assigned', 'running'].includes(task.status)) {
       throw new TaskStateError(taskId, task.status, 'assigned or running');
     }
 
-    const updated = await this.taskModel.update(taskId, {
-      status: 'completed',
-      completedAt: new Date(),
-      result: input.result !== undefined ? JSON.stringify(input.result) : null,
-      resultUri: input.resultUri,
-      cost: input.cost ?? task.cost,
-    });
-    if (!updated) throw new TaskNotFoundError(taskId);
+    const updated = await this.taskModel.update(
+      taskId,
+      {
+        status: 'completed',
+        completedAt: new Date(),
+        result: input.result !== undefined ? JSON.stringify(input.result) : null,
+        resultUri: input.resultUri,
+        cost: input.cost ?? task.cost,
+      },
+      input.expectedStateVersion,
+    );
+    if (!updated) await this.throwMissingOrVersionConflict(taskId, input.expectedStateVersion);
 
     await this.taskModel.createLog({
       taskId,
       actorId: agentId,
       action: 'completed',
       message: 'Task completed',
-      metadata: input.result ? JSON.stringify({ resultPreview: String(input.result).slice(0, 200) }) : undefined,
+      metadata:
+        input.result || input.metadata
+          ? JSON.stringify({
+              ...(input.metadata ?? {}),
+              ...(input.result ? { resultPreview: String(input.result).slice(0, 200) } : {}),
+            })
+          : undefined,
     });
 
     log.info(`Completed: ${taskId}`);
@@ -750,6 +797,11 @@ export class TaskService {
     if (task.assigneeId !== agentId) {
       throw new TaskAccessError(taskId, 'only the assigned agent can fail this task');
     }
+    this.assertStateVersion(task, input.expectedStateVersion);
+
+    if (task.status === 'failed') {
+      return this.toTaskInfo(task);
+    }
 
     if (!['assigned', 'running'].includes(task.status)) {
       throw new TaskStateError(taskId, task.status, 'assigned or running');
@@ -761,12 +813,17 @@ export class TaskService {
       const delay = task.retryDelayMs * Math.pow(2, task.retryCount);
       const nextRetryAt = new Date(Date.now() + delay);
 
-      const updated = await this.taskModel.update(taskId, {
-        status: 'pending',
-        retryCount: { increment: 1 },
-        nextRunAt: nextRetryAt,
-        error: input.error,
-      });
+      const updated = await this.taskModel.update(
+        taskId,
+        {
+          status: 'pending',
+          retryCount: { increment: 1 },
+          nextRunAt: nextRetryAt,
+          error: input.error,
+        },
+        input.expectedStateVersion,
+      );
+      if (!updated) await this.throwMissingOrVersionConflict(taskId, input.expectedStateVersion);
 
       await this.taskModel.createLog({
         taskId,
@@ -778,16 +835,19 @@ export class TaskService {
 
       log.info(`Retrying: ${taskId} (${task.retryCount + 1}/${task.maxRetries}, next at ${nextRetryAt.toISOString()})`);
 
-      if (!updated) throw new TaskNotFoundError(taskId);
       return this.toTaskInfo(updated);
     }
 
     // No more retries — mark as failed
-    const updated = await this.taskModel.update(taskId, {
-      status: 'failed',
-      error: input.error,
-    });
-    if (!updated) throw new TaskNotFoundError(taskId);
+    const updated = await this.taskModel.update(
+      taskId,
+      {
+        status: 'failed',
+        error: input.error,
+      },
+      input.expectedStateVersion,
+    );
+    if (!updated) await this.throwMissingOrVersionConflict(taskId, input.expectedStateVersion);
 
     // Refund escrowed budget to creator on final failure
     await this._refundEscrow(task, 'failed (retries exhausted)');
@@ -1423,6 +1483,27 @@ export class TaskService {
     }
   }
 
+  private getStateVersion(record: { updatedAt: Date }): number {
+    return taskStateVersion(record);
+  }
+
+  private assertStateVersion(record: { id: string; updatedAt: Date }, expectedStateVersion?: number): void {
+    if (expectedStateVersion === undefined) return;
+    const currentStateVersion = this.getStateVersion(record);
+    if (currentStateVersion !== expectedStateVersion) {
+      throw new TaskVersionConflictError(record.id, expectedStateVersion, currentStateVersion);
+    }
+  }
+
+  private async throwMissingOrVersionConflict(id: string, expectedStateVersion?: number): Promise<never> {
+    const current = await this.taskModel.findById(id);
+    if (!current) throw new TaskNotFoundError(id);
+    if (expectedStateVersion !== undefined) {
+      throw new TaskVersionConflictError(id, expectedStateVersion, this.getStateVersion(current));
+    }
+    throw new TaskNotFoundError(id);
+  }
+
   private toTaskInfo(record: {
     id: string;
     title: string;
@@ -1461,6 +1542,7 @@ export class TaskService {
   }): TaskInfo {
     return {
       id: record.id,
+      stateVersion: this.getStateVersion(record),
       title: record.title,
       description: record.description,
       capability: record.capability,

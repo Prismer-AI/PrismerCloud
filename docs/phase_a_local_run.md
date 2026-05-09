@@ -76,6 +76,79 @@ PRISMER_RUNTIME_MAX_SKEW_MS=300000 \
 bash scripts/phase_a/run_orchestrator.sh
 ```
 
+## Signed Daemon Setup Path
+
+The W2/W3 setup path now has a server/API/CLI handoff:
+
+```bash
+prismer setup --with-daemon
+```
+
+That flow:
+
+- gets or verifies the user's API key
+- derives a deterministic AIP DID from the API key
+- registers the runtime public key through `POST /api/runtimes/signing-keys`
+- writes daemon launch values under `[daemon]` in `~/.prismer/config.toml`
+
+The Go daemon reads those `[daemon]` values when explicit env vars are absent:
+
+```toml
+[daemon]
+runtime_did = "did:key:..."
+key_id = "did:key:...#k1"
+signing_private_key = "..."
+orchestrator_ws_url = "wss://prismer.cloud/ws/runtime"
+```
+
+Environment variables still take priority for local smoke runs and CI overrides:
+
+```bash
+PRISMER_DAEMON_DID=did:key:local-dev-daemon \
+PRISMER_DAEMON_KEY_ID=did:key:local-dev-daemon#k1 \
+PRISMER_DAEMON_SIGNING_PRIVATE_KEY='<base64url-ed25519-private-key>' \
+PRISMER_ORCH_WS_URL=ws://127.0.0.1:8080/ws/runtime \
+bash scripts/phase_a/run_daemon.sh
+```
+
+Runtime signing keys can be rotated or revoked through the Phase A API:
+
+```bash
+curl -X POST https://prismer.cloud/api/runtimes/signing-keys/rotate \
+  -H "Authorization: Bearer $PRISMER_API_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"did":"did:key:...","previous_key_id":"did:key:...#k1","public_key":"<base64url-ed25519-public-key>"}'
+
+curl -X DELETE https://prismer.cloud/api/runtimes/signing-keys/<id-or-key-id> \
+  -H "Authorization: Bearer $PRISMER_API_KEY"
+```
+
+Task mutation APIs accept `X-Idempotency-Key` for retry-safe client replays:
+
+```bash
+curl -X POST https://prismer.cloud/api/im/tasks \
+  -H "Authorization: Bearer $PRISMER_API_KEY" \
+  -H "X-Idempotency-Key: task-create-$(date +%s)" \
+  -H 'Content-Type: application/json' \
+  -d '{"title":"Retry-safe task","capability":"noop"}'
+```
+
+Task responses include `stateVersion` and mutation responses also return
+`ETag` / `X-State-Version`. Clients can send that value back to reject stale
+writes instead of overwriting newer task state:
+
+```bash
+STATE_VERSION="$(curl -s https://prismer.cloud/api/im/tasks/<task-id> \
+  -H "Authorization: Bearer $PRISMER_API_KEY" | jq -r '.data.task.stateVersion')"
+
+curl -X POST https://prismer.cloud/api/im/tasks/<task-id>/complete \
+  -H "Authorization: Bearer $PRISMER_API_KEY" \
+  -H "If-Match: \"$STATE_VERSION\"" \
+  -H "X-Idempotency-Key: task-complete-<task-id>-1" \
+  -H 'Content-Type: application/json' \
+  -d '{"result":{"ok":true}}'
+```
+
 ## Start A Local Daemon
 
 In a second terminal:

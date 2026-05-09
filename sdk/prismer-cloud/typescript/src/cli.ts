@@ -12,6 +12,7 @@ import * as path from 'path';
 import * as os from 'os';
 // @ts-ignore — no type declarations for @iarna/toml
 import * as TOML from '@iarna/toml';
+import { AIPIdentity } from '@prismer/aip-sdk';
 import { PrismerClient } from './index';
 import {
   displayBanner,
@@ -51,6 +52,14 @@ interface PrismerCLIConfig {
     im_user_id?: string;
     im_username?: string;
     im_token_expires?: string;
+  };
+  daemon?: {
+    runtime_did?: string;
+    key_id?: string;
+    public_key?: string;
+    signing_private_key?: string;
+    orchestrator_ws_url?: string;
+    registered_at?: string;
   };
   [key: string]: unknown;
 }
@@ -120,7 +129,7 @@ program.name('prismer').description('Prismer Cloud SDK CLI').version(cliVersion)
 // Shared helpers for setup flows
 // ============================================================================
 
-async function verifyAndSaveKey(config: PrismerCLIConfig, apiKey: string): Promise<void> {
+async function verifyAndSaveKey(config: PrismerCLIConfig, apiKey: string, opts: { withDaemon?: boolean } = {}): Promise<void> {
   if (!apiKey) {
     uiError('No key provided.');
     process.exit(1);
@@ -154,12 +163,74 @@ async function verifyAndSaveKey(config: PrismerCLIConfig, apiKey: string): Promi
   success('Saved to ~/.prismer/config.toml');
   uiInfo('You can now use: CLI commands, MCP tools, Claude Code plugin, and all SDKs.');
 
+  if (opts.withDaemon) {
+    await configurePhaseADaemon(config, apiKey, baseUrl);
+  }
+
   // Auto-install daemon service so evolution sync runs persistently
   try {
     installDaemonService();
   } catch {
     dim('Daemon auto-start setup skipped. Run manually: prismer daemon install');
   }
+}
+
+async function configurePhaseADaemon(config: PrismerCLIConfig, apiKey: string, baseUrl: string): Promise<void> {
+  const identity = await AIPIdentity.fromApiKey(apiKey);
+  const keyId = `${identity.did}#k1`;
+  const publicKey = identity.publicKeyBase64;
+  const privateKey = identity.exportPrivateKey();
+
+  const res = await fetch(`${baseUrl}/api/runtimes/signing-keys`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      did: identity.did,
+      key_id: keyId,
+      key_version: 1,
+      public_key: publicKey,
+      metadata: {
+        source: 'prismer_setup',
+        sdk_version: cliVersion,
+      },
+    }),
+  });
+
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data?.success === false) {
+    throw new Error(data?.error?.message || `runtime signing key registration failed: HTTP ${res.status}`);
+  }
+
+  if (!config.daemon) config.daemon = {};
+  config.daemon.runtime_did = identity.did;
+  config.daemon.key_id = keyId;
+  config.daemon.public_key = publicKey;
+  config.daemon.signing_private_key = privateKey;
+  config.daemon.orchestrator_ws_url = toRuntimeWebSocketURL(baseUrl);
+  config.daemon.registered_at = new Date().toISOString();
+  writeConfig(config);
+
+  console.log('');
+  success('Phase A daemon identity registered');
+  keyValue({
+    'Runtime DID': identity.did,
+    'Key ID': keyId,
+    'WS URL': config.daemon.orchestrator_ws_url,
+  });
+  console.log('');
+  dim('  Daemon launch environment saved under [daemon] in ~/.prismer/config.toml.');
+}
+
+function toRuntimeWebSocketURL(baseUrl: string): string {
+  const parsed = new URL(baseUrl);
+  parsed.protocol = parsed.protocol === 'https:' ? 'wss:' : 'ws:';
+  parsed.pathname = '/ws/runtime';
+  parsed.search = '';
+  parsed.hash = '';
+  return parsed.toString();
 }
 
 function openBrowser(url: string): void {
@@ -177,13 +248,13 @@ function openBrowser(url: string): void {
 // prismer setup — unified initialization (browser auto / agent auto-register / manual / key arg)
 // ============================================================================
 
-async function runSetup(opts: { manual?: boolean; agent?: boolean; force?: boolean }, apiKey?: string): Promise<void> {
+async function runSetup(opts: { manual?: boolean; agent?: boolean; force?: boolean; withDaemon?: boolean }, apiKey?: string): Promise<void> {
   const config = readConfig();
   if (!config.default) config.default = {};
   const baseUrl = config.default.base_url || 'https://prismer.cloud';
 
   // ── Already configured check ──
-  if (!opts.force && config.default.api_key?.startsWith('sk-prismer-')) {
+  if (!opts.force && !opts.withDaemon && config.default.api_key?.startsWith('sk-prismer-')) {
     const masked = config.default.api_key.slice(0, 12) + '...' + config.default.api_key.slice(-4);
     success(`Already configured: ${masked}`);
     console.log('');
@@ -194,7 +265,12 @@ async function runSetup(opts: { manual?: boolean; agent?: boolean; force?: boole
 
   // ── Path 1: Direct key argument (e.g. prismer setup sk-prismer-xxx / prismer init sk-prismer-xxx) ──
   if (apiKey) {
-    await verifyAndSaveKey(config, apiKey);
+    await verifyAndSaveKey(config, apiKey, { withDaemon: opts.withDaemon });
+    return;
+  }
+
+  if (opts.withDaemon && config.default.api_key?.startsWith('sk-prismer-')) {
+    await configurePhaseADaemon(config, config.default.api_key, baseUrl);
     return;
   }
 
@@ -289,7 +365,7 @@ async function runSetup(opts: { manual?: boolean; agent?: boolean; force?: boole
       res.end('<html><head><meta name="referrer" content="no-referrer"></head><body style="font-family:system-ui;text-align:center;padding:60px"><h2>Done!</h2><p>API key received. You can close this tab.</p></body></html>');
 
       resolved = true;
-      verifyAndSaveKey(config, key)
+      verifyAndSaveKey(config, key, { withDaemon: opts.withDaemon })
         .then(() => { server.close(); process.exit(0); })
         .catch((err: Error) => { console.error(`Setup failed: ${err.message}`); server.close(); process.exit(1); });
     } else {
@@ -301,7 +377,7 @@ async function runSetup(opts: { manual?: boolean; agent?: boolean; force?: boole
   server.listen(0, '127.0.0.1', () => {
     const port = server.address().port;
     const callbackUrl = `http://127.0.0.1:${port}/callback`;
-    const setupUrl = `${baseUrl}/setup?callback=${encodeURIComponent(callbackUrl)}&state=${state}&utm_source=cli&utm_medium=auto`;
+    const setupUrl = `${baseUrl}/setup?callback=${encodeURIComponent(callbackUrl)}&state=${state}&utm_source=cli&utm_medium=auto${opts.withDaemon ? '&daemon=1' : ''}`;
 
     uiInfo('Opening browser to sign in...');
     console.log('');
@@ -333,8 +409,9 @@ program
   .description('Set up Prismer — sign in via browser, register as agent, or provide your API key')
   .option('--manual', 'Paste API key manually instead of browser auto-flow')
   .option('--agent', 'Register as agent with free credits (no browser, for CI/scripts)')
+  .option('--with-daemon', 'Register a Phase A daemon signing key after API key setup')
   .option('--force', 'Reconfigure even if already set up')
-  .action(async (apiKey: string | undefined, opts: { manual?: boolean; agent?: boolean; force?: boolean }) => {
+  .action(async (apiKey: string | undefined, opts: { manual?: boolean; agent?: boolean; force?: boolean; withDaemon?: boolean }) => {
     await runSetup(opts, apiKey);
   });
 
@@ -344,8 +421,9 @@ program
   .description('Alias for "prismer setup" (deprecated, use setup instead)')
   .option('--manual', 'Paste API key manually')
   .option('--agent', 'Register as agent with free credits')
+  .option('--with-daemon', 'Register a Phase A daemon signing key after API key setup')
   .option('--force', 'Reconfigure even if already set up')
-  .action(async (apiKey: string | undefined, opts: { manual?: boolean; agent?: boolean; force?: boolean }) => {
+  .action(async (apiKey: string | undefined, opts: { manual?: boolean; agent?: boolean; force?: boolean; withDaemon?: boolean }) => {
     uiWarn('"prismer init" is deprecated. Use "prismer setup" instead.');
     console.log('');
     await runSetup(opts, apiKey);
