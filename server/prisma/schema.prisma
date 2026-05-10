@@ -681,6 +681,19 @@ model IMTaskExecution {
   @@map("im_task_executions")
 }
 
+model PhaseAMsgDedupStateful {
+  executionId  String
+  stateVersion Int
+  msgId        String
+  msgType      String
+  payloadHash  String
+  receivedAt   DateTime @default(now())
+
+  @@id([executionId, stateVersion])
+  @@index([receivedAt])
+  @@map("phase_a_msg_dedup_stateful")
+}
+
 model IMExecutionStreamCursor {
   executionId      String
   streamId         String

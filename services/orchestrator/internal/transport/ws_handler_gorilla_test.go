@@ -5,8 +5,6 @@ package transport
 import (
 	"bufio"
 	"context"
-	"crypto/sha256"
-	"encoding/base64"
 	"encoding/json"
 	"net"
 	"net/http"
@@ -238,7 +236,10 @@ func mustGorillaStatefulEnvelope(t *testing.T, executionID string, messageType s
 	if err != nil {
 		t.Fatalf("marshal payload: %v", err)
 	}
-	sum := sha256.Sum256(payloadBytes)
+	payloadHash, err := proto.ComputePayloadHash(payloadBytes)
+	if err != nil {
+		t.Fatalf("ComputePayloadHash() error = %v", err)
+	}
 	wire, err := json.Marshal(proto.Envelope{
 		V:            proto.ProtocolVersionV2,
 		ID:           "msg_" + messageType,
@@ -246,8 +247,8 @@ func mustGorillaStatefulEnvelope(t *testing.T, executionID string, messageType s
 		Type:         messageType,
 		MessageClass: proto.MessageClassStateful,
 		TimestampMs:  time.Now().UnixMilli(),
-		StateVersion: 1,
-		PayloadHash:  base64.RawURLEncoding.EncodeToString(sum[:]),
+		StateVersion: testStateVersionForGorillaMessageType(messageType),
+		PayloadHash:  payloadHash,
 		AckType:      proto.AckTypeRequired,
 		Payload:      payloadBytes,
 	})
@@ -255,6 +256,15 @@ func mustGorillaStatefulEnvelope(t *testing.T, executionID string, messageType s
 		t.Fatalf("marshal envelope: %v", err)
 	}
 	return wire
+}
+
+func testStateVersionForGorillaMessageType(messageType string) int64 {
+	switch messageType {
+	case "task.finished", "task.rejected":
+		return 2
+	default:
+		return 1
+	}
 }
 
 func mustGorillaStreamEnvelope(t *testing.T, executionID string, messageType string, streamID string, streamSeq int64, payload any) []byte {

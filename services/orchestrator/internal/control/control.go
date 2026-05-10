@@ -44,6 +44,10 @@ func (c *Controller) CancelExecution(ctx context.Context, executionID string, re
 	if err != nil {
 		return err
 	}
+	payloadHash, err := proto.ComputePayloadHash(payloadBytes)
+	if err != nil {
+		return err
+	}
 	envelope := proto.Envelope{
 		V:            proto.ProtocolVersionV2,
 		ID:           fmt.Sprintf("msg_cancel_%d", c.now().UnixNano()),
@@ -52,7 +56,7 @@ func (c *Controller) CancelExecution(ctx context.Context, executionID string, re
 		MessageClass: proto.MessageClassStateful,
 		TimestampMs:  c.now().UnixMilli(),
 		StateVersion: 1,
-		PayloadHash:  "cancel",
+		PayloadHash:  payloadHash,
 		AckType:      proto.AckTypeRequired,
 		Payload:      payloadBytes,
 	}

@@ -2,8 +2,6 @@ package dispatcher
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -152,7 +150,10 @@ func (d *Dispatcher) buildTaskPushEnvelope(task shareddb.Task, executionID, mess
 	if err != nil {
 		return proto.Envelope{}, err
 	}
-	sum := sha256.Sum256(payloadBytes)
+	payloadHash, err := proto.ComputePayloadHash(payloadBytes)
+	if err != nil {
+		return proto.Envelope{}, err
+	}
 
 	return proto.Envelope{
 		V:            proto.ProtocolVersionV2,
@@ -162,7 +163,7 @@ func (d *Dispatcher) buildTaskPushEnvelope(task shareddb.Task, executionID, mess
 		MessageClass: proto.MessageClassStateful,
 		TimestampMs:  d.now().UnixMilli(),
 		StateVersion: 1,
-		PayloadHash:  base64.RawURLEncoding.EncodeToString(sum[:]),
+		PayloadHash:  payloadHash,
 		AckType:      proto.AckTypeRequired,
 		Payload:      payloadBytes,
 	}, nil

@@ -5,8 +5,6 @@ package server
 import (
 	"bufio"
 	"context"
-	"crypto/sha256"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net"
@@ -719,7 +717,10 @@ func mustStatefulEnvelope(t *testing.T, executionID string, messageType string, 
 	if err != nil {
 		t.Fatalf("json.Marshal(payload) error = %v", err)
 	}
-	sum := sha256.Sum256(payloadBytes)
+	payloadHash, err := proto.ComputePayloadHash(payloadBytes)
+	if err != nil {
+		t.Fatalf("ComputePayloadHash() error = %v", err)
+	}
 	return proto.Envelope{
 		V:            proto.ProtocolVersionV2,
 		ID:           "msg_" + messageType,
@@ -727,10 +728,19 @@ func mustStatefulEnvelope(t *testing.T, executionID string, messageType string, 
 		Type:         messageType,
 		MessageClass: proto.MessageClassStateful,
 		TimestampMs:  time.Now().UnixMilli(),
-		StateVersion: 1,
-		PayloadHash:  base64.RawURLEncoding.EncodeToString(sum[:]),
+		StateVersion: testStateVersionForMessageType(messageType),
+		PayloadHash:  payloadHash,
 		AckType:      proto.AckTypeRequired,
 		Payload:      payloadBytes,
+	}
+}
+
+func testStateVersionForMessageType(messageType string) int64 {
+	switch messageType {
+	case "task.finished", "task.rejected":
+		return 2
+	default:
+		return 1
 	}
 }
 

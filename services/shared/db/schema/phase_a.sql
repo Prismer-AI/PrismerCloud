@@ -118,6 +118,18 @@ CREATE TABLE im_task_executions (
 CREATE INDEX idx_im_task_executions_task_attempt ON im_task_executions(task_id, attempt);
 CREATE INDEX idx_im_task_executions_runtime_status ON im_task_executions(runtime_id, status);
 
+CREATE TABLE phase_a_msg_dedup_stateful (
+    execution_id  TEXT NOT NULL,
+    state_version INTEGER NOT NULL,
+    msg_id        TEXT NOT NULL,
+    msg_type      TEXT NOT NULL,
+    payload_hash  TEXT NOT NULL,
+    received_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (execution_id, state_version)
+);
+
+CREATE INDEX idx_phase_a_msg_dedup_stateful_received_at ON phase_a_msg_dedup_stateful(received_at);
+
 CREATE TABLE im_task_logs (
     id         TEXT PRIMARY KEY,
     task_id     TEXT NOT NULL,

@@ -308,6 +308,50 @@ func TestSessionDelegatesExecutionMessages(t *testing.T) {
 	}
 }
 
+func TestSessionDedupsStatefulMessagesAndRejectsPayloadCollision(t *testing.T) {
+	ctx := context.Background()
+	store := shareddb.NewMemoryStore()
+	h := hub.New(store)
+	session := NewSession(store, h, execpkg.NewTracker(store), AuthConfig{}, "127.0.0.1:9000", "daemon-test")
+
+	if err := session.HandleInbound(ctx, mustStatefulEnvelope(t, "exec_runtime", "runtime.hello", proto.RuntimeHelloPayload{
+		DID:       "did:key:z6MkRuntime",
+		SessionID: "sess_1",
+		Version:   "0.1.0",
+		Host:      proto.RuntimeHelloHost{Hostname: "box", OS: "linux", Arch: "amd64"},
+	})); err != nil {
+		t.Fatalf("hello error = %v", err)
+	}
+
+	report := mustStatefulEnvelope(t, "exec_runtime", "runtime.capability_report", proto.RuntimeCapabilityReportPayload{
+		Capabilities: []proto.RuntimeCapability{{Key: "codex"}},
+		ScannedAtMs:  time.Now().UnixMilli(),
+	})
+	if err := session.HandleInbound(ctx, report); err != nil {
+		t.Fatalf("first capability report error = %v", err)
+	}
+
+	if err := store.SetRuntimeCapabilities(ctx, "did:key:z6MkRuntime", `["manual"]`); err != nil {
+		t.Fatalf("SetRuntimeCapabilities() error = %v", err)
+	}
+	if err := session.HandleInbound(ctx, report); err != nil {
+		t.Fatalf("duplicate capability report error = %v", err)
+	}
+	runtime, ok := store.GetRuntime("did:key:z6MkRuntime")
+	if !ok || runtime.Capabilities != `["manual"]` {
+		t.Fatalf("expected duplicate to skip mutation, got %+v", runtime)
+	}
+
+	conflict := mustStatefulEnvelope(t, "exec_runtime", "runtime.capability_report", proto.RuntimeCapabilityReportPayload{
+		Capabilities: []proto.RuntimeCapability{{Key: "claude-code"}},
+		ScannedAtMs:  time.Now().UnixMilli(),
+	})
+	err := session.HandleInbound(ctx, conflict)
+	if !errors.Is(err, shareddb.ErrStatefulMessageConflict) {
+		t.Fatalf("expected ErrStatefulMessageConflict, got %v", err)
+	}
+}
+
 func TestSessionRequiresHelloBeforeHeartbeat(t *testing.T) {
 	ctx := context.Background()
 	store := shareddb.NewMemoryStore()
@@ -457,7 +501,10 @@ func mustStatefulEnvelope(t *testing.T, executionID string, messageType string, 
 	if err != nil {
 		t.Fatalf("marshal payload: %v", err)
 	}
-	sum := sha256.Sum256(payloadBytes)
+	payloadHash, err := proto.ComputePayloadHash(payloadBytes)
+	if err != nil {
+		t.Fatalf("ComputePayloadHash() error = %v", err)
+	}
 	wire, err := json.Marshal(proto.Envelope{
 		V:            proto.ProtocolVersionV2,
 		ID:           "msg_" + messageType,
@@ -465,8 +512,8 @@ func mustStatefulEnvelope(t *testing.T, executionID string, messageType string, 
 		Type:         messageType,
 		MessageClass: proto.MessageClassStateful,
 		TimestampMs:  time.Now().UnixMilli(),
-		StateVersion: 1,
-		PayloadHash:  base64.RawURLEncoding.EncodeToString(sum[:]),
+		StateVersion: testStateVersionForMessageType(messageType),
+		PayloadHash:  payloadHash,
 		AckType:      proto.AckTypeRequired,
 		Payload:      payloadBytes,
 	})
@@ -474,6 +521,15 @@ func mustStatefulEnvelope(t *testing.T, executionID string, messageType string, 
 		t.Fatalf("marshal envelope: %v", err)
 	}
 	return wire
+}
+
+func testStateVersionForMessageType(messageType string) int64 {
+	switch messageType {
+	case "task.finished", "task.rejected":
+		return 2
+	default:
+		return 1
+	}
 }
 
 func mustStreamEnvelope(t *testing.T, executionID string, messageType string, streamID string, streamSeq int64, payload any) []byte {

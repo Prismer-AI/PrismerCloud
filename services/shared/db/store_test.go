@@ -349,3 +349,85 @@ func TestMemoryStoreStreamCursorLifecycle(t *testing.T) {
 		t.Fatalf("unexpected stream cursors: %+v", cursors)
 	}
 }
+
+func TestMemoryStoreApplyStatefulMessageDedupsAndRejectsConflicts(t *testing.T) {
+	store := NewMemoryStore()
+	ctx := context.Background()
+	calls := 0
+
+	result, err := store.ApplyStatefulMessage(ctx, StatefulMessageParams{
+		ExecutionID:  "exec_1",
+		StateVersion: 1,
+		MessageID:    "msg_1",
+		MessageType:  "task.accepted",
+		PayloadHash:  "hash_1",
+	}, func(context.Context, Store) error {
+		calls++
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("ApplyStatefulMessage() error = %v", err)
+	}
+	if result.Status != StatefulMessageAccepted || calls != 1 {
+		t.Fatalf("expected accepted once, result=%+v calls=%d", result, calls)
+	}
+
+	result, err = store.ApplyStatefulMessage(ctx, StatefulMessageParams{
+		ExecutionID:  "exec_1",
+		StateVersion: 1,
+		MessageID:    "msg_1_retry",
+		MessageType:  "task.accepted",
+		PayloadHash:  "hash_1",
+	}, func(context.Context, Store) error {
+		calls++
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("duplicate ApplyStatefulMessage() error = %v", err)
+	}
+	if result.Status != StatefulMessageDuplicate || calls != 1 {
+		t.Fatalf("expected duplicate without mutation, result=%+v calls=%d", result, calls)
+	}
+
+	_, err = store.ApplyStatefulMessage(ctx, StatefulMessageParams{
+		ExecutionID:  "exec_1",
+		StateVersion: 1,
+		MessageID:    "msg_1_conflict",
+		MessageType:  "task.finished",
+		PayloadHash:  "hash_2",
+	}, nil)
+	if !errors.Is(err, ErrStatefulMessageConflict) {
+		t.Fatalf("expected ErrStatefulMessageConflict, got %v", err)
+	}
+
+	if _, err := store.ApplyStatefulMessage(ctx, StatefulMessageParams{
+		ExecutionID:  "exec_1",
+		StateVersion: 3,
+		MessageID:    "msg_3",
+		MessageType:  "task.finished",
+		PayloadHash:  "hash_3",
+	}, nil); err != nil {
+		t.Fatalf("ApplyStatefulMessage(state=3) error = %v", err)
+	}
+	_, err = store.ApplyStatefulMessage(ctx, StatefulMessageParams{
+		ExecutionID:  "exec_1",
+		StateVersion: 2,
+		MessageID:    "msg_2_stale",
+		MessageType:  "task.rejected",
+		PayloadHash:  "hash_2_stale",
+	}, nil)
+	if !errors.Is(err, ErrStatefulMessageStale) {
+		t.Fatalf("expected ErrStatefulMessageStale, got %v", err)
+	}
+
+	_, err = store.ApplyStatefulMessage(ctx, StatefulMessageParams{
+		ExecutionID:  "exec_1",
+		StateVersion: 0,
+		MessageID:    "msg_invalid",
+		MessageType:  "task.accepted",
+		PayloadHash:  "hash_0",
+	}, nil)
+	if err == nil {
+		t.Fatal("expected invalid state version error")
+	}
+}

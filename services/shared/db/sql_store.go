@@ -16,11 +16,18 @@ var ErrSQLDBNotConfigured = errors.New("sql db not configured")
 var schemaFS embed.FS
 
 type SQLStore struct {
-	db *sql.DB
+	db     *sql.DB
+	runner sqlRunner
 }
 
 func NewSQLStore(db *sql.DB) *SQLStore {
-	return &SQLStore{db: db}
+	return &SQLStore{db: db, runner: db}
+}
+
+type sqlRunner interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
 func (s *SQLStore) ApplyPhaseASchema(ctx context.Context) error {
@@ -499,6 +506,90 @@ func (s *SQLStore) GetSigningKeyByKeyID(ctx context.Context, keyID string) (Sign
 	return key, err
 }
 
+func (s *SQLStore) ApplyStatefulMessage(ctx context.Context, params StatefulMessageParams, mutate StatefulMessageMutator) (StatefulMessageResult, error) {
+	if s.db == nil {
+		return StatefulMessageResult{}, ErrSQLDBNotConfigured
+	}
+	if err := validateStatefulMessageParams(params); err != nil {
+		return StatefulMessageResult{}, err
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return StatefulMessageResult{}, err
+	}
+	txStore := &SQLStore{db: s.db, runner: tx}
+
+	result, err := txStore.applyStatefulMessageInTx(ctx, params, mutate)
+	if err != nil {
+		_ = tx.Rollback()
+		return StatefulMessageResult{}, err
+	}
+	if result.Status != StatefulMessageAccepted {
+		_ = tx.Rollback()
+		return result, nil
+	}
+	if err := tx.Commit(); err != nil {
+		return StatefulMessageResult{}, err
+	}
+	return result, nil
+}
+
+func (s *SQLStore) applyStatefulMessageInTx(ctx context.Context, params StatefulMessageParams, mutate StatefulMessageMutator) (StatefulMessageResult, error) {
+	var existing StatefulMessageRecord
+	err := s.queryRow(ctx, `
+		SELECT execution_id, state_version, msg_id, msg_type, payload_hash, received_at
+		FROM phase_a_msg_dedup_stateful
+		WHERE execution_id = ? AND state_version = ?
+	`, params.ExecutionID, params.StateVersion).Scan(
+		&existing.ExecutionID,
+		&existing.StateVersion,
+		&existing.MessageID,
+		&existing.MessageType,
+		&existing.PayloadHash,
+		&existing.ReceivedAt,
+	)
+	if err == nil {
+		if existing.MessageType == params.MessageType && existing.PayloadHash == params.PayloadHash {
+			return StatefulMessageResult{
+				Status:            StatefulMessageDuplicate,
+				ExistingMessageID: existing.MessageID,
+			}, nil
+		}
+		return StatefulMessageResult{}, ErrStatefulMessageConflict
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return StatefulMessageResult{}, err
+	}
+
+	var maxStateVersion sql.NullInt64
+	if err := s.queryRow(ctx, `
+		SELECT MAX(state_version)
+		FROM phase_a_msg_dedup_stateful
+		WHERE execution_id = ?
+	`, params.ExecutionID).Scan(&maxStateVersion); err != nil {
+		return StatefulMessageResult{}, err
+	}
+	if maxStateVersion.Valid && params.StateVersion <= maxStateVersion.Int64 {
+		return StatefulMessageResult{}, ErrStatefulMessageStale
+	}
+
+	if _, err := s.exec(ctx, `
+		INSERT INTO phase_a_msg_dedup_stateful (
+			execution_id, state_version, msg_id, msg_type, payload_hash
+		) VALUES (?, ?, ?, ?, ?)
+	`, params.ExecutionID, params.StateVersion, params.MessageID, params.MessageType, params.PayloadHash); err != nil {
+		return StatefulMessageResult{}, err
+	}
+
+	if mutate != nil {
+		if err := mutate(ctx, s); err != nil {
+			return StatefulMessageResult{}, err
+		}
+	}
+	return StatefulMessageResult{Status: StatefulMessageAccepted}, nil
+}
+
 func (s *SQLStore) UpsertStreamCursor(ctx context.Context, params UpsertStreamCursorParams) error {
 	result, err := s.exec(ctx, `
 		INSERT INTO im_execution_stream_cursors (execution_id, stream_id, last_committed_seq)
@@ -552,24 +643,24 @@ func (s *SQLStore) GetStreamCursors(ctx context.Context, executionID string, str
 }
 
 func (s *SQLStore) exec(ctx context.Context, query string, args ...any) (sql.Result, error) {
-	if s.db == nil {
+	if s.runner == nil {
 		return nil, ErrSQLDBNotConfigured
 	}
-	return s.db.ExecContext(ctx, query, args...)
+	return s.runner.ExecContext(ctx, query, args...)
 }
 
 func (s *SQLStore) query(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
-	if s.db == nil {
+	if s.runner == nil {
 		return nil, ErrSQLDBNotConfigured
 	}
-	return s.db.QueryContext(ctx, query, args...)
+	return s.runner.QueryContext(ctx, query, args...)
 }
 
 func (s *SQLStore) queryRow(ctx context.Context, query string, args ...any) *sql.Row {
-	if s.db == nil {
+	if s.runner == nil {
 		return nil
 	}
-	return s.db.QueryRowContext(ctx, query, args...)
+	return s.runner.QueryRowContext(ctx, query, args...)
 }
 
 type scanner interface {

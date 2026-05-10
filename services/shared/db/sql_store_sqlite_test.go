@@ -466,6 +466,84 @@ func TestSQLStoreSQLiteStreamCursorLifecycle(t *testing.T) {
 	}
 }
 
+func TestSQLStoreSQLiteApplyStatefulMessageIsTransactional(t *testing.T) {
+	ctx := context.Background()
+	store, rawDB := mustOpenSQLiteStore(t, ctx)
+	defer rawDB.Close()
+
+	calls := 0
+	result, err := store.ApplyStatefulMessage(ctx, StatefulMessageParams{
+		ExecutionID:  "exec_1",
+		StateVersion: 1,
+		MessageID:    "msg_1",
+		MessageType:  "task.accepted",
+		PayloadHash:  "hash_1",
+	}, func(context.Context, Store) error {
+		calls++
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("ApplyStatefulMessage() error = %v", err)
+	}
+	if result.Status != StatefulMessageAccepted || calls != 1 {
+		t.Fatalf("expected accepted once, result=%+v calls=%d", result, calls)
+	}
+
+	result, err = store.ApplyStatefulMessage(ctx, StatefulMessageParams{
+		ExecutionID:  "exec_1",
+		StateVersion: 1,
+		MessageID:    "msg_1_retry",
+		MessageType:  "task.accepted",
+		PayloadHash:  "hash_1",
+	}, func(context.Context, Store) error {
+		calls++
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("duplicate ApplyStatefulMessage() error = %v", err)
+	}
+	if result.Status != StatefulMessageDuplicate || calls != 1 {
+		t.Fatalf("expected duplicate without mutation, result=%+v calls=%d", result, calls)
+	}
+
+	_, err = store.ApplyStatefulMessage(ctx, StatefulMessageParams{
+		ExecutionID:  "exec_1",
+		StateVersion: 1,
+		MessageID:    "msg_conflict",
+		MessageType:  "task.finished",
+		PayloadHash:  "hash_2",
+	}, nil)
+	if !errors.Is(err, ErrStatefulMessageConflict) {
+		t.Fatalf("expected ErrStatefulMessageConflict, got %v", err)
+	}
+
+	_, err = store.ApplyStatefulMessage(ctx, StatefulMessageParams{
+		ExecutionID:  "exec_1",
+		StateVersion: 3,
+		MessageID:    "msg_3",
+		MessageType:  "task.finished",
+		PayloadHash:  "hash_3",
+	}, func(context.Context, Store) error {
+		return errors.New("boom")
+	})
+	if err == nil || err.Error() != "boom" {
+		t.Fatalf("expected mutation error, got %v", err)
+	}
+	result, err = store.ApplyStatefulMessage(ctx, StatefulMessageParams{
+		ExecutionID:  "exec_1",
+		StateVersion: 3,
+		MessageID:    "msg_3_retry",
+		MessageType:  "task.finished",
+		PayloadHash:  "hash_3",
+	}, nil)
+	if err != nil {
+		t.Fatalf("expected failed mutation to roll back dedup row, got %v", err)
+	}
+	if result.Status != StatefulMessageAccepted {
+		t.Fatalf("expected state=3 retry to be accepted, got %+v", result)
+	}
+}
+
 type sqliteTaskSeed struct {
 	ID           string
 	Title        string

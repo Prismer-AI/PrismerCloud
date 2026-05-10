@@ -3,8 +3,6 @@ package ws
 import (
 	"context"
 	"crypto/ed25519"
-	"crypto/sha256"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -352,7 +350,10 @@ func (c *Client) sendStateful(ctx context.Context, executionID string, messageTy
 	if err != nil {
 		return err
 	}
-	sum := sha256.Sum256(payloadBytes)
+	payloadHash, err := proto.ComputePayloadHash(payloadBytes)
+	if err != nil {
+		return err
+	}
 	envelope := proto.Envelope{
 		V:            proto.ProtocolVersionV2,
 		ID:           c.nextMessageID("msg"),
@@ -361,7 +362,7 @@ func (c *Client) sendStateful(ctx context.Context, executionID string, messageTy
 		MessageClass: proto.MessageClassStateful,
 		TimestampMs:  c.now().UnixMilli(),
 		StateVersion: atomic.AddInt64(&c.stateSeq, 1),
-		PayloadHash:  base64.RawURLEncoding.EncodeToString(sum[:]),
+		PayloadHash:  payloadHash,
 		AckType:      proto.AckTypeRequired,
 		KeyID:        c.cfg.SigningKeyID,
 		Payload:      payloadBytes,

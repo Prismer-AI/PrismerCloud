@@ -2,8 +2,6 @@ package transport
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -232,7 +230,10 @@ func mustStatefulEnvelopeForHandler(t *testing.T, executionID string, messageTyp
 	if err != nil {
 		t.Fatalf("marshal payload: %v", err)
 	}
-	sum := sha256.Sum256(payloadBytes)
+	payloadHash, err := proto.ComputePayloadHash(payloadBytes)
+	if err != nil {
+		t.Fatalf("ComputePayloadHash() error = %v", err)
+	}
 	wire, err := json.Marshal(proto.Envelope{
 		V:            proto.ProtocolVersionV2,
 		ID:           "msg_" + messageType,
@@ -240,8 +241,8 @@ func mustStatefulEnvelopeForHandler(t *testing.T, executionID string, messageTyp
 		Type:         messageType,
 		MessageClass: proto.MessageClassStateful,
 		TimestampMs:  time.Now().UnixMilli(),
-		StateVersion: 1,
-		PayloadHash:  base64.RawURLEncoding.EncodeToString(sum[:]),
+		StateVersion: testStateVersionForHandlerMessageType(messageType),
+		PayloadHash:  payloadHash,
 		AckType:      proto.AckTypeRequired,
 		Payload:      payloadBytes,
 	})
@@ -249,6 +250,15 @@ func mustStatefulEnvelopeForHandler(t *testing.T, executionID string, messageTyp
 		t.Fatalf("marshal envelope: %v", err)
 	}
 	return wire
+}
+
+func testStateVersionForHandlerMessageType(messageType string) int64 {
+	switch messageType {
+	case "task.finished", "task.rejected":
+		return 2
+	default:
+		return 1
+	}
 }
 
 func mustStreamEnvelopeForHandler(t *testing.T, executionID string, messageType string, streamID string, streamSeq int64, payload any) []byte {

@@ -2,8 +2,6 @@ package transport
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -69,21 +67,31 @@ func (s *Session) HandleInbound(ctx context.Context, wire []byte) error {
 	case "runtime.hello":
 		return s.handleRuntimeHello(ctx, envelope)
 	case "runtime.capability_report":
-		return s.handleCapabilityReport(ctx, envelope)
+		return s.applyStatefulEnvelope(ctx, envelope, func(ctx context.Context, store shareddb.Store) error {
+			return s.handleCapabilityReportWithStore(ctx, store, envelope)
+		})
 	case "runtime.heartbeat":
 		return s.handleHeartbeat(ctx, envelope)
 	case "stream.resume_request":
 		return s.handleResumeRequest(ctx, envelope)
 	case "approval.request":
-		return s.handleApprovalRequest(ctx, envelope)
+		return s.applyStatefulEnvelope(ctx, envelope, func(ctx context.Context, store shareddb.Store) error {
+			return s.handleApprovalRequestWithStore(ctx, store, envelope)
+		})
 	case "task.accepted":
-		return s.exec.HandleAccepted(ctx, envelope)
+		return s.applyStatefulEnvelope(ctx, envelope, func(ctx context.Context, store shareddb.Store) error {
+			return execpkg.NewTracker(store).HandleAccepted(ctx, envelope)
+		})
 	case "task.rejected":
-		return s.exec.HandleRejected(ctx, envelope)
+		return s.applyStatefulEnvelope(ctx, envelope, func(ctx context.Context, store shareddb.Store) error {
+			return execpkg.NewTracker(store).HandleRejected(ctx, envelope)
+		})
 	case "task.log_chunk":
 		return s.exec.HandleLogChunk(ctx, envelope)
 	case "task.finished":
-		return s.exec.HandleFinished(ctx, envelope)
+		return s.applyStatefulEnvelope(ctx, envelope, func(ctx context.Context, store shareddb.Store) error {
+			return execpkg.NewTracker(store).HandleFinished(ctx, envelope)
+		})
 	default:
 		return fmt.Errorf("unsupported inbound message type: %s", envelope.Type)
 	}
@@ -225,6 +233,10 @@ func (s *Session) Disconnect(ctx context.Context, reason string) error {
 }
 
 func (s *Session) handleCapabilityReport(ctx context.Context, envelope proto.Envelope) error {
+	return s.handleCapabilityReportWithStore(ctx, s.store, envelope)
+}
+
+func (s *Session) handleCapabilityReportWithStore(ctx context.Context, store shareddb.Store, envelope proto.Envelope) error {
 	runtimeID, err := s.requireRuntimeID()
 	if err != nil {
 		return err
@@ -238,7 +250,7 @@ func (s *Session) handleCapabilityReport(ctx context.Context, envelope proto.Env
 	if err != nil {
 		return err
 	}
-	return s.store.SetRuntimeCapabilities(ctx, runtimeID, string(capabilitiesBytes))
+	return store.SetRuntimeCapabilities(ctx, runtimeID, string(capabilitiesBytes))
 }
 
 func (s *Session) handleHeartbeat(ctx context.Context, envelope proto.Envelope) error {
@@ -310,6 +322,10 @@ func (s *Session) handleResumeRequest(ctx context.Context, envelope proto.Envelo
 }
 
 func (s *Session) handleApprovalRequest(ctx context.Context, envelope proto.Envelope) error {
+	return s.handleApprovalRequestWithStore(ctx, s.store, envelope)
+}
+
+func (s *Session) handleApprovalRequestWithStore(ctx context.Context, store shareddb.Store, envelope proto.Envelope) error {
 	runtimeID, err := s.requireRuntimeID()
 	if err != nil {
 		return err
@@ -335,7 +351,7 @@ func (s *Session) handleApprovalRequest(ctx context.Context, envelope proto.Enve
 		return errors.New("approval.request requires request_signature")
 	}
 
-	_, err = s.store.CreateTaskApproval(ctx, shareddb.CreateTaskApprovalParams{
+	_, err = store.CreateTaskApproval(ctx, shareddb.CreateTaskApprovalParams{
 		ID:               payload.ApprovalID,
 		TaskID:           payload.TaskID,
 		Kind:             payload.Kind,
@@ -347,6 +363,20 @@ func (s *Session) handleApprovalRequest(ctx context.Context, envelope proto.Enve
 		RequestSignature: payload.RequestSignature,
 		Metadata:         defaultApprovalJSON(payload.Metadata),
 	})
+	return err
+}
+
+func (s *Session) applyStatefulEnvelope(ctx context.Context, envelope proto.Envelope, mutate shareddb.StatefulMessageMutator) error {
+	if err := proto.VerifyPayloadHash(envelope); err != nil {
+		return err
+	}
+	_, err := s.store.ApplyStatefulMessage(ctx, shareddb.StatefulMessageParams{
+		ExecutionID:  envelope.ExecutionID,
+		StateVersion: envelope.StateVersion,
+		MessageID:    envelope.ID,
+		MessageType:  envelope.Type,
+		PayloadHash:  envelope.PayloadHash,
+	}, mutate)
 	return err
 }
 
@@ -371,7 +401,10 @@ func (s *Session) buildStatefulEnvelope(executionID string, messageType string, 
 	if err != nil {
 		return proto.Envelope{}, err
 	}
-	sum := sha256.Sum256(payloadBytes)
+	payloadHash, err := proto.ComputePayloadHash(payloadBytes)
+	if err != nil {
+		return proto.Envelope{}, err
+	}
 	stateVersion := atomic.AddInt64(&s.stateSeq, 1)
 	return proto.Envelope{
 		V:            proto.ProtocolVersionV2,
@@ -381,7 +414,7 @@ func (s *Session) buildStatefulEnvelope(executionID string, messageType string, 
 		MessageClass: proto.MessageClassStateful,
 		TimestampMs:  s.now().UnixMilli(),
 		StateVersion: stateVersion,
-		PayloadHash:  base64.RawURLEncoding.EncodeToString(sum[:]),
+		PayloadHash:  payloadHash,
 		AckType:      proto.AckTypeRequired,
 		Payload:      payloadBytes,
 	}, nil

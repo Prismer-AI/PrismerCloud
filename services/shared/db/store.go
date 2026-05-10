@@ -4,18 +4,21 @@ import (
 	"context"
 	"errors"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 )
 
 var (
-	ErrRuntimeNotFound        = errors.New("runtime not found")
-	ErrSessionNotFound        = errors.New("daemon session not found")
-	ErrTaskNotFound           = errors.New("task not found")
-	ErrTaskLogExists          = errors.New("task log already exists")
-	ErrApprovalNotFound       = errors.New("approval not found")
-	ErrApprovalAlreadyDecided = errors.New("approval already decided")
-	ErrSigningKeyNotFound     = errors.New("signing key not found")
+	ErrRuntimeNotFound         = errors.New("runtime not found")
+	ErrSessionNotFound         = errors.New("daemon session not found")
+	ErrTaskNotFound            = errors.New("task not found")
+	ErrTaskLogExists           = errors.New("task log already exists")
+	ErrApprovalNotFound        = errors.New("approval not found")
+	ErrApprovalAlreadyDecided  = errors.New("approval already decided")
+	ErrSigningKeyNotFound      = errors.New("signing key not found")
+	ErrStatefulMessageStale    = errors.New("stateful message stale")
+	ErrStatefulMessageConflict = errors.New("stateful message conflict")
 )
 
 type Runtime struct {
@@ -150,6 +153,37 @@ type StreamCursor struct {
 	LastCommittedSeq int64
 	UpdatedAt        time.Time
 }
+
+type StatefulMessageStatus string
+
+const (
+	StatefulMessageAccepted  StatefulMessageStatus = "accepted"
+	StatefulMessageDuplicate StatefulMessageStatus = "duplicate"
+)
+
+type StatefulMessageRecord struct {
+	ExecutionID  string
+	StateVersion int64
+	MessageID    string
+	MessageType  string
+	PayloadHash  string
+	ReceivedAt   time.Time
+}
+
+type StatefulMessageParams struct {
+	ExecutionID  string
+	StateVersion int64
+	MessageID    string
+	MessageType  string
+	PayloadHash  string
+}
+
+type StatefulMessageResult struct {
+	Status            StatefulMessageStatus
+	ExistingMessageID string
+}
+
+type StatefulMessageMutator func(ctx context.Context, store Store) error
 
 type RegisterRuntimeParams struct {
 	ID            string
@@ -351,6 +385,7 @@ type Store interface {
 	DecideTaskApproval(ctx context.Context, params DecideTaskApprovalParams) error
 	CreateSigningKey(ctx context.Context, params CreateSigningKeyParams) (SigningKey, error)
 	GetSigningKeyByKeyID(ctx context.Context, keyID string) (SigningKey, error)
+	ApplyStatefulMessage(ctx context.Context, params StatefulMessageParams, mutate StatefulMessageMutator) (StatefulMessageResult, error)
 	UpsertStreamCursor(ctx context.Context, params UpsertStreamCursorParams) error
 	GetStreamCursors(ctx context.Context, executionID string, streamIDs []string) ([]StreamCursor, error)
 }
@@ -365,6 +400,7 @@ type MemoryStore struct {
 	taskLogs       map[string]TaskLog
 	approvals      map[string]TaskApproval
 	signingKeys    map[string]SigningKey
+	statefulMsgs   map[string]StatefulMessageRecord
 	streamCursors  map[string]StreamCursor
 	now            func() time.Time
 }
@@ -379,6 +415,7 @@ func NewMemoryStore() *MemoryStore {
 		taskLogs:       make(map[string]TaskLog),
 		approvals:      make(map[string]TaskApproval),
 		signingKeys:    make(map[string]SigningKey),
+		statefulMsgs:   make(map[string]StatefulMessageRecord),
 		streamCursors:  make(map[string]StreamCursor),
 		now:            time.Now,
 	}
@@ -452,6 +489,13 @@ func (s *MemoryStore) GetStreamCursorForTest(executionID, streamID string) (Stre
 	defer s.mu.RUnlock()
 	cursor, ok := s.streamCursors[streamCursorKey(executionID, streamID)]
 	return cursor, ok
+}
+
+func (s *MemoryStore) GetStatefulMessageForTest(executionID string, stateVersion int64) (StatefulMessageRecord, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	record, ok := s.statefulMsgs[statefulMessageKey(executionID, stateVersion)]
+	return record, ok
 }
 
 func (s *MemoryStore) RegisterRuntime(_ context.Context, params RegisterRuntimeParams) (Runtime, error) {
@@ -962,6 +1006,53 @@ func (s *MemoryStore) GetSigningKeyByKeyID(_ context.Context, keyID string) (Sig
 	return key, nil
 }
 
+func (s *MemoryStore) ApplyStatefulMessage(ctx context.Context, params StatefulMessageParams, mutate StatefulMessageMutator) (StatefulMessageResult, error) {
+	if err := validateStatefulMessageParams(params); err != nil {
+		return StatefulMessageResult{}, err
+	}
+
+	key := statefulMessageKey(params.ExecutionID, params.StateVersion)
+	s.mu.Lock()
+	if existing, ok := s.statefulMsgs[key]; ok {
+		s.mu.Unlock()
+		if existing.MessageType == params.MessageType && existing.PayloadHash == params.PayloadHash {
+			return StatefulMessageResult{
+				Status:            StatefulMessageDuplicate,
+				ExistingMessageID: existing.MessageID,
+			}, nil
+		}
+		return StatefulMessageResult{}, ErrStatefulMessageConflict
+	}
+	for _, existing := range s.statefulMsgs {
+		if existing.ExecutionID == params.ExecutionID && existing.StateVersion >= params.StateVersion {
+			s.mu.Unlock()
+			return StatefulMessageResult{}, ErrStatefulMessageStale
+		}
+	}
+	s.statefulMsgs[key] = StatefulMessageRecord{
+		ExecutionID:  params.ExecutionID,
+		StateVersion: params.StateVersion,
+		MessageID:    params.MessageID,
+		MessageType:  params.MessageType,
+		PayloadHash:  params.PayloadHash,
+		ReceivedAt:   s.now(),
+	}
+	s.mu.Unlock()
+
+	if mutate != nil {
+		if err := mutate(ctx, s); err != nil {
+			s.mu.Lock()
+			if existing, ok := s.statefulMsgs[key]; ok && existing.MessageID == params.MessageID && existing.PayloadHash == params.PayloadHash {
+				delete(s.statefulMsgs, key)
+			}
+			s.mu.Unlock()
+			return StatefulMessageResult{}, err
+		}
+	}
+
+	return StatefulMessageResult{Status: StatefulMessageAccepted}, nil
+}
+
 func (s *MemoryStore) UpsertStreamCursor(_ context.Context, params UpsertStreamCursorParams) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1018,4 +1109,27 @@ func defaultInt64(value int64, fallback int64) int64 {
 
 func streamCursorKey(executionID, streamID string) string {
 	return executionID + "\x00" + streamID
+}
+
+func statefulMessageKey(executionID string, stateVersion int64) string {
+	return executionID + "\x00" + strconv.FormatInt(stateVersion, 10)
+}
+
+func validateStatefulMessageParams(params StatefulMessageParams) error {
+	if params.ExecutionID == "" {
+		return errors.New("stateful message requires execution_id")
+	}
+	if params.StateVersion <= 0 {
+		return errors.New("stateful message requires state_version > 0")
+	}
+	if params.MessageID == "" {
+		return errors.New("stateful message requires message_id")
+	}
+	if params.MessageType == "" {
+		return errors.New("stateful message requires message_type")
+	}
+	if params.PayloadHash == "" {
+		return errors.New("stateful message requires payload_hash")
+	}
+	return nil
 }

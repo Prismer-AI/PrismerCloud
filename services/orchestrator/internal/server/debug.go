@@ -2,8 +2,6 @@ package server
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -395,7 +393,10 @@ func buildDebugStatefulEnvelope(executionID string, messageType string, payload 
 	if err != nil {
 		return proto.Envelope{}, err
 	}
-	sum := sha256.Sum256(payloadBytes)
+	payloadHash, err := proto.ComputePayloadHash(payloadBytes)
+	if err != nil {
+		return proto.Envelope{}, err
+	}
 	return proto.Envelope{
 		V:            proto.ProtocolVersionV2,
 		ID:           nextDebugID("msg"),
@@ -404,7 +405,7 @@ func buildDebugStatefulEnvelope(executionID string, messageType string, payload 
 		MessageClass: proto.MessageClassStateful,
 		TimestampMs:  time.Now().UnixMilli(),
 		StateVersion: atomic.AddInt64(&debugStateSeq, 1),
-		PayloadHash:  base64.RawURLEncoding.EncodeToString(sum[:]),
+		PayloadHash:  payloadHash,
 		AckType:      proto.AckTypeRequired,
 		Payload:      payloadBytes,
 	}, nil
