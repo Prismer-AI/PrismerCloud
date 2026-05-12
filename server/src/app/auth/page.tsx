@@ -1,7 +1,7 @@
 'use client';
 
-import { Suspense, useState, useEffect, FormEvent } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useState, useEffect, FormEvent } from 'react';
+import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { Eye, EyeOff, Github, Mail, Loader2, ArrowLeft, Phone, Smartphone } from 'lucide-react';
 import { useApp } from '@/contexts/app-context';
@@ -12,28 +12,16 @@ type AuthMode = 'login' | 'register' | 'reset-password';
 type LoginMethod = 'email' | 'phone';
 
 export default function AuthPage() {
-  return (
-    <Suspense>
-      <AuthPageInner />
-    </Suspense>
-  );
-}
-
-function AuthPageInner() {
   const router = useRouter();
-  const searchParams = useSearchParams();
-  // Validate redirect target: must be relative path, no protocol-relative URLs
-  const rawRedirect = searchParams.get('redirect') || '/dashboard';
-  const redirectTo = rawRedirect.startsWith('/') && !rawRedirect.startsWith('//') ? rawRedirect : '/dashboard';
   const { login, addToast } = useApp();
   const { resolvedTheme } = useTheme();
   const isDark = resolvedTheme === 'dark';
-
+  
   const [mode, setMode] = useState<AuthMode>('login');
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
-
+  
   // Form fields
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -155,24 +143,24 @@ function AuthPageInner() {
   const handleLogin = async (e: FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
-
+    
     try {
       const passwordHash = await hashPassword(password);
       const res = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password: passwordHash }),
+        body: JSON.stringify({ email, password: passwordHash })
       });
 
       const data = await res.json();
-
+      
       if (!res.ok) {
         throw new Error(data.error?.msg || 'Login failed');
       }
 
       login(data.user, data.token);
       addToast('Welcome back!', 'success');
-      router.push(redirectTo);
+      router.push('/dashboard');
     } catch (error: any) {
       addToast(error.message || 'Login failed', 'error');
     } finally {
@@ -183,7 +171,7 @@ function AuthPageInner() {
   // Handle register
   const handleRegister = async (e: FormEvent) => {
     e.preventDefault();
-
+    
     if (!codeVerified) {
       addToast('Please verify your email first', 'error');
       return;
@@ -195,11 +183,11 @@ function AuthPageInner() {
     }
 
     setIsLoading(true);
-
+    
     try {
       const passwordHash = await hashPassword(password);
       const confirmPasswordHash = await hashPassword(confirmPassword);
-
+      
       const res = await fetch('/api/auth/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -207,19 +195,19 @@ function AuthPageInner() {
           email,
           password: passwordHash,
           confirm_password: confirmPasswordHash,
-          code: verificationCode,
-        }),
+          code: verificationCode
+        })
       });
 
       const data = await res.json();
-
+      
       if (!res.ok) {
         throw new Error(data.error?.msg || 'Registration failed');
       }
 
       login(data.user, data.token);
       addToast('Account created successfully!', 'success');
-      router.push(redirectTo);
+      router.push('/dashboard');
     } catch (error: any) {
       addToast(error.message || 'Registration failed', 'error');
     } finally {
@@ -230,7 +218,7 @@ function AuthPageInner() {
   // Handle reset password
   const handleResetPassword = async (e: FormEvent) => {
     e.preventDefault();
-
+    
     if (!codeVerified) {
       addToast('Please verify your email first', 'error');
       return;
@@ -242,11 +230,11 @@ function AuthPageInner() {
     }
 
     setIsLoading(true);
-
+    
     try {
       const passwordHash = await hashPassword(password);
       const confirmPasswordHash = await hashPassword(confirmPassword);
-
+      
       const res = await fetch('/api/auth/reset-password', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -254,12 +242,12 @@ function AuthPageInner() {
           email,
           code: verificationCode,
           password: passwordHash,
-          confirm_password: confirmPasswordHash,
-        }),
+          confirm_password: confirmPasswordHash
+        })
       });
 
       const data = await res.json();
-
+      
       if (!res.ok) {
         throw new Error(data.error?.msg || 'Password reset failed');
       }
@@ -287,26 +275,23 @@ function AuthPageInner() {
     }
 
     setIsLoading(true);
-
+    
     try {
       const type = mode === 'register' ? 'signup' : 'reset-password';
       const res = await fetch('/api/auth/send-code', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, type }),
+        body: JSON.stringify({ email, type })
       });
 
       const data = await res.json();
-
+      
       if (!res.ok) {
         throw new Error(data.error?.msg || 'Failed to send code');
       }
 
       setCodeSent(true);
-      addToast(
-        `Verification code sent to ${email}${data.verification_code ? ` (Test: ${data.verification_code})` : ''}`,
-        'success',
-      );
+      addToast(`Verification code sent to ${email}`, 'success');
     } catch (error: any) {
       addToast(error.message || 'Failed to send code', 'error');
     } finally {
@@ -322,17 +307,17 @@ function AuthPageInner() {
     }
 
     setIsLoading(true);
-
+    
     try {
       const type = mode === 'register' ? 'signup' : 'reset-password';
       const res = await fetch('/api/auth/verify-code', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, code, type }),
+        body: JSON.stringify({ email, code, type })
       });
 
       const data = await res.json();
-
+      
       if (!res.ok) {
         throw new Error(data.error?.msg || 'Code verification failed');
       }
@@ -361,11 +346,14 @@ function AuthPageInner() {
 
     try {
       setIsLoading(true);
-      // Save redirect target for post-OAuth navigation
-      if (redirectTo !== '/dashboard') {
-        sessionStorage.setItem('prismer_oauth_redirect', redirectTo);
-      }
-      const origin = typeof window !== 'undefined' ? window.location.origin : '';
+      const origin =
+        typeof window !== 'undefined'
+          ? window.location.origin
+          : '';
+
+      // NOTE: OAuth redirect URI must exactly match what is configured
+      // in GitHub/Google OAuth App settings (including scheme, host and path).
+      // We use /playground as the redirect endpoint to match OAuth provider config.
       const redirectUri = `${origin}/playground`;
 
       console.log('[OAuth][GitHub] clientId=', githubClientId, 'origin=', origin, 'redirectUri=', redirectUri);
@@ -398,10 +386,12 @@ function AuthPageInner() {
 
     try {
       setIsLoading(true);
-      if (redirectTo !== '/dashboard') {
-        sessionStorage.setItem('prismer_oauth_redirect', redirectTo);
-      }
-      const origin = typeof window !== 'undefined' ? window.location.origin : '';
+      const origin =
+        typeof window !== 'undefined'
+          ? window.location.origin
+          : '';
+
+      // Use /playground as redirect endpoint to match Google OAuth provider config
       const redirectUri = `${origin}/playground`;
 
       console.log('[OAuth][Google] clientId=', googleClientId, 'origin=', origin, 'redirectUri=', redirectUri);
@@ -428,9 +418,9 @@ function AuthPageInner() {
         {/* Header */}
         <div className="text-center mb-8">
           <div className="w-20 h-20 mx-auto mb-6">
-            <img
-              src={isDark ? '/animation-dark-small.webp' : '/animation-light-small.webp'}
-              alt="Prismer Cloud"
+            <img 
+              src={isDark ? '/animation-dark-small.webp' : '/animation-light-small.webp'} 
+              alt="Prismer Cloud" 
               className="w-full h-full object-contain"
             />
           </div>
@@ -447,9 +437,7 @@ function AuthPageInner() {
         </div>
 
         {/* Card */}
-        <div
-          className={`backdrop-blur-xl border rounded-2xl p-8 shadow-2xl ${isDark ? 'bg-zinc-900/80 border-white/10' : 'bg-white border-zinc-200'}`}
-        >
+        <div className={`backdrop-blur-xl border rounded-2xl p-8 shadow-2xl ${isDark ? 'bg-zinc-900/80 border-white/10' : 'bg-white border-zinc-200'}`}>
           {/* Back button for reset-password */}
           {mode === 'reset-password' && (
             <button
@@ -465,27 +453,21 @@ function AuthPageInner() {
           {(mode === 'login' || mode === 'register') && (
             <>
               <div className="space-y-3 mb-6">
-                {githubClientId && (
-                  <button
-                    onClick={handleGitHubOAuth}
-                    disabled={isLoading}
-                    className={`w-full flex items-center justify-center gap-3 px-4 py-3 border rounded-xl font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
-                      isDark
-                        ? 'bg-zinc-800 hover:bg-zinc-700 border-white/10 text-white'
-                        : 'bg-zinc-100 hover:bg-zinc-200 border-zinc-300 text-zinc-900'
-                    }`}
-                  >
-                    <Github className="w-5 h-5" />
-                    Continue with GitHub
-                  </button>
-                )}
-                <button
+                <button 
+                  onClick={handleGitHubOAuth}
+                  disabled={isLoading}
+                  className={`w-full flex items-center justify-center gap-3 px-4 py-3 border rounded-xl font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+                    isDark ? 'bg-zinc-800 hover:bg-zinc-700 border-white/10 text-white' : 'bg-zinc-100 hover:bg-zinc-200 border-zinc-300 text-zinc-900'
+                  }`}
+                >
+                  <Github className="w-5 h-5" />
+                  Continue with GitHub
+                </button>
+                <button 
                   onClick={handleGoogleOAuth}
                   disabled={isLoading}
                   className={`w-full flex items-center justify-center gap-3 px-4 py-3 border rounded-xl font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
-                    isDark
-                      ? 'bg-zinc-800 hover:bg-zinc-700 border-white/10 text-white'
-                      : 'bg-zinc-100 hover:bg-zinc-200 border-zinc-300 text-zinc-900'
+                    isDark ? 'bg-zinc-800 hover:bg-zinc-700 border-white/10 text-white' : 'bg-zinc-100 hover:bg-zinc-200 border-zinc-300 text-zinc-900'
                   }`}
                 >
                   <Mail className="w-5 h-5" />
@@ -499,9 +481,7 @@ function AuthPageInner() {
                   <div className={`w-full border-t ${isDark ? 'border-white/10' : 'border-zinc-300'}`}></div>
                 </div>
                 <div className="relative flex justify-center text-xs uppercase">
-                  <span className={`px-2 ${isDark ? 'bg-zinc-900 text-zinc-500' : 'bg-white text-zinc-500'}`}>
-                    Or continue with email
-                  </span>
+                  <span className={`px-2 ${isDark ? 'bg-zinc-900 text-zinc-500' : 'bg-white text-zinc-500'}`}>Or continue with email</span>
                 </div>
               </div>
             </>
@@ -546,107 +526,27 @@ function AuthPageInner() {
           )}
 
           {/* Form */}
-          <form
-            onSubmit={
-              mode === 'login'
-                ? loginMethod === 'phone'
-                  ? handlePhoneLogin
-                  : handleLogin
-                : mode === 'register'
-                  ? handleRegister
-                  : handleResetPassword
-            }
+          <form 
+            onSubmit={mode === 'login' ? handleLogin : mode === 'register' ? handleRegister : handleResetPassword} 
             className="space-y-4"
           >
-            {mode === 'login' && loginMethod === 'phone' ? (
-              <>
-                <div>
-                  <label
-                    htmlFor="phone"
-                    className={`block text-xs font-semibold mb-2 ${isDark ? 'text-zinc-300' : 'text-zinc-600'}`}
-                  >
-                    PHONE NUMBER (中国大陆)
-                  </label>
-                  <div className="relative">
-                    <Phone
-                      className={`absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}
-                    />
-                    <input
-                      id="phone"
-                      type="tel"
-                      value={phone}
-                      onChange={(e) => setPhone(e.target.value)}
-                      placeholder="138 0013 8000"
-                      className={`w-full border rounded-xl pl-11 pr-4 py-4 text-sm focus:outline-none focus:border-violet-500 focus:ring-1 focus:ring-violet-500/50 transition-all ${
-                        isDark
-                          ? 'bg-black/50 border-white/10 text-white placeholder-zinc-600'
-                          : 'bg-zinc-50 border-zinc-300 text-zinc-900 placeholder-zinc-400'
-                      }`}
-                      autoComplete="tel"
-                      required
-                    />
-                  </div>
-                </div>
-                <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <label
-                      htmlFor="sms-code"
-                      className={`block text-xs font-semibold ${isDark ? 'text-zinc-300' : 'text-zinc-600'}`}
-                    >
-                      VERIFICATION CODE
-                    </label>
-                    <button
-                      type="button"
-                      onClick={handleSendSmsCode}
-                      disabled={isLoading || !phone || smsCountdown > 0}
-                      className="text-xs font-medium text-violet-400 hover:text-violet-300 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                    >
-                      {smsCountdown > 0 ? `Resend in ${smsCountdown}s` : smsCodeSent ? 'Resend code' : 'Send code'}
-                    </button>
-                  </div>
-                  <input
-                    id="sms-code"
-                    type="text"
-                    inputMode="numeric"
-                    pattern="[0-9]*"
-                    maxLength={6}
-                    value={smsCode}
-                    onChange={(e) => setSmsCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                    placeholder="6-digit code"
-                    className={`w-full border rounded-xl p-4 text-sm tracking-widest font-mono focus:outline-none focus:border-violet-500 focus:ring-1 focus:ring-violet-500/50 transition-all ${
-                      isDark
-                        ? 'bg-black/50 border-white/10 text-white placeholder-zinc-600'
-                        : 'bg-zinc-50 border-zinc-300 text-zinc-900 placeholder-zinc-400'
-                    }`}
-                    autoComplete="one-time-code"
-                    required
-                  />
-                </div>
-              </>
-            ) : (
-              <div>
-                <label
-                  htmlFor="email"
-                  className={`block text-xs font-semibold mb-2 ${isDark ? 'text-zinc-300' : 'text-zinc-600'}`}
-                >
-                  EMAIL ADDRESS
-                </label>
-                <input
-                  id="email"
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="dev@example.com"
-                  className={`w-full border rounded-xl p-4 text-sm focus:outline-none focus:border-violet-500 focus:ring-1 focus:ring-violet-500/50 transition-all ${
-                    isDark
-                      ? 'bg-black/50 border-white/10 text-white placeholder-zinc-600'
-                      : 'bg-zinc-50 border-zinc-300 text-zinc-900 placeholder-zinc-400'
-                  }`}
-                  required
-                  disabled={codeSent && mode !== 'login'}
-                />
-              </div>
-            )}
+            <div>
+              <label htmlFor="email" className={`block text-xs font-semibold mb-2 ${isDark ? 'text-zinc-300' : 'text-zinc-600'}`}>
+                EMAIL ADDRESS
+              </label>
+              <input
+                id="email"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="dev@example.com"
+                className={`w-full border rounded-xl p-4 text-sm focus:outline-none focus:border-violet-500 focus:ring-1 focus:ring-violet-500/50 transition-all ${
+                  isDark ? 'bg-black/50 border-white/10 text-white placeholder-zinc-600' : 'bg-zinc-50 border-zinc-300 text-zinc-900 placeholder-zinc-400'
+                }`}
+                required
+                disabled={codeSent && mode !== 'login'}
+              />
+            </div>
 
             {/* Verification code section for register/reset */}
             {(mode === 'register' || mode === 'reset-password') && (
@@ -663,10 +563,7 @@ function AuthPageInner() {
                 ) : (
                   <>
                     <div>
-                      <label
-                        htmlFor="code"
-                        className={`block text-xs font-semibold mb-2 ${isDark ? 'text-zinc-300' : 'text-zinc-600'}`}
-                      >
+                      <label htmlFor="code" className={`block text-xs font-semibold mb-2 ${isDark ? 'text-zinc-300' : 'text-zinc-600'}`}>
                         VERIFICATION CODE
                       </label>
                       <div className="flex gap-2">
@@ -677,9 +574,7 @@ function AuthPageInner() {
                           onChange={(e) => setCode(e.target.value)}
                           placeholder="Enter 6-digit code"
                           className={`flex-1 border rounded-xl p-4 text-sm focus:outline-none focus:border-violet-500 focus:ring-1 focus:ring-violet-500/50 transition-all ${
-                            isDark
-                              ? 'bg-black/50 border-white/10 text-white placeholder-zinc-600'
-                              : 'bg-zinc-50 border-zinc-300 text-zinc-900 placeholder-zinc-400'
+                            isDark ? 'bg-black/50 border-white/10 text-white placeholder-zinc-600' : 'bg-zinc-50 border-zinc-300 text-zinc-900 placeholder-zinc-400'
                           }`}
                           maxLength={6}
                           required
@@ -706,18 +601,39 @@ function AuthPageInner() {
               </div>
             )}
 
-            {/* Password fields - only show if not verified for register/reset, or always for login (skip in phone-login mode) */}
-            {!(mode === 'login' && loginMethod === 'phone') &&
-              (mode === 'login' ||
-                (mode === 'register' && codeVerified) ||
-                (mode === 'reset-password' && codeVerified)) && (
-                <>
-                  <div>
-                    <label
-                      htmlFor="password"
-                      className={`block text-xs font-semibold mb-2 ${isDark ? 'text-zinc-300' : 'text-zinc-600'}`}
+            {/* Password fields - only show if not verified for register/reset, or always for login */}
+            {((mode === 'login') || (mode === 'register' && codeVerified) || (mode === 'reset-password' && codeVerified)) && (
+              <>
+                <div>
+                  <label htmlFor="password" className={`block text-xs font-semibold mb-2 ${isDark ? 'text-zinc-300' : 'text-zinc-600'}`}>
+                    PASSWORD
+                  </label>
+                  <div className="relative">
+                    <input
+                      id="password"
+                      type={showPassword ? 'text' : 'password'}
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      placeholder="••••••••••••"
+                      className={`w-full border rounded-xl p-4 pr-12 text-sm focus:outline-none focus:border-violet-500 focus:ring-1 focus:ring-violet-500/50 transition-all ${
+                        isDark ? 'bg-black/50 border-white/10 text-white placeholder-zinc-600' : 'bg-zinc-50 border-zinc-300 text-zinc-900 placeholder-zinc-400'
+                      }`}
+                      required
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword(!showPassword)}
+                      className={`absolute right-4 top-4 transition-colors ${isDark ? 'text-zinc-500 hover:text-white' : 'text-zinc-400 hover:text-zinc-700'}`}
                     >
-                      PASSWORD
+                      {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                    </button>
+                  </div>
+                </div>
+
+                {(mode === 'register' || mode === 'reset-password') && (
+                  <div>
+                    <label htmlFor="confirm-password" className={`block text-xs font-semibold mb-2 ${isDark ? 'text-zinc-300' : 'text-zinc-600'}`}>
+                      CONFIRM PASSWORD
                     </label>
                     <div className="relative">
                       <input
@@ -727,9 +643,7 @@ function AuthPageInner() {
                         onChange={(e) => setPassword(e.target.value)}
                         placeholder="••••••••••••"
                         className={`w-full border rounded-xl p-4 pr-12 text-sm focus:outline-none focus:border-violet-500 focus:ring-1 focus:ring-violet-500/50 transition-all ${
-                          isDark
-                            ? 'bg-black/50 border-white/10 text-white placeholder-zinc-600'
-                            : 'bg-zinc-50 border-zinc-300 text-zinc-900 placeholder-zinc-400'
+                          isDark ? 'bg-black/50 border-white/10 text-white placeholder-zinc-600' : 'bg-zinc-50 border-zinc-300 text-zinc-900 placeholder-zinc-400'
                         }`}
                         required
                       />
@@ -780,8 +694,8 @@ function AuthPageInner() {
 
             {mode === 'login' && loginMethod === 'email' && (
               <div className="flex justify-end">
-                <button
-                  type="button"
+                <button 
+                  type="button" 
                   onClick={() => setMode('reset-password')}
                   className="text-xs text-violet-400 hover:text-violet-300 transition-colors"
                 >
@@ -838,17 +752,11 @@ function AuthPageInner() {
         {/* Footer */}
         <p className={`text-center text-xs mt-6 ${isDark ? 'text-zinc-600' : 'text-zinc-500'}`}>
           By continuing, you agree to our{' '}
-          <Link
-            href="#"
-            className={`transition-colors ${isDark ? 'text-zinc-400 hover:text-white' : 'text-zinc-600 hover:text-zinc-900'}`}
-          >
+          <Link href="#" className={`transition-colors ${isDark ? 'text-zinc-400 hover:text-white' : 'text-zinc-600 hover:text-zinc-900'}`}>
             Terms of Service
           </Link>{' '}
           and{' '}
-          <Link
-            href="#"
-            className={`transition-colors ${isDark ? 'text-zinc-400 hover:text-white' : 'text-zinc-600 hover:text-zinc-900'}`}
-          >
+          <Link href="#" className={`transition-colors ${isDark ? 'text-zinc-400 hover:text-white' : 'text-zinc-600 hover:text-zinc-900'}`}>
             Privacy Policy
           </Link>
         </p>
