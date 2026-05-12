@@ -654,7 +654,7 @@ export function GraphSection({
 
       {/* ══ Detail Panel — floating glassmorphic drawer ══ */}
       <div
-        className={`absolute top-14 right-3 w-[340px] max-h-[calc(100%-4.5rem)] z-20 rounded-2xl overflow-hidden
+        className={`absolute top-14 right-3 w-80 max-h-[calc(100%-4.5rem)] z-20 rounded-2xl overflow-hidden
           transition-all duration-500 shadow-2xl
           ${isDark ? 'shadow-black/40' : 'shadow-black/10'}
           ${
