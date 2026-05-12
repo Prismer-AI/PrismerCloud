@@ -18,8 +18,6 @@ import {
   type ReplayWindowState,
 } from '../crypto';
 import { IdentityService } from './identity.service';
-import { RevocationService } from './revocation.service';
-import { DelegationService } from './delegation.service';
 
 export interface VerifyResult {
   valid: boolean;
@@ -28,13 +26,7 @@ export interface VerifyResult {
 }
 
 export class SigningService {
-  private revocationService: RevocationService;
-  private delegationService: DelegationService;
-
-  constructor(private identityService: IdentityService) {
-    this.revocationService = new RevocationService();
-    this.delegationService = new DelegationService();
-  }
+  constructor(private identityService: IdentityService) {}
 
   /**
    * Server-side verification of a signed message.
@@ -56,8 +48,6 @@ export class SigningService {
     createdAt: number; // ms since epoch
     secVersion: number;
     senderKeyId: string;
-    senderDid?: string; // AIP: preferred over senderKeyId
-    delegationProof?: string; // AIP: JSON delegation chain proof
     sequence: number;
     contentHash: string;
     prevHash: string | null;
@@ -70,31 +60,13 @@ export class SigningService {
       return { valid: false, reason: 'timestamp_skew' };
     }
 
-    // 1. Lookup sender's identity key — prefer DID, fallback to keyId
-    const key = params.senderDid
-      ? await this.identityService.lookupByDID(params.senderDid)
-      : await this.identityService.lookupByKeyId(params.senderKeyId);
+    // 1. Lookup sender's identity key
+    const key = await this.identityService.lookupByKeyId(params.senderKeyId);
     if (!key) {
-      return { valid: false, reason: params.senderDid ? 'unknown_did' : 'unknown_key_id' };
+      return { valid: false, reason: 'unknown_key_id' };
     }
     if (key.imUserId !== params.senderId) {
       return { valid: false, reason: 'key_sender_mismatch' };
-    }
-
-    // 1b. AIP: Check if the sender's DID has been revoked
-    if (key.didKey) {
-      const revoked = await this.revocationService.isRevoked(key.didKey);
-      if (revoked) {
-        return { valid: false, reason: 'sender_did_revoked' };
-      }
-    }
-
-    // 1c. AIP: Verify delegation chain if delegationProof is provided
-    if (params.delegationProof) {
-      const chainResult = await this.verifyDelegationChain(params.delegationProof);
-      if (!chainResult.valid) {
-        return { valid: false, reason: `delegation_invalid: ${chainResult.reason}` };
-      }
     }
 
     // 2. Verify contentHash matches actual content
@@ -118,7 +90,6 @@ export class SigningService {
           secVersion: params.secVersion,
           senderId: params.senderId,
           senderKeyId: params.senderKeyId,
-          senderDid: params.senderDid,
           conversationId: params.conversationId,
           sequence: params.sequence,
           type: params.type,
@@ -181,33 +152,6 @@ export class SigningService {
     }
 
     return { valid: true };
-  }
-
-  /**
-   * AIP: Verify a delegation chain proof.
-   * Parses the proof JSON to extract the delegatee DID, then walks the chain.
-   */
-  private async verifyDelegationChain(delegationProofJson: string): Promise<{ valid: boolean; reason?: string }> {
-    try {
-      const proof = JSON.parse(delegationProofJson);
-      // proof can be { delegateeDid: "did:key:..." } or a raw DID string
-      const subjectDid = typeof proof === 'string' ? proof : (proof.delegateeDid ?? proof.did);
-      if (!subjectDid) {
-        return { valid: false, reason: 'missing_delegatee_did_in_proof' };
-      }
-
-      const result = await this.delegationService.verifyChain(subjectDid);
-      return result;
-    } catch (err) {
-      return { valid: false, reason: `delegation_parse_error: ${(err as Error).message}` };
-    }
-  }
-
-  /**
-   * AIP: Check if a DID has been revoked.
-   */
-  async checkRevocation(did: string): Promise<boolean> {
-    return this.revocationService.isRevoked(did);
   }
 
   /**
