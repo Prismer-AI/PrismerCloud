@@ -1,13 +1,13 @@
 /**
  * Prismer IM — Agent Registry
- *
+ * 
  * Central registry for agent discovery and management.
  * Provides query capabilities for finding agents by type, capability, etc.
  */
 
-import type { AgentService } from '../services/agent.service';
-import type { AgentInfo, AgentDiscoveryQuery } from './types';
-import type { AgentCapability, AgentType, AgentStatus } from '../types/index';
+import type { AgentService } from "../services/agent.service";
+import type { AgentInfo, AgentDiscoveryQuery } from "./types";
+import type { AgentCapability, AgentType, AgentStatus } from "../types/index";
 
 export class AgentRegistry {
   constructor(private agentService: AgentService) {}
@@ -16,14 +16,17 @@ export class AgentRegistry {
    * Discover agents matching the given criteria.
    */
   async discover(query: AgentDiscoveryQuery): Promise<AgentInfo[]> {
-    const agents = query.onlineOnly ? await this.agentService.listOnline() : await this.agentService.listAll();
+    const agents = query.onlineOnly
+      ? await this.agentService.listOnline()
+      : await this.agentService.listAll();
 
-    let results: AgentInfo[] = agents.map((card: (typeof agents)[number]) => {
+    let results: AgentInfo[] = agents.map((card: typeof agents[number]) => {
       // Parse capabilities from JSON string
       let capabilities: AgentCapability[] = [];
       try {
-        capabilities =
-          typeof card.capabilities === 'string' ? JSON.parse(card.capabilities) : (card.capabilities ?? []);
+        capabilities = typeof card.capabilities === 'string'
+          ? JSON.parse(card.capabilities)
+          : (card.capabilities ?? []);
       } catch {
         capabilities = [];
       }
@@ -38,11 +41,6 @@ export class AgentRegistry {
         status: card.status as AgentStatus,
         load: card.load ?? 0,
         endpoint: card.endpoint ?? undefined,
-        did: card.did ?? (card as any).imUser?.primaryDid ?? undefined,
-        didDocumentUrl:
-          (card.did ?? (card as any).imUser?.primaryDid)
-            ? (card.didDocumentUrl ?? `/.well-known/did/agents/${card.imUserId}/did.json`)
-            : undefined,
       };
     });
 
@@ -54,7 +52,9 @@ export class AgentRegistry {
     // Filter by capability (handles both string[] and AgentCapability[])
     if (query.capability) {
       results = results.filter((a) =>
-        a.capabilities.some((c: string | AgentCapability) => (typeof c === 'string' ? c : c.name) === query.capability),
+        a.capabilities.some((c: string | AgentCapability) =>
+          (typeof c === 'string' ? c : c.name) === query.capability
+        ),
       );
     }
 
@@ -88,7 +88,9 @@ export class AgentRegistry {
     // Parse capabilities from JSON string
     let capabilities: AgentCapability[] = [];
     try {
-      capabilities = typeof card.capabilities === 'string' ? JSON.parse(card.capabilities) : (card.capabilities ?? []);
+      capabilities = typeof card.capabilities === 'string'
+        ? JSON.parse(card.capabilities)
+        : (card.capabilities ?? []);
     } catch {
       capabilities = [];
     }
@@ -103,11 +105,6 @@ export class AgentRegistry {
       status: card.status as AgentStatus,
       load: card.load ?? 0,
       endpoint: card.endpoint ?? undefined,
-      did: card.did ?? (card as any).imUser?.primaryDid ?? undefined,
-      didDocumentUrl:
-        (card.did ?? (card as any).imUser?.primaryDid)
-          ? (card.didDocumentUrl ?? `/.well-known/did/agents/${card.imUserId}/did.json`)
-          : undefined,
     };
   }
 }
