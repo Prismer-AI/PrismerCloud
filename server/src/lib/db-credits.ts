@@ -1,6 +1,6 @@
 /**
  * Database Operations for User Credits
- * 
+ *
  * 操作表：pc_user_credits, pc_credit_transactions
  * 前端先行实现，与后端解耦
  */
@@ -43,18 +43,15 @@ export interface CreditTransaction {
  * 获取用户积分信息（不存在则创建）
  * @param initialBalanceIfNew 仅当新创建时使用的初始额度（默认 1000）；IM 注册用户传 100000 以支持约 1 亿条消息
  */
-export async function getUserCredits(
-  userId: number,
-  initialBalanceIfNew?: number
-): Promise<UserCredits> {
+export async function getUserCredits(userId: number, initialBalanceIfNew?: number): Promise<UserCredits> {
   const sql = `SELECT * FROM pc_user_credits WHERE user_id = ?`;
   let row = await queryOne<UserCredits & RowDataPacket>(sql, [userId]);
-  
+
   if (!row) {
     await initUserCredits(userId, initialBalanceIfNew ?? 1000);
     row = await queryOne<UserCredits & RowDataPacket>(sql, [userId]);
   }
-  
+
   return {
     user_id: row!.user_id,
     balance: parseFloat(row!.balance as unknown as string),
@@ -62,17 +59,14 @@ export async function getUserCredits(
     total_spent: parseFloat(row!.total_spent as unknown as string),
     plan: row!.plan,
     created_at: row!.created_at,
-    updated_at: row!.updated_at
+    updated_at: row!.updated_at,
   };
 }
 
 /**
  * 初始化新用户积分
  */
-export async function initUserCredits(
-  userId: number,
-  initialBalance: number = 1000
-): Promise<void> {
+export async function initUserCredits(userId: number, initialBalance: number = 1000): Promise<void> {
   const sql = `
     INSERT IGNORE INTO pc_user_credits (user_id, balance, total_earned, total_spent, plan)
     VALUES (?, ?, ?, 0, 'free')
@@ -87,7 +81,7 @@ export async function initUserCredits(
       amount: initialBalance,
       balanceAfter: initialBalance,
       description: 'Welcome bonus',
-      referenceType: 'admin'
+      referenceType: 'admin',
     });
   }
 }
@@ -100,7 +94,7 @@ export async function deductCredits(
   amount: number,
   description: string,
   referenceId?: string,
-  externalConn?: PoolConnection
+  externalConn?: PoolConnection,
 ): Promise<{ success: boolean; balance_after: number; error?: string }> {
   if (FEATURE_FLAGS.UNLIMITED_CREDITS) {
     return { success: true, balance_after: 999999 };
@@ -110,18 +104,18 @@ export async function deductCredits(
     // 获取当前余额（加锁）
     const [rows] = await conn.execute<(UserCredits & RowDataPacket)[]>(
       `SELECT * FROM pc_user_credits WHERE user_id = ? FOR UPDATE`,
-      [userId]
+      [userId],
     );
 
     if (rows.length === 0) {
       // 用户不存在，先初始化
       await conn.execute(
         `INSERT INTO pc_user_credits (user_id, balance, total_earned, total_spent, plan) VALUES (?, 1000, 1000, 0, 'free')`,
-        [userId]
+        [userId],
       );
       const [newRows] = await conn.execute<(UserCredits & RowDataPacket)[]>(
         `SELECT * FROM pc_user_credits WHERE user_id = ? FOR UPDATE`,
-        [userId]
+        [userId],
       );
       rows.push(newRows[0]);
     }
@@ -133,7 +127,7 @@ export async function deductCredits(
       return {
         success: false,
         balance_after: currentBalance,
-        error: 'Insufficient credits'
+        error: 'Insufficient credits',
       };
     }
 
@@ -141,22 +135,23 @@ export async function deductCredits(
     const totalSpent = parseFloat(rows[0].total_spent as unknown as string) + amount;
 
     // 更新余额
-    await conn.execute(
-      `UPDATE pc_user_credits SET balance = ?, total_spent = ? WHERE user_id = ?`,
-      [newBalance, totalSpent, userId]
-    );
+    await conn.execute(`UPDATE pc_user_credits SET balance = ?, total_spent = ? WHERE user_id = ?`, [
+      newBalance,
+      totalSpent,
+      userId,
+    ]);
 
     // 记录交易
     const txId = generateUUID();
     await conn.execute(
       `INSERT INTO pc_credit_transactions (id, user_id, type, amount, balance_after, description, reference_type, reference_id)
        VALUES (?, ?, 'usage', ?, ?, ?, 'usage_record', ?)`,
-      [txId, userId, -amount, newBalance, description, referenceId || null]
+      [txId, userId, -amount, newBalance, description, referenceId || null],
     );
 
     return {
       success: true,
-      balance_after: newBalance
+      balance_after: newBalance,
     };
   };
 
@@ -176,46 +171,47 @@ export async function addCredits(
   type: 'purchase' | 'refund' | 'bonus' | 'gift',
   description: string,
   referenceType?: string,
-  referenceId?: string
+  referenceId?: string,
 ): Promise<{ balance_after: number }> {
   return withTransaction(async (conn: PoolConnection) => {
     // 获取当前余额（加锁）
     const [rows] = await conn.execute<(UserCredits & RowDataPacket)[]>(
       `SELECT * FROM pc_user_credits WHERE user_id = ? FOR UPDATE`,
-      [userId]
+      [userId],
     );
-    
+
     let currentBalance = 0;
     let totalEarned = 0;
-    
+
     if (rows.length === 0) {
       // 用户不存在，先初始化（不包含 welcome bonus）
       await conn.execute(
         `INSERT INTO pc_user_credits (user_id, balance, total_earned, total_spent, plan) VALUES (?, 0, 0, 0, 'free')`,
-        [userId]
+        [userId],
       );
     } else {
       currentBalance = parseFloat(rows[0].balance as unknown as string);
       totalEarned = parseFloat(rows[0].total_earned as unknown as string);
     }
-    
+
     const newBalance = currentBalance + amount;
     const newTotalEarned = totalEarned + amount;
-    
+
     // 更新余额
-    await conn.execute(
-      `UPDATE pc_user_credits SET balance = ?, total_earned = ? WHERE user_id = ?`,
-      [newBalance, newTotalEarned, userId]
-    );
-    
+    await conn.execute(`UPDATE pc_user_credits SET balance = ?, total_earned = ? WHERE user_id = ?`, [
+      newBalance,
+      newTotalEarned,
+      userId,
+    ]);
+
     // 记录交易
     const txId = generateUUID();
     await conn.execute(
       `INSERT INTO pc_credit_transactions (id, user_id, type, amount, balance_after, description, reference_type, reference_id)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [txId, userId, type, amount, newBalance, description, referenceType || null, referenceId || null]
+      [txId, userId, type, amount, newBalance, description, referenceType || null, referenceId || null],
     );
-    
+
     return { balance_after: newBalance };
   });
 }
@@ -251,7 +247,7 @@ async function createCreditTransaction(params: CreateTransactionParams): Promise
     params.balanceAfter,
     params.description,
     params.referenceType || null,
-    params.referenceId || null
+    params.referenceId || null,
   ]);
   return id;
 }
@@ -262,29 +258,34 @@ async function createCreditTransaction(params: CreateTransactionParams): Promise
 export async function getUserTransactions(
   userId: number,
   page: number = 1,
-  limit: number = 20
+  limit: number = 20,
 ): Promise<{ transactions: CreditTransaction[]; total: number }> {
   const offset = (page - 1) * limit;
-  
+
   // 获取总数
   const countSql = `SELECT COUNT(*) as total FROM pc_credit_transactions WHERE user_id = ?`;
   const countResult = await queryOne<{ total: number } & RowDataPacket>(countSql, [userId]);
   const total = countResult?.total || 0;
-  
-  // 获取记录
+
+  // LIMIT/OFFSET inlined: mysql2 prepared statements (`pool.execute`) send
+  // bound integers as strings via the binary protocol, which MySQL 8 rejects
+  // with `Incorrect arguments to mysqld_stmt_execute` (errno 1210). Both
+  // values are validated → safe to inline.
+  const safeLimit = Math.max(1, Math.min(1000, Math.floor(Number(limit) || 20)));
+  const safeOffset = Math.max(0, Math.floor(Number(offset) || 0));
   const sql = `
     SELECT * FROM pc_credit_transactions
     WHERE user_id = ?
     ORDER BY created_at DESC
-    LIMIT ? OFFSET ?
+    LIMIT ${safeLimit} OFFSET ${safeOffset}
   `;
-  const rows = await query<(CreditTransaction & RowDataPacket)[]>(sql, [userId, Number(limit), Number(offset)]);
-  
-  const transactions = rows.map(row => ({
+  const rows = await query<(CreditTransaction & RowDataPacket)[]>(sql, [userId]);
+
+  const transactions = rows.map((row) => ({
     ...row,
     amount: parseFloat(row.amount as unknown as string),
-    balance_after: parseFloat(row.balance_after as unknown as string)
+    balance_after: parseFloat(row.balance_after as unknown as string),
   }));
-  
+
   return { transactions, total };
 }

@@ -1,13 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createModuleLogger } from '@/lib/logger';
 
-const log = createModuleLogger('ParseImageProxy');
+const log = createModuleLogger('ParseImage');
 
-const DEFAULT_ALLOWED_ORIGINS = 'cdn.prismer.ai,parser.prismer.dev,parser.prismer.app,localhost';
-const ALLOWED_ORIGINS = (process.env.IMAGE_PROXY_ORIGINS || DEFAULT_ALLOWED_ORIGINS)
-  .split(',')
-  .map((s) => s.trim())
-  .filter(Boolean);
+const ALLOWED_ORIGINS = (process.env.IMAGE_PROXY_ORIGINS || 'localhost').split(',').map(s => s.trim());
 
 /**
  * GET /api/parse/image-proxy?url=<encoded-image-url>

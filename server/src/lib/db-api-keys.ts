@@ -30,6 +30,35 @@ interface ApiKeyRow extends RowDataPacket {
   updated_at: Date;
 }
 
+export function normalizeApiKeyLabel(label: string | null | undefined): string {
+  const raw = (label ?? '').trim();
+  if (!raw) return 'API Key';
+
+  if (raw.startsWith('workspace-runtime ')) {
+    const jsonPart = raw.slice('workspace-runtime '.length);
+    try {
+      const parsed = JSON.parse(jsonPart) as {
+        name?: unknown;
+        runtimeInstanceId?: unknown;
+        daemonId?: unknown;
+      };
+      const name =
+        typeof parsed.name === 'string' && parsed.name.trim()
+          ? parsed.name.trim()
+          : typeof parsed.runtimeInstanceId === 'string' && parsed.runtimeInstanceId.trim()
+            ? parsed.runtimeInstanceId.trim()
+            : typeof parsed.daemonId === 'string' && parsed.daemonId.trim()
+              ? parsed.daemonId.trim()
+              : '';
+      return name ? `Workspace Runtime: ${name}` : 'Workspace Runtime';
+    } catch {
+      return 'Workspace Runtime';
+    }
+  }
+
+  return raw;
+}
+
 /** Response format matching frontend expectations */
 export interface ApiKeyResponse {
   id: string;
@@ -65,10 +94,7 @@ function getKeyPrefix(apiKey: string): string {
  * Create a new API key for a user.
  * Returns the full key (only shown once — not stored in DB).
  */
-export async function createApiKey(
-  userId: number,
-  label: string
-): Promise<ApiKeyResponse> {
+export async function createApiKey(userId: number, label: string): Promise<ApiKeyResponse> {
   const id = generateUUID();
   const fullKey = generateApiKey();
   const keyHash = hashApiKey(fullKey);
@@ -106,7 +132,7 @@ export async function getUserApiKeys(userId: number): Promise<ApiKeyResponse[]> 
   return rows.map((row) => ({
     id: row.id,
     key: row.key_prefix + '...', // Masked for list display
-    label: row.label || 'API Key',
+    label: normalizeApiKeyLabel(row.label),
     created: row.created_at.toISOString(),
     status: row.status,
   }));
@@ -121,7 +147,7 @@ export async function revokeApiKey(userId: number, keyId: string): Promise<boole
     WHERE id = ? AND user_id = ?
   `;
   const result = await execute(sql, [keyId, userId]);
-  const affected = (result as any).affectedRows || 0;
+  const affected = (result as { affectedRows?: number }).affectedRows || 0;
 
   if (affected === 0) {
     console.warn(`[API Keys] Revoke failed: key ${keyId} not found for user ${userId}`);
@@ -138,7 +164,7 @@ export async function revokeApiKey(userId: number, keyId: string): Promise<boole
 export async function deleteApiKey(userId: number, keyId: string): Promise<boolean> {
   const sql = `DELETE FROM pc_api_keys WHERE id = ? AND user_id = ?`;
   const result = await execute(sql, [keyId, userId]);
-  const affected = (result as any).affectedRows || 0;
+  const affected = (result as { affectedRows?: number }).affectedRows || 0;
 
   if (affected === 0) {
     console.warn(`[API Keys] Delete failed: key ${keyId} not found for user ${userId}`);
@@ -158,9 +184,7 @@ export async function deleteApiKey(userId: number, keyId: string): Promise<boole
  * Returns user_id if valid, null if invalid/revoked.
  * Updates last_used_at in background.
  */
-export async function validateApiKeyFromDb(
-  apiKey: string
-): Promise<{ userId: number } | null> {
+export async function validateApiKeyFromDb(apiKey: string): Promise<{ userId: number } | null> {
   const keyHash = hashApiKey(apiKey);
 
   const sql = `
@@ -174,10 +198,7 @@ export async function validateApiKeyFromDb(
   }
 
   // Update last_used_at in background (fire-and-forget)
-  execute(
-    `UPDATE pc_api_keys SET last_used_at = NOW() WHERE key_hash = ?`,
-    [keyHash]
-  ).catch(() => {});
+  execute(`UPDATE pc_api_keys SET last_used_at = NOW() WHERE key_hash = ?`, [keyHash]).catch(() => {});
 
   return { userId: Number(row.user_id) };
 }

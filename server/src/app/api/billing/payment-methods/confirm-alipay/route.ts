@@ -9,8 +9,10 @@ const log = createModuleLogger('Billing');
  * POST /api/billing/payment-methods/confirm-alipay
  * Confirm Alipay authorization after redirect from Alipay
  *
+ * Proxies to: POST /api/v1/cloud/billing/payment-methods/confirm-alipay
+ *
  * FF_BILLING_LOCAL=true  → not supported (Alipay requires backend)
- * FF_BILLING_LOCAL=false → proxy to: POST /api/v1/cloud/billing/payment-methods/confirm-alipay
+ * FF_BILLING_LOCAL=false → proxy to backend
  *
  * Request body:
  * - setup_intent_id: string

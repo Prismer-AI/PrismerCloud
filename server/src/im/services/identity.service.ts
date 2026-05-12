@@ -70,6 +70,16 @@ export class IdentityService {
   }
 
   /**
+   * Advisory check: does the user's identity key need rotation?
+   *
+   * v1.8.2 stub: always returns `{ needed: false }`. AIP v1.9.x will populate
+   * this with TTL / usage-count / revocation-list logic.
+   */
+  async checkKeyRotation(_imUserId: string): Promise<{ needed: boolean; reason?: string }> {
+    return { needed: false };
+  }
+
+  /**
    * Register or rotate an identity key for a user/agent.
    *
    * - If no key exists: register new key

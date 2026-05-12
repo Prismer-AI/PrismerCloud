@@ -247,20 +247,22 @@ export class SchedulerService {
    */
   private async runDreamSweep(): Promise<void> {
     try {
-      // Find agents with enough memory files
+      // Find agents with enough memory files (per workspace+owner pair —
+      // shouldDream now requires both since memory is workspace-scoped after
+      // the workspace-resolver landing).
       const candidates = await (
         await import('../db')
       ).default.iMMemoryFile.groupBy({
-        by: ['ownerId'],
+        by: ['ownerId', 'workspaceId'],
         _count: true,
         having: { ownerId: { _count: { gte: 3 } } },
       });
 
       let dreamCount = 0;
       for (const c of candidates.slice(0, 50)) {
-        const { ready } = await shouldDream(c.ownerId);
+        const { ready } = await shouldDream(c.ownerId, c.workspaceId);
         if (ready) {
-          const result = await runDream(c.ownerId);
+          const result = await runDream(c.ownerId, c.workspaceId);
           if (result.triggered) dreamCount++;
         }
       }

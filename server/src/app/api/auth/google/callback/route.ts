@@ -1,37 +1,24 @@
 import { NextResponse } from 'next/server';
-import { googleCallback } from '@/lib/auth-api';
+import { loginWithGoogleAccessToken, LocalAuthError } from '@/lib/auth/local-auth';
 
 /**
- * POST /api/auth/google/callback
- * Google OAuth callback
+ * POST /api/auth/google/callback  { access_token }
+ * Native — exchanges the Google access token for the userinfo profile,
+ * upserts an im_users row, and returns a Prismer JWT.
  */
 export async function POST(request: Request) {
   try {
-    const body = await request.json();
-    const { access_token } = body;
+    const { access_token } = await request.json();
 
     if (!access_token) {
-      return NextResponse.json(
-        { error: { code: 400, msg: 'access_token is required' } },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: { code: 400, msg: 'access_token is required' } }, { status: 400 });
     }
 
-    const result = await googleCallback(access_token);
+    const result = await loginWithGoogleAccessToken(access_token);
     return NextResponse.json(result);
   } catch (error: any) {
-    return NextResponse.json(
-      { error: { code: 500, msg: error.message || 'Google authentication failed' } },
-      { status: 500 }
-    );
+    const status = error instanceof LocalAuthError ? error.status : 500;
+    const code = error instanceof LocalAuthError ? error.code : 500;
+    return NextResponse.json({ error: { code, msg: error.message || 'Google authentication failed' } }, { status });
   }
 }
-
-
-
-
-
-
-
-
-

@@ -162,7 +162,11 @@ export function createUsersRouter() {
       metadata,
     });
 
-    return c.json<ApiResponse>({ ok: true, data: updated });
+    // Strip BigInt fields (numericId) that JSON.stringify cannot serialize.
+    // Prisma returns the full model on update, which includes numericId as
+    // a BigInt — Hono's c.json calls JSON.stringify and throws on BigInt.
+    const { numericId, ...safeData } = updated || {};
+    return c.json<ApiResponse>({ ok: true, data: safeData as Record<string, unknown> });
   });
 
   /**
@@ -171,6 +175,32 @@ export function createUsersRouter() {
   router.get('/:id', authMiddleware, async (c) => {
     const userId = c.req.param('id')!;
     const user = await userModel.findById(userId);
+    if (!user) {
+      return c.json<ApiResponse>({ ok: false, error: 'User not found' }, 404);
+    }
+
+    return c.json<ApiResponse>({
+      ok: true,
+      data: {
+        id: user.id,
+        username: user.username,
+        displayName: user.displayName,
+        role: user.role,
+        agentType: user.agentType,
+        avatarUrl: user.avatarUrl,
+        createdAt: user.createdAt,
+      },
+    });
+  });
+
+  /**
+   * GET /api/users/by-username/:username — Look up user by username (auth-gated
+   * to prevent enumeration). Mirrors GET /:id response shape so callers can
+   * treat both lookups interchangeably.
+   */
+  router.get('/by-username/:username', authMiddleware, async (c) => {
+    const username = c.req.param('username');
+    const user = await userModel.findByUsername(username);
     if (!user) {
       return c.json<ApiResponse>({ ok: false, error: 'User not found' }, 404);
     }

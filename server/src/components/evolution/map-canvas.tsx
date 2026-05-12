@@ -17,6 +17,7 @@
  */
 
 import { useRef, useEffect, useCallback } from 'react';
+import { getIMClientToken } from '@/lib/im-token';
 import type {
   EvolutionMapData,
   MapLayout,
@@ -409,10 +410,13 @@ export function MapCanvas({
   // ═══ SSE Event Stream ═══
   useEffect(() => {
     // Connect to SSE stream for real-time evolution events
+    const token = getIMClientToken();
+    if (!token) return;
+
     let es: EventSource | null = null;
 
     try {
-      es = new EventSource('/api/im/sync/stream');
+      es = new EventSource(`/api/im/sync/stream?token=${encodeURIComponent(token)}&since=0`);
       es.addEventListener('sync', (e: MessageEvent) => {
         try {
           const event = JSON.parse(e.data);

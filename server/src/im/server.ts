@@ -49,6 +49,7 @@ export interface IMAppResult {
   conversationService: ConversationService;
   presenceService: PresenceService;
   schedulerService: SchedulerService;
+  taskService: TaskService;
 }
 
 /**
@@ -110,6 +111,9 @@ export async function createApp(): Promise<IMAppResult> {
     eventBusService,
     creditService,
   });
+  // v1.9.x: wire @-mention dispatch (resolves the MessageService ↔ TaskService
+  // circular dep via post-construction setter).
+  messageService.setTaskService(taskService);
   const schedulerService = new SchedulerService(taskService, undefined, evolutionService);
 
   // ─── Cross-system Signal Bridge (P3 v1.8.0) ──────────────
@@ -205,6 +209,7 @@ export async function createApp(): Promise<IMAppResult> {
     conversationService,
     presenceService,
     schedulerService,
+    taskService,
   };
 }
 
@@ -277,6 +282,7 @@ export async function createServer() {
     presenceService: result.presenceService,
     agentService: result.agentService,
     streamService: result.streamService,
+    taskService: result.taskService,
   });
 
   console.log(`WebSocket server on ws://${config.host}:${config.port}/ws`);

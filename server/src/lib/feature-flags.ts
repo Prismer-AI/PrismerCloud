@@ -1,12 +1,12 @@
 /**
  * Feature Flags
- * 
+ *
  * 控制前端先行实现与后端代理的切换
- * 
+ *
  * 使用方式：
  * - true: 使用 Next.js 直连数据库（前端先行）
  * - false: 代理到后端 API
- * 
+ *
  * 环境变量：
  * - FF_USAGE_RECORD_LOCAL=true
  * - FF_ACTIVITIES_LOCAL=true
@@ -17,7 +17,7 @@
 
 /**
  * Feature Flags - 动态读取
- * 
+ *
  * 使用 getter 确保每次访问时都读取最新的环境变量值
  * 这解决了 Nacos 配置异步加载的时序问题
  */
@@ -30,7 +30,7 @@ export const FEATURE_FLAGS = {
     const value = process.env.FF_USAGE_RECORD_LOCAL === 'true';
     return value;
   },
-  
+
   /**
    * Activities API
    * GET /api/activities → 读取 pc_usage_records
@@ -39,7 +39,7 @@ export const FEATURE_FLAGS = {
     const value = process.env.FF_ACTIVITIES_LOCAL === 'true';
     return value;
   },
-  
+
   /**
    * Dashboard Stats API
    * GET /api/dashboard/stats → 聚合 pc_usage_records
@@ -48,7 +48,7 @@ export const FEATURE_FLAGS = {
     const value = process.env.FF_DASHBOARD_STATS_LOCAL === 'true';
     return value;
   },
-  
+
   /**
    * User Credits API
    * GET /api/credits/balance → 读取 pc_user_credits
@@ -57,7 +57,7 @@ export const FEATURE_FLAGS = {
     const value = process.env.FF_USER_CREDITS_LOCAL === 'true';
     return value;
   },
-  
+
   /**
    * Billing API (Payment Methods, Topup, Subscriptions)
    * /api/billing/* → 直接调用 Stripe + 写入 pc_payment_methods, pc_payments
@@ -119,6 +119,15 @@ export const FEATURE_FLAGS = {
    */
   get AUTH_DISABLED(): boolean {
     return process.env.AUTH_DISABLED === 'true';
+  },
+
+  /**
+   * LLM Proxy (self-host mode)
+   * /api/chat/completions, /api/embeddings, /api/messages → proxy to OpenAI-compatible upstream
+   * Default false in self-host (disabled unless explicitly opted in).
+   */
+  get LLM_PROXY_ENABLED(): boolean {
+    return process.env.FF_LLM_PROXY_ENABLED === 'true';
   },
 };
 

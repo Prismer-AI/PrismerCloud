@@ -1,11 +1,11 @@
 /**
  * Nacos configuration management for Prismer Cloud Next.js
- * 
+ *
  * All configuration is loaded from Nacos configuration center.
  * Environment variables can override Nacos values.
- * 
+ *
  * Priority: Environment Variables > Nacos
- * 
+ *
  * Note: Uses HTTP API directly instead of nacos npm package because:
  * - nacos npm package (v2.6.0) only supports Nacos Server 1.x
  * - Our server runs Nacos 2.4.3 which is incompatible
@@ -23,7 +23,7 @@ const logger = {
     if (process.env.DEBUG) {
       console.debug(`[Nacos] ${msg}`, ...args);
     }
-  }
+  },
 };
 
 interface NacosConfig {
@@ -40,9 +40,9 @@ class NacosConfigLoader {
   private config: Record<string, string> = {};
   private initialized: boolean = false;
   private loading: Promise<boolean> | null = null;
-  
+
   private configParams: NacosConfig;
-  
+
   constructor(config?: Partial<NacosConfig>) {
     // Default configuration
     const serverAddr =
@@ -53,9 +53,7 @@ class NacosConfigLoader {
     // Determine app environment:
     // - If APP_ENV is set, use it directly (prod/test/dev)
     // - Otherwise, default to 'prod' in production, 'dev' in local development
-    const appEnv =
-      process.env.APP_ENV ??
-      (process.env.NODE_ENV === 'production' ? 'prod' : 'dev');
+    const appEnv = process.env.APP_ENV ?? (process.env.NODE_ENV === 'production' ? 'prod' : 'dev');
 
     // Map APP_ENV to namespace
     const envNamespaceMap: Record<string, string> = {
@@ -66,7 +64,7 @@ class NacosConfigLoader {
       development: process.env.NACOS_NAMESPACE || 'dev',
     };
 
-     // Map APP_ENV to dataId (Nacos dataId is case-sensitive!)
+    // Map APP_ENV to dataId (Nacos dataId is case-sensitive!)
     // All environments use "PrismerCloud"
     const envDataIdMap: Record<string, string> = {
       prod: 'PrismerCloud',
@@ -76,10 +74,8 @@ class NacosConfigLoader {
       development: 'PrismerCloud',
     };
 
-    const namespace =
-      config?.namespace || envNamespaceMap[appEnv] || envNamespaceMap['dev'];
-    const dataId =
-      config?.dataId || envDataIdMap[appEnv] || envDataIdMap['dev'];
+    const namespace = config?.namespace || envNamespaceMap[appEnv] || envNamespaceMap['dev'];
+    const dataId = config?.dataId || envDataIdMap[appEnv] || envDataIdMap['dev'];
 
     this.configParams = {
       serverAddr,
@@ -89,16 +85,14 @@ class NacosConfigLoader {
       username: config?.username || process.env.NACOS_USERNAME || 'nacos',
       password: config?.password || process.env.NACOS_PASSWORD || '',
     };
-    
+
     if (!process.env.APP_ENV && process.env.NODE_ENV !== 'production') {
-      logger.info(
-        `🔧 Local dev mode (APP_ENV not set), using dev namespace: ${namespace}`,
-      );
+      logger.info(`🔧 Local dev mode (APP_ENV not set), using dev namespace: ${namespace}`);
     } else {
       logger.info(`📋 Using namespace for APP_ENV=${appEnv}: ${namespace}`);
     }
   }
-  
+
   /**
    * Initialize Nacos client and load configuration.
    * Uses singleton pattern to avoid duplicate initialization.
@@ -108,44 +102,44 @@ class NacosConfigLoader {
     if (this.initialized) {
       return true;
     }
-    
+
     // If currently loading, wait for it
     if (this.loading) {
       return this.loading;
     }
-    
+
     // Start loading
     this.loading = this._doInitialize();
     const result = await this.loading;
     this.loading = null;
-    
+
     return result;
   }
-  
+
   private async _doInitialize(): Promise<boolean> {
     try {
       logger.info(`🔧 Initializing Nacos HTTP client: ${this.configParams.serverAddr}`);
       logger.info(`   Namespace: ${this.configParams.namespace}`);
       logger.info(`   Data ID: ${this.configParams.dataId}`);
       logger.info(`   Group: ${this.configParams.group}`);
-      
+
       // Build base URL for Nacos HTTP API
       let baseUrl = this.configParams.serverAddr;
       if (!baseUrl.startsWith('http')) {
         baseUrl = `https://${baseUrl}`;
       }
       baseUrl = baseUrl.replace(/\/$/, '');
-      
+
       // Login to get access token
       const loginUrl = `${baseUrl}/nacos/v1/auth/login`;
       const loginBody = `username=${encodeURIComponent(this.configParams.username)}&password=${encodeURIComponent(this.configParams.password)}`;
-      
+
       const loginRes = await fetch(loginUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: loginBody,
       });
-      
+
       if (loginRes.ok) {
         const loginData = await loginRes.json();
         this.accessToken = loginData.accessToken;
@@ -153,16 +147,15 @@ class NacosConfigLoader {
       } else {
         logger.warn(`⚠️  Nacos login failed: ${loginRes.status}, will try without auth`);
       }
-      
+
       const configLoaded = await this.loadConfig();
-      
+
       if (!configLoaded) {
         logger.warn('⚠️  Nacos configuration not loaded, will fall back to .env file');
       }
-      
+
       this.initialized = true;
       return configLoaded;
-      
     } catch (error) {
       logger.warn(`❌ Failed to initialize Nacos: ${error instanceof Error ? error.message : String(error)}`);
       if (process.env.DEBUG) {
@@ -171,81 +164,82 @@ class NacosConfigLoader {
       return false;
     }
   }
-  
+
   /**
    * Load configuration from Nacos via HTTP API and update environment variables.
    * Supports both YAML and .env (key=value) formats.
    */
   async loadConfig(): Promise<boolean> {
     try {
-      logger.info(`📥 Loading config from Nacos (dataId=${this.configParams.dataId}, group=${this.configParams.group})`);
-      
+      logger.info(
+        `📥 Loading config from Nacos (dataId=${this.configParams.dataId}, group=${this.configParams.group})`,
+      );
+
       // Build base URL for Nacos HTTP API
       let baseUrl = this.configParams.serverAddr;
       if (!baseUrl.startsWith('http')) {
         baseUrl = `https://${baseUrl}`;
       }
       baseUrl = baseUrl.replace(/\/$/, '');
-      
+
       // Build query params
       const params = new URLSearchParams({
         dataId: this.configParams.dataId,
         group: this.configParams.group,
         tenant: this.configParams.namespace,
       });
-      
+
       if (this.accessToken) {
         params.set('accessToken', this.accessToken);
       }
-      
+
       const configUrl = `${baseUrl}/nacos/v1/cs/configs?${params.toString()}`;
-      
+
       const res = await fetch(configUrl, {
         method: 'GET',
-        headers: { 'Accept': 'text/plain' },
+        headers: { Accept: 'text/plain' },
       });
-      
+
       if (!res.ok) {
         if (res.status === 404) {
           logger.warn(
             `No configuration found in Nacos for dataId=${this.configParams.dataId}, ` +
-            `namespace=${this.configParams.namespace}, group=${this.configParams.group}. ` +
-            `Will fall back to .env file.`
+              `namespace=${this.configParams.namespace}, group=${this.configParams.group}. ` +
+              `Will fall back to .env file.`,
           );
         } else {
           logger.warn(`Nacos config fetch failed: ${res.status} ${res.statusText}`);
         }
         return false;
       }
-      
+
       const configStr = await res.text();
-      
+
       if (!configStr || configStr.trim().length === 0) {
         logger.warn('Empty configuration from Nacos');
         return false;
       }
-      
+
       // Parse configuration string
       const configDict = this._parseConfigString(configStr);
-      
+
       if (!configDict || Object.keys(configDict).length === 0) {
         logger.warn('Empty configuration from Nacos after parsing');
         return false;
       }
-      
+
       // Flatten configuration
       const flattened = this._isFlatConfig(configDict)
         ? Object.fromEntries(Object.entries(configDict).map(([k, v]) => [k.toUpperCase(), v]))
         : this._flattenConfig(configDict);
-      
+
       this.config = flattened;
-      
+
       // Update environment variables (only if not already set)
       this._updateEnvVars(flattened);
-      
+
       logger.info(`✅ Loaded ${Object.keys(flattened).length} configuration items from Nacos`);
       return true;
-      
     } catch (error) {
       logger.warn(`❌ Failed to load config from Nacos: ${error instanceof Error ? error.message : String(error)}`);
       if (process.env.DEBUG) {
@@ -254,7 +248,7 @@ class NacosConfigLoader {
       return false;
     }
   }
-  
+
   /**
    * Parse configuration string, supporting both YAML and .env formats.
    */
@@ -269,25 +263,25 @@ class NacosConfigLoader {
     } catch (yamlError) {
       // Not YAML, continue to .env format
     }
-    
+
     // Fall back to .env format (key=value pairs)
     logger.info('📋 Parsing configuration as .env format');
     const configDict: Record<string, string> = {};
-    
+
     for (const line of configStr.trim().split('\n')) {
       const trimmed = line.trim();
-      
+
       // Skip empty lines and comments
       if (!trimmed || trimmed.startsWith('#')) {
         continue;
       }
-      
+
       // Parse key=value
       if (trimmed.includes('=')) {
         const [key, ...valueParts] = trimmed.split('=');
         const keyTrimmed = key.trim();
         let value = valueParts.join('=').trim();
-        
+
         // Remove quotes if present
         if (value && (value.startsWith('"') || value.startsWith("'"))) {
           const quote = value[0];
@@ -301,41 +295,41 @@ class NacosConfigLoader {
             value = value.substring(0, commentIndex).trim();
           }
         }
-        
+
         configDict[keyTrimmed] = value;
       }
     }
-    
+
     return configDict;
   }
-  
+
   /**
    * Check if config is already flat (no nested objects).
    */
   private _isFlatConfig(configDict: Record<string, any>): boolean {
-    return !Object.values(configDict).some(v => typeof v === 'object' && v !== null && !Array.isArray(v));
+    return !Object.values(configDict).some((v) => typeof v === 'object' && v !== null && !Array.isArray(v));
   }
-  
+
   /**
    * Flatten nested configuration to environment variable format.
    * Example: {"openai": {"api_key": "xxx"}} -> {"OPENAI_API_KEY": "xxx"}
    */
   private _flattenConfig(configDict: Record<string, any>, prefix: string = ''): Record<string, string> {
     const flattened: Record<string, string> = {};
-    
+
     for (const [key, value] of Object.entries(configDict)) {
       const newKey = prefix ? `${prefix}_${key}`.toUpperCase() : key.toUpperCase();
-      
+
       if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
         Object.assign(flattened, this._flattenConfig(value as Record<string, any>, newKey));
       } else {
         flattened[newKey] = String(value);
       }
     }
-    
+
     return flattened;
   }
-  
+
   /**
    * Update environment variables from configuration.
    * Only sets variables that are not already set (allows env override).
@@ -351,7 +345,7 @@ class NacosConfigLoader {
       }
     }
   }
-  
+
   /**
    * Reload configuration from Nacos.
    */
@@ -359,7 +353,7 @@ class NacosConfigLoader {
     logger.info('🔄 Reloading Nacos configuration...');
     return this.loadConfig();
   }
-  
+
   /**
    * Get Nacos connection status.
    */
@@ -390,30 +384,30 @@ let _nacosLoader: NacosConfigLoader | null = null;
  */
 export async function initNacosConfig(
   enableNacos: boolean = true,
-  config?: Partial<NacosConfig>
+  config?: Partial<NacosConfig>,
 ): Promise<NacosConfigLoader | null> {
   // Return existing loader if already initialized (singleton pattern)
   if (_nacosLoader !== null && _nacosLoader.getStatus().initialized) {
     logger.debug('Nacos loader already initialized, reusing existing instance');
     return _nacosLoader;
   }
-  
+
   if (!enableNacos) {
     logger.info('Nacos configuration disabled');
     return null;
   }
-  
+
   _nacosLoader = new NacosConfigLoader(config);
-  
+
   // Try to initialize, but don't fail if config doesn't exist
   const configLoaded = await _nacosLoader.initialize();
-  
+
   if (configLoaded) {
     logger.info('✅ Nacos configuration loaded successfully');
   } else {
     logger.info('ℹ️  Nacos configuration not found, using .env file as fallback');
   }
-  
+
   // Return loader even if config wasn't loaded (client is still initialized)
   return _nacosLoader;
 }
@@ -444,6 +438,19 @@ export async function reloadNacosConfig(): Promise<boolean> {
 /**
  * Ensure Nacos config is loaded (for use in API routes).
  * This is a convenience function that initializes if needed.
+ *
+ * LOCAL_ONLY=1 (LAN dev): we still try Nacos best-effort because
+ * `.env.local` rarely carries OAuth credentials and the dev cloud
+ * /api/config/oauth needs them for browser-based Google/GitHub sign-in
+ * (Wave-7 ζ regression: LOCAL_ONLY users saw "Google client ID is not
+ * configured" because Nacos was hard-skipped). Existing env vars from
+ * `.env.local` always win — see writeToEnv() `if (!(key in process.env))`
+ * — so Nacos cannot accidentally redirect DATABASE_URL/REDIS_URL away
+ * from the local docker stack.
+ *
+ * If Nacos is unreachable in LOCAL_ONLY mode (no network / VPN off),
+ * the failure is swallowed so the dev boot still completes; OAuth UI
+ * will fall back to "client id missing" until creds land in `.env.local`.
  */
 export async function ensureNacosConfig(): Promise<void> {
   // Self-host mode: skip Nacos entirely, use .env
@@ -451,7 +458,22 @@ export async function ensureNacosConfig(): Promise<void> {
     return;
   }
   if (!_nacosLoader || !_nacosLoader.getStatus().initialized) {
-    await initNacosConfig();
+    try {
+      await initNacosConfig();
+    } catch (err) {
+      const isLocalDev = process.env.LOCAL_ONLY === '1' || process.env.NODE_ENV === 'development';
+      if (isLocalDev) {
+        // Best effort in LAN dev — do not break boot if Nacos is offline.
+        // Caller flows that need a specific Nacos-only key (e.g. OAuth)
+        // surface the missing-key UX themselves.
+
+        console.warn(
+          '[Nacos] LOCAL_ONLY best-effort load failed; continuing without remote config:',
+          (err as Error).message,
+        );
+        return;
+      }
+      throw err;
+    }
   }
 }
-

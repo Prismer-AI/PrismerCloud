@@ -174,7 +174,7 @@ const TABS: { key: TabKey; label: string; icon: typeof Activity }[] = [
   { key: 'overview', label: 'Map', icon: Map },
   { key: 'library', label: 'Marketplace', icon: Sparkles },
   { key: 'agents', label: 'Leaderboard', icon: Trophy },
-  { key: 'my', label: 'Workspace', icon: User },
+  { key: 'my', label: 'My Agents', icon: User },
 ];
 
 const CAT_COLORS: Record<string, { text: string; bg: string; border: string; glow: string; hex: string }> = {
@@ -1727,13 +1727,14 @@ export default function EvolutionPage() {
       </div>
 
       {/* ═══════════════════════════════════════════════ */}
-      {/* TAB 6: MY EVOLUTION                             */}
+      {/* TAB 6: MY AGENTS                                */}
       {/* ═══════════════════════════════════════════════ */}
-      {activeTab === 'my' && (
-        isAuthenticated
-          ? <WorkspaceTab isDark={isDark} />
-          : <MyEvolutionPanel isDark={isDark} isAuthenticated={isAuthenticated} />
-      )}
+      {activeTab === 'my' &&
+        (isAuthenticated ? (
+          <WorkspaceTab isDark={isDark} />
+        ) : (
+          <MyEvolutionPanel isDark={isDark} isAuthenticated={isAuthenticated} />
+        ))}
 
       {/* CTA */}
       {!isAuthenticated && activeTab === 'library' && (

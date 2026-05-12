@@ -21,6 +21,12 @@ import { createModuleLogger } from '../../lib/logger';
 
 const log = createModuleLogger('Evolution');
 
+// Synthetic workspace for global seed-gene templates (visibility='seed',
+// ownerAgentId='system:seed'). m3 phase 2 made workspaceId NOT NULL on
+// im_genes / im_gene_signals; system templates have no real workspace, so we
+// pin them to a constant value. No FK on the column, so the string is opaque.
+const SYSTEM_SEED_WORKSPACE = 'system';
+
 // ===== Gene Store (uses im_genes table) =====
 
 /** Convert DB row to PrismerGene interface */
@@ -63,10 +69,15 @@ export function dbGeneToModel(r: any): PrismerGene {
 
 /**
  * Load all genes owned by an agent from im_genes table.
+ *
+ * v1.9.3 m3: the `scope` column was dropped (migration 120). The parameter
+ * is retained for backwards-compatible call signatures but is no longer
+ * applied to the Prisma where clause.
  */
-export async function loadGenes(agentId: string, scope = 'global'): Promise<PrismerGene[]> {
+export async function loadGenes(agentId: string, _scope = 'global'): Promise<PrismerGene[]> {
+  void _scope; // legacy param; column dropped in m3 phase 2
   const rows = await prisma.iMGene.findMany({
-    where: { ownerAgentId: agentId, scope },
+    where: { ownerAgentId: agentId },
     include: { signalLinks: true },
   });
   return rows.map((r: any) => dbGeneToModel(r));
@@ -74,8 +85,12 @@ export async function loadGenes(agentId: string, scope = 'global'): Promise<Pris
 
 /**
  * Save a gene to im_genes table. Upserts by ID.
+ *
+ * v1.9.3 m3: `scope` parameter retained for back-compat but no longer
+ * persisted (column dropped in migration 120).
  */
-export async function saveGene(agentId: string, gene: PrismerGene, scope = 'global'): Promise<void> {
+export async function saveGene(agentId: string, gene: PrismerGene, _scope = 'global'): Promise<void> {
+  void _scope; // legacy param; column dropped in m3 phase 2
   await prisma.iMGene.upsert({
     where: { id: gene.id },
     update: {
@@ -108,7 +123,6 @@ export async function saveGene(agentId: string, gene: PrismerGene, scope = 'glob
       parentId: gene.parentGeneId,
       forkCount: gene.forkCount ?? 0,
       generation: gene.generation ?? 1,
-      scope,
     },
   });
 
@@ -823,6 +837,7 @@ export async function ensureSeedGenesInTable(): Promise<void> {
         create: {
           id: g.id,
           ownerAgentId: 'system:seed',
+          workspaceId: SYSTEM_SEED_WORKSPACE,
           category: g.category,
           title: g.title || '',
           description: g.description || '',
@@ -839,7 +854,12 @@ export async function ensureSeedGenesInTable(): Promise<void> {
       for (const tag of g.signals_match ?? []) {
         try {
           await prisma.iMGeneSignal.create({
-            data: { geneId: g.id, signalId: tag.type, signalTags: JSON.stringify([tag]) },
+            data: {
+              geneId: g.id,
+              workspaceId: SYSTEM_SEED_WORKSPACE,
+              signalId: tag.type,
+              signalTags: JSON.stringify([tag]),
+            },
           });
         } catch {
           /* skip duplicate */
@@ -855,10 +875,39 @@ export async function ensureSeedGenesInTable(): Promise<void> {
 /**
  * Seed initial genes for a newly registered agent.
  * Clones seed genes into im_genes table with agent-specific IDs.
+ *
+ * v1.9.3: im_genes / im_gene_signals require workspaceId NOT NULL.
+ * Caller passes the agent's owner workspace; if missing, resolve from the
+ * agent IMUser's owner human → default workspace.
  */
-export async function seedGenesForNewAgent(agentId: string): Promise<void> {
+export async function seedGenesForNewAgent(agentId: string, workspaceId?: string): Promise<void> {
   const seedGenes = loadSeedGenes();
   if (seedGenes.length === 0) return;
+
+  let wsId = workspaceId;
+  if (!wsId) {
+    const agent = await prisma.iMUser.findUnique({
+      where: { id: agentId },
+      select: { userId: true },
+    });
+    if (agent?.userId) {
+      const owner = await prisma.iMUser.findFirst({
+        where: { userId: agent.userId, role: 'human' },
+        select: { id: true },
+      });
+      if (owner) {
+        const ws = await prisma.iMWorkspace.findFirst({
+          where: { ownerImUserId: owner.id, isDefault: true, deletedAt: null },
+          select: { id: true },
+        });
+        wsId = ws?.id;
+      }
+    }
+  }
+  if (!wsId) {
+    log.info(`seedGenesForNewAgent skipped — no workspaceId for agent ${agentId}`);
+    return;
+  }
 
   // Check if agent already has genes in the table
   const existingCount = await prisma.iMGene.count({ where: { ownerAgentId: agentId } });
@@ -872,6 +921,7 @@ export async function seedGenesForNewAgent(agentId: string): Promise<void> {
         data: {
           id: geneId,
           ownerAgentId: agentId,
+          workspaceId: wsId,
           category: g.category,
           title: g.title || '',
           description: g.description || '',
@@ -886,7 +936,7 @@ export async function seedGenesForNewAgent(agentId: string): Promise<void> {
       for (const tag of g.signals_match) {
         try {
           await prisma.iMGeneSignal.create({
-            data: { geneId, signalId: tag.type, signalTags: JSON.stringify([tag]) },
+            data: { geneId, workspaceId: wsId, signalId: tag.type, signalTags: JSON.stringify([tag]) },
           });
         } catch {
           /* skip duplicate */

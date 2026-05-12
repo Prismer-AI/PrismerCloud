@@ -1,0 +1,16 @@
+{
+  "id": "modifier-small",
+  "type": "modifier",
+  "sizeKey": "B",
+  "name": { "zh": "小型 (3-10)", "en": "Small (3-10)" },
+  "headcountRange": [3, 10],
+  "maxRoles": 5,
+  "renameRule": "CASUAL_NAME",
+  "skipRolesWithoutCorporateName": false,
+  "description": "Lean team. CEO + 3-4 specialists. Use casual role names.",
+  "tagline": {
+    "zh": "精干小队,职能划分清晰",
+    "en": "Lean team, clear functional split"
+  },
+  "selectionPriority": ["primary", "appliesAtSize-B-and-industry-specific", "appliesAtSize-B-core"]
+}

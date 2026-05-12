@@ -17,6 +17,11 @@ import type { KnowledgeLinkService } from '../services/knowledge-link.service';
 import type { EventBusService } from '../services/event-bus.service';
 import type { ApiResponse } from '../types/index';
 import { recallMemory, type RecallStrategy } from '../services/memory-recall';
+import {
+  WorkspaceResolutionError,
+  memoryWorkspaceErrorResponse,
+  resolveMemoryWorkspaceIdForRequest,
+} from './workspace-resolver';
 
 interface RecallResult {
   source: 'memory' | 'cache' | 'evolution';
@@ -108,6 +113,16 @@ export function createRecallRouter(
   eventBusService?: EventBusService,
 ) {
   const router = new Hono();
+  const resolveWorkspace = async (c: any, explicit?: unknown) => {
+    try {
+      return { workspaceId: await resolveMemoryWorkspaceIdForRequest(c, explicit) };
+    } catch (err) {
+      if (err instanceof WorkspaceResolutionError) {
+        return { response: memoryWorkspaceErrorResponse(c, err) };
+      }
+      throw err;
+    }
+  };
 
   router.use('*', authMiddleware);
 
@@ -126,6 +141,7 @@ export function createRecallRouter(
     const scope = c.req.query('scope') || 'all';
     const memoryScope = c.req.query('memoryScope') || 'global';
     const limit = Math.min(parseInt(c.req.query('limit') || '10', 10), 50);
+    const workspaceIdParam = c.req.query('workspaceId');
 
     if (!q || !q.trim()) {
       return c.json<ApiResponse>({ ok: false, error: 'q (query) parameter is required' }, 400);
@@ -141,12 +157,19 @@ export function createRecallRouter(
 
     // Run searches in parallel
     const searches: Promise<void>[] = [];
+    let workspaceId: string | undefined;
+
+    if (scope === 'all' || scope === 'memory') {
+      const resolved = await resolveWorkspace(c, workspaceIdParam);
+      if (resolved.response) return resolved.response;
+      workspaceId = resolved.workspaceId;
+    }
 
     // ── Memory search ──────────────────────────────────────
     if (scope === 'all' || scope === 'memory') {
       searches.push(
         memoryService
-          .searchMemoryFiles(user.imUserId, query, limit, memoryScope)
+          .searchMemoryFiles(workspaceId!, query, limit, memoryScope)
           .then((files) => {
             for (const f of files) {
               // Pass through upstream relevance: memory.service already ran FULLTEXT +
@@ -246,8 +269,7 @@ export function createRecallRouter(
               SELECT id, title, description, category, successCount, updatedAt,
                      MATCH(title, description) AGAINST(${booleanQuery} IN BOOLEAN MODE) AS ft_score
               FROM im_genes
-              WHERE scope = ${memoryScope}
-                AND visibility IN ('published', 'seed')
+              WHERE visibility IN ('published', 'seed')
                 AND MATCH(title, description) AGAINST(${booleanQuery} IN BOOLEAN MODE)
               ORDER BY ft_score DESC
               LIMIT ${limit}
@@ -345,8 +367,12 @@ export function createRecallRouter(
 
     const clampedMax = Math.min(Math.max(1, maxResults), 20);
 
+    const resolved = await resolveWorkspace(c, body.workspaceId);
+    if (resolved.response) return resolved.response;
+
     const results = await recallMemory(memoryService, {
       query: query.trim(),
+      workspaceId: resolved.workspaceId!,
       agentId: user.imUserId,
       scope,
       maxResults: clampedMax,

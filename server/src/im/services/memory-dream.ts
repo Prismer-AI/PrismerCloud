@@ -12,6 +12,7 @@
  * Inspired by: Claude Code auto-dream consolidation
  */
 
+import * as crypto from 'crypto';
 import prisma from '../db';
 import { callLLM } from './evolution-distill';
 import { KnowledgeLinkService } from './knowledge-link.service';
@@ -40,7 +41,7 @@ export interface DreamResult {
  * Uses both in-process lock (_dreamLocks) and DB-level optimistic lock
  * (meta.dream_lock_at) for cross-Pod safety.
  */
-export async function shouldDream(agentId: string): Promise<{ ready: boolean; reason: string }> {
+export async function shouldDream(agentId: string, workspaceId: string): Promise<{ ready: boolean; reason: string }> {
   // Fast path: in-process lock avoids unnecessary DB query (with TTL to prevent stuck locks)
   const lockExpiry = _dreamLocks.get(agentId);
   if (lockExpiry && Date.now() < lockExpiry) {
@@ -80,7 +81,7 @@ export async function shouldDream(agentId: string): Promise<{ ready: boolean; re
   // Activity gate: count memory files updated since last dream (proxy for session activity)
   const lastDreamDate = lastDreamAt > 0 ? new Date(lastDreamAt) : new Date(0);
   const recentActivity = await prisma.iMMemoryFile.count({
-    where: { ownerId: agentId, updatedAt: { gte: lastDreamDate } },
+    where: { workspaceId, ownerId: agentId, updatedAt: { gte: lastDreamDate } },
   });
   if (recentActivity < DREAM_SESSION_GATE) {
     return {
@@ -89,7 +90,7 @@ export async function shouldDream(agentId: string): Promise<{ ready: boolean; re
     };
   }
 
-  const fileCount = await prisma.iMMemoryFile.count({ where: { ownerId: agentId } });
+  const fileCount = await prisma.iMMemoryFile.count({ where: { workspaceId, ownerId: agentId } });
   if (fileCount < 3) {
     return { ready: false, reason: 'Too few memory files to consolidate' };
   }
@@ -176,8 +177,8 @@ async function releaseDbDreamLock(agentId: string): Promise<void> {
 /**
  * Run the dream consolidation for an agent.
  */
-export async function runDream(agentId: string, scope: string = 'global'): Promise<DreamResult> {
-  const { ready, reason } = await shouldDream(agentId);
+export async function runDream(agentId: string, workspaceId: string, scope: string = 'global'): Promise<DreamResult> {
+  const { ready, reason } = await shouldDream(agentId, workspaceId);
   if (!ready) {
     return { triggered: false, reason, merged: 0, staleMarked: 0, contradictions: 0, indexUpdated: false };
   }
@@ -197,8 +198,9 @@ export async function runDream(agentId: string, scope: string = 'global'): Promi
 
   _dreamLocks.set(agentId, Date.now() + DREAM_LOCK_TTL_MS);
   try {
+    // v1.9.2: scope filter dropped — im_memory_files no longer has a scope column.
     const files = await prisma.iMMemoryFile.findMany({
-      where: { ownerId: agentId, scope },
+      where: { workspaceId, ownerId: agentId },
       orderBy: { updatedAt: 'desc' },
     });
 
@@ -220,13 +222,13 @@ export async function runDream(agentId: string, scope: string = 'global'): Promi
     let merged = 0;
     let contradictions = 0;
     if (process.env.OPENAI_API_KEY) {
-      const result = await llmConsolidate(agentId, files, scope);
+      const result = await llmConsolidate(agentId, workspaceId, files, scope);
       merged = result.merged;
       contradictions = result.contradictions;
     }
 
     // Phase 3: Update MEMORY.md index
-    const indexUpdated = await updateMemoryIndex(agentId, scope);
+    const indexUpdated = await updateMemoryIndex(agentId, workspaceId, scope);
 
     // Update last_dream_at (also clears lock)
     const card = await prisma.iMAgentCard.findUnique({ where: { imUserId: agentId } });
@@ -274,6 +276,7 @@ async function markStaleMemories(
 
 async function llmConsolidate(
   agentId: string,
+  workspaceId: string,
   files: Array<{ id: string; path: string; content: string; memoryType: string | null; updatedAt: Date }>,
   scope: string,
 ): Promise<{ merged: number; contradictions: number }> {
@@ -349,27 +352,40 @@ For each contradiction pair, output:
       if (sourceFiles.length < 2) continue;
 
       const mergedContent = sourceFiles.map((f) => `## From: ${f.path}\n\n${f.content}`).join('\n\n---\n\n');
+      const contentHash = memoryContentHash(mergedContent);
 
       await prisma.iMMemoryFile.upsert({
         where: {
-          ownerId_scope_path: { ownerId: agentId, scope, path: group.target },
+          workspaceId_path: { workspaceId, path: group.target },
         },
         create: {
+          workspaceId,
           ownerId: agentId,
           ownerType: 'agent',
-          scope,
           path: group.target,
           content: mergedContent,
           memoryType: 'project',
           description: `Merged: ${group.reason}`,
           version: 1,
           lastConsolidatedAt: new Date(),
+          visibility: 'workspace',
+          encrypted: false,
+          contentHash,
+          etag: contentHash,
+          sourceKind: 'memory-dream',
+          sourceRef: `dream:merge:${group.target}`,
         },
         update: {
+          ownerId: agentId,
+          ownerType: 'agent',
           content: mergedContent,
           description: `Merged: ${group.reason}`,
           version: { increment: 1 },
           lastConsolidatedAt: new Date(),
+          contentHash,
+          etag: contentHash,
+          sourceKind: 'memory-dream',
+          sourceRef: `dream:merge:${group.target}`,
         },
       });
 
@@ -434,10 +450,12 @@ For each contradiction pair, output:
   return { merged, contradictions };
 }
 
-async function updateMemoryIndex(agentId: string, scope: string): Promise<boolean> {
+async function updateMemoryIndex(agentId: string, workspaceId: string, _scope: string): Promise<boolean> {
+  void _scope;
   try {
+    // v1.9.2: scope filter dropped — im_memory_files no longer has a scope column.
     const files = await prisma.iMMemoryFile.findMany({
-      where: { ownerId: agentId, scope, stale: false },
+      where: { workspaceId, ownerId: agentId, stale: false },
       select: { path: true, memoryType: true, description: true, updatedAt: true },
       orderBy: { updatedAt: 'desc' },
     });
@@ -454,22 +472,35 @@ async function updateMemoryIndex(agentId: string, scope: string): Promise<boolea
     );
 
     const indexContent = `# Memory Index\n\n_Auto-updated by Dream consolidation (${new Date().toISOString().slice(0, 10)})_\n\n${lines.join('\n')}\n`;
+    const contentHash = memoryContentHash(indexContent);
 
     await prisma.iMMemoryFile.upsert({
       where: {
-        ownerId_scope_path: { ownerId: agentId, scope, path: 'MEMORY.md' },
+        workspaceId_path: { workspaceId, path: 'MEMORY.md' },
       },
       create: {
+        workspaceId,
         ownerId: agentId,
         ownerType: 'agent',
-        scope,
         path: 'MEMORY.md',
         content: indexContent,
         version: 1,
+        visibility: 'workspace',
+        encrypted: false,
+        contentHash,
+        etag: contentHash,
+        sourceKind: 'memory-dream',
+        sourceRef: 'dream:index',
       },
       update: {
+        ownerId: agentId,
+        ownerType: 'agent',
         content: indexContent,
         version: { increment: 1 },
+        contentHash,
+        etag: contentHash,
+        sourceKind: 'memory-dream',
+        sourceRef: 'dream:index',
       },
     });
 
@@ -478,4 +509,7 @@ async function updateMemoryIndex(agentId: string, scope: string): Promise<boolea
     console.warn(`${LOG} Index update failed:`, (err as Error).message);
     return false;
   }
+}
+function memoryContentHash(content: string): string {
+  return crypto.createHash('sha256').update(content).digest('hex');
 }

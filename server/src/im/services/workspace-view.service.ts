@@ -42,6 +42,11 @@ export class WorkspaceViewService {
     includeContent = false,
   ): Promise<WorkspaceView> {
     const personAgentIds = await getPersonAgentIds(agentId);
+    const card = await prisma.iMAgentCard.findUnique({
+      where: { imUserId: agentId },
+      select: { workspaceId: true },
+    });
+    const workspaceId = card?.workspaceId ?? null;
 
     const view: WorkspaceView = { scope, agentId, personAgentIds };
 
@@ -56,13 +61,13 @@ export class WorkspaceViewService {
       );
     if (slotSet.has('memory'))
       tasks.push(
-        this.loadMemory(personAgentIds, scope, includeContent).then((v) => {
+        this.loadMemory(workspaceId, personAgentIds, scope, includeContent).then((v) => {
           view.memory = v;
         }),
       );
     if (slotSet.has('personality'))
       tasks.push(
-        this.loadPersonality(agentId, personAgentIds, scope).then((v) => {
+        this.loadPersonality(agentId, workspaceId, personAgentIds, scope).then((v) => {
           view.personality = v;
         }),
       );
@@ -92,7 +97,7 @@ export class WorkspaceViewService {
       );
     if (slotSet.has('extensions'))
       tasks.push(
-        this.loadExtensions(personAgentIds, scope, includeContent).then((v) => {
+        this.loadExtensions(workspaceId, personAgentIds, scope, includeContent).then((v) => {
           view.extensions = v;
         }),
       );
@@ -108,12 +113,14 @@ export class WorkspaceViewService {
 
   // ── Slot: genes ────────────────────────────────────────────────────
 
-  private async loadGenes(personIds: string[], scope: string): Promise<WorkspaceGene[]> {
-    // 1. Fetch genes (limit 100)
+  private async loadGenes(personIds: string[], _scope: string): Promise<WorkspaceGene[]> {
+    // 1. Fetch genes (limit 100). Migration 120 dropped scope on im_genes /
+    // im_evolution_edges / im_knowledge_links / im_agent_skills / im_evolution_capsules,
+    // so all scope-based filters here are no-ops; the function still accepts
+    // `scope` for caller-side compat but ignores it at the DB layer.
     const genes = await prisma.iMGene.findMany({
       where: {
         ownerAgentId: { in: personIds },
-        scope: { in: [scope, 'global'] },
         visibility: { not: 'quarantined' },
       },
       take: 100,
@@ -125,36 +132,28 @@ export class WorkspaceViewService {
     const geneIds = genes.map((g: any) => g.id as string);
     const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
 
-    // 2-6. Parallel sub-queries (all scoped to prevent cross-scope data leakage)
-    const scopeWhere = scopeFilter(scope);
     const [edgeCounts, linkCounts, skillOrigins, capsules] = await Promise.all([
-      // edgeCount per gene (scoped)
       prisma.iMEvolutionEdge.groupBy({
         by: ['geneId'],
-        where: { geneId: { in: geneIds }, scope: scopeWhere },
+        where: { geneId: { in: geneIds } },
         _count: { id: true },
       }),
-      // linkCount per gene (as source, scoped)
       prisma.iMKnowledgeLink.groupBy({
         by: ['sourceId'],
-        where: { sourceType: 'gene', sourceId: { in: geneIds }, scope: scopeWhere },
+        where: { sourceType: 'gene', sourceId: { in: geneIds } },
         _count: { id: true },
       }),
-      // skill origin lookup (scoped)
       prisma.iMAgentSkill.findMany({
         where: {
           geneId: { in: geneIds },
           agentId: { in: personIds },
-          scope: scopeWhere,
           status: 'active',
         },
         select: { geneId: true, skillId: true },
       }),
-      // capsules from last 7 days for trend (scoped)
       prisma.iMEvolutionCapsule.findMany({
         where: {
           geneId: { in: geneIds },
-          scope: scopeWhere,
           createdAt: { gte: sevenDaysAgo },
         },
         select: { geneId: true, score: true, outcome: true, createdAt: true },
@@ -286,14 +285,17 @@ export class WorkspaceViewService {
   // ── Slot: memory ──────────────────────────────────────────────────
 
   private async loadMemory(
+    workspaceId: string | null,
     personIds: string[],
-    scope: string,
+    _scope: string,
     includeContent: boolean,
   ): Promise<WorkspaceMemoryFile[]> {
+    void _scope; // v1.9.2: im_memory_files.scope dropped — workspace isolation moves to workspaceId
+    if (!workspaceId) return [];
     const files = await prisma.iMMemoryFile.findMany({
       where: {
+        workspaceId,
         ownerId: { in: personIds },
-        scope: scopeFilter(scope),
         OR: [
           { memoryType: { not: null, notIn: ['soul'] }, NOT: { memoryType: { startsWith: 'ext_' } } },
           { memoryType: null },
@@ -322,13 +324,21 @@ export class WorkspaceViewService {
 
   // ── Slot: personality ─────────────────────────────────────────────
 
-  private async loadPersonality(agentId: string, personIds: string[], scope: string): Promise<WorkspacePersonality> {
+  private async loadPersonality(
+    agentId: string,
+    workspaceId: string | null,
+    personIds: string[],
+    _scope: string,
+  ): Promise<WorkspacePersonality> {
+    void _scope; // v1.9.2: im_memory_files.scope dropped
     const [card, soulFile] = await Promise.all([
       prisma.iMAgentCard.findUnique({ where: { imUserId: agentId }, select: { metadata: true } }),
-      prisma.iMMemoryFile.findFirst({
-        where: { ownerId: { in: personIds }, scope: scopeFilter(scope), memoryType: 'soul' },
-        select: { content: true },
-      }),
+      workspaceId
+        ? prisma.iMMemoryFile.findFirst({
+            where: { workspaceId, ownerId: { in: personIds }, memoryType: 'soul' },
+            select: { content: true },
+          })
+        : Promise.resolve(null),
     ]);
 
     let personality: Partial<WorkspacePersonality> = {};
@@ -385,11 +395,11 @@ export class WorkspaceViewService {
 
   // ── Slot: catalog ─────────────────────────────────────────────────
 
-  private async loadCatalog(personIds: string[], scope: string): Promise<WorkspaceCatalogEntry[]> {
+  private async loadCatalog(personIds: string[], _scope: string): Promise<WorkspaceCatalogEntry[]> {
+    void _scope; // Migration 120 dropped scope from im_agent_skills
     const records = await prisma.iMAgentSkill.findMany({
       where: {
         agentId: { in: personIds },
-        scope: scopeFilter(scope),
         status: 'active',
       },
       orderBy: { installedAt: 'desc' },
@@ -420,11 +430,11 @@ export class WorkspaceViewService {
 
   // ── Slot: tasks ───────────────────────────────────────────────────
 
-  private async loadTasks(personIds: string[], scope: string): Promise<WorkspaceTask[]> {
+  private async loadTasks(personIds: string[], _scope: string): Promise<WorkspaceTask[]> {
+    void _scope; // Migration 120 dropped scope from im_tasks
     const tasks = await prisma.iMTask.findMany({
       where: {
         creatorId: { in: personIds },
-        scope: scopeFilter(scope),
         status: { notIn: ['cancelled'] },
       },
       select: { id: true, title: true, status: true, assigneeId: true, createdAt: true },
@@ -459,14 +469,17 @@ export class WorkspaceViewService {
   // ── Slot: extensions ──────────────────────────────────────────────
 
   private async loadExtensions(
+    workspaceId: string | null,
     personIds: string[],
-    scope: string,
+    _scope: string,
     includeContent: boolean,
   ): Promise<WorkspaceExtension[]> {
+    void _scope; // v1.9.2: im_memory_files.scope dropped
+    if (!workspaceId) return [];
     const files = await prisma.iMMemoryFile.findMany({
       where: {
+        workspaceId,
         ownerId: { in: personIds },
-        scope: scopeFilter(scope),
         memoryType: { startsWith: 'ext_' },
       },
       select: {

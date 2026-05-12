@@ -1,0 +1,21 @@
+{
+  "id": "modifier-large",
+  "type": "modifier",
+  "sizeKey": "D",
+  "name": { "zh": "大型 (100+)", "en": "Large (100+)" },
+  "headcountRange": [100, null],
+  "maxRoles": 8,
+  "renameRule": "CORPORATE_NAME",
+  "skipRolesWithoutCorporateName": true,
+  "description": "Roles render as C-suite / department heads (CEO/CTO/CMO/CFO/CHRO/...). Roles without corporateName are SKIPPED — they're absorbed into a peer C-suite at this scale.",
+  "tagline": {
+    "zh": "在大型组织里,每个 agent 代表整个职能部门",
+    "en": "Each agent represents a whole function/department"
+  },
+  "renameMapping": {
+    "rule": "If role.corporateName exists, render using corporateName; otherwise skip the role entirely.",
+    "rationale": "Large org doesn't want 1 AI agent per individual role — it wants 1 AI agent per function. Engineer is absorbed into CTO. Designer absorbed into CPO or marketing org."
+  },
+  "selectionPriority": ["primary", "has-corporateName-and-appliesAtSize-D", "has-corporateName-and-industry-specific"],
+  "q5Status": "If Q5 lands on A (hardcode), this file IS the hardcode. If Q5 lands on B (workspace setting), add a user.metadata.preferCorporateNames flag that overrides renameRule per workspace. If Q5 lands on C (already current state), no change."
+}

@@ -1,0 +1,141 @@
+{
+  "id": "pack-research",
+  "type": "pack",
+  "industryKey": "research",
+  "name": { "zh": "科研 / 研发", "en": "Research / R&D" },
+  "icon": "🔬",
+  "description": "Academic labs, R&D divisions, biotech, deep-tech research.",
+  "taskPatterns": {
+    "zh": "文献综述 + 论文初稿 + 数据汇总 + 经费申请",
+    "en": "Literature review + paper drafts + data summary + grant writing"
+  },
+  "rolesNote": "Research industry's 'CEO' is typically the Lab Head / PI / Director — core.json's CEO role is rendered with that label via i18n. At Size D the §A appendix roster is {CEO, CSO, CTO, COO, CFO, Head of IP & Legal, CHRO} — sales/marketing functions are absorbed into the PI/Director or industry partnerships office, so coreOverrides drops marketer + salesperson. Lab Manager applies only at B/C; at D it is absorbed into COO (operations).",
+  "coreOverrides": {
+    "marketer": { "skip": true },
+    "salesperson": { "skip": true }
+  },
+  "roles": [
+    {
+      "id": "researcher",
+      "slug": "researcher",
+      "displayName": { "zh": "研究员", "en": "Researcher" },
+      "agentType": "specialist",
+      "rationale": {
+        "zh": "实验、文献、数据分析",
+        "en": "Experiments, literature, data analysis"
+      },
+      "appliesAtSize": ["A", "B", "C"],
+      "capabilities": ["experiment-design", "literature-review", "data-analysis"],
+      "defaultIcon": "🧪"
+    },
+    {
+      "id": "technical-writer",
+      "slug": "writer",
+      "displayName": { "zh": "技术作者", "en": "Technical Writer" },
+      "agentType": "specialist",
+      "rationale": {
+        "zh": "论文、专利、文档、申请书",
+        "en": "Papers, patents, docs, proposals"
+      },
+      "appliesAtSize": ["A", "B", "C"],
+      "capabilities": ["academic-writing", "patent-drafting", "documentation"],
+      "defaultIcon": "✍️"
+    },
+    {
+      "id": "data-analyst-research",
+      "slug": "analyst",
+      "displayName": { "zh": "数据分析", "en": "Data Analyst" },
+      "agentType": "specialist",
+      "rationale": {
+        "zh": "统计、建模、可视化",
+        "en": "Stats, modeling, visualization"
+      },
+      "appliesAtSize": ["B", "C"],
+      "capabilities": ["statistics", "modeling", "data-viz"],
+      "defaultIcon": "📊"
+    },
+    {
+      "id": "lab-manager",
+      "slug": "lab-manager",
+      "displayName": { "zh": "实验室主管", "en": "Lab Manager" },
+      "corporateName": { "zh": "实验运营负责人", "en": "Head of Lab Operations" },
+      "agentType": "specialist",
+      "rationale": {
+        "zh": "物资、合规、调度",
+        "en": "Supplies, compliance, scheduling"
+      },
+      "appliesAtSize": ["B", "C"],
+      "capabilities": ["operations", "compliance", "scheduling"],
+      "defaultIcon": "🧰"
+    },
+    {
+      "id": "project-manager-research",
+      "slug": "pm",
+      "displayName": { "zh": "项目经理", "en": "Project Manager" },
+      "agentType": "specialist",
+      "rationale": {
+        "zh": "里程碑、可交付物追踪",
+        "en": "Milestones, deliverables tracking"
+      },
+      "appliesAtSize": ["C"],
+      "capabilities": ["project-management", "milestone-tracking"],
+      "defaultIcon": "🗺"
+    },
+    {
+      "id": "chief-scientist",
+      "slug": "chief-scientist",
+      "displayName": { "zh": "首席科学家", "en": "Chief Scientist" },
+      "corporateName": { "zh": "首席科学官", "en": "CSO" },
+      "agentType": "specialist",
+      "rationale": {
+        "zh": "研究方向、同行评审",
+        "en": "Research agenda, peer review"
+      },
+      "appliesAtSize": ["C", "D"],
+      "capabilities": ["research-strategy", "peer-review"],
+      "defaultIcon": "🔬"
+    },
+    {
+      "id": "head-of-ip",
+      "slug": "ip-legal",
+      "displayName": { "zh": "知识产权 & 法务", "en": "Head of IP & Legal" },
+      "corporateName": { "zh": "知识产权 & 法务负责人", "en": "Head of IP & Legal" },
+      "agentType": "specialist",
+      "rationale": {
+        "zh": "专利、授权、合规",
+        "en": "Patents, licensing, compliance"
+      },
+      "appliesAtSize": ["D"],
+      "capabilities": ["patents", "licensing", "ip-strategy"],
+      "defaultIcon": "⚖️"
+    },
+    {
+      "id": "cto-research",
+      "slug": "cto",
+      "displayName": { "zh": "技术官 / CTO", "en": "Head of Research IT / CTO" },
+      "corporateName": { "zh": "首席技术官", "en": "CTO" },
+      "agentType": "specialist",
+      "rationale": {
+        "zh": "科研计算、数据平台、IT 基础设施、HPC 集群",
+        "en": "Research computing, data platforms, IT infrastructure, HPC clusters"
+      },
+      "appliesAtSize": ["D"],
+      "capabilities": ["research-computing", "data-platform", "it-infrastructure", "hpc"],
+      "defaultIcon": "🖥"
+    },
+    {
+      "id": "hr-research",
+      "slug": "hr",
+      "displayName": { "zh": "人力 / HR", "en": "HR / People Operations" },
+      "corporateName": { "zh": "首席人力官", "en": "CHRO" },
+      "agentType": "specialist",
+      "rationale": {
+        "zh": "研究员招聘、博后管理、学术人才发展、薪酬",
+        "en": "Researcher recruiting, postdoc management, academic talent development, compensation"
+      },
+      "appliesAtSize": ["C", "D"],
+      "capabilities": ["researcher-recruiting", "postdoc-management", "talent-development", "compensation"],
+      "defaultIcon": "👥"
+    }
+  ]
+}

@@ -2,7 +2,18 @@
 
 import { useState, useMemo, useCallback, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Search, FileText, AlertTriangle, Clock, X } from 'lucide-react';
+import {
+  Search,
+  FileText,
+  AlertTriangle,
+  Clock,
+  X,
+  Settings,
+  Lightbulb,
+  Calendar,
+  File as FileIcon,
+} from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import { glass, timeAgo } from '../helpers';
 import { spring, fetchWorkspace } from './shared';
 import { AnimatedCounter } from './animated-counter';
@@ -27,11 +38,11 @@ function classifyFile(f: WorkspaceMemoryFile): (typeof GROUP_ORDER)[number] {
   return 'other';
 }
 
-const GROUP_LABELS: Record<string, { label: string; icon: string }> = {
-  bootstrap: { label: 'Bootstrap', icon: '⚙' },
-  knowledge: { label: 'Knowledge', icon: '💡' },
-  daily: { label: 'Daily Notes', icon: '📅' },
-  other: { label: 'Other', icon: '📄' },
+const GROUP_LABELS: Record<string, { label: string; Icon: LucideIcon }> = {
+  bootstrap: { label: 'Bootstrap', Icon: Settings },
+  knowledge: { label: 'Knowledge', Icon: Lightbulb },
+  daily: { label: 'Daily Notes', Icon: Calendar },
+  other: { label: 'Other', Icon: FileIcon },
 };
 
 export function MemoryTab({ view, scope, isDark }: MemoryTabProps) {
@@ -142,12 +153,14 @@ export function MemoryTab({ view, scope, isDark }: MemoryTabProps) {
           {GROUP_ORDER.map((g) => {
             const count = files.filter((f) => classifyFile(f) === g).length;
             if (count === 0) return null;
+            const GIcon = GROUP_LABELS[g].Icon;
             return (
               <span
                 key={g}
-                className={`text-[10px] px-2 py-0.5 rounded-full ${isDark ? 'bg-white/[0.04] text-zinc-400' : 'bg-zinc-100 text-zinc-500'}`}
+                className={`inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full ${isDark ? 'bg-white/[0.04] text-zinc-400' : 'bg-zinc-100 text-zinc-500'}`}
               >
-                {GROUP_LABELS[g].icon} {count}
+                <GIcon className="h-3 w-3 shrink-0" strokeWidth={1.5} />
+                {count}
               </span>
             );
           })}
@@ -197,31 +210,34 @@ export function MemoryTab({ view, scope, isDark }: MemoryTabProps) {
 
       {/* Grouped file list */}
       <div className="mt-4 space-y-4">
-        {GROUP_ORDER.filter((g) => groups[g]?.length).map((group) => (
-          <div key={group}>
-            <div className="flex items-center gap-2 px-1 mb-2">
-              <span className="text-sm">{GROUP_LABELS[group].icon}</span>
-              <h3
-                className={`text-[11px] font-semibold uppercase tracking-wider ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}
-              >
-                {GROUP_LABELS[group].label}
-              </h3>
-              <span className={`text-[10px] tabular-nums ${isDark ? 'text-zinc-600' : 'text-zinc-300'}`}>
-                {groups[group].length}
-              </span>
+        {GROUP_ORDER.filter((g) => groups[g]?.length).map((group) => {
+          const GIcon = GROUP_LABELS[group].Icon;
+          return (
+            <div key={group}>
+              <div className="flex items-center gap-2 px-1 mb-2">
+                <GIcon className={`h-4 w-4 shrink-0 ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`} strokeWidth={1.5} />
+                <h3
+                  className={`text-[11px] font-semibold uppercase tracking-wider ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}
+                >
+                  {GROUP_LABELS[group].label}
+                </h3>
+                <span className={`text-[10px] tabular-nums ${isDark ? 'text-zinc-600' : 'text-zinc-300'}`}>
+                  {groups[group].length}
+                </span>
+              </div>
+              <div className={`rounded-xl overflow-hidden ${glass(isDark, 'subtle')}`}>
+                {groups[group].map((f, i) => (
+                  <div key={f.path}>
+                    {i > 0 && (
+                      <div className={`mx-4 ${isDark ? 'border-t border-white/[0.04]' : 'border-t border-zinc-100'}`} />
+                    )}
+                    <MemoryRow file={f} scope={scope} isDark={isDark} />
+                  </div>
+                ))}
+              </div>
             </div>
-            <div className={`rounded-xl overflow-hidden ${glass(isDark, 'subtle')}`}>
-              {groups[group].map((f, i) => (
-                <div key={f.path}>
-                  {i > 0 && (
-                    <div className={`mx-4 ${isDark ? 'border-t border-white/[0.04]' : 'border-t border-zinc-100'}`} />
-                  )}
-                  <MemoryRow file={f} scope={scope} isDark={isDark} />
-                </div>
-              ))}
-            </div>
-          </div>
-        ))}
+          );
+        })}
         {filtered.length === 0 && (
           <div className="text-center py-16">
             <FileText className={`w-8 h-8 mx-auto mb-3 ${isDark ? 'text-zinc-700' : 'text-zinc-200'}`} />

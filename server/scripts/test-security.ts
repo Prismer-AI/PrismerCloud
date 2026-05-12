@@ -116,16 +116,15 @@ async function testTokenForgery() {
   });
   assert(garbageStatus === 401, 'Garbage Bearer token → 401', `got ${garbageStatus}`);
 
-  // Malformed JWT (3 dot-separated base64 parts) — synthesised at runtime so
-  // GitGuardian doesn't flag a static JWT-looking literal.
-  const fakeJwt = ['eyJhbGciOiJIUzI1NiJ9', 'eyJzdWIiOiJoYWNrZXIiLCJleHAiOjB9', 'invalidsignature'].join('.');
+  // Malformed JWT (3 dot-separated base64 parts)
+  const fakeJwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJoYWNrZXIiLCJleHAiOjB9.invalidsignature';
   const { status: fakeJwtStatus } = await request('/api/im/conversations', 'GET', undefined, {
     Authorization: `Bearer ${fakeJwt}`,
   });
   assert(fakeJwtStatus === 401 || fakeJwtStatus === 403, 'Forged JWT → 401/403', `got ${fakeJwtStatus}`);
 
   // API key format but fake
-  const fakeApiKey = (process.env.PRISMER_API_KEY || process.env.PRISMER_API_KEY_TEST || '');
+  const fakeApiKey = 'sk-prismer-live-0000000000000000000000000000000000000000000000000000000000000000';
   const { status: fakeKeyStatus } = await request('/api/search', 'POST', { query: 'test' }, {
     Authorization: `Bearer ${fakeApiKey}`,
   });

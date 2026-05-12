@@ -15,6 +15,8 @@ export interface CreateTaskData {
   contextUri?: string;
   creatorId: string;
   assigneeId?: string;
+  workspaceId?: string;
+  /** @deprecated v1.9.x dropped im_tasks.scope; use workspaceId. Accepted for legacy callers but ignored. */
   scope?: string;
   conversationId?: string;
   status?: TaskStatus;
@@ -30,6 +32,8 @@ export interface CreateTaskData {
   retryDelayMs?: number;
   budget?: number;
   metadata?: string; // JSON
+  /** Cloud 3 / S3: 'agent' | 'sandbox' | 'shell' (defaults to 'agent' at the column level). */
+  runtimeRoute?: string;
 }
 
 export interface TaskListFilter {
@@ -37,6 +41,8 @@ export interface TaskListFilter {
   capability?: string;
   assigneeId?: string;
   creatorId?: string;
+  workspaceId?: string;
+  /** @deprecated use workspaceId */
   scope?: string;
   conversationId?: string;
   scheduleType?: ScheduleType;
@@ -52,7 +58,65 @@ export interface CreateTaskLogData {
   metadata?: string; // JSON
 }
 
+export interface CreateTaskRunData {
+  taskId?: string | null;
+  workspaceId?: string | null;
+  conversationId?: string | null;
+  triggerMessageId?: string | null;
+  creatorId: string;
+  assigneeId?: string | null;
+  actorId?: string;
+  sourceKind?: string;
+  capability?: string;
+  status?: string;
+  runtimeRoute?: string;
+  input?: string; // JSON
+  output?: string; // JSON/string
+  outputUri?: string;
+  error?: string;
+  startedAt?: Date;
+  completedAt?: Date;
+  metadata?: string; // JSON
+}
+
+export interface TaskRunListFilter {
+  taskId?: string;
+  workspaceId?: string;
+  conversationId?: string;
+  creatorId?: string;
+  assigneeId?: string;
+  actorId?: string;
+  sourceKind?: string;
+  status?: string;
+  limit?: number;
+  cursor?: string;
+}
+
+export interface UpdateTaskRunData {
+  status?: string;
+  output?: string;
+  outputUri?: string;
+  error?: string;
+  startedAt?: Date | null;
+  completedAt?: Date | null;
+  metadata?: string;
+}
+
+export interface CreateTaskEventData {
+  runId: string;
+  taskId?: string | null;
+  workspaceId?: string | null;
+  conversationId?: string | null;
+  actorId?: string;
+  type: string;
+  level?: string;
+  message?: string;
+  payload?: string; // JSON
+}
+
 export class TaskModel {
+  static readonly DEFAULT_MAX_RETRIES = 3;
+
   async create(data: CreateTaskData) {
     return prisma.iMTask.create({
       data: {
@@ -63,7 +127,7 @@ export class TaskModel {
         contextUri: data.contextUri,
         creatorId: data.creatorId,
         assigneeId: data.assigneeId,
-        scope: data.scope ?? 'global',
+        workspaceId: data.workspaceId,
         conversationId: data.conversationId,
         status: data.status ?? 'pending',
         scheduleType: data.scheduleType,
@@ -74,10 +138,11 @@ export class TaskModel {
         maxRuns: data.maxRuns,
         timeoutMs: data.timeoutMs ?? 300000,
         deadline: data.deadline,
-        maxRetries: data.maxRetries ?? 0,
+        maxRetries: data.maxRetries ?? TaskModel.DEFAULT_MAX_RETRIES,
         retryDelayMs: data.retryDelayMs ?? 60000,
         budget: data.budget,
         metadata: data.metadata ?? '{}',
+        runtimeRoute: data.runtimeRoute ?? 'agent',
       },
     });
   }
@@ -94,7 +159,7 @@ export class TaskModel {
     if (filter.capability) where.capability = filter.capability;
     if (filter.assigneeId) where.assigneeId = filter.assigneeId;
     if (filter.creatorId) where.creatorId = filter.creatorId;
-    if (filter.scope) where.scope = filter.scope;
+    if (filter.workspaceId) where.workspaceId = filter.workspaceId;
     if (filter.conversationId) where.conversationId = filter.conversationId;
     if (filter.scheduleType) where.scheduleType = filter.scheduleType;
 
@@ -160,9 +225,16 @@ export class TaskModel {
     const now = new Date();
     const tasks = await prisma.iMTask.findMany({
       where: {
-        NOT: { scheduleType: null },
         nextRunAt: { lte: now },
         status: { in: ['pending', 'assigned'] },
+        OR: [
+          { scheduleType: { not: null } },
+          {
+            assigneeId: { not: null },
+            retryCount: { gt: 0 },
+          },
+          { runtimeRoute: 'shell' },
+        ],
       },
       orderBy: { nextRunAt: 'asc' },
       take: limit,
@@ -323,6 +395,93 @@ export class TaskModel {
       where: { taskId },
       orderBy: { createdAt: 'desc' },
       take: limit,
+    });
+  }
+
+  // ─── Task Runs / Events ───────────────────────────────────
+
+  async createRun(data: CreateTaskRunData) {
+    return (prisma as any).iMTaskRun.create({
+      data: {
+        taskId: data.taskId ?? undefined,
+        workspaceId: data.workspaceId ?? undefined,
+        conversationId: data.conversationId ?? undefined,
+        triggerMessageId: data.triggerMessageId ?? undefined,
+        creatorId: data.creatorId,
+        assigneeId: data.assigneeId ?? undefined,
+        actorId: data.actorId,
+        sourceKind: data.sourceKind ?? 'task',
+        capability: data.capability,
+        status: data.status ?? 'running',
+        runtimeRoute: data.runtimeRoute ?? 'agent',
+        input: data.input ?? '{}',
+        output: data.output,
+        outputUri: data.outputUri,
+        error: data.error,
+        startedAt: data.startedAt,
+        completedAt: data.completedAt,
+        metadata: data.metadata ?? '{}',
+      },
+    });
+  }
+
+  async findRunById(id: string) {
+    return (prisma as any).iMTaskRun.findUnique({ where: { id } });
+  }
+
+  async listRuns(filter: TaskRunListFilter) {
+    const limit = Math.min(filter.limit ?? 20, 100);
+    const where: Record<string, unknown> = {};
+    if (filter.taskId) where.taskId = filter.taskId;
+    if (filter.workspaceId) where.workspaceId = filter.workspaceId;
+    if (filter.conversationId) where.conversationId = filter.conversationId;
+    if (filter.creatorId) where.creatorId = filter.creatorId;
+    if (filter.assigneeId) where.assigneeId = filter.assigneeId;
+    if (filter.actorId) where.actorId = filter.actorId;
+    if (filter.sourceKind) where.sourceKind = filter.sourceKind;
+    if (filter.status) where.status = filter.status;
+
+    return (prisma as any).iMTaskRun.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+      skip: filter.cursor ? 1 : 0,
+      cursor: filter.cursor ? { id: filter.cursor } : undefined,
+    });
+  }
+
+  async updateRun(id: string, data: UpdateTaskRunData) {
+    try {
+      return await (prisma as any).iMTaskRun.update({
+        where: { id },
+        data,
+      });
+    } catch {
+      return null;
+    }
+  }
+
+  async createRunEvent(data: CreateTaskEventData) {
+    return (prisma as any).iMTaskEvent.create({
+      data: {
+        runId: data.runId,
+        taskId: data.taskId ?? undefined,
+        workspaceId: data.workspaceId ?? undefined,
+        conversationId: data.conversationId ?? undefined,
+        actorId: data.actorId,
+        type: data.type,
+        level: data.level ?? 'info',
+        message: data.message,
+        payload: data.payload ?? '{}',
+      },
+    });
+  }
+
+  async listRunEvents(runId: string, limit: number = 100) {
+    return (prisma as any).iMTaskEvent.findMany({
+      where: { runId },
+      orderBy: { createdAt: 'asc' },
+      take: Math.min(limit, 500),
     });
   }
 }

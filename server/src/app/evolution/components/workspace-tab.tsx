@@ -1,8 +1,9 @@
 'use client';
 
+import Link from 'next/link';
 import { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Loader2, Layers, RefreshCw } from 'lucide-react';
+import { ArrowRight, Layers, RefreshCw } from 'lucide-react';
 import { glass } from './helpers';
 import { fetchWorkspace, fetchScopes, gentleSpring, type WorkspaceSubTab } from './workspace/shared';
 import { ProgressTab } from './workspace/progress-tab';
@@ -32,7 +33,6 @@ export function WorkspaceTab({ isDark }: WorkspaceTabProps) {
   const [scopes, setScopes] = useState<string[]>(['global']);
   const [view, setView] = useState<WorkspaceView | null>(null);
   const [loading, setLoading] = useState(true);
-  const [prevTabKey, setPrevTabKey] = useState<WorkspaceSubTab>(activeTab);
 
   const load = useCallback(async (tab: WorkspaceSubTab, s: string) => {
     setLoading(true);
@@ -46,18 +46,37 @@ export function WorkspaceTab({ isDark }: WorkspaceTabProps) {
     load(activeTab, scope);
   }, [activeTab, scope, load]);
 
-  // Track direction for slide animation
-  const tabIndex = TABS.findIndex((t) => t.key === activeTab);
-  const prevIndex = TABS.findIndex((t) => t.key === prevTabKey);
-  const direction = tabIndex >= prevIndex ? 1 : -1;
-
   function switchTab(tab: WorkspaceSubTab) {
-    setPrevTabKey(activeTab);
     setActiveTab(tab);
   }
 
   return (
     <div className="space-y-4">
+      <div
+        className={`flex flex-col gap-3 rounded-xl p-4 sm:flex-row sm:items-center sm:justify-between ${glass(isDark)}`}
+      >
+        <div>
+          <p className={`text-[10px] uppercase tracking-[0.18em] ${isDark ? 'text-zinc-500' : 'text-zinc-500'}`}>
+            My Agents
+          </p>
+          <h2 className={`mt-1 text-lg font-bold ${isDark ? 'text-white' : 'text-zinc-900'}`}>
+            Agent learning profile
+          </h2>
+          <p className={`mt-1 max-w-2xl text-sm ${isDark ? 'text-zinc-400' : 'text-zinc-600'}`}>
+            Review what your agents learn from Workspace work: progress, memory, identity, and installed capabilities.
+          </p>
+        </div>
+        <Link
+          href="/workspace"
+          className={`inline-flex shrink-0 items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold transition-colors ${
+            isDark ? 'bg-white text-zinc-950 hover:bg-zinc-200' : 'bg-zinc-900 text-white hover:bg-zinc-700'
+          }`}
+        >
+          Open Workspace
+          <ArrowRight className="h-3.5 w-3.5" />
+        </Link>
+      </div>
+
       {/* Tab Bar + Scope */}
       <div className={`flex items-center justify-between p-1.5 rounded-xl ${glass(isDark)}`}>
         {/* Tabs */}

@@ -1,10 +1,8 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import {
-  Filter, Clock, Loader2, CircleDot, Diamond, Star, Trophy,
-  Download, XCircle,
-} from 'lucide-react';
+import { Filter, Clock, Loader2, CircleDot, Diamond, Star, Trophy, Download, XCircle } from 'lucide-react';
+import { getIMClientToken } from '@/lib/im-token';
 import { type FeedEvent, CAT_COLORS, FEED_ICONS, glass, timeAgo } from './helpers';
 
 interface FeedTabProps {
@@ -30,8 +28,14 @@ const FEED_ICON_MAP: Record<string, typeof CircleDot> = {
 
 function TimeAgo({ ts, className }: { ts: string; className?: string }) {
   const [text, setText] = useState('');
-  useEffect(() => { setText(timeAgo(ts)); }, [ts]);
-  return <span className={className} suppressHydrationWarning>{text}</span>;
+  useEffect(() => {
+    setText(timeAgo(ts));
+  }, [ts]);
+  return (
+    <span className={className} suppressHydrationWarning>
+      {text}
+    </span>
+  );
 }
 
 export function FeedTab({ isDark, initialFeed }: FeedTabProps) {
@@ -47,30 +51,42 @@ export function FeedTab({ isDark, initialFeed }: FeedTabProps) {
     if (initialFeed && initialFeed.length > 0) return;
     setLoading(true);
     fetch('/api/im/evolution/public/feed?limit=50')
-      .then(r => r.json())
-      .then(d => setFeed(d.data || []))
+      .then((r) => r.json())
+      .then((d) => setFeed(d.data || []))
       .catch(() => {})
       .finally(() => setLoading(false));
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // SSE connection for real-time updates
   useEffect(() => {
-    let token: string | null = null;
-    try {
-      token = JSON.parse(localStorage.getItem('prismer_auth') || '{}')?.token;
-    } catch {}
+    const token = getIMClientToken();
     if (!token) return;
 
     let es: EventSource | null = null;
     try {
-      es = new EventSource(`/api/im/sse?token=${token}`);
+      es = new EventSource(`/api/im/sync/stream?token=${encodeURIComponent(token)}&since=0`);
 
-      es.addEventListener('evolution:capsule', (e: MessageEvent) => {
+      es.addEventListener('sync', (e: MessageEvent) => {
         try {
-          const data = JSON.parse(e.data);
+          const event = JSON.parse(e.data);
+          if (!event || (event.type !== 'evolution:capsule' && event.type !== 'evolution:achievement')) return;
+          const data = event.data ?? {};
+          if (event.type === 'evolution:achievement') {
+            const newEvent: FeedEvent = {
+              type: 'milestone',
+              timestamp: event.at || new Date().toISOString(),
+              agentName: data.agentId?.slice(-8) || 'agent',
+              geneTitle: `Unlocked: ${data.badgeKey}`,
+              geneCategory: 'innovate',
+              detail: data.badgeName,
+            };
+            setFeed((prev) => [newEvent, ...prev]);
+            setNewEventCount((c) => c + 1);
+            return;
+          }
           const newEvent: FeedEvent = {
             type: 'capsule',
-            timestamp: new Date().toISOString(),
+            timestamp: event.at || new Date().toISOString(),
             agentName: data.agentId?.slice(-8) || 'agent',
             geneTitle: data.geneId || 'Unknown Gene',
             geneCategory: 'repair',
@@ -78,24 +94,8 @@ export function FeedTab({ isDark, initialFeed }: FeedTabProps) {
             score: data.score,
             summary: data.summary,
           };
-          setFeed(prev => [newEvent, ...prev]);
-          setNewEventCount(c => c + 1);
-        } catch {}
-      });
-
-      es.addEventListener('evolution:achievement', (e: MessageEvent) => {
-        try {
-          const data = JSON.parse(e.data);
-          const newEvent: FeedEvent = {
-            type: 'milestone',
-            timestamp: new Date().toISOString(),
-            agentName: data.agentId?.slice(-8) || 'agent',
-            geneTitle: `Unlocked: ${data.badgeKey}`,
-            geneCategory: 'innovate',
-            detail: data.badgeName,
-          };
-          setFeed(prev => [newEvent, ...prev]);
-          setNewEventCount(c => c + 1);
+          setFeed((prev) => [newEvent, ...prev]);
+          setNewEventCount((c) => c + 1);
         } catch {}
       });
 
@@ -104,11 +104,13 @@ export function FeedTab({ isDark, initialFeed }: FeedTabProps) {
       };
     } catch {}
 
-    return () => { es?.close(); };
+    return () => {
+      es?.close();
+    };
   }, []);
 
   // Filter feed
-  const filtered = feed.filter(e => {
+  const filtered = feed.filter((e) => {
     if (filter && e.type !== filter) return false;
     if (catFilter && e.geneCategory !== catFilter) return false;
     return true;
@@ -116,7 +118,11 @@ export function FeedTab({ isDark, initialFeed }: FeedTabProps) {
 
   // Group by date
   const groups = filtered.reduce<Array<{ date: string; events: FeedEvent[] }>>((acc, event) => {
-    const date = new Date(event.timestamp).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+    const date = new Date(event.timestamp).toLocaleDateString('en-US', {
+      weekday: 'short',
+      month: 'short',
+      day: 'numeric',
+    });
     const last = acc[acc.length - 1];
     if (last && last.date === date) {
       last.events.push(event);
@@ -131,9 +137,14 @@ export function FeedTab({ isDark, initialFeed }: FeedTabProps) {
       {/* New events banner */}
       {newEventCount > 0 && (
         <button
-          onClick={() => { setNewEventCount(0); feedTopRef.current?.scrollIntoView({ behavior: 'smooth' }); }}
+          onClick={() => {
+            setNewEventCount(0);
+            feedTopRef.current?.scrollIntoView({ behavior: 'smooth' });
+          }}
           className={`w-full mb-4 py-2 px-4 rounded-lg text-xs font-medium text-center transition-all ${
-            isDark ? 'bg-violet-500/15 text-violet-300 hover:bg-violet-500/25' : 'bg-violet-100 text-violet-700 hover:bg-violet-200'
+            isDark
+              ? 'bg-violet-500/15 text-violet-300 hover:bg-violet-500/25'
+              : 'bg-violet-100 text-violet-700 hover:bg-violet-200'
           }`}
         >
           {newEventCount} new event{newEventCount > 1 ? 's' : ''} — click to scroll up
@@ -151,22 +162,30 @@ export function FeedTab({ isDark, initialFeed }: FeedTabProps) {
             onClick={() => setFilter(key)}
             className={`px-2.5 py-1 rounded-full text-xs font-medium transition-all ${
               filter === key
-                ? (isDark ? 'bg-white/10 text-white' : 'bg-zinc-900 text-white')
-                : (isDark ? 'bg-zinc-800/60 text-zinc-500 hover:text-zinc-300' : 'bg-zinc-100 text-zinc-500 hover:text-zinc-900')
+                ? isDark
+                  ? 'bg-white/10 text-white'
+                  : 'bg-zinc-900 text-white'
+                : isDark
+                  ? 'bg-zinc-800/60 text-zinc-500 hover:text-zinc-300'
+                  : 'bg-zinc-100 text-zinc-500 hover:text-zinc-900'
             }`}
           >
             {label}
           </button>
         ))}
         <div className="w-px h-5 self-center bg-zinc-700/30" />
-        {['', 'repair', 'optimize', 'innovate'].map(cat => (
+        {['', 'repair', 'optimize', 'innovate'].map((cat) => (
           <button
             key={cat}
             onClick={() => setCatFilter(cat)}
             className={`px-2.5 py-1 rounded-full text-xs font-medium transition-all ${
               catFilter === cat
-                ? (isDark ? 'bg-white/10 text-white' : 'bg-zinc-900 text-white')
-                : (isDark ? 'bg-zinc-800/60 text-zinc-500 hover:text-zinc-300' : 'bg-zinc-100 text-zinc-500 hover:text-zinc-900')
+                ? isDark
+                  ? 'bg-white/10 text-white'
+                  : 'bg-zinc-900 text-white'
+                : isDark
+                  ? 'bg-zinc-800/60 text-zinc-500 hover:text-zinc-300'
+                  : 'bg-zinc-100 text-zinc-500 hover:text-zinc-900'
             }`}
           >
             {cat || 'All categories'}
@@ -178,7 +197,9 @@ export function FeedTab({ isDark, initialFeed }: FeedTabProps) {
 
       {/* Timeline */}
       {loading ? (
-        <div className="flex justify-center py-20"><Loader2 className="w-6 h-6 animate-spin text-violet-400" /></div>
+        <div className="flex justify-center py-20">
+          <Loader2 className="w-6 h-6 animate-spin text-violet-400" />
+        </div>
       ) : filtered.length === 0 ? (
         <div className={`text-center py-20 ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>
           <Clock className="w-8 h-8 mx-auto mb-3 opacity-40" />
@@ -188,13 +209,17 @@ export function FeedTab({ isDark, initialFeed }: FeedTabProps) {
         <div className="relative">
           <div className={`absolute left-[19px] top-0 bottom-0 w-px ${isDark ? 'bg-zinc-800' : 'bg-zinc-200'}`} />
 
-          {groups.map(group => (
+          {groups.map((group) => (
             <div key={group.date} className="mb-6">
               <div className="flex items-center gap-3 mb-3">
-                <div className={`w-10 h-6 rounded-full flex items-center justify-center text-[10px] font-bold ${isDark ? 'bg-zinc-800 text-zinc-400' : 'bg-zinc-200 text-zinc-600'}`}>
+                <div
+                  className={`w-10 h-6 rounded-full flex items-center justify-center text-[10px] font-bold ${isDark ? 'bg-zinc-800 text-zinc-400' : 'bg-zinc-200 text-zinc-600'}`}
+                >
                   {group.date.split(',')[0].split(' ')[1] || group.date.slice(0, 3)}
                 </div>
-                <span className={`text-xs font-medium ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>{group.date}</span>
+                <span className={`text-xs font-medium ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>
+                  {group.date}
+                </span>
               </div>
 
               {group.events.map((event, i) => {
@@ -219,23 +244,34 @@ export function FeedTab({ isDark, initialFeed }: FeedTabProps) {
                           backgroundColor: isDark ? 'rgb(24,24,27)' : 'white',
                         }}
                       >
-                        {isFailure
-                          ? <XCircle className="w-3.5 h-3.5 text-red-400" />
-                          : <Icon className={`w-3.5 h-3.5 ${cfg.color}`} />
-                        }
+                        {isFailure ? (
+                          <XCircle className="w-3.5 h-3.5 text-red-400" />
+                        ) : (
+                          <Icon className={`w-3.5 h-3.5 ${cfg.color}`} />
+                        )}
                       </div>
                     </div>
 
                     {/* Content */}
                     <div className="flex-1 min-w-0 pt-1">
                       <p className={`text-sm leading-snug ${isDark ? 'text-zinc-300' : 'text-zinc-700'}`}>
-                        <span className="font-semibold" style={{ color: catColor }}>{event.agentName}</span>
-                        {' '}
+                        <span className="font-semibold" style={{ color: catColor }}>
+                          {event.agentName}
+                        </span>{' '}
                         <span className={isDark ? 'text-zinc-500' : 'text-zinc-400'}>
-                          {event.type === 'capsule' ? 'executed' : event.type === 'publish' ? 'published' : event.type === 'distill' ? 'distilled' : event.type === 'milestone' ? 'achieved' : 'imported'}
+                          {event.type === 'capsule'
+                            ? 'executed'
+                            : event.type === 'publish'
+                              ? 'published'
+                              : event.type === 'distill'
+                                ? 'distilled'
+                                : event.type === 'milestone'
+                                  ? 'achieved'
+                                  : 'imported'}
+                        </span>{' '}
+                        <span className={`font-medium ${isDark ? 'text-zinc-200' : 'text-zinc-800'}`}>
+                          {event.geneTitle}
                         </span>
-                        {' '}
-                        <span className={`font-medium ${isDark ? 'text-zinc-200' : 'text-zinc-800'}`}>{event.geneTitle}</span>
                         {event.score != null && (
                           <span className={`ml-1 text-xs ${isFailure ? 'text-red-400' : 'text-emerald-400'}`}>
                             ({Math.round(event.score * 100)}%)
@@ -243,27 +279,40 @@ export function FeedTab({ isDark, initialFeed }: FeedTabProps) {
                         )}
                       </p>
                       {event.summary && (
-                        <p className={`text-xs mt-0.5 ${isDark ? 'text-zinc-600' : 'text-zinc-400'}`}>{event.summary}</p>
+                        <p className={`text-xs mt-0.5 ${isDark ? 'text-zinc-600' : 'text-zinc-400'}`}>
+                          {event.summary}
+                        </p>
                       )}
-                      <TimeAgo ts={event.timestamp} className={`text-[10px] mt-0.5 block ${isDark ? 'text-zinc-700' : 'text-zinc-400'}`} />
+                      <TimeAgo
+                        ts={event.timestamp}
+                        className={`text-[10px] mt-0.5 block ${isDark ? 'text-zinc-700' : 'text-zinc-400'}`}
+                      />
                     </div>
 
                     {/* Outcome badge */}
                     {event.type === 'capsule' && (
-                      <span className={`shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded-full mt-1 ${
-                        isFailure
-                          ? (isDark ? 'bg-red-500/10 text-red-400' : 'bg-red-100 text-red-600')
-                          : (isDark ? 'bg-emerald-500/10 text-emerald-400' : 'bg-emerald-100 text-emerald-600')
-                      }`}>
+                      <span
+                        className={`shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded-full mt-1 ${
+                          isFailure
+                            ? isDark
+                              ? 'bg-red-500/10 text-red-400'
+                              : 'bg-red-100 text-red-600'
+                            : isDark
+                              ? 'bg-emerald-500/10 text-emerald-400'
+                              : 'bg-emerald-100 text-emerald-600'
+                        }`}
+                      >
                         {isFailure ? 'Failed' : 'Success'}
                       </span>
                     )}
 
                     {/* Milestone celebration */}
                     {event.type === 'milestone' && (
-                      <span className={`shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded-full mt-1 ${
-                        isDark ? 'bg-cyan-500/10 text-cyan-400' : 'bg-cyan-100 text-cyan-600'
-                      }`}>
+                      <span
+                        className={`shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded-full mt-1 ${
+                          isDark ? 'bg-cyan-500/10 text-cyan-400' : 'bg-cyan-100 text-cyan-600'
+                        }`}
+                      >
                         Milestone
                       </span>
                     )}

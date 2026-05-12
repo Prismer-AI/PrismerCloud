@@ -6,6 +6,7 @@
  */
 
 import { createHmac } from 'crypto';
+import { EventEmitter } from 'node:events';
 import type Redis from 'ioredis';
 import prisma from '../db';
 import type { RoomManager } from '../ws/rooms';
@@ -68,6 +69,17 @@ export class EventBusService {
    * Entries are evicted when the map exceeds MAX_COOLDOWN_ENTRIES.
    */
   private cooldownMap = new Map<string, number>();
+  /**
+   * In-process broadcast for non-webhook subscribers (SSE handlers, WS
+   * relays). Webhook delivery still goes through DB-backed subscriptions
+   * + cooldown; this emitter is the live-relay channel for HTTP clients
+   * that want zero-latency typed events without registering a webhook.
+   *
+   * Cross-pod note: this emitter is single-pod only. Multi-pod cloud
+   * deployments must add Redis pub/sub fan-out — but cookbook + dev
+   * stack are single-pod, so deferred.
+   */
+  private localEmitter = new EventEmitter();
 
   constructor(deps: EventBusServiceDeps) {
     this.deps = deps;
@@ -77,6 +89,24 @@ export class EventBusService {
     } else {
       log.info('Using in-memory cooldown (single-pod only)');
     }
+    // Cap listeners high enough that many concurrent SSE clients don't
+    // trigger Node's default 10-listener warning. Each /tasks/events
+    // connection adds one.
+    this.localEmitter.setMaxListeners(0);
+  }
+
+  /**
+   * Subscribe to every published event in-process. Returns an unsubscribe
+   * function. Caller is responsible for filtering (e.g. by event.type
+   * prefix or event.data.creatorId / assigneeId for task.* events) and
+   * for not blocking — the emitter is synchronous.
+   *
+   * Used by:
+   *   - GET /api/im/tasks/events SSE handler (typed task.* relay)
+   */
+  onLocalEvent(handler: (event: PlatformEvent) => void): () => void {
+    this.localEmitter.on('event', handler);
+    return () => this.localEmitter.off('event', handler);
   }
 
   // ═══════════════════════════════════════════════════════════
@@ -88,6 +118,17 @@ export class EventBusService {
    * Queries active subscriptions, matches event type + filter, delivers.
    */
   async publish(event: PlatformEvent): Promise<void> {
+    // In-process broadcast first — it's synchronous and SSE clients should
+    // see typed events with minimal latency. Webhook fan-out follows
+    // (DB query + HTTP POST per subscription, slow path). A throw here
+    // is a listener bug; isolate to the listener so other listeners +
+    // webhook delivery still proceed.
+    try {
+      this.localEmitter.emit('event', event);
+    } catch (err) {
+      log.warn(`localEmitter.emit threw for ${event.type}: ${(err as Error).message}`);
+    }
+
     try {
       // Pre-filter by event type prefix in DB to avoid full table scan.
       // Match subscriptions whose events JSON contains the event type or its prefix.

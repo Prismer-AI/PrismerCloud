@@ -29,6 +29,7 @@ export type RecallStrategy = 'keyword' | 'llm' | 'hybrid';
 
 export interface RecallInput {
   query: string;
+  workspaceId: string;
   agentId: string;
   scope?: string;
   maxResults?: number;
@@ -60,10 +61,14 @@ interface ManifestEntry {
 /**
  * Build manifest from memory files — lightweight metadata for LLM context.
  * ~10 tokens per entry, so 200 files ≈ 2K tokens.
+ *
+ * v1.9.2: scope param retained for caller back-compat — no longer used for filtering
+ * (im_memory_files.scope dropped).
  */
-async function buildManifest(agentId: string, scope: string): Promise<ManifestEntry[]> {
+async function buildManifest(workspaceId: string, agentId: string, _scope: string): Promise<ManifestEntry[]> {
+  void _scope;
   const files = await prisma.iMMemoryFile.findMany({
-    where: { ownerId: agentId, scope },
+    where: { workspaceId, ownerId: agentId },
     select: {
       id: true,
       path: true,
@@ -112,8 +117,8 @@ function formatManifest(entries: ManifestEntry[]): string {
  * Keyword-based recall: text matching on path, description, and content.
  */
 async function keywordRecall(memoryService: MemoryService, input: RecallInput): Promise<RecallResult[]> {
-  const { agentId, query, scope = 'global', maxResults = 5, memoryType } = input;
-  const files = await memoryService.searchMemoryFiles(agentId, query, maxResults * 2, scope);
+  const { workspaceId, query, scope = 'global', maxResults = 5, memoryType } = input;
+  const files = await memoryService.searchMemoryFiles(workspaceId, query, maxResults * 2, scope);
 
   let results = files.map((f: any) => ({
     id: f.id,
@@ -152,9 +157,9 @@ function computeKeywordScore(query: string, path: string, desc: string, content:
  * Uses the cheapest fast model (env LLM_RECALL_MODEL or defaults to a haiku-class model).
  */
 async function llmRecall(memoryService: MemoryService, input: RecallInput): Promise<RecallResult[]> {
-  const { agentId, query, scope = 'global', maxResults = 5 } = input;
+  const { workspaceId, query, scope = 'global', maxResults = 5 } = input;
 
-  const manifest = await buildManifest(agentId, scope);
+  const manifest = await buildManifest(workspaceId, input.agentId, scope);
   if (manifest.length === 0) return [];
 
   // For small manifests (≤ maxResults), skip LLM call
@@ -246,7 +251,7 @@ Select the ${maxResults} most relevant files. Return JSON array of indices only.
 
     const results: RecallResult[] = [];
     for (const entry of selected) {
-      const file = await memoryService.readMemoryFile(entry.id);
+      const file = await memoryService.readMemoryFile(entry.id, workspaceId);
       results.push({
         id: entry.id,
         path: entry.path,

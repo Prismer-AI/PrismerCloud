@@ -1,0 +1,116 @@
+{
+  "id": "pack-manufacturing",
+  "type": "pack",
+  "industryKey": "manufacturing",
+  "name": { "zh": "制造业", "en": "Manufacturing" },
+  "icon": "🏭",
+  "description": "Discrete manufacturing, process manufacturing, OEMs.",
+  "taskPatterns": {
+    "zh": "生产排期 + 质检报告 + 供应商管理 + 报价响应",
+    "en": "Production schedule + QC reports + supplier mgmt + RFQ response"
+  },
+  "rolesNote": "Manufacturing leans on salesperson over marketer at B/C/D — wholesale / B2B distribution channels dominate demand-gen. Marketer kept only at Solo (founder doing both). Override pattern shadows core.marketer (skip) + core.salesperson (skip) and re-adds size-targeted versions via pack roles.",
+  "coreOverrides": {
+    "marketer": { "skip": true },
+    "salesperson": { "skip": true }
+  },
+  "roles": [
+    {
+      "id": "operations-mfg",
+      "slug": "operations",
+      "displayName": { "zh": "运营", "en": "Operations" },
+      "corporateName": { "zh": "首席运营官", "en": "COO" },
+      "agentType": "specialist",
+      "rationale": {
+        "zh": "车间排期、生产计划、产能调度",
+        "en": "Floor scheduling, production planning, capacity"
+      },
+      "appliesAtSize": ["A", "B", "C", "D"],
+      "capabilities": ["production-scheduling", "capacity-planning", "operations"],
+      "defaultIcon": "⚙️"
+    },
+    {
+      "id": "marketer-mfg",
+      "slug": "marketer",
+      "displayName": { "zh": "市场", "en": "Marketer" },
+      "agentType": "specialist",
+      "rationale": {
+        "zh": "Solo 创始人兼营销 — 落地页、内容、活动",
+        "en": "Solo founder wears marketer hat — landing pages, content, campaigns"
+      },
+      "appliesAtSize": ["A"],
+      "capabilities": ["content", "growth", "campaign"],
+      "defaultIcon": "📢"
+    },
+    {
+      "id": "engineer-mfg",
+      "slug": "engineer",
+      "displayName": { "zh": "工程师", "en": "Engineer" },
+      "corporateName": { "zh": "首席技术官", "en": "CTO" },
+      "agentType": "specialist",
+      "rationale": {
+        "zh": "产品 / 工艺工程",
+        "en": "Product / process engineering"
+      },
+      "appliesAtSize": ["B", "C", "D"],
+      "capabilities": ["mechanical-design", "process-engineering", "bom"],
+      "defaultIcon": "🔧"
+    },
+    {
+      "id": "quality-manager",
+      "slug": "quality",
+      "displayName": { "zh": "质量经理", "en": "Quality Manager" },
+      "corporateName": { "zh": "首席质量官", "en": "CQO" },
+      "agentType": "specialist",
+      "rationale": {
+        "zh": "QC、审计、合规(ISO 等)",
+        "en": "QC, audits, ISO compliance"
+      },
+      "appliesAtSize": ["B", "C", "D"],
+      "capabilities": ["quality-control", "audit", "compliance", "iso"],
+      "defaultIcon": "✅"
+    },
+    {
+      "id": "procurement",
+      "slug": "procurement",
+      "displayName": { "zh": "采购", "en": "Procurement" },
+      "corporateName": { "zh": "首席供应链官", "en": "CSCO" },
+      "agentType": "specialist",
+      "rationale": {
+        "zh": "供应商、合同、采购",
+        "en": "Suppliers, contracts, procurement"
+      },
+      "appliesAtSize": ["C", "D"],
+      "capabilities": ["procurement", "supplier-management", "contract-negotiation"],
+      "defaultIcon": "📋"
+    },
+    {
+      "id": "salesperson-mfg",
+      "slug": "salesperson",
+      "displayName": { "zh": "销售", "en": "Salesperson" },
+      "corporateName": { "zh": "首席收入官", "en": "CRO" },
+      "agentType": "specialist",
+      "rationale": {
+        "zh": "B2B 大客户、报价、商务谈判",
+        "en": "B2B accounts, RFQ response, deal negotiation"
+      },
+      "appliesAtSize": ["B", "C", "D"],
+      "capabilities": ["b2b-sales", "rfq", "negotiation", "pipeline"],
+      "defaultIcon": "💼"
+    },
+    {
+      "id": "hr-safety",
+      "slug": "hr-safety",
+      "displayName": { "zh": "人力 & 安全", "en": "HR / Safety" },
+      "corporateName": { "zh": "首席人力官", "en": "CHRO" },
+      "agentType": "specialist",
+      "rationale": {
+        "zh": "劳动力、OSHA 类合规",
+        "en": "Workforce, OSHA-equivalent safety"
+      },
+      "appliesAtSize": ["C", "D"],
+      "capabilities": ["hr", "safety-compliance", "workforce-management"],
+      "defaultIcon": "🦺"
+    }
+  ]
+}

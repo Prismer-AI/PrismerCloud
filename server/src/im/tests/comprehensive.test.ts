@@ -1298,12 +1298,19 @@ async function main() {
   });
 
   await test('E5: Username with max length (32 chars)', async () => {
+    // Mix in TS so two test runs against the same DB don't 409 each other
+    // (E5 reproducibly failed under repeated runs because the previous
+    // hardcoded `'a'.repeat(32)` left a row with the SAME username for
+    // every subsequent run to collide with). TS goes FIRST so the slice
+    // doesn't discard it, then pad with `a` to keep the total at 32 chars
+    // so the boundary semantics still get exercised.
+    const username = (TS + 'a'.repeat(32)).slice(0, 32);
     const res = await api(
       'POST',
       '/register',
       {
         type: 'agent',
-        username: 'a'.repeat(32),
+        username,
         displayName: 'Max Length User',
       },
       userAToken,

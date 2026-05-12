@@ -8,6 +8,7 @@
  */
 
 import { useState, useEffect, useRef } from 'react';
+import { getIMClientToken } from '@/lib/im-token';
 import type { EvolutionMapData, EvolutionStory } from './types/evolution-map.types';
 import { GraphSection } from './sections/graph-section';
 
@@ -170,17 +171,16 @@ export function EvolutionMap({ isDark }: Props) {
 
   // SSE for real-time feed updates
   useEffect(() => {
-    let token: string | null = null;
-    try {
-      token = JSON.parse(localStorage.getItem('prismer_auth') || '{}')?.token;
-    } catch {}
+    const token = getIMClientToken();
     if (!token) return;
     let es: EventSource | null = null;
     try {
-      es = new EventSource(`/api/im/sse?token=${token}`);
-      es.addEventListener('evolution:capsule', (e: MessageEvent) => {
+      es = new EventSource(`/api/im/sync/stream?token=${encodeURIComponent(token)}&since=0`);
+      es.addEventListener('sync', (e: MessageEvent) => {
         try {
-          const d = JSON.parse(e.data);
+          const event = JSON.parse(e.data);
+          if (!event || event.type !== 'evolution:capsule') return;
+          const d = event.data ?? {};
           setFeed((prev) =>
             [
               {

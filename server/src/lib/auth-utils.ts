@@ -1,6 +1,6 @@
 /**
  * Authentication Utilities
- * 
+ *
  * 用于解析 JWT token 并获取用户信息
  * 支持 JWT token 和 API Key (sk-prismer-xxx)
  */
@@ -45,7 +45,7 @@ function decodeJwtPayload(token: string): Record<string, unknown> | null {
 
 /**
  * 从 Authorization header 解析用户信息
- * 
+ *
  * 支持：
  * - Bearer <jwt_token>
  * - Bearer sk-prismer-xxx (API Key)
@@ -62,21 +62,19 @@ export async function getUserFromAuth(authHeader: string | null): Promise<AuthRe
   if (!authHeader) {
     return { success: false, error: 'Authorization header required' };
   }
-  
+
   // 提取 token
-  const token = authHeader.startsWith('Bearer ')
-    ? authHeader.slice(7)
-    : authHeader;
-  
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : authHeader;
+
   if (!token) {
     return { success: false, error: 'Invalid authorization format' };
   }
-  
+
   // 检查是否是 API Key
   if (token.startsWith('sk-prismer-')) {
     return getUserFromApiKey(token);
   }
-  
+
   // 尝试解析 JWT
   return getUserFromJwt(token);
 }
@@ -86,35 +84,39 @@ export async function getUserFromAuth(authHeader: string | null): Promise<AuthRe
  */
 async function getUserFromJwt(token: string): Promise<AuthResult> {
   const payload = decodeJwtPayload(token);
-  
+
   if (!payload) {
     return { success: false, error: 'Invalid JWT token' };
   }
-  
-  // 尝试从不同的 JWT payload 格式获取用户 ID
-  // 常见格式: { sub: "123", user_id: 123, id: 123 }
-  const userId = payload.sub || payload.user_id || payload.id;
-  
-  if (!userId) {
-    return { success: false, error: 'User ID not found in token' };
-  }
-  
-  const numericId = typeof userId === 'string' ? parseInt(userId, 10) : userId as number;
-  
-  if (isNaN(numericId)) {
+
+  // Prefer `numericId` (pc_users.id, canonical FK for FF_*_LOCAL handlers
+  // like /api/keys, /api/dashboard/*, /api/billing/*). Newer JWTs from
+  // local-auth.ts::issueToken set both `sub` (IMUser.id, cuid string)
+  // and `numericId` (pc_users.id, int). Legacy tokens may only have `sub`
+  // as a numeric string — keep the parseInt fallback for those.
+  const numericId = (() => {
+    if (typeof payload.numericId === 'number' && Number.isFinite(payload.numericId)) {
+      return payload.numericId;
+    }
+    const userId = payload.sub || payload.user_id || payload.id;
+    if (!userId) return NaN;
+    return typeof userId === 'string' ? parseInt(userId, 10) : (userId as number);
+  })();
+
+  if (!Number.isFinite(numericId)) {
     return { success: false, error: 'Invalid user ID format' };
   }
-  
+
   // 可选：从数据库验证用户存在
   // 这里我们信任 JWT，不做额外查询
   const email = (payload.email as string) || '';
-  
+
   return {
     success: true,
     user: {
       id: numericId,
-      email
-    }
+      email,
+    },
   };
 }
 
@@ -132,7 +134,7 @@ async function getUserFromApiKey(apiKey: string): Promise<AuthResult> {
     }
     return {
       success: true,
-      user: { id: result.userId, email: '' }
+      user: { id: result.userId, email: '' },
     };
   } catch (error) {
     console.error('[Auth] API Key verification error:', error);
@@ -145,10 +147,10 @@ async function getUserFromApiKey(apiKey: string): Promise<AuthResult> {
  */
 export async function requireUserId(authHeader: string | null): Promise<number> {
   const result = await getUserFromAuth(authHeader);
-  
+
   if (!result.success || !result.user) {
     throw new Error(result.error || 'Authentication required');
   }
-  
+
   return result.user.id;
 }

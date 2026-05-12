@@ -8,6 +8,7 @@ import { extractMeta } from '@/lib/context-meta';
 import { apiGuard } from '@/lib/api-guard';
 import { metrics } from '@/lib/metrics';
 import { createModuleLogger } from '@/lib/logger';
+import prisma from '@/lib/prisma';
 
 const log = createModuleLogger('Load');
 
@@ -233,11 +234,10 @@ async function handleSingleUrl(
 
     if (!contentRes.ok) {
       const errorData = await contentRes.json().catch(() => ({}));
-      log.error({ errorData, status: contentRes.status }, 'Content fetch failed');
-      const reason =
-        contentRes.status === 503
-          ? errorData.error || 'Content fetching service not configured'
-          : 'Failed to fetch URL content';
+      console.error('[handleSingleUrl] Content fetch failed:', errorData);
+      const reason = contentRes.status === 503
+        ? (errorData.error || 'Content fetching service not configured')
+        : 'Failed to fetch URL content';
       return NextResponse.json({
         success: false,
         requestId: taskId,
@@ -1032,8 +1032,273 @@ async function handleQueryStream(
   return handleQuery(request, query, search, processing, returnConfig, ranking, userId);
 }
 
+// ---------------------------------------------------------------------------
+// prismer:// URI parser — 1.9.x adds asset + file types alongside the
+// pre-1.9 context / workspace / channel / message / pack legacy types.
+//
+// Spec: docs/refactor/10-asset-network-drive.md, 02-workspace-data-model.md
+//   prismer://<owner>/asset/<sha256-hex>          → resolveAssetUri
+//   prismer://<owner>/file/<wsId>/<relPath...>    → resolveFileUri
+// Anything else → fall through to the existing withdraw() backend path.
+// ---------------------------------------------------------------------------
+
+type PrismerAssetUri = { type: 'asset'; owner: string; hash: string };
+type PrismerFileUri = { type: 'file'; owner: string; wsId: string; path: string };
+type PrismerLegacyUri = { type: 'legacy' };
+type ParsedPrismerUri = PrismerAssetUri | PrismerFileUri | PrismerLegacyUri;
+
+function parsePrismerUri(uri: string): ParsedPrismerUri {
+  if (!uri.startsWith('prismer://')) return { type: 'legacy' };
+  const rest = uri.slice('prismer://'.length);
+  const parts = rest.split('/');
+  if (parts.length < 3) return { type: 'legacy' };
+
+  const owner = parts[0]!;
+  const uriType = parts[1];
+
+  if (uriType === 'asset') {
+    const hash = parts[2];
+    if (!hash || !/^[0-9a-f]{64}$/i.test(hash)) return { type: 'legacy' };
+    return { type: 'asset', owner, hash };
+  }
+
+  if (uriType === 'file') {
+    if (parts.length < 4) return { type: 'legacy' };
+    const wsId = parts[2]!;
+    const filePath = parts.slice(3).join('/');
+    if (!wsId || !filePath) return { type: 'legacy' };
+    // Reject path traversal — mirrors normalizePath() in workspace-files.ts
+    if (filePath.includes('..') || filePath.startsWith('/') || filePath.includes('\\')) {
+      return { type: 'legacy' };
+    }
+    return { type: 'file', owner, wsId, path: filePath };
+  }
+
+  return { type: 'legacy' };
+}
+
+/** Resolve cloud user id → IM user id (read-only; mirrors auth/middleware ensureIMUser). */
+async function resolveImUserIdForLoad(cloudUserId: string): Promise<string | null> {
+  const human = await prisma.iMUser.findFirst({
+    where: { userId: cloudUserId, role: 'human' },
+    orderBy: { createdAt: 'asc' },
+    select: { id: true },
+  });
+  if (human) return human.id;
+  const anyImUser = await prisma.iMUser.findFirst({
+    where: { userId: cloudUserId },
+    orderBy: { createdAt: 'asc' },
+    select: { id: true },
+  });
+  return anyImUser?.id ?? null;
+}
+
+/** Caller's IMUser must own the workspace (mirrors loadOwnedWorkspace in api/assets.ts). */
+async function checkWorkspaceAccess(wsId: string, callerImUserId: string): Promise<{ id: string } | null> {
+  const ws = await prisma.iMWorkspace.findFirst({
+    where: { id: wsId, deletedAt: null },
+    select: { id: true, ownerImUserId: true },
+  });
+  if (!ws || ws.ownerImUserId !== callerImUserId) return null;
+  return { id: ws.id };
+}
+
+async function resolveAssetUri(
+  parsed: PrismerAssetUri,
+  cloudUserId: string,
+  uri: string,
+  taskId: string,
+  startTime: number,
+): Promise<NextResponse> {
+  const imUserId = await resolveImUserIdForLoad(cloudUserId);
+  if (!imUserId) {
+    return NextResponse.json(
+      {
+        success: false,
+        requestId: taskId,
+        mode: 'prismer_uri',
+        error: { code: 'WORKSPACE_FORBIDDEN', message: 'No IM identity for this account' },
+      },
+      { status: 403 },
+    );
+  }
+  // 1:1 user↔workspace in 1.9.x — pick the caller's default workspace.
+  const workspace = await prisma.iMWorkspace.findFirst({
+    where: { ownerImUserId: imUserId, deletedAt: null },
+    orderBy: [{ isDefault: 'desc' }, { createdAt: 'asc' }],
+    select: { id: true },
+  });
+  if (!workspace) {
+    return NextResponse.json(
+      {
+        success: false,
+        requestId: taskId,
+        mode: 'prismer_uri',
+        error: { code: 'WORKSPACE_FORBIDDEN', message: 'No workspace for this account' },
+      },
+      { status: 403 },
+    );
+  }
+  const asset = await prisma.iMAsset.findUnique({
+    where: { workspaceId_contentHash: { workspaceId: workspace.id, contentHash: parsed.hash } },
+    select: {
+      id: true,
+      contentHash: true,
+      storageUri: true,
+      sizeBytes: true,
+      mime: true,
+      kind: true,
+      metadata: true,
+      createdAt: true,
+    },
+  });
+  if (!asset) {
+    return NextResponse.json(
+      {
+        success: false,
+        requestId: taskId,
+        mode: 'prismer_uri',
+        error: { code: 'NOT_FOUND', message: `Asset not found: ${uri}` },
+      },
+      { status: 404 },
+    );
+  }
+  let metaObj: Record<string, unknown> = {};
+  try {
+    metaObj = JSON.parse(asset.metadata) as Record<string, unknown>;
+  } catch {
+    /* tolerate malformed metadata */
+  }
+  log.info({ uri, assetId: asset.id }, 'Resolved prismer://asset URI');
+  return NextResponse.json({
+    success: true,
+    requestId: taskId,
+    mode: 'prismer_uri',
+    result: {
+      uri,
+      title: (metaObj.title as string | undefined) ?? asset.contentHash,
+      hqcc: asset.storageUri,
+      cached: true,
+      meta: {
+        assetId: asset.id,
+        contentHash: asset.contentHash,
+        storageUri: asset.storageUri,
+        sizeBytes: asset.sizeBytes != null ? Number(asset.sizeBytes) : null,
+        mime: asset.mime,
+        kind: asset.kind,
+        createdAt: asset.createdAt.toISOString(),
+        ...metaObj,
+      },
+    },
+    cost: { credits: 0, cached: true },
+    processingTime: Date.now() - startTime,
+  });
+}
+
+async function resolveFileUri(
+  parsed: PrismerFileUri,
+  cloudUserId: string,
+  uri: string,
+  taskId: string,
+  startTime: number,
+): Promise<NextResponse> {
+  const imUserId = await resolveImUserIdForLoad(cloudUserId);
+  if (!imUserId) {
+    return NextResponse.json(
+      {
+        success: false,
+        requestId: taskId,
+        mode: 'prismer_uri',
+        error: { code: 'WORKSPACE_FORBIDDEN', message: 'No IM identity for this account' },
+      },
+      { status: 403 },
+    );
+  }
+  const ws = await checkWorkspaceAccess(parsed.wsId, imUserId);
+  if (!ws) {
+    return NextResponse.json(
+      {
+        success: false,
+        requestId: taskId,
+        mode: 'prismer_uri',
+        error: {
+          code: 'WORKSPACE_FORBIDDEN',
+          message: `Access denied to workspace: ${parsed.wsId}`,
+        },
+      },
+      { status: 403 },
+    );
+  }
+  const fileRow = await prisma.iMWorkspaceFile.findFirst({
+    where: { workspaceId: parsed.wsId, path: parsed.path, deletedAt: null },
+    include: {
+      asset: {
+        select: {
+          id: true,
+          contentHash: true,
+          storageUri: true,
+          sizeBytes: true,
+          mime: true,
+          kind: true,
+          metadata: true,
+          createdAt: true,
+        },
+      },
+    },
+  });
+  if (!fileRow) {
+    return NextResponse.json(
+      {
+        success: false,
+        requestId: taskId,
+        mode: 'prismer_uri',
+        error: { code: 'NOT_FOUND', message: `File not found: ${uri}` },
+      },
+      { status: 404 },
+    );
+  }
+  const asset = fileRow.asset;
+  let metaObj: Record<string, unknown> = {};
+  try {
+    metaObj = JSON.parse(asset.metadata) as Record<string, unknown>;
+  } catch {
+    /* tolerate malformed metadata */
+  }
+  log.info({ uri, fileId: fileRow.id, assetId: asset.id }, 'Resolved prismer://file URI');
+  return NextResponse.json({
+    success: true,
+    requestId: taskId,
+    mode: 'prismer_uri',
+    result: {
+      uri,
+      title: (metaObj.title as string | undefined) ?? parsed.path,
+      hqcc: asset.storageUri,
+      cached: true,
+      meta: {
+        fileId: fileRow.id,
+        workspaceId: parsed.wsId,
+        path: fileRow.path,
+        version: fileRow.version,
+        assetId: asset.id,
+        contentHash: asset.contentHash,
+        storageUri: asset.storageUri,
+        sizeBytes: asset.sizeBytes != null ? Number(asset.sizeBytes) : null,
+        mime: asset.mime,
+        kind: asset.kind,
+        updatedAt: fileRow.updatedAt.toISOString(),
+        ...metaObj,
+      },
+    },
+    cost: { credits: 0, cached: true },
+    processingTime: Date.now() - startTime,
+  });
+}
+
 /**
  * 处理 prismer:// URI — 内部内容寻址
+ *
+ * 1.9.x: asset / file URI 直接查 im_assets / im_workspace_files (cloud MySQL)
+ * Pre-1.9.x: context / workspace / channel / message / pack 走 withdraw()
  */
 async function handlePrismerUri(
   request: NextRequest,
@@ -1046,6 +1311,45 @@ async function handlePrismerUri(
   const taskId = generateTaskId('load_prismer');
 
   try {
+    const parsed = parsePrismerUri(uri);
+
+    if (parsed.type === 'asset') {
+      if (!userId) {
+        return NextResponse.json(
+          {
+            success: false,
+            requestId: taskId,
+            mode: 'prismer_uri',
+            error: {
+              code: 'UNAUTHORIZED',
+              message: 'Authentication required to resolve asset URI',
+            },
+          },
+          { status: 401 },
+        );
+      }
+      return resolveAssetUri(parsed, userId, uri, taskId, startTime);
+    }
+
+    if (parsed.type === 'file') {
+      if (!userId) {
+        return NextResponse.json(
+          {
+            success: false,
+            requestId: taskId,
+            mode: 'prismer_uri',
+            error: {
+              code: 'UNAUTHORIZED',
+              message: 'Authentication required to resolve file URI',
+            },
+          },
+          { status: 401 },
+        );
+      }
+      return resolveFileUri(parsed, userId, uri, taskId, startTime);
+    }
+
+    // Pre-1.9.x legacy URI types fall through to the backend withdraw path.
     const withdrawResult = await withdraw({ url: uri, format: returnConfig?.format || 'hqcc' }, authHeader, userId);
 
     if (withdrawResult.ok && withdrawResult.data?.found && withdrawResult.data?.hqcc_content) {

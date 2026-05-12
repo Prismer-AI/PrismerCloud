@@ -29,7 +29,6 @@ export async function computeTokenBaselines(): Promise<number> {
   // Primary: capsules without gene guidance (geneId='none' or empty) as baseline
   const noGeneCapsules = await prisma.iMEvolutionCapsule.findMany({
     where: {
-      scope: 'global',
       outcome: { in: ['success', 'failed'] },
       OR: [{ geneId: 'none' }, { geneId: '' }],
     },
@@ -46,7 +45,6 @@ export async function computeTokenBaselines(): Promise<number> {
   if (capsules.length === 0) {
     capsules = await prisma.iMEvolutionCapsule.findMany({
       where: {
-        scope: 'global',
         outcome: { in: ['success', 'failed'] },
         costCredits: { gt: 0 },
       },
@@ -122,7 +120,6 @@ export async function computeValueMetrics(
   const capsules = await prisma.iMEvolutionCapsule.findMany({
     where: {
       createdAt: { gte: since },
-      scope: 'global',
       outcome: 'success',
       geneId: { not: 'none' },
     },
@@ -218,7 +215,6 @@ export async function computeValueMetrics(
       percentile: totalAgents > 0 ? Math.round(((totalAgents - i) / totalAgents) * 1000) / 10 : null,
       prevPeriodValue: prev ?? null,
       growthRate,
-      scope: 'global',
     };
   });
 
@@ -311,7 +307,6 @@ export async function computeValueMetrics(
     percentile: totalCreators > 0 ? Math.round(((totalCreators - i) / totalCreators) * 1000) / 10 : null,
     prevPeriodValue: null as number | null,
     growthRate: null as number | null,
-    scope: 'global',
   }));
 
   // Batch write
@@ -472,7 +467,7 @@ export async function getBenchmarkData(agentId?: string): Promise<{
       orderBy: { snapshotDate: 'desc' },
     });
     const edge = await prisma.iMEvolutionEdge.findMany({
-      where: { ownerAgentId: agentId, scope: 'global' },
+      where: { ownerAgentId: agentId },
       select: { successCount: true, failureCount: true },
     });
     const totalS = edge.reduce((s: number, e: any) => s + e.successCount, 0);

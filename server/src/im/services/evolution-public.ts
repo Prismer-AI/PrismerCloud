@@ -33,7 +33,6 @@ export async function getAllPublicGenes(): Promise<PrismerGene[]> {
   const rows = await prisma.iMGene.findMany({
     where: {
       visibility: { in: ['seed', 'published', 'canary'] },
-      scope: 'global',
       qualityScore: { gte: 0.005 },
     },
     include: { signalLinks: true },
@@ -57,7 +56,7 @@ async function getCachedStats(): Promise<Map<string, { success_count: number; fa
 /** Internal stats aggregation */
 async function _aggregateStats(): Promise<Map<string, { success_count: number; failure_count: number }>> {
   const capsules = await prisma.iMEvolutionCapsule.findMany({
-    where: { scope: 'global' },
+    where: {},
     select: { geneId: true, outcome: true },
   });
   const stats = new Map<string, { success_count: number; failure_count: number }>();
@@ -112,8 +111,8 @@ export async function getPublicStats(): Promise<{
 
   // Query actual capsule counts from im_evolution_capsules table
   const [totalCapsules, totalSuccess, agentCount] = await Promise.all([
-    prisma.iMEvolutionCapsule.count({ where: { scope: 'global' } }),
-    prisma.iMEvolutionCapsule.count({ where: { outcome: 'success', scope: 'global' } }),
+    prisma.iMEvolutionCapsule.count({ where: {} }),
+    prisma.iMEvolutionCapsule.count({ where: { outcome: 'success' } }),
     prisma.iMAgentCard.count(),
   ]);
 
@@ -150,18 +149,18 @@ export async function getAdvancedMetrics(): Promise<{
 
   const [basicStats, capsules24h, capsules7d, allCapsules7d, allCapsulesPrev7d, allEdges] = await Promise.all([
     getPublicStats(),
-    prisma.iMEvolutionCapsule.count({ where: { createdAt: { gte: h24Ago }, scope: 'global' } }),
-    prisma.iMEvolutionCapsule.count({ where: { createdAt: { gte: d7Ago }, scope: 'global' } }),
+    prisma.iMEvolutionCapsule.count({ where: { createdAt: { gte: h24Ago } } }),
+    prisma.iMEvolutionCapsule.count({ where: { createdAt: { gte: d7Ago } } }),
     prisma.iMEvolutionCapsule.findMany({
-      where: { createdAt: { gte: d7Ago }, scope: 'global' },
+      where: { createdAt: { gte: d7Ago } },
       select: { geneId: true, outcome: true },
     }),
     prisma.iMEvolutionCapsule.findMany({
-      where: { createdAt: { gte: d14Ago, lt: d7Ago }, scope: 'global' },
+      where: { createdAt: { gte: d14Ago, lt: d7Ago } },
       select: { geneId: true, outcome: true },
     }),
     prisma.iMEvolutionEdge.findMany({
-      where: { scope: 'global' },
+      where: {},
       select: { successCount: true, failureCount: true },
     }),
   ]);
@@ -414,7 +413,6 @@ export async function getPublicGeneCapsules(
   // Match base geneId and imported variants (e.g. {geneId}_imp_xxx)
   const capsules = await prisma.iMEvolutionCapsule.findMany({
     where: {
-      scope: 'global',
       OR: [{ geneId }, { geneId: { startsWith: `${geneId}_imp_` } }, { geneId: { startsWith: `${geneId}_fork_` } }],
     },
     orderBy: { createdAt: 'desc' },
@@ -627,7 +625,7 @@ export async function getPublicFeed(limit = 20): Promise<
 
   // Fetch recent capsules from DB for capsule events (exclude 'unmatched' noise)
   const recentCapsules = await prisma.iMEvolutionCapsule.findMany({
-    where: { scope: 'global', geneId: { not: 'unmatched' } },
+    where: { geneId: { not: 'unmatched' } },
     orderBy: { createdAt: 'desc' },
     take: limit * 2, // fetch extra to account for dedup
   });
@@ -700,7 +698,7 @@ export async function getStories(
 > {
   const since = new Date(Date.now() - sinceMinutes * 60 * 1000);
   const capsules = await prisma.iMEvolutionCapsule.findMany({
-    where: { createdAt: { gte: since }, outcome: { in: ['success', 'failed'] }, scope: 'global' },
+    where: { createdAt: { gte: since }, outcome: { in: ['success', 'failed'] } },
     orderBy: { createdAt: 'desc' },
     take: limit,
     select: {
@@ -860,9 +858,9 @@ export async function getMapData(opts?: { topN?: number; includeGeneIds?: string
   const [allGenes, capsuleStats, allEdges, recentCapsules, agentCount, agentCards] = await Promise.all([
     getAllPublicGenes(),
     aggregatePublicGeneStats(),
-    prisma.iMEvolutionEdge.findMany({ where: { scope: 'global' }, orderBy: { updatedAt: 'desc' }, take: 2000 }),
+    prisma.iMEvolutionEdge.findMany({ where: {}, orderBy: { updatedAt: 'desc' }, take: 2000 }),
     prisma.iMEvolutionCapsule.findMany({
-      where: { scope: 'global' },
+      where: {},
       orderBy: { createdAt: 'desc' },
       take: 50,
       select: {
@@ -886,7 +884,7 @@ export async function getMapData(opts?: { topN?: number; includeGeneIds?: string
   const missingIds = (opts?.includeGeneIds || []).filter((id) => !existingIds.has(id) && id !== 'unmatched');
   if (missingIds.length > 0) {
     const extra = await prisma.iMGene.findMany({
-      where: { id: { in: missingIds }, scope: 'global' },
+      where: { id: { in: missingIds } },
       include: { signalLinks: true },
     });
     for (const r of extra) {
@@ -1282,7 +1280,7 @@ export async function getMapData(opts?: { topN?: number; includeGeneIds?: string
 /** Compute average capsule quality from metadata.capsuleQuality */
 async function computeAvgCapsuleQuality(): Promise<number> {
   const recent = await prisma.iMEvolutionCapsule.findMany({
-    where: { outcome: { in: ['success', 'failed'] }, scope: 'global' },
+    where: { outcome: { in: ['success', 'failed'] } },
     orderBy: { createdAt: 'desc' },
     take: 100,
     select: { metadata: true },
@@ -1306,7 +1304,7 @@ async function computeAvgCapsuleQuality(): Promise<number> {
 /** Count capsules within a quality range */
 async function countCapsulesByQuality(min: number, max: number): Promise<number> {
   const recent = await prisma.iMEvolutionCapsule.findMany({
-    where: { outcome: { in: ['success', 'failed'] }, scope: 'global' },
+    where: { outcome: { in: ['success', 'failed'] } },
     orderBy: { createdAt: 'desc' },
     take: 200,
     select: { metadata: true },

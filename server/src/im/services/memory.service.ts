@@ -66,28 +66,31 @@ export class MemoryService {
 
   /**
    * Create or upsert a memory file.
-   * If a file with same (ownerId, scope, path) exists, it updates.
+   * If a file with same legacy (ownerId, path) exists, it updates.
+   * workspaceId is required and is the primary access boundary.
    */
   async writeMemoryFile(
+    workspaceId: string,
     ownerId: string,
     ownerType: MemoryOwnerType,
     path: string,
     content: string,
-    scope: string = 'global',
+    _scope: string = 'global',
     memoryType?: string,
     description?: string,
   ): Promise<MemoryFileDetail> {
+    void _scope;
     const record = await this.memoryFileModel.upsert({
+      workspaceId,
       ownerId,
       ownerType,
-      scope,
       path,
       content,
       memoryType,
       description,
     });
 
-    console.log(`${LOG} Write: ${ownerType}/${ownerId} → ${scope}/${path} (v${record.version})`);
+    console.log(`${LOG} Write: workspace=${workspaceId} ${ownerType}/${ownerId} → ${path} (v${record.version})`);
 
     return this.toDetail(record);
   }
@@ -95,33 +98,45 @@ export class MemoryService {
   /**
    * Read a memory file by ID.
    */
-  async readMemoryFile(id: string): Promise<MemoryFileDetail> {
+  async readMemoryFile(id: string, workspaceId: string): Promise<MemoryFileDetail> {
     const record = await this.memoryFileModel.findById(id);
-    if (!record) throw new MemoryNotFoundError(id);
+    if (!record || record.workspaceId !== workspaceId) throw new MemoryNotFoundError(id);
     return this.toDetail(record);
   }
 
   /**
-   * Read a memory file by owner/scope/path (the natural key).
+   * Read a memory file by owner/path (the natural key as of v1.9.2).
+   *
+   * v1.9.2: scope param retained for caller back-compat — ignored for storage.
    */
-  async readMemoryFileByPath(ownerId: string, scope: string, path: string): Promise<MemoryFileDetail | null> {
-    const record = await this.memoryFileModel.findByOwnerScopePath(ownerId, scope, path);
+  async readMemoryFileByPath(
+    workspaceId: string,
+    ownerId: string,
+    _scope: string,
+    path: string,
+  ): Promise<MemoryFileDetail | null> {
+    void _scope;
+    const record = await this.memoryFileModel.findByWorkspaceOwnerPath(workspaceId, ownerId, path);
     return record ? this.toDetail(record) : null;
   }
 
   /**
    * List memory files for an owner (metadata only, no content).
+   *
+   * v1.9.2: scope param retained for caller / route back-compat — ignored for filtering.
    */
   async listMemoryFiles(
-    ownerId: string,
-    scope?: string,
+    workspaceId: string,
+    ownerId?: string,
+    _scope?: string,
     path?: string,
     memoryType?: string,
     stale?: boolean,
     sort?: string,
     order?: 'asc' | 'desc',
   ): Promise<MemoryFileInfo[]> {
-    const records = await this.memoryFileModel.list({ ownerId, scope, path, memoryType, stale, sort, order });
+    void _scope;
+    const records = await this.memoryFileModel.list({ workspaceId, ownerId, path, memoryType, stale, sort, order });
     return records.map((r: any) => this.toInfo(r));
   }
 
@@ -132,13 +147,14 @@ export class MemoryService {
    */
   async updateMemoryFile(
     id: string,
+    workspaceId: string,
     operation: MemoryFileOperation,
     content: string,
     expectedVersion?: number,
     section?: string,
   ): Promise<MemoryFileDetail> {
     const existing = await this.memoryFileModel.findById(id);
-    if (!existing) throw new MemoryNotFoundError(id);
+    if (!existing || existing.workspaceId !== workspaceId) throw new MemoryNotFoundError(id);
 
     // Use provided version or current version (no-conflict mode)
     const version = expectedVersion ?? existing.version;
@@ -172,9 +188,9 @@ export class MemoryService {
   /**
    * Delete a memory file.
    */
-  async deleteMemoryFile(id: string): Promise<void> {
+  async deleteMemoryFile(id: string, workspaceId: string): Promise<void> {
     const existing = await this.memoryFileModel.findById(id);
-    if (!existing) throw new MemoryNotFoundError(id);
+    if (!existing || existing.workspaceId !== workspaceId) throw new MemoryNotFoundError(id);
     await this.memoryFileModel.delete(id);
     console.log(`${LOG} Delete: ${id} (${existing.path})`);
   }
@@ -184,8 +200,8 @@ export class MemoryService {
    * Returns full content + metadata (totalLines, totalBytes).
    * Truncation is the SDK/Agent's responsibility, not the server's.
    */
-  async loadSessionMemory(ownerId: string, scope: string = 'global') {
-    return this.loadMemoryFile(ownerId, scope, 'MEMORY.md');
+  async loadSessionMemory(workspaceId: string, ownerId: string, scope: string = 'global') {
+    return this.loadMemoryFile(workspaceId, ownerId, scope, 'MEMORY.md');
   }
 
   /**
@@ -209,6 +225,7 @@ export class MemoryService {
    * facts are always kept.
    */
   async buildDigest(
+    workspaceId: string,
     ownerId: string,
     opts: { scope?: string; maxLines?: number; maxBytes?: number } = {},
   ): Promise<{
@@ -220,11 +237,11 @@ export class MemoryService {
     truncated: boolean;
     generatedAt: string;
   }> {
-    const scope = opts.scope ?? 'global';
+    void opts.scope; // v1.9.2: scope dropped from im_memory_files; param kept for back-compat
     const maxLines = opts.maxLines ?? 200;
     const maxBytes = opts.maxBytes ?? 6000;
 
-    // Load all non-stale files for this owner+scope, including content.
+    // Load all non-stale files for this owner, including content.
     interface DigestRow {
       id: string;
       path: string;
@@ -234,7 +251,7 @@ export class MemoryService {
       updatedAt: Date;
     }
     const files = (await prisma.iMMemoryFile.findMany({
-      where: { ownerId, scope, stale: false },
+      where: { workspaceId, ownerId, stale: false },
       select: {
         id: true,
         path: true,
@@ -349,10 +366,13 @@ export class MemoryService {
 
   /**
    * Load any memory file by path.
+   *
+   * v1.9.2: scope param retained for caller / route back-compat — ignored for lookup.
    */
   async loadMemoryFile(
+    workspaceId: string,
     ownerId: string,
-    scope: string,
+    _scope: string,
     path: string,
   ): Promise<{
     content: string;
@@ -361,7 +381,8 @@ export class MemoryService {
     version: number;
     id: string;
   } | null> {
-    const record = await this.memoryFileModel.findByOwnerScopePath(ownerId, scope, path);
+    void _scope;
+    const record = await this.memoryFileModel.findByWorkspaceOwnerPath(workspaceId, ownerId, path);
     if (!record || !record.content) return null;
 
     return {
@@ -373,10 +394,10 @@ export class MemoryService {
     };
   }
 
-  async getStats(ownerId: string) {
+  async getStats(workspaceId: string, ownerId?: string) {
     // TODO(perf): content loaded only for totalBytes — consider raw SQL SUM(LENGTH(content)) or denormalized contentLength column
     const files = await prisma.iMMemoryFile.findMany({
-      where: { ownerId },
+      where: { workspaceId, ...(ownerId ? { ownerId } : {}) },
       select: { id: true, memoryType: true, stale: true, content: true, updatedAt: true },
     });
 
@@ -410,10 +431,12 @@ export class MemoryService {
       });
     }
 
-    const card = await prisma.iMAgentCard.findUnique({
-      where: { imUserId: ownerId },
-      select: { metadata: true },
-    });
+    const card = ownerId
+      ? await prisma.iMAgentCard.findUnique({
+          where: { imUserId: ownerId },
+          select: { metadata: true },
+        })
+      : null;
     const meta = (() => {
       try {
         return JSON.parse(card?.metadata || '{}');
@@ -451,10 +474,11 @@ export class MemoryService {
 
   async updateFileMetadata(
     id: string,
+    workspaceId: string,
     data: { memoryType?: string; description?: string; stale?: boolean },
   ): Promise<MemoryFileInfo> {
     const existing = await this.memoryFileModel.findById(id);
-    if (!existing) throw new MemoryNotFoundError(id);
+    if (!existing || existing.workspaceId !== workspaceId) throw new MemoryNotFoundError(id);
     const updated = await this.memoryFileModel.updateMetadata(id, data);
     return this.toInfo(updated);
   }
@@ -472,14 +496,15 @@ export class MemoryService {
    * MySQL: uses FULLTEXT MATCH..AGAINST on (path, description) + LIKE on content.
    * SQLite: falls back to Prisma `contains` on all fields.
    */
-  async searchMemoryFiles(ownerId: string, query: string, limit: number = 10, scope?: string) {
+  async searchMemoryFiles(workspaceId: string, query: string, limit: number = 10, _scope?: string) {
+    void _scope; // v1.9.2: scope dropped from im_memory_files; param kept for back-compat
     if (this.isMySQL()) {
-      return this.searchMemoryFilesMySQL(ownerId, query, limit, scope);
+      return this.searchMemoryFilesMySQL(workspaceId, query, limit);
     }
-    return this.searchMemoryFilesSQLite(ownerId, query, limit, scope);
+    return this.searchMemoryFilesSQLite(workspaceId, query, limit);
   }
 
-  private async searchMemoryFilesMySQL(ownerId: string, query: string, limit: number, scope?: string) {
+  private async searchMemoryFilesMySQL(workspaceId: string, query: string, limit: number) {
     const searchTerm = query.replace(/[+\-<>()~*"@]/g, ' ').trim();
     if (!searchTerm) return [];
 
@@ -509,7 +534,6 @@ export class MemoryService {
     type RawRow = {
       id: string;
       path: string;
-      scope: string;
       content: string;
       description: string | null;
       memoryType: string | null;
@@ -529,18 +553,16 @@ export class MemoryService {
     // Both scores are combined in the application-layer relevance ranking.
     // LIKE fallback remains for databases where the FULLTEXT index on content
     // hasn't been created yet (migration 036 pending).
-    const scopeFilter = scope ?? 'global';
     let rows: RawRow[];
 
     try {
       // Primary path: dual FULLTEXT (requires migration 036 — idx_ft_memory_content)
       rows = await prisma.$queryRaw`
-        SELECT id, path, scope, content, description, memoryType, stale, updatedAt,
+        SELECT id, path, content, description, memoryType, stale, updatedAt,
                MATCH(path, description) AGAINST(${booleanQuery} IN BOOLEAN MODE) AS ft_meta_score,
                MATCH(content) AGAINST(${booleanQuery} IN BOOLEAN MODE) AS ft_content_score
         FROM im_memory_files
-        WHERE ownerId = ${ownerId}
-          AND scope = ${scopeFilter}
+        WHERE workspaceId = ${workspaceId}
           AND (
             MATCH(path, description) AGAINST(${booleanQuery} IN BOOLEAN MODE)
             OR MATCH(content) AGAINST(${booleanQuery} IN BOOLEAN MODE)
@@ -559,12 +581,11 @@ export class MemoryService {
       if (msg.includes('1191') || msg.includes('FULLTEXT')) {
         console.warn(`${LOG} FULLTEXT(content) index missing — falling back to meta-only search. Run migration 036.`);
         rows = await prisma.$queryRaw`
-          SELECT id, path, scope, content, description, memoryType, stale, updatedAt,
+          SELECT id, path, content, description, memoryType, stale, updatedAt,
                  MATCH(path, description) AGAINST(${booleanQuery} IN BOOLEAN MODE) AS ft_meta_score,
                  0 AS ft_content_score
           FROM im_memory_files
-          WHERE ownerId = ${ownerId}
-            AND scope = ${scopeFilter}
+          WHERE workspaceId = ${workspaceId}
             AND (
               MATCH(path, description) AGAINST(${booleanQuery} IN BOOLEAN MODE)
               OR content LIKE ${likeTerm1}
@@ -660,7 +681,6 @@ export class MemoryService {
         return {
           id: f.id,
           path: f.path,
-          scope: f.scope,
           snippet: f.content.slice(0, 2000),
           memoryType: f.memoryType,
           updatedAt: f.updatedAt,
@@ -677,17 +697,15 @@ export class MemoryService {
       .slice(0, limit);
   }
 
-  private async searchMemoryFilesSQLite(ownerId: string, query: string, limit: number, scope?: string) {
+  private async searchMemoryFilesSQLite(workspaceId: string, query: string, limit: number) {
     const files = await prisma.iMMemoryFile.findMany({
       where: {
-        ownerId,
-        ...(scope ? { scope } : {}),
+        workspaceId,
         OR: [{ path: { contains: query } }, { content: { contains: query } }, { description: { contains: query } }],
       },
       select: {
         id: true,
         path: true,
-        scope: true,
         content: true,
         description: true,
         memoryType: true,
@@ -703,7 +721,6 @@ export class MemoryService {
         (f: {
           id: string;
           path: string;
-          scope: string;
           content: string;
           description: string | null;
           memoryType: string | null;
@@ -723,7 +740,6 @@ export class MemoryService {
           return {
             id: f.id,
             path: f.path,
-            scope: f.scope,
             snippet: f.content.slice(0, 2000),
             memoryType: f.memoryType,
             updatedAt: f.updatedAt,
@@ -871,23 +887,30 @@ export class MemoryService {
 
   private toDetail(record: {
     id: string;
+    workspaceId: string;
     ownerId: string;
     ownerType: string;
-    scope: string;
     path: string;
     content: string;
     version: number;
     memoryType?: string | null;
     description?: string | null;
     stale?: boolean;
+    visibility?: string | null;
+    aclJson?: string | null;
+    encrypted?: boolean;
+    contentHash?: string;
+    etag?: string | null;
+    sourceKind?: string | null;
+    sourceRef?: string | null;
     createdAt: Date;
     updatedAt: Date;
   }): MemoryFileDetail {
     return {
       id: record.id,
+      workspaceId: record.workspaceId,
       ownerId: record.ownerId,
       ownerType: record.ownerType as MemoryOwnerType,
-      scope: record.scope,
       path: record.path,
       content: record.content,
       contentLength: record.content.length,
@@ -895,6 +918,13 @@ export class MemoryService {
       memoryType: record.memoryType ?? null,
       description: record.description ?? null,
       stale: record.stale ?? false,
+      visibility: record.visibility ?? 'workspace',
+      aclJson: record.aclJson ?? null,
+      encrypted: record.encrypted ?? false,
+      contentHash: record.contentHash,
+      etag: record.etag ?? null,
+      sourceKind: record.sourceKind ?? null,
+      sourceRef: record.sourceRef ?? null,
       createdAt: record.createdAt,
       updatedAt: record.updatedAt,
     };
@@ -902,28 +932,42 @@ export class MemoryService {
 
   private toInfo(record: {
     id: string;
+    workspaceId: string;
     ownerId: string;
     ownerType: string;
-    scope: string;
     path: string;
     version: number;
     memoryType?: string | null;
     description?: string | null;
     stale?: boolean;
+    visibility?: string | null;
+    aclJson?: string | null;
+    encrypted?: boolean;
+    contentHash?: string;
+    etag?: string | null;
+    sourceKind?: string | null;
+    sourceRef?: string | null;
     createdAt: Date;
     updatedAt: Date;
   }): MemoryFileInfo {
     return {
       id: record.id,
+      workspaceId: record.workspaceId,
       ownerId: record.ownerId,
       ownerType: record.ownerType as MemoryOwnerType,
-      scope: record.scope,
       path: record.path,
       contentLength: 0,
       version: record.version,
       memoryType: record.memoryType ?? null,
       description: record.description ?? null,
       stale: record.stale ?? false,
+      visibility: record.visibility ?? 'workspace',
+      aclJson: record.aclJson ?? null,
+      encrypted: record.encrypted ?? false,
+      contentHash: record.contentHash,
+      etag: record.etag ?? null,
+      sourceKind: record.sourceKind ?? null,
+      sourceRef: record.sourceRef ?? null,
       createdAt: record.createdAt,
       updatedAt: record.updatedAt,
     };

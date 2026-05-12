@@ -1,0 +1,82 @@
+{
+  "id": "pack-it-software",
+  "type": "pack",
+  "industryKey": "it_software",
+  "name": { "zh": "IT / 软件", "en": "IT / Software" },
+  "icon": "💻",
+  "description": "Software product companies, IT services, dev tools, SaaS.",
+  "taskPatterns": {
+    "zh": "代码评审 + 规格写作 + 增长试验 + 发布管理",
+    "en": "Code review + spec writing + growth experiments + release management"
+  },
+  "roles": [
+    {
+      "id": "cto",
+      "slug": "cto",
+      "displayName": { "zh": "CTO", "en": "CTO" },
+      "corporateName": { "zh": "首席技术官", "en": "CTO" },
+      "agentType": "specialist",
+      "rationale": {
+        "zh": "架构决策、代码评审、技术招聘",
+        "en": "Architecture, code review, tech hiring"
+      },
+      "appliesAtSize": ["B", "C", "D"],
+      "capabilities": ["architecture", "code-review", "tech-strategy", "hiring"],
+      "defaultIcon": "🏗"
+    },
+    {
+      "id": "engineer",
+      "slug": "engineer",
+      "displayName": { "zh": "工程师", "en": "Engineer" },
+      "agentType": "specialist",
+      "rationale": {
+        "zh": "写代码、修 bug、CI/CD、部署",
+        "en": "Code, debug, CI/CD, deployment"
+      },
+      "appliesAtSize": ["A", "B"],
+      "capabilities": ["code", "debug", "deploy", "ci-cd", "testing"],
+      "defaultIcon": "💻"
+    },
+    {
+      "id": "designer",
+      "slug": "designer",
+      "displayName": { "zh": "设计师", "en": "Designer" },
+      "agentType": "specialist",
+      "rationale": {
+        "zh": "产品 UI、视觉一致性、用户研究",
+        "en": "Product UI, brand, user research"
+      },
+      "appliesAtSize": ["B", "C"],
+      "capabilities": ["ui-design", "brand", "user-research", "prototyping"],
+      "defaultIcon": "🎨"
+    },
+    {
+      "id": "product-manager",
+      "slug": "pm",
+      "displayName": { "zh": "产品经理", "en": "Product Manager" },
+      "corporateName": { "zh": "首席产品官", "en": "CPO" },
+      "agentType": "specialist",
+      "rationale": {
+        "zh": "路线图、规格、优先级、跨团队",
+        "en": "Roadmap, specs, prioritization, cross-team"
+      },
+      "appliesAtSize": ["C", "D"],
+      "capabilities": ["roadmap", "spec-writing", "prioritization"],
+      "defaultIcon": "🗺"
+    },
+    {
+      "id": "hr",
+      "slug": "hr",
+      "displayName": { "zh": "HR", "en": "HR" },
+      "corporateName": { "zh": "首席人力官", "en": "CHRO" },
+      "agentType": "specialist",
+      "rationale": {
+        "zh": "招聘、入职、人才管理",
+        "en": "Recruiting, onboarding, talent management"
+      },
+      "appliesAtSize": ["C", "D"],
+      "capabilities": ["recruiting", "onboarding", "hr-policy"],
+      "defaultIcon": "👥"
+    }
+  ]
+}

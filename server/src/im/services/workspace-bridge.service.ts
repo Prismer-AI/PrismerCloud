@@ -49,7 +49,7 @@ export class WorkspaceBridgeService {
    * Used when `force: true` is passed to init endpoints during testing.
    */
   async destroyWorkspace(workspaceId: string): Promise<boolean> {
-    const existing = await prisma.iMConversation.findUnique({
+    const existing = await prisma.iMConversation.findFirst({
       where: { workspaceId },
       include: { participants: true },
     });
@@ -74,7 +74,7 @@ export class WorkspaceBridgeService {
     const { workspaceId, imUserId, agentImUserId, force } = input;
 
     // 1. Check if workspace already has a conversation
-    const existing = await prisma.iMConversation.findUnique({
+    const existing = await prisma.iMConversation.findFirst({
       where: { workspaceId },
       include: {
         participants: { include: { imUser: true } },
@@ -143,7 +143,7 @@ export class WorkspaceBridgeService {
    * Get the IM conversation for a workspace.
    */
   async getWorkspaceConversation(workspaceId: string) {
-    return prisma.iMConversation.findUnique({
+    return prisma.iMConversation.findFirst({
       where: { workspaceId },
       include: {
         participants: { include: { imUser: true } },
@@ -168,7 +168,7 @@ export class WorkspaceBridgeService {
    * Get recent messages for a workspace.
    */
   async getWorkspaceMessages(workspaceId: string, limit = 50) {
-    const conversation = await prisma.iMConversation.findUnique({
+    const conversation = await prisma.iMConversation.findFirst({
       where: { workspaceId },
     });
 
@@ -190,7 +190,7 @@ export class WorkspaceBridgeService {
    * Add participant to workspace conversation.
    */
   async addParticipantToWorkspace(workspaceId: string, imUserId: string) {
-    const conversation = await prisma.iMConversation.findUnique({
+    const conversation = await prisma.iMConversation.findFirst({
       where: { workspaceId },
     });
 
@@ -223,7 +223,7 @@ export class WorkspaceBridgeService {
     const { workspaceId, agentName, agentDisplayName, agentType, capabilities, metadata } = input;
 
     // 1. Get workspace conversation
-    const conversation = await prisma.iMConversation.findUnique({
+    const conversation = await prisma.iMConversation.findFirst({
       where: { workspaceId },
     });
 
@@ -266,7 +266,9 @@ export class WorkspaceBridgeService {
       },
     });
 
-    // 5. Create or update agent card with capabilities
+    // 5. Create or update agent card with capabilities.
+    // workspaceId is required by Prisma schema (NOT NULL since 1.9.2 Phase 2);
+    // forgetting it triggers P2012 "Argument workspaceId is missing" → 500.
     await prisma.iMAgentCard.upsert({
       where: { imUserId: agentUser.id },
       update: {
@@ -275,6 +277,7 @@ export class WorkspaceBridgeService {
       },
       create: {
         imUserId: agentUser.id,
+        workspaceId,
         name: agentDisplayName,
         description: `Agent for workspace ${workspaceId}`,
         agentType: agentType ?? 'assistant',
@@ -422,7 +425,7 @@ export class WorkspaceBridgeService {
     }
 
     // 1. Check if workspace already has a conversation
-    const existingConv = await prisma.iMConversation.findUnique({
+    const existingConv = await prisma.iMConversation.findFirst({
       where: { workspaceId },
     });
     if (existingConv) {
@@ -541,7 +544,9 @@ export class WorkspaceBridgeService {
         },
       });
 
-      // Create or update agent card
+      // Create or update agent card.
+      // workspaceId required (NOT NULL since 1.9.2 Phase 2); see sibling fix
+      // at line ~270 for the same gap.
       await prisma.iMAgentCard.upsert({
         where: { imUserId: agentUser.id },
         update: {
@@ -549,6 +554,7 @@ export class WorkspaceBridgeService {
         },
         create: {
           imUserId: agentUser.id,
+          workspaceId,
           name: agent.displayName,
           description: `Agent for workspace ${workspaceId}`,
           agentType: agent.type ?? 'assistant',
@@ -591,7 +597,7 @@ export class WorkspaceBridgeService {
    * List all agents in a workspace conversation.
    */
   async listWorkspaceAgents(workspaceId: string) {
-    const conversation = await prisma.iMConversation.findUnique({
+    const conversation = await prisma.iMConversation.findFirst({
       where: { workspaceId },
       include: {
         participants: {

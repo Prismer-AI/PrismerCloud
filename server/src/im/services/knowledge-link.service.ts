@@ -94,7 +94,7 @@ export class KnowledgeLinkService {
     }
 
     const link = await prisma.iMKnowledgeLink.create({
-      data: { sourceType, sourceId, targetType, targetId, linkType, scope },
+      data: { sourceType, sourceId, targetType, targetId, linkType },
     });
 
     console.log(`${LOG} Created: ${sourceType}/${sourceId} → ${targetType}/${targetId} [${linkType}]`);
@@ -165,14 +165,18 @@ export class KnowledgeLinkService {
         return t === spaced ? [t] : [t, spaced];
       });
 
-      // Search memory files in the same SCOPE, not just the recording agent's own files.
-      // Gene and memory are both in the scope namespace — the correct boundary for
-      // knowledge links is scope, not ownership. Using ownerId would silently fail when
-      // agent A records an outcome for agent B's published gene (A has no matching memories
-      // under its own ownerId, even though B's memories exist in the same global scope).
+      // Search memory files broadly (no scope/owner filter) — gene→memory auto-link
+      // is intended to discover related memories across the deployment. Knowledge link
+      // rows themselves still carry the gene's `scope` so cross-scope queries can filter.
+      // v1.9.2: im_memory_files.scope dropped, so the previous scope filter is removed.
+      const card = await prisma.iMAgentCard.findUnique({
+        where: { imUserId: agentId },
+        select: { workspaceId: true },
+      });
+      if (!card?.workspaceId) return 0;
       const memoryFiles = await prisma.iMMemoryFile.findMany({
         where: {
-          scope,
+          workspaceId: card.workspaceId,
           OR: searchTerms.flatMap((term) => [{ path: { contains: term } }, { content: { contains: term } }]),
         },
         select: { id: true, path: true },

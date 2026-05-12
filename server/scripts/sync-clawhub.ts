@@ -13,7 +13,7 @@
  *   DATABASE_URL="file:$(pwd)/prisma/data/dev.db" npx tsx scripts/sync-clawhub.ts
  *
  *   # Against test MySQL:
- *   DATABASE_URL="mysql://prismer_cloud:REDACTED-MYSQL-PASSWORD@REDACTED-DB-HOST:3306/prismer_cloud" npx tsx scripts/sync-clawhub.ts import
+ *   DATABASE_URL="mysql://prismer_cloud:BPAUGhhX5iD9@34.207.64.245:3306/prismer_cloud" npx tsx scripts/sync-clawhub.ts import
  *
  * The fetch step caches to /tmp/clawhub-skills.json and resumes from where it
  * left off if interrupted. Delete the file to start fresh.

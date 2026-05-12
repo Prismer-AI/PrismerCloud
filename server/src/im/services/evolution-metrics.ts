@@ -31,7 +31,7 @@ export async function collectMetrics(
 
   // 1. Capsule counts
   const capsules = await prisma.iMEvolutionCapsule.findMany({
-    where: { createdAt: { gte: since }, mode, scope: 'global', outcome: { in: ['success', 'failed'] } },
+    where: { createdAt: { gte: since }, mode, outcome: { in: ['success', 'failed'] } },
     select: { outcome: true, geneId: true, ownerAgentId: true },
   });
   const total = capsules.length;
@@ -54,7 +54,7 @@ export async function collectMetrics(
 
   // 3. Routing precision (capsules with coverage_level ≥ 1)
   const edges = await prisma.iMEvolutionEdge.findMany({
-    where: { mode, scope: 'global', updatedAt: { gte: since } },
+    where: { mode, updatedAt: { gte: since } },
     select: { coverageLevel: true, successCount: true, failureCount: true },
   });
   const preciseEdges = edges.filter((e: { coverageLevel: number }) => e.coverageLevel >= 1).length;
@@ -83,7 +83,7 @@ export async function collectMetrics(
     for (const aid of agentIds.slice(0, 10)) {
       // Sample up to 10 agents for performance
       const agentCapsules = await prisma.iMEvolutionCapsule.findMany({
-        where: { ownerAgentId: aid, mode, scope: 'global', outcome: { in: ['success', 'failed'] } },
+        where: { ownerAgentId: aid, mode, outcome: { in: ['success', 'failed'] } },
         orderBy: { createdAt: 'asc' },
         select: { outcome: true },
         take: 200,
@@ -111,7 +111,7 @@ export async function collectMetrics(
     // Need enough data for oracle to be meaningful
     // Build oracle: best gene SSR per signalType
     const allEdgesForOracle = await prisma.iMEvolutionEdge.findMany({
-      where: { mode, scope: 'global' },
+      where: { mode },
       select: { signalType: true, geneId: true, successCount: true, failureCount: true },
     });
     const oracleBySignalType = new Map<string, number>();
@@ -126,7 +126,7 @@ export async function collectMetrics(
     }
     // Compute regret: for each failed capsule, if oracle gene would have succeeded
     const recentCapsules = await prisma.iMEvolutionCapsule.findMany({
-      where: { createdAt: { gte: since }, mode, scope: 'global', outcome: { in: ['success', 'failed'] } },
+      where: { createdAt: { gte: since }, mode, outcome: { in: ['success', 'failed'] } },
       select: { outcome: true, signalKey: true, geneId: true },
       take: 500,
     });
@@ -148,7 +148,6 @@ export async function collectMetrics(
     data: {
       window: windowLabel,
       mode,
-      scope: 'global',
       ssr,
       cs,
       rp,
@@ -175,11 +174,11 @@ export async function getMetricsComparison(): Promise<{
 }> {
   const [std, hyper] = await Promise.all([
     prisma.iMEvolutionMetrics.findFirst({
-      where: { mode: 'standard', scope: 'global' },
+      where: { mode: 'standard' },
       orderBy: { ts: 'desc' },
     }),
     prisma.iMEvolutionMetrics.findFirst({
-      where: { mode: 'hypergraph', scope: 'global' },
+      where: { mode: 'hypergraph' },
       orderBy: { ts: 'desc' },
     }),
   ]);

@@ -43,11 +43,8 @@ export async function POST(request: NextRequest) {
 
     if (!CONTENT_API_KEY) {
       return NextResponse.json(
-        {
-          error:
-            'Content fetching not available. Set EXASEARCH_API_KEY in your .env file. Get one at https://dashboard.exa.ai/api-keys',
-        },
-        { status: 503 },
+        { error: 'Content fetching not available. Set EXASEARCH_API_KEY in your .env file. Get one at https://dashboard.exa.ai/api-keys' },
+        { status: 503 }
       );
     }
 

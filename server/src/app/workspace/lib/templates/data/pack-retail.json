@@ -1,0 +1,96 @@
+{
+  "id": "pack-retail",
+  "type": "pack",
+  "industryKey": "retail",
+  "name": { "zh": "零售 / 电商", "en": "Retail / E-commerce" },
+  "icon": "🛍",
+  "description": "Online and offline retail, D2C brands, marketplaces.",
+  "taskPatterns": {
+    "zh": "广告创意 + listing 优化 + 订单运营 + 客服处理",
+    "en": "Ad creative + listing optimization + order ops + ticket triage"
+  },
+  "roles": [
+    {
+      "id": "customer-support",
+      "slug": "support",
+      "displayName": { "zh": "客服", "en": "Customer Support" },
+      "corporateName": { "zh": "客户成功负责人", "en": "Head of CX" },
+      "agentType": "support",
+      "rationale": {
+        "zh": "工单、退换、客户挽留",
+        "en": "Tickets, returns, retention"
+      },
+      "appliesAtSize": ["A", "B", "C", "D"],
+      "capabilities": ["ticket-handling", "refund-policy", "customer-care"],
+      "defaultIcon": "🎧"
+    },
+    {
+      "id": "operations-retail",
+      "slug": "operations",
+      "displayName": { "zh": "运营", "en": "Operations" },
+      "corporateName": { "zh": "首席运营官", "en": "COO" },
+      "agentType": "specialist",
+      "rationale": {
+        "zh": "订单履约、仓储、物流",
+        "en": "Order fulfilment, warehousing, logistics"
+      },
+      "appliesAtSize": ["B", "C", "D"],
+      "capabilities": ["order-fulfilment", "warehousing", "logistics"],
+      "defaultIcon": "📦"
+    },
+    {
+      "id": "merchandiser",
+      "slug": "merchandiser",
+      "displayName": { "zh": "买手", "en": "Merchandiser" },
+      "corporateName": { "zh": "首席选品官", "en": "Chief Merchant" },
+      "agentType": "specialist",
+      "rationale": {
+        "zh": "选品、定价、买手",
+        "en": "Assortment, pricing, buying"
+      },
+      "appliesAtSize": ["C", "D"],
+      "capabilities": ["product-selection", "pricing", "buying", "trend-analysis"],
+      "defaultIcon": "📦"
+    },
+    {
+      "id": "designer-retail",
+      "slug": "designer",
+      "displayName": { "zh": "设计师", "en": "Designer" },
+      "agentType": "specialist",
+      "rationale": {
+        "zh": "包装、品牌、站点 UX",
+        "en": "Packaging, brand, site UX"
+      },
+      "appliesAtSize": ["B", "C"],
+      "capabilities": ["packaging-design", "brand", "ui-design"],
+      "defaultIcon": "🎨"
+    },
+    {
+      "id": "data-analyst-retail",
+      "slug": "analyst",
+      "displayName": { "zh": "数据分析", "en": "Data Analyst" },
+      "agentType": "specialist",
+      "rationale": {
+        "zh": "销售、复购、归因",
+        "en": "Sales, cohort, attribution"
+      },
+      "appliesAtSize": ["C"],
+      "capabilities": ["analytics", "sql", "attribution-modeling"],
+      "defaultIcon": "📊"
+    },
+    {
+      "id": "cto-retail",
+      "slug": "cto",
+      "displayName": { "zh": "技术", "en": "Tech Lead" },
+      "corporateName": { "zh": "首席技术官", "en": "CTO" },
+      "agentType": "specialist",
+      "rationale": {
+        "zh": "电商平台、集成、性能",
+        "en": "E-commerce platform, integrations, performance"
+      },
+      "appliesAtSize": ["D"],
+      "capabilities": ["e-commerce-platform", "integration", "performance"],
+      "defaultIcon": "💻"
+    }
+  ]
+}

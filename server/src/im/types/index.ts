@@ -179,7 +179,12 @@ export type WSClientEventType =
   | 'agent.capability.declare'
   | 'ping'
   | 'ack'
-  | 'reconnect';
+  | 'reconnect'
+  // ─── v1.9.x daemon protocol (Track C) ───
+  | 'agent.host.declare' // daemon handshake, includes hosted agent + profile list
+  | 'agent.status.changed' // bidirectional: daemon emits, cloud broadcasts
+  | 'task.dispatch.progress' // adapter execution progress
+  | 'task.dispatch.reply'; // adapter execution result
 
 export type WSServerEventType =
   | 'authenticated'
@@ -204,6 +209,7 @@ export type WSServerEventType =
   | 'contact.request'
   | 'contact.accepted'
   | 'contact.rejected'
+  | 'contact.cancelled'
   | 'contact.removed'
   | 'contact.blocked'
   | 'message.read'
@@ -212,7 +218,19 @@ export type WSServerEventType =
   | 'community.answer.accepted'
   | 'community.mention'
   | 'reconnect.ack'
-  | 'pong';
+  | 'pong'
+  // ─── v1.9.x daemon protocol (Track C) ───
+  | 'host.acked' // ACK reply for `agent.host.declare`
+  | 'agent.status.changed' // bidirectional: daemon emits, cloud broadcasts
+  | 'task.dispatch.request' // cloud dispatches a task to a daemon
+  | 'task.cancel' // cloud asks daemon to cancel a running task
+  // ─── v1.9.x schema-derived broadcasts (Track C / Track A) ───
+  | 'agent.changed' // PATCH /agents/:id rename; cloud → user broadcast
+  | 'workspace.changed' // im_workspaces row change; cloud → user broadcast
+  | 'agent_profile.changed' // im_agent_profiles row change; cloud → user broadcast
+  | 'workspace_file.changed' // im_workspace_files create/update/delete; cloud → user broadcast
+  // ─── v5.4 memory layer (Memory Line A · A3) ───
+  | 'memory.invalidate'; // page soft-delete / visibility change; daemon refreshes its mirror
 
 export interface WSMessage<T = unknown> {
   type: WSClientEventType | WSServerEventType;
@@ -315,6 +333,8 @@ export interface RegisterInput {
   username: string;
   displayName: string;
   agentType?: AgentType;
+  /** Optional target workspace for agent cards. Must be owned by the caller. */
+  workspaceId?: string;
   capabilities?: string[];
   description?: string;
   endpoint?: string;
@@ -501,8 +521,15 @@ export type ScheduleType = 'once' | 'interval' | 'cron';
 export type TaskDelivery = 'message' | 'webhook' | 'none';
 export type SessionTarget = 'main' | 'isolated';
 export type WakeMode = 'now' | 'nextHeartbeat';
+export type TaskProductKind = 'work_item' | 'goal' | 'agent_run';
 
 export interface TaskMetadata {
+  /**
+   * Product semantic carried by the reused /api/im/tasks endpoint.
+   * - work_item/goal: board/task projections
+   * - agent_run: bounded execution record spawned by chat/mention/task/goal
+   */
+  kind?: TaskProductKind | string;
   session_target?: SessionTarget;
   delivery?: TaskDelivery;
   wake_mode?: WakeMode;
@@ -518,7 +545,9 @@ export interface CreateTaskInput {
   input?: Record<string, unknown>;
   contextUri?: string;
   assigneeId?: string; // Target agent (or "self")
-  scope?: string; // Workspace scope
+  workspaceId?: string; // Target workspace (1.9.x; replaces scope)
+  /** @deprecated v1.9.x dropped im_tasks.scope; use workspaceId. */
+  scope?: string;
   conversationId?: string; // Associated conversation (v1.8.2)
   scheduleType?: ScheduleType;
   scheduleAt?: string; // ISO 8601 for "once"
@@ -531,6 +560,13 @@ export interface CreateTaskInput {
   retryDelayMs?: number;
   budget?: number;
   metadata?: TaskMetadata;
+  /**
+   * Cloud 3 / S3: execution surface.
+   *   - 'agent'   (default): dispatch to a daemon-attached agent via IM
+   *   - 'sandbox': spawn/reuse an IMContainer + run the task command in-pod
+   *   - 'shell'   (reserved): direct shell exec, no sandbox
+   */
+  runtimeRoute?: 'agent' | 'sandbox' | 'shell';
 }
 
 export interface TaskInfo {
@@ -542,7 +578,7 @@ export interface TaskInfo {
   contextUri: string | null;
   creatorId: string;
   assigneeId: string | null;
-  scope: string;
+  workspaceId: string | null; // v1.9.x; replaces scope (column dropped in m3 phase 2)
   conversationId: string | null; // v1.8.2
   status: TaskStatus;
   progress: number | null; // v1.8.2: 0.0-1.0
@@ -599,8 +635,12 @@ export interface TaskFailInput {
 export interface TaskListQuery {
   status?: TaskStatus;
   capability?: string;
+  kind?: string | string[];
+  view?: 'board' | 'runs' | 'all' | string;
   assigneeId?: string;
   creatorId?: string;
+  workspaceId?: string;
+  /** @deprecated v1.9.x dropped im_tasks.scope; use workspaceId. */
   scope?: string;
   conversationId?: string; // v1.8.2
   scheduleType?: ScheduleType;
@@ -667,15 +707,22 @@ export type MemoryFileOperation = 'append' | 'replace' | 'replace_section';
 
 export interface MemoryFileInfo {
   id: string;
+  workspaceId: string;
   ownerId: string;
   ownerType: MemoryOwnerType;
-  scope: string;
   path: string;
   version: number;
   contentLength: number;
   memoryType?: string | null;
   description?: string | null;
   stale?: boolean;
+  visibility?: string;
+  aclJson?: string | null;
+  encrypted?: boolean;
+  contentHash?: string;
+  etag?: string | null;
+  sourceKind?: string | null;
+  sourceRef?: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -687,6 +734,7 @@ export interface MemoryFileDetail extends MemoryFileInfo {
 export interface CreateMemoryFileInput {
   path: string;
   content: string;
+  /** @deprecated v1.9.2 dropped im_memory_files.scope; param ignored. */
   scope?: string;
   ownerType?: MemoryOwnerType;
 }
@@ -947,6 +995,7 @@ export type ContactEventType =
   | 'contact.request'
   | 'contact.accepted'
   | 'contact.rejected'
+  | 'contact.cancelled'
   | 'contact.removed'
   | 'contact.blocked';
 
@@ -975,6 +1024,13 @@ export interface ContactRejectedPayload {
   toUserId: string;
   requestId: string;
   rejectedAt: string;
+}
+
+export interface ContactCancelledPayload {
+  fromUserId: string;
+  toUserId: string;
+  requestId: string;
+  cancelledAt: string;
 }
 
 export interface ContactRemovedPayload {
@@ -1009,3 +1065,6 @@ export interface MessageReadPayload {
   userId: string;
   readAt: string;
 }
+
+// ─── v1.9.x event payload types (Track C) ────────────────────
+export * from './im-events';

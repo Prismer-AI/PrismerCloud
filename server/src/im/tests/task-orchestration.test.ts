@@ -65,33 +65,48 @@ async function setup() {
   const ts = Date.now();
 
   // Creator (human)
-  const r1 = await api('POST', '/api/register', {
-    type: 'human',
-    username: `task-creator-${ts}`,
-    displayName: 'Task Creator',
-  }, '');
+  const r1 = await api(
+    'POST',
+    '/api/register',
+    {
+      type: 'human',
+      username: `task-creator-${ts}`,
+      displayName: 'Task Creator',
+    },
+    '',
+  );
   assert(r1.ok, `Register creator failed: ${JSON.stringify(r1)}`);
   creatorToken = r1.data.token;
   creatorId = r1.data.imUserId;
 
   // Agent (will be assigned tasks)
-  const r2 = await api('POST', '/api/register', {
-    type: 'agent',
-    username: `task-agent-${ts}`,
-    displayName: 'Task Agent',
-    agentType: 'assistant',
-  }, '');
+  const r2 = await api(
+    'POST',
+    '/api/register',
+    {
+      type: 'agent',
+      username: `task-agent-${ts}`,
+      displayName: 'Task Agent',
+      agentType: 'assistant',
+    },
+    creatorToken,
+  );
   assert(r2.ok, `Register agent failed: ${JSON.stringify(r2)}`);
   agentToken = r2.data.token;
   agentId = r2.data.imUserId;
 
   // Intruder (should be blocked from accessing others' tasks)
-  const r3 = await api('POST', '/api/register', {
-    type: 'agent',
-    username: `task-intruder-${ts}`,
-    displayName: 'Intruder',
-    agentType: 'assistant',
-  }, '');
+  const r3 = await api(
+    'POST',
+    '/api/register',
+    {
+      type: 'agent',
+      username: `task-intruder-${ts}`,
+      displayName: 'Intruder',
+      agentType: 'assistant',
+    },
+    creatorToken,
+  );
   assert(r3.ok, `Register intruder failed: ${JSON.stringify(r3)}`);
   intruderToken = r3.data.token;
   intruderId = r3.data.imUserId;
@@ -149,6 +164,97 @@ async function testCRUD() {
     assert(ids.includes(taskId), 'Agent should see assigned task');
   });
 
+  await test('GET /tasks?view=board — excludes legacy chat agent_run rows', async () => {
+    const runTask = await api('POST', '/api/tasks', {
+      title: 'Legacy chat run should not be a board card',
+      capability: 'chat',
+      assigneeId: agentId,
+      conversationId: 'conv-test-legacy',
+      metadata: { kind: 'agent_run', triggerKind: 'mention', triggerMessageId: 'msg-test-legacy' },
+    });
+    assert(runTask.status === 201, `Expected legacy run task create 201, got ${runTask.status}`);
+
+    const board = await api('GET', '/api/tasks?view=board&kind=work_item,goal&limit=100');
+    assert(board.ok, 'Failed to list board tasks');
+    const boardIds = board.data.map((t: any) => t.id);
+    assert(!boardIds.includes(runTask.data.id), 'Board view must not include agent_run rows');
+
+    const all = await api('GET', '/api/tasks?view=all&limit=100');
+    assert(all.ok, 'Failed to list all tasks');
+    const allIds = all.data.map((t: any) => t.id);
+    assert(allIds.includes(runTask.data.id), 'view=all must include legacy agent_run rows');
+  });
+
+  await test('POST /tasks/:id/runs and GET /runs — execution attempts are separate from board', async () => {
+    const created = await api('POST', `/api/tasks/${taskId}/runs`, {
+      status: 'running',
+      metadata: { reason: 'test-run-contract' },
+    });
+    assert(created.status === 201, `Expected run create 201, got ${created.status}`);
+    assert(created.data.taskId === taskId, 'Run should link to parent task');
+
+    const runs = await api('GET', `/api/runs?taskId=${taskId}&limit=20`);
+    assert(runs.ok, 'Failed to list runs');
+    const runIds = runs.data.map((r: any) => r.id);
+    assert(runIds.includes(created.data.id), 'GET /runs should include created run');
+
+    const filteredRuns = await api('GET', `/api/tasks?view=runs&taskId=${taskId}&limit=20`);
+    assert(filteredRuns.ok, 'Failed to list runs via /tasks?view=runs');
+    const filteredRunIds = filteredRuns.data.map((r: any) => r.id);
+    assert(filteredRunIds.includes(created.data.id), 'view=runs should include created run');
+
+    const board = await api('GET', '/api/tasks?view=board&kind=work_item,goal&limit=100');
+    const boardIds = board.data.map((t: any) => t.id);
+    assert(!boardIds.includes(created.data.id), 'Run id must not appear as a board task');
+  });
+
+  await test('PATCH /runs/:id completed — output exposed via GET /runs/:id/result (Wave-9 Phase 1)', async () => {
+    // Wave-9 Phase 1: replaces the legacy "task-result IMAsset mirror"
+    // assertion. The agent's run output is now canonically held in
+    // IMTaskRun.output JSON and exposed via GET /api/im/runs/:id/result
+    // with the locked shape:
+    //   { taskId, status, output, metrics?, assetIds: string[],
+    //     resultUri?: string|null, completedAt: string }
+    const created = await api('POST', `/api/tasks/${taskId}/runs`, {
+      status: 'running',
+      metadata: { title: 'Markdown run result contract', reason: 'run-result-contract' },
+    });
+    assert(created.status === 201, `Expected run create 201, got ${created.status}`);
+    const runId = created.data.id;
+    const sentinel = `RUN-RESULT-${Date.now()}`;
+    const markdown = `# Run Result\n\n- completed\n\n\`\`\`\n${sentinel}\n\`\`\``;
+
+    const completed = await api('PATCH', `/api/runs/${runId}`, {
+      status: 'completed',
+      output: { output: markdown },
+    });
+    assert(completed.ok, `Run complete failed: ${JSON.stringify(completed)}`);
+    assert(completed.data.status === 'completed', `Expected completed, got ${completed.data.status}`);
+
+    const result = await api('GET', `/api/runs/${runId}/result`);
+    assert(result.ok, `GET /runs/:id/result failed: ${JSON.stringify(result)}`);
+    assert(result.data.taskId === runId, `Expected taskId=${runId}, got ${result.data.taskId}`);
+    assert(result.data.status === 'completed', `Expected status=completed, got ${result.data.status}`);
+    assert(typeof result.data.output === 'string', `Expected output string, got ${typeof result.data.output}`);
+    assert(result.data.output.includes('# Run Result'), 'Result output should contain markdown heading');
+    assert(result.data.output.includes('```'), 'Result output should contain fenced code block');
+    assert(result.data.output.includes(sentinel), 'Result output should contain sentinel');
+    assert(Array.isArray(result.data.assetIds), 'assetIds must be an array (possibly empty)');
+    assert(typeof result.data.completedAt === 'string', 'completedAt must be ISO string');
+
+    // Negative assertion (Phase 1 cleanup): the legacy task-result asset
+    // mirror MUST NOT be created anymore. Library should stay clean.
+    const listed = await api(
+      'GET',
+      `/api/assets?workspaceId=${created.data.workspaceId}&taskId=${runId}&kind=task-result&limit=10`,
+    );
+    assert(listed.ok, `Asset list failed: ${JSON.stringify(listed)}`);
+    const orphans = (listed.data ?? []).filter(
+      (asset: any) => asset.kind === 'task-result' && asset.sourceTaskId === runId,
+    );
+    assert(orphans.length === 0, `Wave-9 should not create task-result assets, got ${orphans.length}`);
+  });
+
   await test('POST /tasks — create with missing title → 400', async () => {
     const res = await api('POST', '/api/tasks', { description: 'no title' });
     assert(res.status === 400, `Expected 400, got ${res.status}`);
@@ -189,16 +295,26 @@ async function testOwnership() {
   });
 
   await test('PATCH /tasks/:id — intruder cannot update', async () => {
-    const res = await api('PATCH', `/api/tasks/${ownerTaskId}`, {
-      status: 'cancelled',
-    }, intruderToken);
+    const res = await api(
+      'PATCH',
+      `/api/tasks/${ownerTaskId}`,
+      {
+        status: 'cancelled',
+      },
+      intruderToken,
+    );
     assert(res.status === 403, `Expected 403, got ${res.status}`);
   });
 
   await test('PATCH /tasks/:id — assignee cannot update (not creator)', async () => {
-    const res = await api('PATCH', `/api/tasks/${ownerTaskId}`, {
-      metadata: { note: 'hacked' },
-    }, agentToken);
+    const res = await api(
+      'PATCH',
+      `/api/tasks/${ownerTaskId}`,
+      {
+        metadata: { note: 'hacked' },
+      },
+      agentToken,
+    );
     assert(res.status === 403, `Expected 403, got ${res.status}`);
   });
 
@@ -210,9 +326,14 @@ async function testOwnership() {
   });
 
   await test('POST /tasks/:id/progress — intruder cannot report progress', async () => {
-    const res = await api('POST', `/api/tasks/${ownerTaskId}/progress`, {
-      message: 'hacking',
-    }, intruderToken);
+    const res = await api(
+      'POST',
+      `/api/tasks/${ownerTaskId}/progress`,
+      {
+        message: 'hacking',
+      },
+      intruderToken,
+    );
     assert(res.status === 403, `Expected 403, got ${res.status}`);
   });
 
@@ -224,16 +345,26 @@ async function testOwnership() {
   });
 
   await test('POST /tasks/:id/progress — assignee CAN report progress', async () => {
-    const res = await api('POST', `/api/tasks/${ownerTaskId}/progress`, {
-      message: 'Working on it',
-    }, agentToken);
+    const res = await api(
+      'POST',
+      `/api/tasks/${ownerTaskId}/progress`,
+      {
+        message: 'Working on it',
+      },
+      agentToken,
+    );
     assert(res.ok, 'Assignee should be able to report progress');
   });
 
   await test('POST /tasks/:id/complete — intruder cannot complete', async () => {
-    const res = await api('POST', `/api/tasks/${ownerTaskId}/complete`, {
-      result: 'hacked',
-    }, intruderToken);
+    const res = await api(
+      'POST',
+      `/api/tasks/${ownerTaskId}/complete`,
+      {
+        result: 'hacked',
+      },
+      intruderToken,
+    );
     assert(res.status === 403, `Expected 403, got ${res.status}`);
   });
 
@@ -245,9 +376,14 @@ async function testOwnership() {
   });
 
   await test('POST /tasks/:id/complete — assignee CAN complete', async () => {
-    const res = await api('POST', `/api/tasks/${ownerTaskId}/complete`, {
-      result: { summary: 'Done' },
-    }, agentToken);
+    const res = await api(
+      'POST',
+      `/api/tasks/${ownerTaskId}/complete`,
+      {
+        result: { summary: 'Done' },
+      },
+      agentToken,
+    );
     assert(res.ok, 'Assignee should be able to complete');
   });
 
@@ -259,16 +395,26 @@ async function testOwnership() {
   const failTaskId = failRes.data.id;
 
   await test('POST /tasks/:id/fail — intruder cannot fail', async () => {
-    const res = await api('POST', `/api/tasks/${failTaskId}/fail`, {
-      error: 'hacked',
-    }, intruderToken);
+    const res = await api(
+      'POST',
+      `/api/tasks/${failTaskId}/fail`,
+      {
+        error: 'hacked',
+      },
+      intruderToken,
+    );
     assert(res.status === 403, `Expected 403, got ${res.status}`);
   });
 
   await test('POST /tasks/:id/fail — assignee CAN fail', async () => {
-    const res = await api('POST', `/api/tasks/${failTaskId}/fail`, {
-      error: 'Legitimate failure',
-    }, agentToken);
+    const res = await api(
+      'POST',
+      `/api/tasks/${failTaskId}/fail`,
+      {
+        error: 'Legitimate failure',
+      },
+      agentToken,
+    );
     assert(res.ok, 'Assignee should be able to fail');
   });
 
@@ -326,9 +472,14 @@ async function testLifecycle() {
   });
 
   await test('POST /tasks/:id/progress — transitions assigned → running', async () => {
-    const res = await api('POST', `/api/tasks/${claimTaskId}/progress`, {
-      message: 'Starting work',
-    }, agentToken);
+    const res = await api(
+      'POST',
+      `/api/tasks/${claimTaskId}/progress`,
+      {
+        message: 'Starting work',
+      },
+      agentToken,
+    );
     assert(res.ok, 'Progress failed');
 
     const detail = await api('GET', `/api/tasks/${claimTaskId}`, undefined, agentToken);
@@ -336,9 +487,14 @@ async function testLifecycle() {
   });
 
   await test('POST /tasks/:id/complete — marks completed', async () => {
-    const res = await api('POST', `/api/tasks/${claimTaskId}/complete`, {
-      result: { output: 'done' },
-    }, agentToken);
+    const res = await api(
+      'POST',
+      `/api/tasks/${claimTaskId}/complete`,
+      {
+        result: { output: 'done' },
+      },
+      agentToken,
+    );
     assert(res.ok, 'Complete failed');
     assert(res.data.status === 'completed', `Expected completed, got ${res.data.status}`);
   });
@@ -353,11 +509,16 @@ async function testLifecycle() {
   const retryId = retryTask.data.id;
 
   await test('POST /tasks/:id/fail — retry on first failure', async () => {
-    const res = await api('POST', `/api/tasks/${retryId}/fail`, {
-      error: 'Temporary error',
-    }, agentToken);
+    const res = await api(
+      'POST',
+      `/api/tasks/${retryId}/fail`,
+      {
+        error: 'Temporary error',
+      },
+      agentToken,
+    );
     assert(res.ok, 'Fail failed');
-    assert(res.data.status === 'pending', `Expected pending (retry), got ${res.data.status}`);
+    assert(res.data.status === 'assigned', `Expected assigned (retry), got ${res.data.status}`);
     assert(res.data.retryCount === 1, `Expected retryCount 1, got ${res.data.retryCount}`);
   });
 
@@ -499,14 +660,14 @@ async function main() {
 
   if (failed > 0) {
     console.log('\nFailed tests:');
-    for (const r of results.filter(r => !r.ok)) {
+    for (const r of results.filter((r) => !r.ok)) {
       console.log(`  ❌ ${r.name}: ${r.error}`);
     }
     process.exit(1);
   }
 }
 
-main().catch(err => {
+main().catch((err) => {
   console.error('Fatal:', err);
   process.exit(1);
 });

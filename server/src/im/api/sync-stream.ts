@@ -13,6 +13,7 @@ import { streamSSE } from 'hono/streaming';
 import type Redis from 'ioredis';
 import { verifyToken } from '../auth/jwt';
 import type { SyncService } from '../services/sync.service';
+import prisma from '../db';
 
 const SYNC_CHANNEL_PREFIX = 'im:sync:';
 const HEARTBEAT_INTERVAL = 25_000;
@@ -20,6 +21,31 @@ const HEARTBEAT_INTERVAL = 25_000;
 export interface SyncStreamDeps {
   redis: Redis;
   syncService: SyncService;
+}
+
+async function resolveStreamUserId(payload: {
+  sub?: string;
+  user_id?: number | string;
+  numericId?: number;
+  type?: string;
+}) {
+  const subStr = typeof payload.sub === 'string' ? payload.sub : '';
+  const subIsNumeric = subStr.length > 0 && /^\d+$/.test(subStr);
+
+  if (subStr.length > 0 && !subIsNumeric && payload.type !== 'api_key_proxy') {
+    return subStr;
+  }
+
+  const numericRaw = subIsNumeric ? subStr : (payload.numericId ?? payload.user_id);
+  const numericStr = numericRaw == null ? null : String(numericRaw);
+  if (!numericStr) return null;
+
+  const imUser = await prisma.iMUser.findFirst({
+    where: { userId: numericStr, role: 'human' },
+    orderBy: { createdAt: 'asc' },
+    select: { id: true },
+  });
+  return imUser?.id ?? null;
 }
 
 export function createSyncStreamRouter(deps: SyncStreamDeps): Hono {
@@ -32,7 +58,7 @@ export function createSyncStreamRouter(deps: SyncStreamDeps): Hono {
    *   token  — JWT auth token
    *   since  — cursor (auto-increment ID), default 0
    */
-  router.get('/stream', (c) => {
+  router.get('/stream', async (c) => {
     const token = c.req.query('token');
     if (!token) {
       return c.json({ ok: false, error: 'Token required (?token=<JWT>)' }, 401);
@@ -45,7 +71,10 @@ export function createSyncStreamRouter(deps: SyncStreamDeps): Hono {
       return c.json({ ok: false, error: 'Invalid or expired token' }, 401);
     }
 
-    const userId = payload.sub;
+    const userId = await resolveStreamUserId(payload);
+    if (!userId) {
+      return c.json({ ok: false, error: 'Token payload missing user identity' }, 401);
+    }
     const since = parseInt(c.req.query('since') ?? '0', 10);
 
     return streamSSE(c, async (stream) => {

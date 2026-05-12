@@ -40,7 +40,10 @@ export class SyncService {
       },
     });
 
-    // Publish to Redis for SSE sync/stream subscribers
+    // Publish to Redis for SSE sync/stream subscribers. /sync/stream Phase 2
+    // subscribes to `im:sync:${recipient}`, so per-conversation events must
+    // fan out to every participant — otherwise admintest2 never sees a
+    // message admintest1 sent (D-γ-2 acceptance contract).
     if (this.redis) {
       const event = {
         seq: record.id,
@@ -49,10 +52,24 @@ export class SyncService {
         conversationId,
         at: record.createdAt.toISOString(),
       };
-      this.redis.publish(
-        `${SYNC_CHANNEL_PREFIX}${imUserId}`,
-        JSON.stringify(event),
-      ).catch(() => { /* non-fatal */ });
+      const payload = JSON.stringify(event);
+
+      const recipientIds = new Set<string>([imUserId]);
+      if (conversationId) {
+        const participants = await prisma.iMParticipant.findMany({
+          where: { conversationId, leftAt: null },
+          select: { imUserId: true },
+        });
+        for (const p of participants) recipientIds.add(p.imUserId);
+      }
+
+      await Promise.all(
+        [...recipientIds].map((rid) =>
+          this.redis!.publish(`${SYNC_CHANNEL_PREFIX}${rid}`, payload).catch(() => {
+            /* non-fatal — one recipient's offline subscriber shouldn't fail the write */
+          }),
+        ),
+      );
     }
   }
 
@@ -93,13 +110,15 @@ export class SyncService {
     const cursor = batch.length > 0 ? batch[batch.length - 1].id : since;
 
     return {
-      events: batch.map((e: { id: number; type: string; data: string; conversationId: string | null; createdAt: Date }) => ({
-        seq: e.id,
-        type: e.type,
-        data: JSON.parse(e.data),
-        conversationId: e.conversationId,
-        at: e.createdAt.toISOString(),
-      })),
+      events: batch.map(
+        (e: { id: number; type: string; data: string; conversationId: string | null; createdAt: Date }) => ({
+          seq: e.id,
+          type: e.type,
+          data: JSON.parse(e.data),
+          conversationId: e.conversationId,
+          at: e.createdAt.toISOString(),
+        }),
+      ),
       cursor,
       hasMore,
     };

@@ -99,7 +99,7 @@ async function enrichTasks(tasks: TaskInfo[]): Promise<EnrichedTask[]> {
     const userIds = [...new Set(tasks.flatMap((t) => [t.creatorId, t.assigneeId].filter(Boolean) as string[]))];
     const users = await prisma.iMUser.findMany({
       where: { id: { in: userIds } },
-      select: { id: true, type: true, displayName: true, username: true },
+      select: { id: true, role: true, displayName: true, username: true },
     });
     userMap = new Map<string, UserInfo>(users.map((u: any) => [u.id, u]));
   } catch (err) {
@@ -111,15 +111,15 @@ async function enrichTasks(tasks: TaskInfo[]): Promise<EnrichedTask[]> {
     return {
       ...t,
       ownerId: t.creatorId,
-      ownerType: creator?.type ?? null,
+      ownerType: creator?.role ?? null,
       ownerName: creator?.displayName ?? creator?.username ?? null,
-      assigneeType: assignee?.type ?? null,
+      assigneeType: assignee?.role ?? null,
       assigneeName: assignee?.displayName ?? assignee?.username ?? null,
     };
   });
 }
 
-type UserInfo = { id: string; type: string; displayName: string | null; username: string };
+type UserInfo = { id: string; role: string; displayName: string | null; username: string };
 
 async function enrichTask(task: TaskInfo): Promise<EnrichedTask> {
   const [enriched] = await enrichTasks([task]);
@@ -137,9 +137,16 @@ function registerSSERoute(router: Hono, eventBusService?: EventBusService) {
       return c.json({ ok: false, error: { code: 'VALIDATION_ERROR', message: 'token query parameter required' } }, 401);
     }
 
-    let payload;
+    // Accept BOTH token shapes (54release Cloud 1.5):
+    //   1. IM-internal JWT (legacy api_key_proxy path) — `sub` is im_users.id
+    //   2. Platform JWT signed by native auth — `sub` is im_users.id (cuid)
+    //      OR `user_id`/`numericId` is the cloud-side numeric user id.
+    // Both sides share JWT_SECRET (see src/lib/auth/guard.ts and
+    // src/im/config.ts), so verifyToken() accepts either; the resolution
+    // below normalises to a single im_users.id we can query im_tasks against.
+    let payload: { sub?: string; user_id?: number | string; numericId?: number };
     try {
-      payload = verifyToken(token);
+      payload = verifyToken(token) as typeof payload;
     } catch {
       return c.json({ ok: false, error: { code: 'INVALID_TOKEN', message: 'Invalid or expired token' } }, 401);
     }
@@ -148,17 +155,86 @@ function registerSSERoute(router: Hono, eventBusService?: EventBusService) {
       return c.json({ ok: false, error: { code: 'SERVICE_UNAVAILABLE', message: 'Event bus not available' } }, 503);
     }
 
-    const userId = payload.sub;
+    // Resolve to im_users.id. Three shapes can land here:
+    //   a) Native-auth platform JWT (NextAuth): `sub` is im_users.id (cuid).
+    //   b) Legacy Go-backend JWT:               `user_id` is the cloud
+    //                                           numericId (BIGINT-as-number).
+    //   c) api_key_proxy translation (see src/lib/api-guard.ts:
+    //      generateIMTokenForUser): `sub` is the api_key's owning user id
+    //      rendered as a decimal STRING (e.g. "1"). For IMUsers created via
+    //      this path, the `userId` column on im_users stores that same
+    //      decimal string; the cuid `id` column is unrelated.
+    // Resolution rules:
+    //   - all-digits sub OR `user_id` claim → look up by im_users.userId
+    //   - non-numeric sub → treat directly as im_users.id (cuid)
+    let userId: string | null = null;
+    const subStr = typeof payload.sub === 'string' ? payload.sub : '';
+    const subIsNumeric = subStr.length > 0 && /^\d+$/.test(subStr);
+
+    if (subStr.length > 0 && !subIsNumeric) {
+      // cuid path
+      userId = subStr;
+    } else {
+      const numericRaw = subIsNumeric ? subStr : payload.user_id;
+      const numericStr =
+        numericRaw == null ? null : typeof numericRaw === 'number' ? String(numericRaw) : String(numericRaw);
+      if (numericStr) {
+        const imUser = await prisma.iMUser.findFirst({
+          where: { userId: numericStr, role: 'human' },
+          orderBy: { createdAt: 'asc' },
+          select: { id: true },
+        });
+        userId = imUser?.id ?? null;
+      }
+    }
+    if (!userId) {
+      return c.json(
+        { ok: false, error: { code: 'INVALID_TOKEN', message: 'Token payload missing user identity' } },
+        401,
+      );
+    }
+
+    // Active-account check: deletion (banned=true) and suspension must
+    // immediately deny new SSE subscriptions, even if the JWT itself is
+    // still cryptographically valid. Active streams are still bounded by
+    // the SSE error budget below.
+    try {
+      const userRow = await prisma.iMUser.findUnique({
+        where: { id: userId },
+        select: { banned: true, suspendedUntil: true },
+      });
+      if (!userRow) {
+        return c.json({ ok: false, error: { code: 'INVALID_TOKEN', message: 'Account not found' } }, 401);
+      }
+      if (userRow.banned || (userRow.suspendedUntil && userRow.suspendedUntil > new Date())) {
+        return c.json({ ok: false, error: { code: 'ACCOUNT_INACTIVE', message: 'Account is inactive' } }, 401);
+      }
+    } catch (err) {
+      log.warn({ err, userId }, 'SSE account-active check failed; rejecting');
+      return c.json({ ok: false, error: { code: 'INTERNAL_ERROR', message: 'Auth check failed' } }, 500);
+    }
+
     // Support reconnection: use Last-Event-ID timestamp if available
     const lastEventIdHeader = c.req.header('Last-Event-ID');
     const initialTime = lastEventIdHeader ? parseInt(lastEventIdHeader, 10) || Date.now() : Date.now();
 
     return streamSSE(c, async (stream) => {
       let closed = false;
-      let consecutiveErrors = 0;
       stream.onAbort(() => {
         closed = true;
       });
+
+      // Flush an initial `connected` event immediately. This forces the
+      // response headers (Content-Type: text/event-stream) out of the Node
+      // server's buffer right away, so EventSource on the browser side
+      // transitions to OPEN within ~10ms instead of waiting for the first
+      // keepalive 30s later. Otherwise Next.js holds the headers until the
+      // first body byte and the client times out / falls back to polling.
+      try {
+        await stream.writeSSE({ event: 'connected', data: JSON.stringify({ ts: Date.now() }) });
+      } catch {
+        closed = true;
+      }
 
       const keepalive = setInterval(() => {
         if (!closed) {
@@ -168,57 +244,161 @@ function registerSSERoute(router: Hono, eventBusService?: EventBusService) {
         }
       }, 30000);
 
-      let lastEventTime = initialTime;
-
-      while (!closed) {
-        try {
-          const tasks = await prisma.iMTask.findMany({
-            where: {
-              OR: [{ creatorId: userId }, { assigneeId: userId }],
-              updatedAt: { gt: new Date(lastEventTime) },
-            },
-            orderBy: { updatedAt: 'asc' },
-            take: 10,
+      // ─── Catch-up: tasks updated since reconnect cursor ───────────────
+      // Replaces the pre-Wave-5 2s polling tick. We emit one snapshot per
+      // recently-touched task as `task.updated` so the mobile decoder's
+      // back-compat path stays warm during reconnects (it reads the same
+      // shape we used to publish on every poll). Live transitions arrive
+      // via the EventBus subscription below.
+      try {
+        const since = lastEventIdHeader ? new Date(initialTime) : new Date(Date.now() - 30_000);
+        const recent = await prisma.iMTask.findMany({
+          where: {
+            OR: [{ creatorId: userId }, { assigneeId: userId }],
+            updatedAt: { gt: since },
+          },
+          orderBy: { updatedAt: 'asc' },
+          take: 50,
+        });
+        for (const task of recent) {
+          if (closed) break;
+          await stream.writeSSE({
+            event: 'task.updated',
+            data: JSON.stringify({
+              taskId: task.id,
+              conversationId: task.conversationId ?? null,
+              title: task.title,
+              status: task.status,
+              progress: (task as any).progress,
+              statusMessage: (task as any).statusMessage,
+              updatedAt: task.updatedAt,
+            }),
+            id: String(task.updatedAt.getTime()),
           });
-
-          consecutiveErrors = 0; // Reset on success
-
-          for (const task of tasks) {
-            if (closed) break;
-            const eventTime = task.updatedAt.getTime();
-            await stream.writeSSE({
-              event: 'task.updated',
-              data: JSON.stringify({
-                taskId: task.id,
-                title: task.title,
-                status: task.status,
-                progress: (task as any).progress,
-                statusMessage: (task as any).statusMessage,
-                updatedAt: task.updatedAt,
-              }),
-              id: String(eventTime),
-            });
-            lastEventTime = Math.max(lastEventTime, eventTime);
-          }
-
-          await new Promise((resolve) => setTimeout(resolve, 2000));
-        } catch (err) {
-          consecutiveErrors++;
-          log.warn({ err }, `SSE poll error for user ${userId} (${consecutiveErrors}/${MAX_SSE_ERRORS})`);
-          if (consecutiveErrors >= MAX_SSE_ERRORS) {
-            log.error(`SSE stream closing after ${consecutiveErrors} consecutive errors for user ${userId}`);
-            closed = true;
-            break;
-          }
-          if (!closed) {
-            await new Promise((resolve) => setTimeout(resolve, 5000));
-          }
         }
+      } catch (err) {
+        log.warn({ err }, `SSE catch-up failed for user ${userId} (continuing without backlog)`);
       }
 
+      // ─── Live: subscribe to typed task.* events ───────────────────────
+      // EventBusService.publish emits in-process via localEmitter (added
+      // Wave-5). We filter to events whose data references the connected
+      // user (creator OR assignee) and project the EventBus payload into
+      // the cookbook §events shape. Cookbook MD authoritative — see
+      // docs/cookbook/task-agent-orchestration.md §events table.
+      let consecutiveSendErrors = 0;
+      const onEvent = async (evt: { type: string; timestamp?: number; data?: unknown }) => {
+        if (closed) return;
+        if (!evt.type.startsWith('task.')) return;
+        const data = (evt.data ?? {}) as Record<string, any>;
+        // Filter: this user must be creator OR assignee (or no filterable
+        // identity, in which case skip — never broadcast unfiltered task
+        // events to a user who isn't on the task).
+        if (data.creatorId !== userId && data.assigneeId !== userId) return;
+
+        const payload = buildTaskSSEPayload(evt.type, data);
+        try {
+          await stream.writeSSE({
+            event: evt.type,
+            data: JSON.stringify(payload),
+            id: String(evt.timestamp ?? Date.now()),
+          });
+          consecutiveSendErrors = 0;
+        } catch (err) {
+          consecutiveSendErrors++;
+          log.warn(
+            { err },
+            `SSE writeSSE failed for ${evt.type} user=${userId} (${consecutiveSendErrors}/${MAX_SSE_ERRORS})`,
+          );
+          if (consecutiveSendErrors >= MAX_SSE_ERRORS) {
+            log.error(`SSE stream closing after ${consecutiveSendErrors} write errors for user ${userId}`);
+            closed = true;
+          }
+        }
+      };
+      const unsubscribe = eventBusService.onLocalEvent(onEvent);
+
+      // Hold the connection open until the client aborts. Hono's streamSSE
+      // tears down the response when this handler returns, so we park here
+      // on a 1s timer (cheap; no DB work).
+      while (!closed) {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
+
+      unsubscribe();
       clearInterval(keepalive);
     });
   });
+}
+
+/**
+ * Project the EventBus event payload (which carries internal fields like
+ * creatorId, capability) into the public SSE shape mobile + web subscribe
+ * to. Cookbook §events table is authoritative — see
+ * `docs/cookbook/task-agent-orchestration.md`.
+ *
+ * `task.failed` payload uses `error: string` (matches IMTask.error TEXT
+ * column + cookbook script's `typeof === 'string'` assertion). The
+ * `{code, message}` shape from cookbook §payload-shapes line 423 is the
+ * daemon→cloud WS protocol (`task.dispatch.reply.error`), distinct from
+ * the cloud→client SSE wire. Cloud serialises `{code, message}` to a
+ * string before storing/publishing.
+ */
+function buildTaskSSEPayload(type: string, data: Record<string, any>): Record<string, unknown> {
+  // Wave-7: conversationId is forwarded for every task.* event so the
+  // chat surface (web ImChannel, mobile ChatDetailView) can render an
+  // ephemeral "thinking / executing" row without a separate /tasks/:id
+  // round-trip per dispatch. Producers that don't carry conversationId
+  // (e.g. legacy task.updated catch-up rows) just emit null.
+  const base: Record<string, unknown> = {
+    taskId: data.taskId,
+    conversationId: typeof data.conversationId === 'string' ? data.conversationId : null,
+  };
+  switch (type) {
+    case 'task.created':
+      return {
+        ...base,
+        title: data.title,
+        capability: data.capability ?? null,
+        status: data.assigneeId ? 'assigned' : 'pending',
+      };
+    case 'task.assigned':
+      return { ...base, assigneeId: data.assigneeId ?? null };
+    case 'task.progress':
+      return {
+        ...base,
+        progress: typeof data.progress === 'number' ? data.progress : null,
+        statusMessage: typeof data.statusMessage === 'string' ? data.statusMessage : null,
+      };
+    case 'task.completed':
+      return {
+        ...base,
+        output: data.output ?? null,
+        metrics: data.metrics ?? null,
+      };
+    case 'task.failed':
+      return {
+        ...base,
+        // string. See doc above for why.
+        error: typeof data.error === 'string' ? data.error : data.error == null ? null : String(data.error),
+      };
+    case 'task.cancelled':
+      return { ...base, by: data.by ?? null };
+    case 'task.updated':
+      // Deprecated event kept for one wave so reconnecting clients with
+      // Last-Event-ID still see snapshot-style data they can diff.
+      return {
+        ...base,
+        title: data.title ?? null,
+        status: data.status ?? null,
+        progress: data.progress ?? null,
+        statusMessage: data.statusMessage ?? null,
+      };
+    default:
+      // Forward any other task.* event with the original data — keeps the
+      // SSE stream useful when new event types ship before mobile updates.
+      return { ...base, ...data };
+  }
 }
 
 // ─── Router ─────────────────────────────────────────────────
@@ -295,6 +475,28 @@ export function createTasksRouter(
       return validationErr(c, 'deadline must be a valid ISO 8601 date');
     }
 
+    // Validate runtimeRoute (Cloud 3 / S3 — execution surface)
+    const runtimeRoute = body.runtimeRoute ?? body.runtime_route ?? 'agent';
+    if (!['agent', 'sandbox', 'shell'].includes(runtimeRoute)) {
+      return validationErr(c, "runtimeRoute must be 'agent', 'sandbox', or 'shell'");
+    }
+
+    // workspaceId is NOT NULL on im_tasks (migration 120). If the
+    // caller didn't pass one, fall back to the user's default Personal
+    // workspace — every human user has one (backfill ensures it).
+    let workspaceId: string | undefined = body.workspaceId ?? body.workspace_id;
+    if (!workspaceId) {
+      try {
+        const defaultWs = await prisma.iMWorkspace.findFirst({
+          where: { ownerImUserId: user.imUserId, isDefault: true },
+          select: { id: true },
+        });
+        workspaceId = defaultWs?.id;
+      } catch {
+        /* ignore — let create fail with a clear NOT NULL error if no default */
+      }
+    }
+
     try {
       const task = await taskService.createTask(user.imUserId, {
         title: body.title,
@@ -303,6 +505,7 @@ export function createTasksRouter(
         input: body.input,
         contextUri: body.contextUri ?? body.context_uri,
         assigneeId: body.assigneeId ?? body.assignee_id,
+        workspaceId,
         scope: body.scope,
         conversationId: body.conversationId ?? body.conversation_id,
         scheduleType: body.scheduleType ?? body.schedule_type,
@@ -316,6 +519,7 @@ export function createTasksRouter(
         retryDelayMs: body.retryDelayMs ?? body.retry_delay_ms,
         budget: body.budget,
         metadata: body.metadata,
+        runtimeRoute,
       });
 
       return c.json<ApiResponse>({ ok: true, data: await enrichTask(task) }, 201);
@@ -331,15 +535,21 @@ export function createTasksRouter(
   /**
    * GET /tasks — List tasks with filters
    *
-   * Query params: status, capability, assigneeId, creatorId, scheduleType, limit, cursor
+   * Query params: status, capability, kind, view, assigneeId, creatorId,
+   * scheduleType, limit, cursor
    */
   router.get('/', async (c) => {
     const user = c.get('user');
     const query = {
       status: c.req.query('status') as TaskStatus | undefined,
       capability: c.req.query('capability'),
+      kind: c.req.query('kind'),
+      view: c.req.query('view'),
+      taskId: c.req.query('taskId') ?? c.req.query('task_id'),
+      sourceKind: c.req.query('sourceKind') ?? c.req.query('source_kind'),
       assigneeId: c.req.query('assigneeId') ?? c.req.query('assignee_id'),
       creatorId: c.req.query('creatorId') ?? c.req.query('creator_id'),
+      workspaceId: c.req.query('workspaceId') ?? c.req.query('workspace_id'),
       scope: c.req.query('scope'),
       conversationId: c.req.query('conversationId') ?? c.req.query('conversation_id'),
       scheduleType: c.req.query('scheduleType') as ScheduleType | undefined,
@@ -355,8 +565,47 @@ export function createTasksRouter(
       return accessErr(c, "Cannot query other users' tasks by assigneeId");
     }
 
+    if (query.view === 'runs') {
+      const [createdRuns, assignedRuns] = await Promise.all([
+        taskService.listTaskRuns(
+          {
+            workspaceId: query.workspaceId,
+            conversationId: query.conversationId,
+            taskId: query.taskId,
+            sourceKind: query.sourceKind,
+            status: query.status,
+            creatorId: user.imUserId,
+            limit: query.limit,
+            cursor: query.cursor,
+          },
+          user.imUserId,
+        ),
+        taskService.listTaskRuns(
+          {
+            workspaceId: query.workspaceId,
+            conversationId: query.conversationId,
+            taskId: query.taskId,
+            sourceKind: query.sourceKind,
+            status: query.status,
+            assigneeId: user.imUserId,
+            limit: query.limit,
+            cursor: query.cursor,
+          },
+          user.imUserId,
+        ),
+      ]);
+      const seen = new Set<string>();
+      const runs = [...createdRuns, ...assignedRuns].filter((run) => {
+        if (seen.has(run.id)) return false;
+        seen.add(run.id);
+        return true;
+      });
+      return c.json({ ok: true, data: runs, meta: { total: runs.length, nextCursor: runs.at(-1)?.id ?? null } });
+    }
+
     // If no filter specified, default to tasks relevant to this user
-    if (!query.status && !query.capability && !query.assigneeId && !query.creatorId) {
+    const hasExplicitViewOrKind = Boolean(query.view || query.kind);
+    if (!hasExplicitViewOrKind && !query.status && !query.capability && !query.assigneeId && !query.creatorId) {
       // Show tasks where user is creator or assignee
       const [created, assigned] = await Promise.all([
         taskService.listTasks({ ...query, creatorId: user.imUserId }),
@@ -402,6 +651,144 @@ export function createTasksRouter(
     return c.json<ApiResponse>({ ok: true, data: enriched, meta: { total: enriched.length } });
   });
 
+  /**
+   * GET /tasks/runs — List execution runs.
+   */
+  router.get('/runs', async (c) => {
+    const user = c.get('user');
+    const runs = await taskService.listTaskRuns(
+      {
+        workspaceId: c.req.query('workspaceId') ?? c.req.query('workspace_id'),
+        conversationId: c.req.query('conversationId') ?? c.req.query('conversation_id'),
+        taskId: c.req.query('taskId') ?? c.req.query('task_id'),
+        status: c.req.query('status') ?? undefined,
+        sourceKind: c.req.query('sourceKind') ?? c.req.query('source_kind'),
+        creatorId: c.req.query('mine') === 'assigned' ? undefined : user.imUserId,
+        assigneeId: c.req.query('mine') === 'created' ? undefined : user.imUserId,
+        limit: c.req.query('limit') ? parseInt(c.req.query('limit')!) : undefined,
+        cursor: c.req.query('cursor') ?? undefined,
+      },
+      user.imUserId,
+    );
+    return c.json<ApiResponse>({
+      ok: true,
+      data: runs,
+      meta: { total: runs.length, nextCursor: runs.at(-1)?.id ?? null },
+    });
+  });
+
+  /**
+   * POST /tasks/:id/runs — Create a task run
+   */
+  router.post('/:id/runs', async (c) => {
+    const user = c.get('user');
+    const body = await c.req.json().catch(() => ({}));
+    try {
+      const run = await taskService.createTaskRun(c.req.param('id'), user.imUserId, {
+        status: typeof body.status === 'string' ? body.status : undefined,
+        runtimeRoute: typeof body.runtimeRoute === 'string' ? body.runtimeRoute : undefined,
+        input: body.input && typeof body.input === 'object' ? body.input : undefined,
+        output: body.output,
+        outputUri: body.outputUri ?? body.output_uri,
+        error: body.error,
+        metadata: body.metadata && typeof body.metadata === 'object' ? body.metadata : undefined,
+      });
+      return c.json<ApiResponse>({ ok: true, data: run }, 201);
+    } catch (err) {
+      return handleTaskError(err, c);
+    }
+  });
+
+  /**
+   * GET /tasks/:id/runs — List runs for a task
+   */
+  router.get('/:id/runs', async (c) => {
+    const user = c.get('user');
+    try {
+      await taskService.getTask(c.req.param('id'), user.imUserId);
+      const runs = await taskService.listTaskRuns(
+        {
+          taskId: c.req.param('id'),
+          status: c.req.query('status') ?? undefined,
+          limit: c.req.query('limit') ? parseInt(c.req.query('limit')!) : undefined,
+          cursor: c.req.query('cursor') ?? undefined,
+        },
+        user.imUserId,
+      );
+      return c.json<ApiResponse>({ ok: true, data: runs, meta: { total: runs.length } });
+    } catch (err) {
+      return handleTaskError(err, c);
+    }
+  });
+
+  /**
+   * GET /tasks/runs/:runId — Fetch a single run
+   */
+  router.get('/runs/:runId', async (c) => {
+    const user = c.get('user');
+    try {
+      const result = await taskService.getTaskRunWithEvents(c.req.param('runId'), user.imUserId);
+      return c.json<ApiResponse>({ ok: true, data: result });
+    } catch (err) {
+      return handleTaskError(err, c);
+    }
+  });
+
+  /**
+   * GET /tasks/runs/:runId/events — List run events
+   */
+  router.get('/runs/:runId/events', async (c) => {
+    const user = c.get('user');
+    try {
+      const result = await taskService.getTaskRunWithEvents(c.req.param('runId'), user.imUserId);
+      return c.json<ApiResponse>({ ok: true, data: result.events, meta: { total: result.events.length } });
+    } catch (err) {
+      return handleTaskError(err, c);
+    }
+  });
+
+  /**
+   * PATCH /tasks/runs/:runId — Update run status/result shell
+   */
+  router.patch('/runs/:runId', async (c) => {
+    const user = c.get('user');
+    const body = await c.req.json().catch(() => ({}));
+    try {
+      const run = await taskService.updateTaskRun(c.req.param('runId'), user.imUserId, {
+        status: typeof body.status === 'string' ? body.status : undefined,
+        output: body.output,
+        outputUri: body.outputUri ?? body.output_uri,
+        error: typeof body.error === 'string' ? body.error : undefined,
+        metadata: body.metadata && typeof body.metadata === 'object' ? body.metadata : undefined,
+      });
+      return c.json<ApiResponse>({ ok: true, data: run });
+    } catch (err) {
+      return handleTaskError(err, c);
+    }
+  });
+
+  /**
+   * POST /tasks/runs/:runId/events — Append a run event
+   */
+  router.post('/runs/:runId/events', async (c) => {
+    const user = c.get('user');
+    const body = await c.req.json().catch(() => ({}));
+    if (!body.type || typeof body.type !== 'string') {
+      return validationErr(c, 'type is required');
+    }
+    try {
+      const event = await taskService.appendTaskRunEvent(c.req.param('runId'), user.imUserId, {
+        type: body.type,
+        level: typeof body.level === 'string' ? body.level : undefined,
+        message: typeof body.message === 'string' ? body.message : undefined,
+        payload: body.payload && typeof body.payload === 'object' ? body.payload : undefined,
+      });
+      return c.json<ApiResponse>({ ok: true, data: event }, 201);
+    } catch (err) {
+      return handleTaskError(err, c);
+    }
+  });
+
   // SSE route registered before authMiddleware via registerSSERoute()
 
   /**
@@ -411,8 +798,27 @@ export function createTasksRouter(
     const user = c.get('user');
     try {
       const result = await taskService.getTaskWithLogs(c.req.param('id')!, user.imUserId);
-      const enrichedTask = await enrichTask(result.task);
-      return c.json<ApiResponse>({ ok: true, data: { ...result, task: enrichedTask } });
+      return c.json<ApiResponse>({ ok: true, data: result });
+    } catch (err) {
+      return handleTaskError(err, c);
+    }
+  });
+
+  /**
+   * GET /tasks/:id/result — canonical task result (Wave-9 Phase 1).
+   *
+   * Replaces the legacy IMAsset(kind=task-result) read pattern. Shape locked:
+   *   { taskId, status, output, metrics?, assetIds: string[],
+   *     resultUri?: string|null, completedAt: string }
+   *
+   * Access: creator, assignee, or anyone with marketplace visibility on the
+   * task — checkReadAccess inside TaskService is the single source of truth.
+   */
+  router.get('/:id/result', async (c) => {
+    const user = c.get('user');
+    try {
+      const data = await taskService.getTaskResult(c.req.param('id'), user.imUserId);
+      return c.json<ApiResponse>({ ok: true, data });
     } catch (err) {
       return handleTaskError(err, c);
     }
@@ -438,10 +844,9 @@ export function createTasksRouter(
 
     try {
       const task = await taskService.updateTask(c.req.param('id')!, user.imUserId, {
-        title: body.title,
-        description: body.description,
         assigneeId: body.assigneeId ?? body.assignee_id,
         status: body.status,
+        forceExecutionStatus: Boolean(body.forceExecutionStatus ?? body.force_execution_status),
         progress: body.progress,
         statusMessage: body.statusMessage ?? body.status_message,
         metadata: body.metadata,
@@ -518,7 +923,7 @@ export function createTasksRouter(
     const user = c.get('user');
     try {
       const task = await taskService.claimTask(c.req.param('id')!, user.imUserId);
-      return c.json<ApiResponse>({ ok: true, data: await enrichTask(task) });
+      return c.json<ApiResponse>({ ok: true, data: task });
     } catch (err) {
       return handleTaskError(err, c);
     }
@@ -558,6 +963,57 @@ export function createTasksRouter(
     const user = c.get('user');
     try {
       const task = await taskService.approveTask(c.req.param('id'), user.imUserId);
+      return c.json<ApiResponse>({ ok: true, data: await enrichTask(task) });
+    } catch (err) {
+      return handleTaskError(err, c);
+    }
+  });
+
+  /**
+   * POST /tasks/:id/start — Force task into running status. Creator only.
+   * Sugar over forceExecutionStatus('running'); reuses creator-only permission + agent_run dispatch.
+   */
+  router.post('/:id/start', async (c) => {
+    const user = c.get('user');
+    const body = await c.req.json().catch(() => ({}));
+    try {
+      const task = await taskService.forceExecutionStatus(c.req.param('id'), user.imUserId, 'running', {
+        reason: body.reason,
+      });
+      return c.json<ApiResponse>({ ok: true, data: await enrichTask(task) });
+    } catch (err) {
+      return handleTaskError(err, c);
+    }
+  });
+
+  /**
+   * POST /tasks/:id/pause — Force task back into pending status (paused). Creator only.
+   */
+  router.post('/:id/pause', async (c) => {
+    const user = c.get('user');
+    const body = await c.req.json().catch(() => ({}));
+    try {
+      const task = await taskService.forceExecutionStatus(c.req.param('id'), user.imUserId, 'pending', {
+        reason: body.reason ?? 'Paused by user',
+        metadata: { pausedBy: user.imUserId, pausedAt: new Date().toISOString() },
+      });
+      return c.json<ApiResponse>({ ok: true, data: await enrichTask(task) });
+    } catch (err) {
+      return handleTaskError(err, c);
+    }
+  });
+
+  /**
+   * POST /tasks/:id/reopen — Force task back into pending status (reopened). Creator only.
+   */
+  router.post('/:id/reopen', async (c) => {
+    const user = c.get('user');
+    const body = await c.req.json().catch(() => ({}));
+    try {
+      const task = await taskService.forceExecutionStatus(c.req.param('id'), user.imUserId, 'pending', {
+        reason: body.reason ?? 'Reopened by user',
+        metadata: { reopenedBy: user.imUserId, reopenedAt: new Date().toISOString() },
+      });
       return c.json<ApiResponse>({ ok: true, data: await enrichTask(task) });
     } catch (err) {
       return handleTaskError(err, c);

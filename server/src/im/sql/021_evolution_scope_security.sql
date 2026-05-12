@@ -1,17 +1,22 @@
 -- ============================================================================
--- Migration 019: Evolution Scope + Security Enhancement
+-- Migration 019 -> filed as 021: Evolution Scope + Security Enhancement
 -- MySQL 8.0 compatible, idempotent (safe to re-run)
--- Date: 2026-03-23
+-- Date: 2026-03-23 (m3 phase 2 rewrite: 2026-05-02)
 -- Description:
 --   Phase 1: scope field on evolution tables (data domain isolation)
 --   Phase 2: encrypted fields on genes/capsules + ephemeralKeys on security
 --   Phase 3: im_evolution_acl table (fine-grained sharing)
---   Security: Rate limiting activation on routes (code-only, no SQL)
+--
+-- Track A m3 phase 2 fix:
+--   - Lines 52-53 used `CREATE INDEX IF NOT EXISTS` (MariaDB-only) — replaced
+--     with a `_create_index_if_missing` helper procedure.
+--   - Lines 73-114's UNIQUE INDEX additions weren't idempotent; wrapped in
+--     INFORMATION_SCHEMA guards so re-runs are no-ops.
 -- ============================================================================
 
 -- Helper: ADD COLUMN IF NOT EXISTS
+DROP PROCEDURE IF EXISTS add_column_if_not_exists;
 DELIMITER //
-DROP PROCEDURE IF EXISTS add_column_if_not_exists//
 CREATE PROCEDURE add_column_if_not_exists(
   IN p_table VARCHAR(64),
   IN p_column VARCHAR(64),
@@ -29,133 +34,135 @@ BEGIN
     PREPARE stmt FROM @sql;
     EXECUTE stmt;
     DEALLOCATE PREPARE stmt;
-    SELECT CONCAT('  ✅ Added ', p_table, '.', p_column) AS result;
-  ELSE
-    SELECT CONCAT('  ⏭️  ', p_table, '.', p_column, ' already exists') AS result;
   END IF;
-END//
+END //
+DELIMITER ;
+
+-- Helper: CREATE INDEX IF NOT EXISTS (MySQL 8 doesn't support the literal syntax)
+DROP PROCEDURE IF EXISTS create_index_if_missing;
+DELIMITER //
+CREATE PROCEDURE create_index_if_missing(
+  IN p_table VARCHAR(64),
+  IN p_index_name VARCHAR(64),
+  IN p_columns VARCHAR(512),
+  IN p_unique TINYINT
+)
+BEGIN
+  SET @idx_exists = (
+    SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = p_table
+      AND INDEX_NAME = p_index_name
+  );
+  IF @idx_exists = 0 THEN
+    SET @sql = CONCAT(
+      'ALTER TABLE `', p_table, '` ADD ',
+      IF(p_unique = 1, 'UNIQUE ', ''),
+      'INDEX `', p_index_name, '` (', p_columns, ')'
+    );
+    PREPARE stmt FROM @sql;
+    EXECUTE stmt;
+    DEALLOCATE PREPARE stmt;
+  END IF;
+END //
+DELIMITER ;
+
+-- Helper: drop a unique index by column-coverage, in preparation for replacing
+-- it with a wider unique that includes scope. Idempotent: drops only if a
+-- unique index covering the seed column still exists.
+DROP PROCEDURE IF EXISTS drop_unique_by_column;
+DELIMITER //
+CREATE PROCEDURE drop_unique_by_column(
+  IN p_table VARCHAR(64),
+  IN p_column VARCHAR(64),
+  IN p_replacement_idx VARCHAR(64)
+)
+BEGIN
+  -- If the replacement unique already exists, the old unique was already dropped.
+  SET @already = (
+    SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = p_table
+      AND INDEX_NAME = p_replacement_idx
+  );
+  IF @already = 0 THEN
+    SET @old_idx = (
+      SELECT INDEX_NAME FROM INFORMATION_SCHEMA.STATISTICS
+      WHERE TABLE_SCHEMA = DATABASE()
+        AND TABLE_NAME = p_table
+        AND COLUMN_NAME = p_column
+        AND NON_UNIQUE = 0
+      LIMIT 1
+    );
+    IF @old_idx IS NOT NULL THEN
+      SET @sql = CONCAT('ALTER TABLE `', p_table, '` DROP INDEX `', @old_idx, '`');
+      PREPARE stmt FROM @sql;
+      EXECUTE stmt;
+      DEALLOCATE PREPARE stmt;
+    END IF;
+  END IF;
+END //
 DELIMITER ;
 
 -- ============================================================================
 -- Phase 1: Scope fields
 -- ============================================================================
 
-SELECT '=== Phase 1: Adding scope fields ===' AS step;
-
-CALL add_column_if_not_exists('im_genes', 'scope', "VARCHAR(60) NOT NULL DEFAULT 'global'");
-CALL add_column_if_not_exists('im_evolution_edges', 'scope', "VARCHAR(60) NOT NULL DEFAULT 'global'");
-CALL add_column_if_not_exists('im_evolution_capsules', 'scope', "VARCHAR(60) NOT NULL DEFAULT 'global'");
-CALL add_column_if_not_exists('im_unmatched_signals', 'scope', "VARCHAR(60) NOT NULL DEFAULT 'global'");
+CALL add_column_if_not_exists('im_genes',                  'scope', "VARCHAR(60) NOT NULL DEFAULT 'global'");
+CALL add_column_if_not_exists('im_evolution_edges',        'scope', "VARCHAR(60) NOT NULL DEFAULT 'global'");
+CALL add_column_if_not_exists('im_evolution_capsules',     'scope', "VARCHAR(60) NOT NULL DEFAULT 'global'");
+CALL add_column_if_not_exists('im_unmatched_signals',      'scope', "VARCHAR(60) NOT NULL DEFAULT 'global'");
 CALL add_column_if_not_exists('im_evolution_achievements', 'scope', "VARCHAR(60) NOT NULL DEFAULT 'global'");
 
 -- Indexes for scope filtering
-CREATE INDEX IF NOT EXISTS idx_genes_scope_vis ON im_genes(scope, visibility);
-CREATE INDEX IF NOT EXISTS idx_capsules_scope ON im_evolution_capsules(scope);
+CALL create_index_if_missing('im_genes',              'idx_genes_scope_vis', 'scope, visibility', 0);
+CALL create_index_if_missing('im_evolution_capsules', 'idx_capsules_scope',  'scope',             0);
 
--- Rebuild unique constraint on im_evolution_edges to include scope
--- Must drop old unique + create new one
-SET @old_idx = (
-  SELECT INDEX_NAME FROM INFORMATION_SCHEMA.STATISTICS
-  WHERE TABLE_SCHEMA = DATABASE()
-    AND TABLE_NAME = 'im_evolution_edges'
-    AND COLUMN_NAME = 'ownerAgentId'
-    AND NON_UNIQUE = 0
-  LIMIT 1
-);
-SET @drop_sql = IF(@old_idx IS NOT NULL,
-  CONCAT('ALTER TABLE im_evolution_edges DROP INDEX `', @old_idx, '`'),
-  'SELECT "No old unique index to drop" AS info'
-);
-PREPARE stmt FROM @drop_sql;
-EXECUTE stmt;
-DEALLOCATE PREPARE stmt;
+-- Rebuild unique constraints to include scope (idempotent: drops old + adds new only when needed)
+CALL drop_unique_by_column('im_evolution_edges',        'ownerAgentId', 'uq_edge_scope');
+CALL create_index_if_missing('im_evolution_edges', 'uq_edge_scope', 'ownerAgentId, signalKey(200), geneId, mode, scope', 1);
 
-ALTER TABLE im_evolution_edges
-  ADD UNIQUE INDEX uq_edge_scope (ownerAgentId, signalKey(200), geneId, mode, scope);
+CALL drop_unique_by_column('im_unmatched_signals',      'signalKey',    'uq_unmatched_scope');
+CALL create_index_if_missing('im_unmatched_signals', 'uq_unmatched_scope', 'signalKey(200), agentId, scope', 1);
 
--- Rebuild unique on im_unmatched_signals to include scope
-SET @old_ums_idx = (
-  SELECT INDEX_NAME FROM INFORMATION_SCHEMA.STATISTICS
-  WHERE TABLE_SCHEMA = DATABASE()
-    AND TABLE_NAME = 'im_unmatched_signals'
-    AND COLUMN_NAME = 'signalKey'
-    AND NON_UNIQUE = 0
-  LIMIT 1
-);
-SET @drop_ums = IF(@old_ums_idx IS NOT NULL,
-  CONCAT('ALTER TABLE im_unmatched_signals DROP INDEX `', @old_ums_idx, '`'),
-  'SELECT "No old unique index to drop" AS info'
-);
-PREPARE stmt FROM @drop_ums;
-EXECUTE stmt;
-DEALLOCATE PREPARE stmt;
-
-ALTER TABLE im_unmatched_signals
-  ADD UNIQUE INDEX uq_unmatched_scope (signalKey(200), agentId, scope);
-
--- Rebuild unique on im_evolution_achievements to include scope
-SET @old_ach_idx = (
-  SELECT INDEX_NAME FROM INFORMATION_SCHEMA.STATISTICS
-  WHERE TABLE_SCHEMA = DATABASE()
-    AND TABLE_NAME = 'im_evolution_achievements'
-    AND COLUMN_NAME = 'agentId'
-    AND NON_UNIQUE = 0
-  LIMIT 1
-);
-SET @drop_ach = IF(@old_ach_idx IS NOT NULL,
-  CONCAT('ALTER TABLE im_evolution_achievements DROP INDEX `', @old_ach_idx, '`'),
-  'SELECT "No old unique index to drop" AS info'
-);
-PREPARE stmt FROM @drop_ach;
-EXECUTE stmt;
-DEALLOCATE PREPARE stmt;
-
-ALTER TABLE im_evolution_achievements
-  ADD UNIQUE INDEX uq_achievement_scope (agentId, badgeKey, scope);
-
-SELECT '  ✅ Phase 1 complete: scope fields + indexes' AS result;
+CALL drop_unique_by_column('im_evolution_achievements', 'agentId',      'uq_achievement_scope');
+CALL create_index_if_missing('im_evolution_achievements', 'uq_achievement_scope', 'agentId, badgeKey, scope', 1);
 
 -- ============================================================================
 -- Phase 2: Encryption fields
 -- ============================================================================
 
-SELECT '=== Phase 2: Adding encryption fields ===' AS step;
-
-CALL add_column_if_not_exists('im_genes', 'encrypted', 'TINYINT(1) NOT NULL DEFAULT 0');
-CALL add_column_if_not_exists('im_genes', 'encryptionKeyId', 'VARCHAR(30) NULL');
-CALL add_column_if_not_exists('im_evolution_capsules', 'encrypted', 'TINYINT(1) NOT NULL DEFAULT 0');
-CALL add_column_if_not_exists('im_conversation_security', 'ephemeralKeys', "TEXT NULL");
-
-SELECT '  ✅ Phase 2 complete: encryption fields' AS result;
+CALL add_column_if_not_exists('im_genes',                'encrypted',         'TINYINT(1) NOT NULL DEFAULT 0');
+CALL add_column_if_not_exists('im_genes',                'encryptionKeyId',   'VARCHAR(30) NULL');
+CALL add_column_if_not_exists('im_evolution_capsules',   'encrypted',         'TINYINT(1) NOT NULL DEFAULT 0');
+CALL add_column_if_not_exists('im_conversation_security','ephemeralKeys',     'TEXT NULL');
 
 -- ============================================================================
 -- Phase 3: ACL table
 -- ============================================================================
 
-SELECT '=== Phase 3: Creating ACL table ===' AS step;
-
 CREATE TABLE IF NOT EXISTS im_evolution_acl (
-  id            VARCHAR(30) NOT NULL,
-  resourceType  VARCHAR(20) NOT NULL,
+  id            VARCHAR(30)  NOT NULL,
+  resourceType  VARCHAR(20)  NOT NULL,
   resourceId    VARCHAR(100) NOT NULL,
-  subjectType   VARCHAR(20) NOT NULL,
+  subjectType   VARCHAR(20)  NOT NULL,
   subjectId     VARCHAR(100) NOT NULL,
-  permission    VARCHAR(20) NOT NULL,
-  grantedBy     VARCHAR(30) NOT NULL,
-  createdAt     DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-  expiresAt     DATETIME(3) NULL,
+  permission    VARCHAR(20)  NOT NULL,
+  grantedBy     VARCHAR(30)  NOT NULL,
+  createdAt     DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  expiresAt     DATETIME(3)  NULL,
   PRIMARY KEY (id),
   UNIQUE KEY uq_acl (resourceType, resourceId, subjectType, subjectId, permission),
   INDEX idx_acl_resource (resourceId),
   INDEX idx_acl_subject (subjectType, subjectId)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-SELECT '  ✅ Phase 3 complete: im_evolution_acl table' AS result;
-
 -- ============================================================================
 -- Cleanup
 -- ============================================================================
 
 DROP PROCEDURE IF EXISTS add_column_if_not_exists;
+DROP PROCEDURE IF EXISTS create_index_if_missing;
+DROP PROCEDURE IF EXISTS drop_unique_by_column;
 
-SELECT '✅ Migration 019 complete: Evolution Scope + Security Enhancement' AS result;
+SELECT 'migration 021 complete' AS status;

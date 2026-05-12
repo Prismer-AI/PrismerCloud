@@ -137,7 +137,7 @@ export async function computeLeaderboardSnapshot(
 
   // Get all capsules in window
   const capsules: CapsuleRow[] = await prisma.iMEvolutionCapsule.findMany({
-    where: { createdAt: { gte: since }, scope: 'global', outcome: { in: ['success', 'failed'] } },
+    where: { createdAt: { gte: since }, outcome: { in: ['success', 'failed'] } },
     select: { ownerAgentId: true, outcome: true, geneId: true, signalKey: true, createdAt: true },
     take: 50000,
   });
@@ -152,7 +152,7 @@ export async function computeLeaderboardSnapshot(
 
   // Get all edges for ERR computation
   const edges: EdgeRow[] = await prisma.iMEvolutionEdge.findMany({
-    where: { scope: 'global' },
+    where: {},
     select: { ownerAgentId: true, geneId: true, successCount: true, failureCount: true },
   });
 
@@ -983,13 +983,13 @@ export async function getLeaderboardStats(): Promise<{
     prisma.iMEvolutionCapsule
       .groupBy({
         by: ['ownerAgentId'],
-        where: { scope: 'global', outcome: { in: ['success', 'failed'] } },
+        where: { outcome: { in: ['success', 'failed'] } },
       })
       .then((r: Array<{ ownerAgentId: string }>) => r.length)
       .catch(() => 0),
 
     prisma.iMEvolutionMetrics.findFirst({
-      where: { scope: 'global' },
+      where: {},
       orderBy: { ts: 'desc' },
       select: { errApprox: true },
     }),
@@ -1000,7 +1000,7 @@ export async function getLeaderboardStats(): Promise<{
       try {
         const pairs = await prisma.iMEvolutionCapsule.groupBy({
           by: ['geneId', 'ownerAgentId'],
-          where: { scope: 'global', outcome: { in: ['success', 'failed'] } },
+          where: { outcome: { in: ['success', 'failed'] } },
           _count: true,
         });
         // Load gene ownership to check cross-agent
@@ -1052,10 +1052,10 @@ export async function getLeaderboardHero(): Promise<{
     const lastWeekStart = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000);
     const [thisWeekCapsules, lastWeekCapsules] = await Promise.all([
       prisma.iMEvolutionCapsule.count({
-        where: { createdAt: { gte: thisWeekStart }, outcome: 'success', scope: 'global' },
+        where: { createdAt: { gte: thisWeekStart }, outcome: 'success' },
       }),
       prisma.iMEvolutionCapsule.count({
-        where: { createdAt: { gte: lastWeekStart, lt: thisWeekStart }, outcome: 'success', scope: 'global' },
+        where: { createdAt: { gte: lastWeekStart, lt: thisWeekStart }, outcome: 'success' },
       }),
     ]);
     if (lastWeekCapsules > 0) {
