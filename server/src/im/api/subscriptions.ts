@@ -87,7 +87,7 @@ export function createSubscriptionsRouter(eventBusService: EventBusService) {
    */
   router.get('/:id', async (c) => {
     const user = c.get('user');
-    const sub = await eventBusService.findById(c.req.param('id'));
+    const sub = await eventBusService.findById(c.req.param('id')!);
 
     if (!sub) {
       return c.json<ApiResponse>({ ok: false, error: 'Subscription not found' }, 404);
@@ -104,7 +104,7 @@ export function createSubscriptionsRouter(eventBusService: EventBusService) {
    */
   router.patch('/:id', async (c) => {
     const user = c.get('user');
-    const sub = await eventBusService.findById(c.req.param('id'));
+    const sub = await eventBusService.findById(c.req.param('id')!);
 
     if (!sub) {
       return c.json<ApiResponse>({ ok: false, error: 'Subscription not found' }, 404);
@@ -139,7 +139,7 @@ export function createSubscriptionsRouter(eventBusService: EventBusService) {
    */
   router.delete('/:id', async (c) => {
     const user = c.get('user');
-    const sub = await eventBusService.findById(c.req.param('id'));
+    const sub = await eventBusService.findById(c.req.param('id')!);
 
     if (!sub) {
       return c.json<ApiResponse>({ ok: false, error: 'Subscription not found' }, 404);
