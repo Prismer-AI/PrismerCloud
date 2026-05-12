@@ -134,7 +134,7 @@ export function ContactsPanel({
     if (!inviteUrl) return;
     let cancelled = false;
     QRCode.toDataURL(inviteUrl, { margin: 1, width: 224, color: { dark: '#111827', light: '#ffffff' } })
-      .then((url) => {
+      .then((url: string) => {
         if (!cancelled) setQrDataUrl(url);
       })
       .catch(() => {

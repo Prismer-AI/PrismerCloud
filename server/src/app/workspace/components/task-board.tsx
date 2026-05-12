@@ -288,10 +288,10 @@ function ColumnFilter({
 
 // ─── Collision tuned for kanban (cards over columns) ────────────────
 
-const kanbanCollision: CollisionDetection = (args) => {
+const kanbanCollision: CollisionDetection = (args: any) => {
   const pointer = pointerWithin(args);
   if (pointer.length > 0) {
-    const cards = pointer.filter((c) => !COLUMN_IDS.has(String(c.id)));
+    const cards = pointer.filter((c: any) => !COLUMN_IDS.has(String(c.id)));
     if (cards.length > 0) return cards;
   }
   return closestCenter(args);

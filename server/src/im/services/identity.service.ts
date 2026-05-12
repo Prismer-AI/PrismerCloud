@@ -15,6 +15,7 @@ import {
   createAttestation,
   computeAuditLogHash,
   generateKeyPair,
+  publicKeyToDIDKey,
 } from '../crypto';
 import type { IdentityKeyInfo, KeyAuditEntry } from '../types';
 
@@ -51,6 +52,31 @@ export class IdentityService {
    */
   getServerPublicKey(): string {
     return getServerKeyPair().publicKey;
+  }
+
+  /**
+   * Get the server's private key (Base64). Used for issuing server-attested
+   * delegations and verifiable presentations.
+   */
+  getServerPrivateKey(): string {
+    return getServerKeyPair().privateKey;
+  }
+
+  /**
+   * Get the server's DID (did:key:z...) derived from the server public key.
+   */
+  getServerDID(): string {
+    return publicKeyToDIDKey(getServerKeyPair().publicKey);
+  }
+
+  /**
+   * Advisory check: does the user's identity key need rotation?
+   *
+   * v1.8.2 stub: always returns `{ needed: false }`. AIP v1.9.x will populate
+   * this with TTL / usage-count / revocation-list logic.
+   */
+  async checkKeyRotation(_imUserId: string): Promise<{ needed: boolean; reason?: string }> {
+    return { needed: false };
   }
 
   /**
@@ -293,6 +319,7 @@ export class IdentityService {
       imUserId: key.imUserId,
       publicKey: key.publicKey,
       keyId: key.keyId,
+      didKey: key.didKey ?? undefined,
       attestation: key.attestation,
       derivationMode: key.derivationMode,
       registeredAt: key.registeredAt,

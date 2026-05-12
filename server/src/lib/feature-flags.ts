@@ -120,6 +120,15 @@ export const FEATURE_FLAGS = {
   get AUTH_DISABLED(): boolean {
     return process.env.AUTH_DISABLED === 'true';
   },
+
+  /**
+   * LLM Proxy (self-host mode)
+   * /api/chat/completions, /api/embeddings, /api/messages → proxy to OpenAI-compatible upstream
+   * Default false in self-host (disabled unless explicitly opted in).
+   */
+  get LLM_PROXY_ENABLED(): boolean {
+    return process.env.FF_LLM_PROXY_ENABLED === 'true';
+  },
 };
 
 /**

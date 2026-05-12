@@ -1048,35 +1048,35 @@ function convertSheetModel(
       },
     });
   }
-  const rows = XLSX.utils.sheet_to_json<Array<string | number | boolean | Date | null>>(sheet, {
+  const rows: Array<Array<string | number | boolean | Date | null>> = XLSX.utils.sheet_to_json(sheet, {
     header: 1,
     blankrows: false,
     defval: '',
   });
-  const values = rows.map((row) => row.map(formatCellValue));
-  const maxCols = Math.max(1, ...values.map((row) => row.length));
+  const values = rows.map((row: Array<string | number | boolean | Date | null>) => row.map(formatCellValue));
+  const maxCols = Math.max(1, ...values.map((row: any[]) => row.length));
   const columns: Column<SpreadsheetRow>[] = [
     {
       key: '__rowNumber',
       name: '#',
       width: 56,
       frozen: true,
-      renderCell: ({ row }) => row.__rowNumber,
+      renderCell: ({ row }: { row: SpreadsheetRow }) => row.__rowNumber,
     },
-    ...Array.from({ length: maxCols }).map<Column<SpreadsheetRow>>((_, idx) => {
+    ...Array.from({ length: maxCols }).map((_, idx): Column<SpreadsheetRow> => {
       const key = `c${idx}`;
       return {
         key,
         name: columnName(idx),
         minWidth: 120,
         resizable: true,
-        renderCell: ({ row }) => row[key] ?? '',
+        renderCell: ({ row }: { row: SpreadsheetRow }) => row[key] ?? '',
       };
     }),
   ];
-  const gridRows = values.map<SpreadsheetRow>((row, rowIndex) => {
+  const gridRows = values.map((row: any[], rowIndex: number): SpreadsheetRow => {
     const item: SpreadsheetRow = { __rowNumber: rowIndex + 1 };
-    row.forEach((value, colIndex) => {
+    row.forEach((value: any, colIndex: number) => {
       item[`c${colIndex}`] = value;
     });
     return item;
@@ -1260,7 +1260,7 @@ function PresentationPreview({ bytes, title, isDark }: { bytes: ArrayBuffer; tit
       .then(({ init }) => {
         if (cancelled) return undefined;
         previewer = init(host, { width: 960, height: 540, mode: 'list' });
-        return previewer.preview(bytes);
+        return previewer!.preview(bytes);
       })
       .catch((err) => {
         if (!cancelled) setError(err instanceof Error ? err.message : 'Presentation preview failed');
@@ -1446,12 +1446,12 @@ function PdfPreview({
           options={PDF_OPTIONS}
           loading={<PreviewEmpty isDark={isDark} label="Loading PDF preview..." />}
           error={<PreviewEmpty isDark={isDark} label="PDF preview failed." />}
-          onLoadSuccess={({ numPages: nextPages }) => {
+          onLoadSuccess={({ numPages: nextPages }: { numPages: number }) => {
             setError(null);
             setNumPages(nextPages);
             setPageNumber((prev) => Math.min(prev, nextPages));
           }}
-          onLoadError={(err) => {
+          onLoadError={(err: Error) => {
             setError(err.message);
           }}
         >

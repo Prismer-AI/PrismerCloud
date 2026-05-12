@@ -339,6 +339,7 @@ export function createAgentsRouter(
     const user = c.get("user");
     const userId = c.req.param("userId")!;
 
+    const allowed = user.imUserId === userId || user.role === 'admin';
     if (!allowed) {
       return c.json<ApiResponse>({ ok: false, error: 'Forbidden' }, 403);
     }

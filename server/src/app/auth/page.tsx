@@ -3,13 +3,12 @@
 import { useState, useEffect, FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { Eye, EyeOff, Github, Mail, Loader2, ArrowLeft, Phone, Smartphone } from 'lucide-react';
+import { Eye, EyeOff, Github, Mail, Loader2, ArrowLeft } from 'lucide-react';
 import { useApp } from '@/contexts/app-context';
 import { useTheme } from '@/contexts/theme-context';
 import { hashPassword } from '@/lib/utils';
 
 type AuthMode = 'login' | 'register' | 'reset-password';
-type LoginMethod = 'email' | 'phone';
 
 export default function AuthPage() {
   const router = useRouter();
@@ -33,14 +32,6 @@ export default function AuthPage() {
   const [githubClientId, setGithubClientId] = useState<string | null>(null);
   const [googleClientId, setGoogleClientId] = useState<string | null>(null);
   const [isConfigLoading, setIsConfigLoading] = useState(true);
-
-  // Phone login method (login mode only) — backend ready in
-  // src/app/api/auth/sms/{send,verify}/route.ts; ChuangLan 253 SMS provider.
-  const [loginMethod, setLoginMethod] = useState<LoginMethod>('email');
-  const [phone, setPhone] = useState('');
-  const [smsCode, setSmsCode] = useState('');
-  const [smsCodeSent, setSmsCodeSent] = useState(false);
-  const [smsCountdown, setSmsCountdown] = useState(0);
 
   // Load public OAuth configuration (client IDs) from server/Nacos
   useEffect(() => {
@@ -74,70 +65,6 @@ export default function AuthPage() {
       cancelled = true;
     };
   }, [addToast]);
-
-  // SMS countdown — disable resend for 60s after send.
-  useEffect(() => {
-    if (smsCountdown <= 0) return;
-    const timer = setTimeout(() => setSmsCountdown((c) => c - 1), 1000);
-    return () => clearTimeout(timer);
-  }, [smsCountdown]);
-
-  // Handle SMS code send (phone login)
-  const handleSendSmsCode = async () => {
-    if (!phone) {
-      addToast('Please enter your phone number', 'error');
-      return;
-    }
-    setIsLoading(true);
-    try {
-      const res = await fetch('/api/auth/sms/send', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone }),
-      });
-      const data = await res.json();
-      if (!res.ok || data.error) {
-        throw new Error(data.error?.msg || 'Failed to send SMS');
-      }
-      setSmsCodeSent(true);
-      setSmsCountdown(60);
-      // Dev mode: code returned in response — show it for convenience.
-      if (data.verification_code) {
-        addToast(`SMS sent (dev): ${data.verification_code}`, 'success');
-      } else {
-        addToast(`SMS sent to ${phone}`, 'success');
-      }
-    } catch (error: any) {
-      addToast(error.message || 'Failed to send SMS', 'error');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  // Handle phone login
-  const handlePhoneLogin = async (e: FormEvent) => {
-    e.preventDefault();
-    if (!phone || !smsCode) return;
-    setIsLoading(true);
-    try {
-      const res = await fetch('/api/auth/sms/verify', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone, code: smsCode }),
-      });
-      const data = await res.json();
-      if (!res.ok || data.error) {
-        throw new Error(data.error?.msg || 'SMS verification failed');
-      }
-      login(data.user, data.token);
-      addToast('Welcome!', 'success');
-      router.push(redirectTo);
-    } catch (error: any) {
-      addToast(error.message || 'Phone login failed', 'error');
-    } finally {
-      setIsLoading(false);
-    }
-  };
 
   // Handle login
   const handleLogin = async (e: FormEvent) => {
@@ -487,44 +414,6 @@ export default function AuthPage() {
             </>
           )}
 
-          {/* Login method tabs (login mode only) */}
-          {mode === 'login' && (
-            <div className={`grid grid-cols-2 gap-1 p-1 rounded-xl mb-4 ${isDark ? 'bg-zinc-800/50' : 'bg-zinc-100'}`}>
-              <button
-                type="button"
-                onClick={() => setLoginMethod('email')}
-                className={`py-2 text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2 ${
-                  loginMethod === 'email'
-                    ? isDark
-                      ? 'bg-zinc-900 text-white shadow'
-                      : 'bg-white text-zinc-900 shadow'
-                    : isDark
-                      ? 'text-zinc-400 hover:text-zinc-200'
-                      : 'text-zinc-500 hover:text-zinc-700'
-                }`}
-              >
-                <Mail className="w-4 h-4" />
-                Email
-              </button>
-              <button
-                type="button"
-                onClick={() => setLoginMethod('phone')}
-                className={`py-2 text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-2 ${
-                  loginMethod === 'phone'
-                    ? isDark
-                      ? 'bg-zinc-900 text-white shadow'
-                      : 'bg-white text-zinc-900 shadow'
-                    : isDark
-                      ? 'text-zinc-400 hover:text-zinc-200'
-                      : 'text-zinc-500 hover:text-zinc-700'
-                }`}
-              >
-                <Smartphone className="w-4 h-4" />
-                Phone
-              </button>
-            </div>
-          )}
-
           {/* Form */}
           <form 
             onSubmit={mode === 'login' ? handleLogin : mode === 'register' ? handleRegister : handleResetPassword} 
@@ -637,10 +526,10 @@ export default function AuthPage() {
                     </label>
                     <div className="relative">
                       <input
-                        id="password"
-                        type={showPassword ? 'text' : 'password'}
-                        value={password}
-                        onChange={(e) => setPassword(e.target.value)}
+                        id="confirm-password"
+                        type={showConfirmPassword ? 'text' : 'password'}
+                        value={confirmPassword}
+                        onChange={(e) => setConfirmPassword(e.target.value)}
                         placeholder="••••••••••••"
                         className={`w-full border rounded-xl p-4 pr-12 text-sm focus:outline-none focus:border-violet-500 focus:ring-1 focus:ring-violet-500/50 transition-all ${
                           isDark ? 'bg-black/50 border-white/10 text-white placeholder-zinc-600' : 'bg-zinc-50 border-zinc-300 text-zinc-900 placeholder-zinc-400'
@@ -649,50 +538,18 @@ export default function AuthPage() {
                       />
                       <button
                         type="button"
-                        onClick={() => setShowPassword(!showPassword)}
+                        onClick={() => setShowConfirmPassword(!showConfirmPassword)}
                         className={`absolute right-4 top-4 transition-colors ${isDark ? 'text-zinc-500 hover:text-white' : 'text-zinc-400 hover:text-zinc-700'}`}
                       >
-                        {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                        {showConfirmPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
                       </button>
                     </div>
                   </div>
+                )}
+              </>
+            )}
 
-                  {(mode === 'register' || mode === 'reset-password') && (
-                    <div>
-                      <label
-                        htmlFor="confirm-password"
-                        className={`block text-xs font-semibold mb-2 ${isDark ? 'text-zinc-300' : 'text-zinc-600'}`}
-                      >
-                        CONFIRM PASSWORD
-                      </label>
-                      <div className="relative">
-                        <input
-                          id="confirm-password"
-                          type={showConfirmPassword ? 'text' : 'password'}
-                          value={confirmPassword}
-                          onChange={(e) => setConfirmPassword(e.target.value)}
-                          placeholder="••••••••••••"
-                          className={`w-full border rounded-xl p-4 pr-12 text-sm focus:outline-none focus:border-violet-500 focus:ring-1 focus:ring-violet-500/50 transition-all ${
-                            isDark
-                              ? 'bg-black/50 border-white/10 text-white placeholder-zinc-600'
-                              : 'bg-zinc-50 border-zinc-300 text-zinc-900 placeholder-zinc-400'
-                          }`}
-                          required
-                        />
-                        <button
-                          type="button"
-                          onClick={() => setShowConfirmPassword(!showConfirmPassword)}
-                          className={`absolute right-4 top-4 transition-colors ${isDark ? 'text-zinc-500 hover:text-white' : 'text-zinc-400 hover:text-zinc-700'}`}
-                        >
-                          {showConfirmPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </>
-              )}
-
-            {mode === 'login' && loginMethod === 'email' && (
+            {mode === 'login' && (
               <div className="flex justify-end">
                 <button 
                   type="button" 
@@ -706,23 +563,19 @@ export default function AuthPage() {
 
             <button
               type="submit"
-              disabled={
-                isLoading ||
-                (mode !== 'login' && !codeVerified) ||
-                (mode === 'login' && loginMethod === 'phone' && (!phone || smsCode.length !== 6))
-              }
+              disabled={isLoading || (mode !== 'login' && !codeVerified)}
               className="w-full py-4 bg-gradient-to-r from-violet-600 to-cyan-600 hover:opacity-90 text-white rounded-xl font-bold transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
             >
               {isLoading ? (
                 <>
                   <Loader2 className="w-5 h-5 animate-spin" />
-                  {mode === 'login' && (loginMethod === 'phone' ? 'Verifying...' : 'Signing in...')}
+                  {mode === 'login' && 'Signing in...'}
                   {mode === 'register' && 'Creating account...'}
                   {mode === 'reset-password' && 'Resetting password...'}
                 </>
               ) : (
                 <>
-                  {mode === 'login' && (loginMethod === 'phone' ? 'Sign In with Phone' : 'Sign In')}
+                  {mode === 'login' && 'Sign In'}
                   {mode === 'register' && 'Create Account'}
                   {mode === 'reset-password' && 'Reset Password'}
                 </>

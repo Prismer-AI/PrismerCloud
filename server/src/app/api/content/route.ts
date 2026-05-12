@@ -3,7 +3,6 @@ import Exa from 'exa-js';
 import { ensureNacosConfig } from '@/lib/nacos-config';
 import { apiGuard } from '@/lib/api-guard';
 import { metrics } from '@/lib/metrics';
-import { apiGuard } from '@/lib/api-guard';
 import { exaBreaker } from '@/lib/circuit-breaker';
 import { checkRateLimit, rateLimitResponse, rateLimitHeaders } from '@/lib/rate-limit';
 import { createModuleLogger } from '@/lib/logger';
@@ -37,9 +36,6 @@ export async function POST(request: NextRequest) {
   const rl = checkRateLimit(guard.auth.userId, 'content');
   if (!rl.allowed) return rateLimitResponse(rl);
   try {
-    const guard = await apiGuard(request, { tier: 'billable', estimatedCost: 1 });
-    if (!guard.ok) return guard.response;
-
     // Ensure Nacos config is loaded before accessing env vars
     await initNacos();
 

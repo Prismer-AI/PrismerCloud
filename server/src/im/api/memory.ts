@@ -29,7 +29,7 @@ import type { RoomManager } from '../ws/rooms';
 import { ServerEvents, type MemoryInvalidatePayload } from '../ws/events';
 import prisma from '../db';
 import { createRateLimitMiddleware } from '../middleware/rate-limit';
-import type { ApiResponse } from '../types';
+import type { ApiResponse, MemoryFileOperation } from '../types';
 import {
   WorkspaceResolutionError,
   memoryWorkspaceErrorResponse,
@@ -780,9 +780,9 @@ export function createMemoryRouter(
    */
   router.get('/files/:id', async (c) => {
     try {
-      const file = await memoryService.readMemoryFile(c.req.param('id')!);
-
-      const file = await memoryService.readMemoryFile(c.req.param('id'), resolved.workspaceId!);
+      const resolved = await resolveWorkspace(c, c.req.query('workspaceId'));
+      if (resolved.response) return resolved.response;
+      const file = await memoryService.readMemoryFile(c.req.param('id')!, resolved.workspaceId!);
       const user = c.get('user');
       if (file.ownerId !== user.imUserId) {
         return c.json<ApiResponse>({ ok: false, error: 'Not found' }, 404);
@@ -840,14 +840,15 @@ export function createMemoryRouter(
       if (resolved.response) return resolved.response;
 
       // Pre-check ownership
-      const existing = await memoryService.readMemoryFile(c.req.param('id')!);
+      const existing = await memoryService.readMemoryFile(c.req.param('id')!, resolved.workspaceId!);
       if (existing.ownerId !== user.imUserId) {
         return c.json<ApiResponse>({ ok: false, error: 'Not found' }, 404);
       }
 
       const result = await memoryService.updateMemoryFile(
         c.req.param('id')!,
-        operation,
+        resolved.workspaceId!,
+        operation as MemoryFileOperation,
         String(content),
         version,
         section,
@@ -875,12 +876,14 @@ export function createMemoryRouter(
     const user = c.get('user');
 
     try {
-      const existing = await memoryService.readMemoryFile(c.req.param('id')!);
+      const resolved = await resolveWorkspace(c, c.req.query('workspaceId'));
+      if (resolved.response) return resolved.response;
+      const existing = await memoryService.readMemoryFile(c.req.param('id')!, resolved.workspaceId!);
       if (existing.ownerId !== user.imUserId) {
         return c.json<ApiResponse>({ ok: false, error: 'Not found' }, 404);
       }
 
-      await memoryService.deleteMemoryFile(c.req.param('id')!);
+      await memoryService.deleteMemoryFile(c.req.param('id')!, resolved.workspaceId!);
       return c.json<ApiResponse>({ ok: true });
     } catch (err) {
       if (err instanceof MemoryNotFoundError) {

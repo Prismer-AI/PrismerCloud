@@ -458,19 +458,22 @@ export async function ensureNacosConfig(): Promise<void> {
     return;
   }
   if (!_nacosLoader || !_nacosLoader.getStatus().initialized) {
-    await initNacosConfig();
-  } catch (err) {
-    if (isLocalDev) {
-      // Best effort in LAN dev — do not break boot if Nacos is offline.
-      // Caller flows that need a specific Nacos-only key (e.g. OAuth)
-      // surface the missing-key UX themselves.
+    try {
+      await initNacosConfig();
+    } catch (err) {
+      const isLocalDev = process.env.LOCAL_ONLY === '1' || process.env.NODE_ENV === 'development';
+      if (isLocalDev) {
+        // Best effort in LAN dev — do not break boot if Nacos is offline.
+        // Caller flows that need a specific Nacos-only key (e.g. OAuth)
+        // surface the missing-key UX themselves.
 
-      console.warn(
-        '[Nacos] LOCAL_ONLY best-effort load failed; continuing without remote config:',
-        (err as Error).message,
-      );
-      return;
+        console.warn(
+          '[Nacos] LOCAL_ONLY best-effort load failed; continuing without remote config:',
+          (err as Error).message,
+        );
+        return;
+      }
+      throw err;
     }
-    throw err;
   }
 }

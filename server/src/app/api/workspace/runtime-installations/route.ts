@@ -232,6 +232,7 @@ function pickFreshest(...ages: (number | null)[]): number | null {
 async function loadRedisPresence(workspaceId: string, rows: ContainerRow[]): Promise<Map<string, number>> {
   const out = new Map<string, number>();
   try {
+    // eslint-disable-next-line boundaries/dependencies -- self-host needs app→im for redis presence
     const { getIMServices } = await import('@/im/bootstrap');
     const im = getIMServices();
     if (!im) return out;

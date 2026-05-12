@@ -1049,7 +1049,7 @@ async function runCmd(podName: string, args: RunCmdArgs): Promise<RunCmdResult> 
       stderr,
       stdin,
       false, // tty
-      (status) => {
+      (status: any) => {
         const stdoutStr = Buffer.concat(stdoutChunks).toString('utf-8');
         const stderrStr = Buffer.concat(stderrChunks).toString('utf-8');
 

@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createModuleLogger } from '@/lib/logger';
 
+const log = createModuleLogger('ParseImage');
+
 const ALLOWED_ORIGINS = (process.env.IMAGE_PROXY_ORIGINS || 'localhost').split(',').map(s => s.trim());
 
 /**

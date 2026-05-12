@@ -11,6 +11,7 @@
 import { ed25519 } from '@noble/curves/ed25519.js';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { bytesToHex } from '@noble/hashes/utils.js';
+import bs58 from 'bs58';
 
 // ─── Constants ──────────────────────────────────────────────
 
@@ -33,6 +34,21 @@ export function generateKeyPair(): { publicKey: string; privateKey: string } {
     publicKey: Buffer.from(publicKey).toString('base64'),
     privateKey: Buffer.from(privateKey).toString('base64'),
   };
+}
+
+/**
+ * Convert a Base64 Ed25519 public key to its `did:key:z...` form (W3C DID-Key).
+ *
+ * Format: `did:key:z` + base58btc(multicodec(0xed 0x01) || rawPublicKey)
+ * `0xed 0x01` is the multicodec varint for Ed25519 public key.
+ */
+export function publicKeyToDIDKey(publicKeyBase64: string): string {
+  const pubBytes = Buffer.from(publicKeyBase64, 'base64');
+  if (pubBytes.length !== 32) {
+    throw new Error('publicKeyToDIDKey: expected 32-byte Ed25519 public key');
+  }
+  const prefixed = Buffer.concat([Buffer.from([0xed, 0x01]), pubBytes]);
+  return 'did:key:z' + bs58.encode(prefixed);
 }
 
 /**

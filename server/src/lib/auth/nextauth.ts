@@ -80,7 +80,7 @@ export const authConfig: NextAuthConfig = {
         email: { label: 'Email', type: 'email' },
         password: { label: 'Password', type: 'password' },
       },
-      async authorize(credentials) {
+      async authorize(credentials: any) {
         try {
           const { email, password } = credentialsSchema.parse(credentials);
           const prisma = (await import('@/lib/prisma')).default;
@@ -147,7 +147,7 @@ export const authConfig: NextAuthConfig = {
   ],
 
   callbacks: {
-    async jwt({ token, user, account, profile }) {
+    async jwt({ token, user, account, profile }: { token: any; user: any; account: any; profile: any }) {
       if (user) {
         token.id = user.id;
         token.numericId = user.numericId;
@@ -228,7 +228,7 @@ export const authConfig: NextAuthConfig = {
       return token;
     },
 
-    async session({ session, token }) {
+    async session({ session, token }: { session: any; token: any }) {
       if (session.user) {
         session.user.id = token.id as string;
         session.user.numericId = (token.numericId as number) || 0;
@@ -239,7 +239,7 @@ export const authConfig: NextAuthConfig = {
       return session;
     },
 
-    authorized({ auth, request: { nextUrl } }) {
+    authorized({ auth, request: { nextUrl } }: { auth: any; request: { nextUrl: any } }) {
       const isLoggedIn = !!auth?.user;
       const isOnAuth = nextUrl.pathname.startsWith('/auth') || nextUrl.pathname.startsWith('/login');
       const isOnDashboard = nextUrl.pathname.startsWith('/dashboard');
@@ -255,7 +255,7 @@ export const authConfig: NextAuthConfig = {
   },
 
   events: {
-    async signIn({ user, account }) {
+    async signIn({ user, account }: { user: any; account: any }) {
       console.log(`[NextAuth] User signed in: ${user.email} via ${account?.provider || 'credentials'}`);
     },
     async signOut() {
