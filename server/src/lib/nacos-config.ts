@@ -45,7 +45,10 @@ class NacosConfigLoader {
 
   constructor(config?: Partial<NacosConfig>) {
     // Default configuration
-    const serverAddr = process.env.CONFIG_CENTER_IP || process.env.NACOS_SERVER_ADDR || 'nacos.prismer.app';
+    const serverAddr =
+      process.env.CONFIG_CENTER_IP ||
+      process.env.NACOS_SERVER_ADDR ||
+      'localhost';
 
     // Determine app environment:
     // - If APP_ENV is set, use it directly (prod/test/dev)
@@ -54,11 +57,11 @@ class NacosConfigLoader {
 
     // Map APP_ENV to namespace
     const envNamespaceMap: Record<string, string> = {
-      prod: 'bd5fb394-7492-440a-9626-9f8a261c500f',
-      production: 'bd5fb394-7492-440a-9626-9f8a261c500f',
-      test: 'a1ce57f2-0405-45c3-a8b1-35953d1e9aaf',
-      dev: 'a49fb6f9-e461-4b2a-aa66-3cccde46126c',
-      development: 'a49fb6f9-e461-4b2a-aa66-3cccde46126c',
+      prod: process.env.NACOS_NAMESPACE || 'prod',
+      production: process.env.NACOS_NAMESPACE || 'prod',
+      test: process.env.NACOS_NAMESPACE || 'test',
+      dev: process.env.NACOS_NAMESPACE || 'dev',
+      development: process.env.NACOS_NAMESPACE || 'dev',
     };
 
     // Map APP_ENV to dataId (Nacos dataId is case-sensitive!)
@@ -80,7 +83,7 @@ class NacosConfigLoader {
       dataId,
       group: config?.group || 'DEFAULT_GROUP',
       username: config?.username || process.env.NACOS_USERNAME || 'nacos',
-      password: config?.password || process.env.NACOS_PASSWORD || 'prismer123',
+      password: config?.password || process.env.NACOS_PASSWORD || '',
     };
 
     if (!process.env.APP_ENV && process.env.NODE_ENV !== 'production') {
@@ -450,10 +453,11 @@ export async function reloadNacosConfig(): Promise<boolean> {
  * will fall back to "client id missing" until creds land in `.env.local`.
  */
 export async function ensureNacosConfig(): Promise<void> {
-  if (_nacosLoader && _nacosLoader.getStatus().initialized) return;
-
-  const isLocalDev = process.env.LOCAL_ONLY === '1' && process.env.NODE_ENV !== 'production';
-  try {
+  // Self-host mode: skip Nacos entirely, use .env
+  if (process.env.NACOS_DISABLED === 'true') {
+    return;
+  }
+  if (!_nacosLoader || !_nacosLoader.getStatus().initialized) {
     await initNacosConfig();
   } catch (err) {
     if (isLocalDev) {
