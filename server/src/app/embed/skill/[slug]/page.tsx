@@ -108,7 +108,7 @@ export default function SkillEmbedPage() {
         {/* Footer */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: 10 }}>
           <a
-            href="https://prismer.cloud/evolution"
+            href="/evolution"
             target="_blank"
             rel="noopener noreferrer"
             style={{ fontSize: 10, color: '#3f3f46', textDecoration: 'none' }}
@@ -116,7 +116,7 @@ export default function SkillEmbedPage() {
             Powered by Prismer
           </a>
           <a
-            href="https://prismer.cloud/evolution"
+            href="/evolution"
             target="_blank"
             rel="noopener noreferrer"
             style={{ fontSize: 10, color: '#8b5cf6', textDecoration: 'none', fontWeight: 600 }}
