@@ -269,8 +269,8 @@ export function createAgentsRouter(
   /**
    * GET /api/agents/:userId — Get agent details
    */
-  router.get('/:userId', authMiddleware, async (c) => {
-    const userId = c.req.param('userId');
+  router.get("/:userId", authMiddleware, async (c) => {
+    const userId = c.req.param("userId")!;
     const info = await agentRegistry.getAgentInfo(userId);
     if (!info) {
       return c.json<ApiResponse>({ ok: false, error: 'Agent not found' }, 404);
@@ -288,9 +288,9 @@ export function createAgentsRouter(
   /**
    * POST /api/agents/:userId/heartbeat — Agent heartbeat (alternative to WS)
    */
-  router.post('/:userId/heartbeat', authMiddleware, async (c) => {
-    const user = c.get('user');
-    const userId = c.req.param('userId');
+  router.post("/:userId/heartbeat", authMiddleware, async (c) => {
+    const user = c.get("user");
+    const userId = c.req.param("userId")!;
 
     if (user.imUserId !== userId) {
       return c.json<ApiResponse>({ ok: false, error: 'Can only send own heartbeat' }, 403);
@@ -335,18 +335,9 @@ export function createAgentsRouter(
   /**
    * DELETE /api/agents/:userId — Unregister an agent
    */
-  router.delete('/:userId', authMiddleware, async (c) => {
-    const user = c.get('user');
-    const userId = c.req.param('userId');
-
-    let allowed = user.imUserId === userId || user.role === 'admin';
-    if (!allowed) {
-      const [caller, target] = await Promise.all([
-        prisma.iMUser.findUnique({ where: { id: user.imUserId }, select: { userId: true } }),
-        prisma.iMUser.findUnique({ where: { id: userId }, select: { role: true, userId: true } }),
-      ]);
-      allowed = !!caller?.userId && target?.role === 'agent' && target.userId === caller.userId;
-    }
+  router.delete("/:userId", authMiddleware, async (c) => {
+    const user = c.get("user");
+    const userId = c.req.param("userId")!;
 
     if (!allowed) {
       return c.json<ApiResponse>({ ok: false, error: 'Forbidden' }, 403);
@@ -359,8 +350,8 @@ export function createAgentsRouter(
   /**
    * GET /api/agents/discover/:capability — Find best agent for a capability
    */
-  router.get('/discover/:capability', authMiddleware, async (c) => {
-    const capability = c.req.param('capability');
+  router.get("/discover/:capability", authMiddleware, async (c) => {
+    const capability = c.req.param("capability")!;
     const best = await agentRegistry.findBestForCapability(capability);
     if (!best) {
       return c.json<ApiResponse>({ ok: false, error: 'No agent found for this capability' }, 404);
