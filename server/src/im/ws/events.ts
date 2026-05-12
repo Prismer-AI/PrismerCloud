@@ -13,6 +13,19 @@ import type {
   PresenceStatus,
   AgentStatus,
   AgentCapability,
+  // v1.9.x daemon protocol payloads (Track C)
+  AgentHostDeclarePayload,
+  HostAckedPayload,
+  AgentStatusChangedPayload,
+  TaskDispatchRequestPayload,
+  TaskDispatchProgressPayload,
+  TaskDispatchReplyPayload,
+  TaskCancelPayload,
+  // v1.9.x schema-derived broadcasts (Track C, schema from Track A)
+  AgentChangedPayload,
+  WorkspaceChangedPayload,
+  AgentProfileChangedPayload,
+  WorkspaceFileChangedPayload,
 } from '../types/index';
 
 // ─── Helpers ─────────────────────────────────────────────────
@@ -154,6 +167,10 @@ export const ServerEvents = {
     return makeEvent('contact.rejected', { ...data, rejectedAt: new Date().toISOString() });
   },
 
+  contactCancelled(data: { fromUserId: string; toUserId: string; requestId: string }) {
+    return makeEvent('contact.cancelled', { ...data, cancelledAt: new Date().toISOString() });
+  },
+
   contactRemoved(data: { userId: string; removedUserId: string }) {
     return makeEvent('contact.removed', { ...data, removedAt: new Date().toISOString() });
   },
@@ -196,7 +213,105 @@ export const ServerEvents = {
   pong(requestId?: string) {
     return makeEvent('pong', {}, requestId);
   },
+
+  // ─── v1.9.x daemon protocol (Track C) ────────────────────
+
+  /** ACK reply to `agent.host.declare`. requestId echoes the originating declare. */
+  hostAcked(data: HostAckedPayload, requestId?: string): WSMessage<HostAckedPayload> {
+    return makeEvent('host.acked', data, requestId);
+  },
+
+  /**
+   * Cloud → daemon: dispatch a task to be executed.
+   * Agent work is sent via `rooms.sendToUser(agentImUserId, ...)`. Runtime
+   * shell work is sent via `rooms.sendToUser("daemon:<daemonId>", ...)`.
+   * requestId is required so the daemon's `task.dispatch.reply` can be
+   * correlated.
+   */
+  taskDispatchRequest(data: TaskDispatchRequestPayload, requestId: string): WSMessage<TaskDispatchRequestPayload> {
+    return makeEvent('task.dispatch.request', data, requestId);
+  },
+
+  /** Cloud → daemon: cancel a running task. */
+  taskCancel(data: TaskCancelPayload): WSMessage<TaskCancelPayload> {
+    return makeEvent('task.cancel', data);
+  },
+
+  /**
+   * Cloud → user: agent status change broadcast.
+   * Sent after the cloud handler writes im_agent_cards.status, so other WS
+   * connections of the same human owner (mobile, web) update their UI.
+   */
+  agentStatusChanged(data: AgentStatusChangedPayload): WSMessage<AgentStatusChangedPayload> {
+    return makeEvent('agent.status.changed', data);
+  },
+
+  // ─── Schema-derived broadcasts (Track C / schema from Track A) ───
+
+  /**
+   * Cloud → user: emitted by `PATCH /api/im/agents/:userId` after a successful
+   * rename. `fields` is partial — only changed columns are present.
+   */
+  agentChanged(data: AgentChangedPayload): WSMessage<AgentChangedPayload> {
+    return makeEvent('agent.changed', data);
+  },
+
+  /**
+   * Cloud → user: emitted when an `im_workspaces` row is created/updated.
+   * Daemon should refresh its local mirror via `GET /api/im/workspaces/:id`.
+   */
+  workspaceChanged(data: WorkspaceChangedPayload): WSMessage<WorkspaceChangedPayload> {
+    return makeEvent('workspace.changed', data);
+  },
+
+  /**
+   * Cloud → user: emitted when an `im_agent_profiles` row is created/updated.
+   * `version` is the optimistic-lock counter; daemon compares against its
+   * mirror to decide if a refetch is necessary.
+   */
+  agentProfileChanged(data: AgentProfileChangedPayload): WSMessage<AgentProfileChangedPayload> {
+    return makeEvent('agent_profile.changed', data);
+  },
+
+  /**
+   * Cloud → user: emitted on `im_workspace_files` create/update/delete.
+   * Daemon updates only the path → asset mapping (`workspace_files_mirror`)
+   * — bytes remain lazy-fetched.
+   */
+  workspaceFileChanged(data: WorkspaceFileChangedPayload): WSMessage<WorkspaceFileChangedPayload> {
+    return makeEvent('workspace_file.changed', data);
+  },
+
+  /**
+   * Cloud → user/agent: page soft-deleted, archived, or visibility-shifted.
+   * Daemon clears the affected pageId from its local mirror and refetches via
+   * GET /memory/pages/:id (which will return 404 for soft-deleted pages, or
+   * the new visibility for changed ones). Reason field documents the cause.
+   */
+  memoryInvalidate(data: MemoryInvalidatePayload): WSMessage<MemoryInvalidatePayload> {
+    return makeEvent('memory.invalidate', data);
+  },
 };
+
+export interface MemoryInvalidatePayload {
+  workspaceId: string;
+  pageIds: string[];
+  reason: 'soft_delete' | 'archive' | 'visibility_changed' | 'promoted' | 'html_updated';
+  createdAt: string;
+}
+
+// ─── v1.9.x daemon → cloud payload aliases ───────────────────
+//
+// Re-exporting under the events.ts surface so handler.ts can import client
+// payload types from a single module, matching the existing 1.8.2 pattern
+// (e.g. `MessageSendPayload` lives here too).
+
+export type {
+  AgentHostDeclarePayload,
+  AgentStatusChangedPayload,
+  TaskDispatchProgressPayload,
+  TaskDispatchReplyPayload,
+} from '../types/index';
 
 // ─── Client → Server payload types ──────────────────────────
 

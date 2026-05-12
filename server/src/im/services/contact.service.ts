@@ -110,6 +110,16 @@ export class ContactService {
       const fromId = request.fromUserId;
       const toId = request.toUserId;
 
+      // Drop any prior accepted row for this exact (from, to) pair so the
+      // forthcoming status update doesn't collide with the
+      // `(fromUserId, toUserId, status)` unique constraint. This happens after
+      // unfriend → re-friend cycles: removeFriend wipes the relation but
+      // leaves the historical accepted request, and a fresh sendRequest
+      // succeeds (no relation, no pending) only to crash here on accept.
+      await tx.iMFriendRequest.deleteMany({
+        where: { fromUserId: fromId, toUserId: toId, status: 'accepted', NOT: { id: requestId } },
+      });
+
       await tx.iMFriendRequest.update({
         where: { id: requestId },
         data: { status: 'accepted' },
@@ -120,6 +130,7 @@ export class ContactService {
           { userId: fromId, contactId: toId },
           { userId: toId, contactId: fromId },
         ],
+        skipDuplicates: true,
       });
 
       const existingConv = await tx.iMConversation.findFirst({
@@ -138,6 +149,14 @@ export class ContactService {
             data: { status: 'active' },
           });
         }
+        // If either side previously left this direct (e.g. unfriended then
+        // re-friended), they need to be re-seated as participants — otherwise
+        // listByUser filters them out via `leftAt: null` and the chat is
+        // invisible after accept.
+        await tx.iMParticipant.updateMany({
+          where: { conversationId: existingConv.id, imUserId: { in: [fromId, toId] }, leftAt: { not: null } },
+          data: { leftAt: null },
+        });
       } else {
         const conv = await tx.iMConversation.create({
           data: {
@@ -168,6 +187,49 @@ export class ContactService {
     return { contact, conversationId: result.conversationId, request: result.request };
   }
 
+  /**
+   * Sender cancels their own pending friend request.
+   *
+   * Idempotency: drops any prior cancelled rows for (from, to) before flipping
+   * the target's status to 'cancelled' so the `(fromUserId, toUserId, status)`
+   * unique constraint doesn't crash on re-cancel cycles (A sends → A cancels →
+   * A re-sends → A re-cancels). Mirrors the rejectRequest fix in 201657c.
+   *
+   * Only the original sender (`fromUserId`) may cancel. Non-pending requests
+   * yield 409 NOT_PENDING — once a request is accepted/rejected/expired, the
+   * sender can't retroactively undo it.
+   */
+  async cancelRequest(requestId: string, cancellerId: string) {
+    const request = await prisma.iMFriendRequest.findUnique({ where: { id: requestId } });
+    if (!request) {
+      throw Object.assign(new Error('Friend request not found'), { status: 404, code: 'NOT_FOUND' });
+    }
+    if (request.status !== 'pending') {
+      throw Object.assign(new Error('Request is no longer pending'), { status: 409, code: 'NOT_PENDING' });
+    }
+    if (request.fromUserId !== cancellerId) {
+      throw Object.assign(new Error('Not authorized'), { status: 403, code: 'FORBIDDEN' });
+    }
+
+    await prisma.$transaction(async (tx: any) => {
+      await tx.iMFriendRequest.deleteMany({
+        where: {
+          fromUserId: request.fromUserId,
+          toUserId: request.toUserId,
+          status: { in: ['cancelled', 'expired', 'rejected'] },
+          NOT: { id: requestId },
+        },
+      });
+      await tx.iMFriendRequest.update({
+        where: { id: requestId },
+        data: { status: 'cancelled' },
+      });
+    });
+
+    log.info(`Request cancelled: ${request.fromUserId} → ${request.toUserId}`);
+    return request;
+  }
+
   async rejectRequest(requestId: string, rejecterId: string) {
     const request = await prisma.iMFriendRequest.findUnique({ where: { id: requestId } });
     if (!request) {
@@ -180,9 +242,25 @@ export class ContactService {
       throw Object.assign(new Error('Not authorized'), { status: 403, code: 'FORBIDDEN' });
     }
 
-    await prisma.iMFriendRequest.update({
-      where: { id: requestId },
-      data: { status: 'rejected' },
+    // Drop any prior rejected/expired row for this (from, to) pair so the
+    // forthcoming pending → rejected status update doesn't collide with the
+    // `(fromUserId, toUserId, status)` unique constraint. Mirrors the pattern
+    // in acceptRequest() that handles stale 'accepted' rows. Without this,
+    // re-reject cycles (B rejects → A re-sends → B re-rejects) crash with
+    // P2002, which the W3 spec hits during clearFriendship cleanup.
+    await prisma.$transaction(async (tx: any) => {
+      await tx.iMFriendRequest.deleteMany({
+        where: {
+          fromUserId: request.fromUserId,
+          toUserId: request.toUserId,
+          status: { in: ['rejected', 'expired'] },
+          NOT: { id: requestId },
+        },
+      });
+      await tx.iMFriendRequest.update({
+        where: { id: requestId },
+        data: { status: 'rejected' },
+      });
     });
 
     log.info(`Request rejected: ${request.fromUserId} → ${rejecterId}`);

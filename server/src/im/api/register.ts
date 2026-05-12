@@ -10,6 +10,7 @@
 
 import { Hono } from 'hono';
 import type { Context, Next } from 'hono';
+import type Redis from 'ioredis';
 import { authMiddleware } from '../auth/middleware';
 import { signToken, verifyToken, decodeToken } from '../auth/jwt';
 import prisma from '../db';
@@ -18,6 +19,9 @@ import { generateIMUserId } from '../utils/id-gen';
 import type { EvolutionService } from '../services/evolution.service';
 import type { RateLimiterService } from '../services/rate-limiter.service';
 import { createRateLimitMiddleware } from '../middleware/rate-limit';
+import { createModuleLogger } from '@/lib/logger';
+
+const registerLog = createModuleLogger('register');
 
 const USERNAME_REGEX = /^[a-zA-Z0-9_-]{3,32}$/;
 
@@ -53,7 +57,11 @@ async function optionalAuthMiddleware(c: Context, next: Next) {
   await next();
 }
 
-export function createRegisterRouter(evolutionService?: EvolutionService, rateLimiter?: RateLimiterService) {
+export function createRegisterRouter(
+  evolutionService?: EvolutionService,
+  rateLimiter?: RateLimiterService,
+  redis?: Redis,
+) {
   const router = new Hono();
 
   /**
@@ -82,6 +90,7 @@ export function createRegisterRouter(evolutionService?: EvolutionService, rateLi
       username,
       displayName,
       agentType,
+      workspaceId: requestedWorkspaceId,
       capabilities,
       description,
       endpoint,
@@ -124,6 +133,9 @@ export function createRegisterRouter(evolutionService?: EvolutionService, rateLi
         400,
       );
     }
+    if (requestedWorkspaceId !== undefined && typeof requestedWorkspaceId !== 'string') {
+      return c.json<ApiResponse>({ ok: false, error: 'workspaceId must be a string' }, 400);
+    }
 
     // Find existing user:
     // - API Key (cloudUserId): look up by (cloudUserId, username) — allows multi-agent
@@ -139,16 +151,52 @@ export function createRegisterRouter(evolutionService?: EvolutionService, rateLi
         include: { agentCard: true },
       });
     } else if (user?.imUserId) {
-      // Direct JWT user: find by IM User ID
-      existingUser = await prisma.iMUser.findUnique({
+      // Direct JWT user: find by IM User ID. For a human registering an
+      // *agent* (Wave-4 cookbook + IM-only flows), the JWT-subject row is
+      // the human owner — registering an agent should NOT collapse the
+      // human into role=agent. Skip the lookup so the create-new branch
+      // owns the new agent IMUser; the human stays as-is.
+      const jwtSelf = await prisma.iMUser.findUnique({
         where: { id: user.imUserId },
         include: { agentCard: true },
       });
+      const jwtSelfIsHuman = jwtSelf?.role === 'human';
+      const registeringAgent = type === 'agent';
+      if (jwtSelfIsHuman && registeringAgent) {
+        // Leave existingUser=null → fall through to create-new path so the
+        // human gets a sibling agent record with their own cloudUserId-style
+        // ownership. resolveOwnerWorkspaceId() will resolve the human as
+        // owner via user.imUserId.
+        existingUser = null;
+      } else {
+        existingUser = jwtSelf;
+      }
     }
 
-    // Check username uniqueness (only reject if held by a DIFFERENT identity)
+    // Check username uniqueness (only reject if held by a DIFFERENT identity).
+    //
+    // §30 Q2 (post-decision): slug = im_users.username is GLOBALLY UNIQUE
+    // (single-column UNIQUE index). Two paths previously diverged here:
+    //   1. direct JWT path → 409 (strict, correct)
+    //   2. API Key (cloudUserId) bypass → silently rebound the existing
+    //      agent's AgentCard to the new workspaceId. Net effect: an agent
+    //      could be moved from workspace A to workspace B without anyone
+    //      noticing. That was wrong by both the documented spec ("unique
+    //      across the platform") and the user-decided behavior ("global
+    //      uniqueness; reject cross-workspace reuse explicitly").
+    //
+    // The fix preserves the legitimate same-workspace update case (caller
+    // re-registers their own agent in its current workspace — that's the
+    // update path AgentCard upserts were designed for) but returns 409
+    // USERNAME_TAKEN_IN_OTHER_WORKSPACE when the existing agent lives in
+    // a DIFFERENT workspace from the one the current call is registering
+    // into. Workspace resolution mirrors the create path: explicit
+    // requestedWorkspaceId wins; otherwise the holder's own AgentCard
+    // workspaceId is the implicit target (matches update-path behavior
+    // at line ~428: `requestedWorkspaceId || existingUser.agentCard.workspaceId`).
     const usernameHolder = await prisma.iMUser.findUnique({
       where: { username },
+      include: { agentCard: true },
     });
     if (usernameHolder) {
       const isOwnUser = existingUser && usernameHolder.id === existingUser.id;
@@ -162,6 +210,28 @@ export function createRegisterRouter(evolutionService?: EvolutionService, rateLi
           409,
         );
       }
+      // §30 Q2 cross-workspace guard — applies to the API-Key bypass path.
+      // If the caller owns this slug already (isOwnCloudUser) but the
+      // existing AgentCard is in a different workspace than the one being
+      // registered into, reject with a distinct error code so callers can
+      // surface "this slug is yours, but it lives in another workspace —
+      // pick a different one" UI without conflating with the generic
+      // "taken by someone else" message.
+      if (isOwnCloudUser && usernameHolder.agentCard?.workspaceId && requestedWorkspaceId) {
+        const holderWorkspaceId = usernameHolder.agentCard.workspaceId;
+        if (holderWorkspaceId !== requestedWorkspaceId) {
+          return c.json<ApiResponse>(
+            {
+              ok: false,
+              error: {
+                code: 'USERNAME_TAKEN_IN_OTHER_WORKSPACE',
+                message: `Username '${username}' is already used by your agent in another workspace. Slug uniqueness is global; choose a different slug.`,
+              },
+            },
+            409,
+          );
+        }
+      }
       // If username is held by same cloud user but different agent, allow (it's updating)
       if (isOwnCloudUser && !existingUser) {
         existingUser = await prisma.iMUser.findUnique({
@@ -173,6 +243,8 @@ export function createRegisterRouter(evolutionService?: EvolutionService, rateLi
 
     let isNew = false;
     let imUserId: string;
+    let ownerUserId: string | null = null;
+    let ownerNumericId: bigint | number | null = null;
 
     // Build agent metadata: merge caller-provided metadata + webhookSecret
     const buildMetadata = (existing?: string | null) => {
@@ -184,8 +256,349 @@ export function createRegisterRouter(evolutionService?: EvolutionService, rateLi
       return JSON.stringify(base);
     };
 
+    async function assertRequestedDaemonBelongsToWorkspace(workspaceId: string): Promise<Response | null> {
+      if (!redis || !inputMetadata || typeof inputMetadata !== 'object') return null;
+      const daemonId = (inputMetadata as { daemonId?: unknown }).daemonId;
+      if (typeof daemonId !== 'string' || !daemonId.trim()) return null;
+      const key = `runtime:device:${workspaceId}:${daemonId.trim()}`;
+      const raw = await redis.get(key).catch(() => null);
+      if (!raw) {
+        return c.json<ApiResponse>(
+          {
+            ok: false,
+            error: `Daemon ${daemonId} is not connected to workspace ${workspaceId}`,
+          },
+          409,
+        );
+      }
+      return null;
+    }
+
+    /**
+     * §30 §2.6 device capacity model — enforce per-device agent ceiling.
+     *
+     * Resolves the IMContainer (device) row from the requested daemonId,
+     * counts agents currently bound to that daemon (via IMAgentCard
+     * metadata.daemonId), and rejects with HTTP 409 + body
+     * `{ error: { code: 'CAPACITY_EXCEEDED', message }, used, max }` when
+     * the existing-agent count has reached `im_containers.maxAgents`.
+     *
+     * No-op when:
+     *   • caller did not declare a daemonId (`inputMetadata.daemonId` absent)
+     *   • the daemonId does not resolve to any IMContainer row (unbound /
+     *     synthetic daemon — capacity ceiling is a per-device concept, so
+     *     there is nothing to enforce against). The earlier Redis check
+     *     ensures the daemon is at least connected to the workspace.
+     *   • the registering agent already owns a card on this daemon (update
+     *     path — counts the existing slot, so re-registering itself never
+     *     trips the ceiling).
+     */
+    /**
+     * Normalize a daemonId to its bare runtime-instance form (strip the
+     * `container:` prefix once if present). Used to compare caller-supplied
+     * daemonId against card.metadata.daemonId — callers historically vary
+     * on whether they include the prefix, so equality must be prefix-agnostic.
+     * Returns null when input is not a non-empty string.
+     */
+    function normalizeDaemonId(value: unknown): string | null {
+      if (typeof value !== 'string') return null;
+      const trimmed = value.trim();
+      if (!trimmed) return null;
+      return trimmed.startsWith('container:') ? trimmed.slice('container:'.length) : trimmed;
+    }
+
+    async function assertDeviceCapacityAvailable(
+      workspaceId: string,
+      registeringImUserId: string | null,
+    ): Promise<Response | null> {
+      if (!inputMetadata || typeof inputMetadata !== 'object') return null;
+      const rawDaemonId = (inputMetadata as { daemonId?: unknown }).daemonId;
+      // No daemonId declared → no device-scoped ceiling to enforce. CLI / lightweight
+      // agents that don't claim a daemon stay on the legacy unbounded path.
+      if (typeof rawDaemonId !== 'string' || !rawDaemonId.trim()) return null;
+      const daemonId = rawDaemonId.trim();
+
+      // daemonId pattern emitted by runtime-installations: `container:<runtimeInstanceId>`
+      // where runtimeInstanceId === IMContainer.agentImUserId. We accept both
+      // the prefixed form and the bare form (heartbeats / older callers).
+      const runtimeInstanceId = normalizeDaemonId(daemonId);
+      if (!runtimeInstanceId) return null;
+
+      // Match by agentImUserId (runtime-installation path, short ID) OR by
+      // daemonId (the full daemon ID from WS host.declare). The daemonId
+      // column is varchar(64) — long enough for the full UUID-format daemon
+      // ID. Using OR lets local daemons (which only have a Redis presence and
+      // a dynamically-upserted container row) be found without changing the
+      // runtime-installation lookup.
+      const device = (await prisma.iMContainer.findFirst({
+        where: { workspaceId, OR: [{ agentImUserId: runtimeInstanceId }, { daemonId }] },
+        select: { id: true, maxAgents: true },
+      })) as { id: string; maxAgents: number | null } | null;
+
+      // §M1 — fail-closed for unknown daemon. If the caller explicitly declared
+      // a daemonId but no IMContainer row matches in this workspace, we must
+      // NOT silently fall through to "no ceiling". An attacker who can connect
+      // their forged daemon to workspace Redis would otherwise be able to mint
+      // unlimited agents by pointing at a daemonId that has no device row.
+      // (No-op only when daemonId was absent from input — handled above.)
+      if (!device) {
+        return c.json<ApiResponse>(
+          {
+            ok: false,
+            error: {
+              code: 'UNKNOWN_DAEMON',
+              message: `Daemon ${daemonId} is not registered as a device in workspace ${workspaceId}; cannot enforce capacity.`,
+            },
+          },
+          409,
+        );
+      }
+
+      // §M2 — fallback observability. im_containers.maxAgents is supposed to
+      // be NOT NULL with DEFAULT 3 since migration 323. If a row predates the
+      // migration (or someone NULLed it manually) we still want to enforce a
+      // safe ceiling, but operators should know. Log once per call when this
+      // fallback triggers so the gap shows up in central log search.
+      if (device.maxAgents == null) {
+        registerLog.warn(
+          {
+            deviceId: device.id,
+            workspaceId,
+            daemonId,
+            runtimeInstanceId,
+            message: 'im_containers.maxAgents missing — fallback 3; check migration 323',
+          },
+          'maxAgents fallback used',
+        );
+      }
+      const max = device.maxAgents ?? 3;
+
+      // Count agents already bound to this daemon. metadata is a JSON-encoded
+      // string column on im_agent_cards; parse client-side to stay portable.
+      const cards = (await prisma.iMAgentCard.findMany({
+        where: { workspaceId },
+        select: { imUserId: true, metadata: true },
+      })) as Array<{ imUserId: string; metadata: string | null }>;
+
+      let used = 0;
+      let registeringAlreadyBound = false;
+      for (const card of cards) {
+        let cardDaemonId: string | null = null;
+        let metadataParseFailed = false;
+        try {
+          const meta = JSON.parse(card.metadata || '{}') as { daemonId?: unknown };
+          cardDaemonId = normalizeDaemonId(meta.daemonId);
+        } catch {
+          metadataParseFailed = true;
+        }
+
+        if (metadataParseFailed) {
+          // §n4 — fail-closed for malformed metadata. A card with garbled
+          // JSON could be a regression, a half-written upgrade, or an
+          // intentional bypass attempt. Conservatively assume it occupies
+          // a slot on this daemon so the ceiling can't be evaded by
+          // corrupting metadata. Log the imUserId so operators can audit.
+          registerLog.error(
+            {
+              imUserId: card.imUserId,
+              workspaceId,
+              daemonId,
+              message: 'im_agent_cards.metadata JSON parse failed — counting card toward capacity (fail-closed)',
+            },
+            'malformed agent card metadata',
+          );
+          used += 1;
+          if (registeringImUserId && card.imUserId === registeringImUserId) {
+            registeringAlreadyBound = true;
+          }
+          continue;
+        }
+
+        // §n1 — both sides normalized to bare runtime-instance form so that
+        // `container:rt-001` vs `rt-001` (or vice-versa) compare equal.
+        if (cardDaemonId !== runtimeInstanceId) continue;
+        used += 1;
+        if (registeringImUserId && card.imUserId === registeringImUserId) {
+          registeringAlreadyBound = true;
+        }
+      }
+
+      // If the registering user already holds a slot on this daemon, the
+      // re-registration is in-place (not a new slot) and should not be
+      // capacity-blocked. Otherwise the effective post-write count would be
+      // `used + 1` for a new agent.
+      const effectiveUsed = registeringAlreadyBound ? used : used + 1;
+      if (effectiveUsed <= max) return null;
+
+      return c.json<ApiResponse>(
+        {
+          ok: false,
+          error: {
+            code: 'CAPACITY_EXCEEDED',
+            message: `Device ${daemonId} already hosts ${used} agent(s); maximum is ${max}.`,
+          },
+          // Surface `used` (current count) and `max` at the top-level meta so
+          // callers can render a precise "N/M agents" UI without parsing the
+          // message. ApiResponse.meta is the canonical place for non-`data`
+          // structured response fields.
+          meta: { used, max },
+        },
+        409,
+      );
+    }
+
+    // v1.9.3: im_agent_cards.workspaceId is NOT NULL. Resolve the owning
+    // workspace once for the agent-creation paths below. Falls back to creating
+    // a default 'Personal' workspace if the owner has none yet (covers fresh
+    // dev cloud where backfill-workspaces.ts hasn't run for newly-auth'd users).
+    async function resolveOwnerWorkspaceId(): Promise<
+      { ok: true; workspaceId: string } | { ok: false; error: string }
+    > {
+      // Find the human IMUser owning this cloud account.
+      let owner: { id: string; userId?: string | null; numericId?: bigint | number | null };
+      if (cloudUserId) {
+        const humanOwner = await prisma.iMUser.findFirst({
+          where: { userId: cloudUserId, role: 'human' },
+          select: { id: true, userId: true, numericId: true },
+        });
+        if (!humanOwner) {
+          return { ok: false, error: 'No human owner IMUser found for cloud user' };
+        }
+        owner = humanOwner;
+      } else if (user?.imUserId) {
+        // Direct JWT path: caller is the IM user themselves
+        const selfOwner = await prisma.iMUser.findUnique({
+          where: { id: user.imUserId },
+          select: { id: true, userId: true, numericId: true },
+        });
+        if (!selfOwner) {
+          return { ok: false, error: 'No owner IMUser found for direct JWT user' };
+        }
+        owner = selfOwner;
+      } else {
+        // No human owner record yet — agent registration without prior /me call.
+        // Create a placeholder human owner first.
+        if (!cloudUserId) {
+          return { ok: false, error: 'No owner IMUser found and no cloudUserId to derive one' };
+        }
+        const ownerUsername = `user-${cloudUserId.slice(0, 8)}`;
+        owner = await prisma.iMUser.upsert({
+          where: { username: ownerUsername },
+          create: {
+            id: generateIMUserId('human'),
+            username: ownerUsername,
+            displayName: ownerUsername,
+            role: 'human',
+            userId: cloudUserId,
+          },
+          update: {},
+          select: { id: true, userId: true, numericId: true },
+        });
+      }
+      ownerUserId = owner.userId ?? null;
+      ownerNumericId = owner.numericId ?? null;
+      const ownerId: string = owner.id;
+      if (requestedWorkspaceId) {
+        const requested = await prisma.iMWorkspace.findFirst({
+          where: { id: requestedWorkspaceId, ownerImUserId: ownerId, deletedAt: null },
+          select: { id: true },
+        });
+        if (!requested) {
+          return { ok: false, error: 'Requested workspace not found for owner' };
+        }
+        return { ok: true, workspaceId: requested.id };
+      }
+      const existing = await prisma.iMWorkspace.findFirst({
+        where: { ownerImUserId: ownerId, isDefault: true, deletedAt: null },
+        select: { id: true },
+      });
+      if (existing) return { ok: true, workspaceId: existing.id };
+      // Don't set id — IMWorkspace uses Prisma @default(cuid()) (25 chars,
+      // fits VARCHAR(30)). randomUUID() is 36 chars and overflows.
+      const ws = await prisma.iMWorkspace.create({
+        data: {
+          ownerImUserId: ownerId,
+          name: 'Personal',
+          slug: 'personal',
+          isDefault: true,
+        },
+        select: { id: true },
+      });
+      return { ok: true, workspaceId: ws.id };
+    }
+    let resolvedWorkspaceId: string | undefined;
+
+    async function ensureOwnerWorkspaceId(): Promise<string | Response> {
+      const resolved = await resolveOwnerWorkspaceId();
+      if (!resolved.ok) {
+        return c.json<ApiResponse>({ ok: false, error: resolved.error }, 404);
+      }
+      return resolved.workspaceId;
+    }
+
     if (existingUser) {
-      // Update existing user
+      // §① — All preconditions (cross-workspace guard, daemon-belongs-to-ws,
+      // device capacity ceiling) MUST run BEFORE the IMUser.update mutation.
+      // Previously the update happened first, so a 409 would still have
+      // dirty-written username/displayName/role/agentType to the existing
+      // row before the caller's request was rejected. Reorder so the row is
+      // touched only after every precondition has passed.
+      let targetWorkspaceId: string | null = null;
+      if (type === 'agent') {
+        if (existingUser.agentCard) {
+          targetWorkspaceId = requestedWorkspaceId || existingUser.agentCard.workspaceId;
+          // Guard: targetWorkspaceId must be non-null at this point (agentCard.workspaceId is required)
+          if (!targetWorkspaceId) {
+            return c.json<ApiResponse>({ ok: false, error: 'Existing agent card has no workspaceId' }, 500);
+          }
+
+          // §② — Cross-workspace silent rebind guard. Applies to BOTH API-Key
+          // proxy and direct-JWT callers (was previously only API-Key path).
+          // If the caller explicitly declares a workspaceId that differs from
+          // where the existing AgentCard already lives, reject with the same
+          // 409 code the upstream slug-uniqueness check uses. This prevents
+          // an agent from being silently relocated from wsA to wsB during a
+          // re-register. Same workspaceId or omitted workspaceId is fine
+          // (legitimate update path).
+          if (
+            requestedWorkspaceId &&
+            existingUser.agentCard.workspaceId &&
+            existingUser.agentCard.workspaceId !== requestedWorkspaceId
+          ) {
+            return c.json<ApiResponse>(
+              {
+                ok: false,
+                error: {
+                  code: 'USERNAME_TAKEN_IN_OTHER_WORKSPACE',
+                  message: `Username '${username}' is already used by your agent in another workspace. Slug uniqueness is global; choose a different slug.`,
+                },
+              },
+              409,
+            );
+          }
+
+          const daemonError = await assertRequestedDaemonBelongsToWorkspace(targetWorkspaceId);
+          if (daemonError) return daemonError;
+          // §30 §2.6 device capacity — count this agent's existing slot via
+          // its imUserId so re-registering itself does not trip the ceiling.
+          const capacityError = await assertDeviceCapacityAvailable(targetWorkspaceId, existingUser.id);
+          if (capacityError) return capacityError;
+        } else {
+          const ownerWorkspaceId = resolvedWorkspaceId ?? (await ensureOwnerWorkspaceId());
+          if (ownerWorkspaceId instanceof Response) return ownerWorkspaceId;
+          resolvedWorkspaceId = ownerWorkspaceId;
+          targetWorkspaceId = ownerWorkspaceId;
+          const daemonError = await assertRequestedDaemonBelongsToWorkspace(resolvedWorkspaceId);
+          if (daemonError) return daemonError;
+          // §30 §2.6 — existing user has no card yet; treat as a new slot
+          // (registeringImUserId=existingUser.id won't be found in cards).
+          const capacityError = await assertDeviceCapacityAvailable(resolvedWorkspaceId, existingUser.id);
+          if (capacityError) return capacityError;
+        }
+      }
+
+      // All preconditions cleared — now safe to update the IMUser row and
+      // upsert the AgentCard.
       await prisma.iMUser.update({
         where: { id: existingUser.id },
         data: {
@@ -197,13 +610,13 @@ export function createRegisterRouter(evolutionService?: EvolutionService, rateLi
       });
       imUserId = existingUser.id;
 
-      // Update or create AgentCard for agents
       if (type === 'agent') {
         if (existingUser.agentCard) {
           await prisma.iMAgentCard.update({
             where: { imUserId: existingUser.id },
             data: {
-              name: username,
+              workspaceId: targetWorkspaceId!,
+              name: displayName,
               description: description ?? existingUser.agentCard.description,
               agentType: agentType ?? 'assistant',
               capabilities: JSON.stringify(capabilities ?? []),
@@ -216,7 +629,8 @@ export function createRegisterRouter(evolutionService?: EvolutionService, rateLi
           await prisma.iMAgentCard.create({
             data: {
               imUserId: existingUser.id,
-              name: username,
+              workspaceId: resolvedWorkspaceId!,
+              name: displayName,
               description: description ?? '',
               agentType: agentType ?? 'assistant',
               capabilities: JSON.stringify(capabilities ?? []),
@@ -226,12 +640,23 @@ export function createRegisterRouter(evolutionService?: EvolutionService, rateLi
             },
           });
           // Seed evolution genes for newly created agent card
-          evolutionService?.seedGenesForNewAgent(existingUser.id).catch(() => {});
+          evolutionService?.seedGenesForNewAgent(existingUser.id, resolvedWorkspaceId!).catch(() => {});
         }
       }
     } else {
       // Create new user — link to cloud user if API Key auth present
       const role = type === 'agent' ? 'agent' : 'human';
+      if (type === 'agent') {
+        const ownerWorkspaceId = resolvedWorkspaceId ?? (await ensureOwnerWorkspaceId());
+        if (ownerWorkspaceId instanceof Response) return ownerWorkspaceId;
+        resolvedWorkspaceId = ownerWorkspaceId;
+        const daemonError = await assertRequestedDaemonBelongsToWorkspace(resolvedWorkspaceId);
+        if (daemonError) return daemonError;
+        // §30 §2.6 — brand-new agent, no existing imUserId yet, so pass null.
+        // assertDeviceCapacityAvailable treats this as a new slot.
+        const capacityError = await assertDeviceCapacityAvailable(resolvedWorkspaceId, null);
+        if (capacityError) return capacityError;
+      }
       const newUser = await prisma.iMUser.create({
         data: {
           id: generateIMUserId(role),
@@ -239,19 +664,42 @@ export function createRegisterRouter(evolutionService?: EvolutionService, rateLi
           displayName,
           role,
           agentType: type === 'agent' ? (agentType ?? 'assistant') : null,
-          userId: cloudUserId ?? undefined,
+          userId: cloudUserId ?? ownerUserId ?? undefined,
+          numericId: type === 'human' ? (ownerNumericId ?? undefined) : undefined,
           metadata: JSON.stringify({ registeredVia: 'register_api', createdAt: new Date().toISOString() }),
         },
       });
       imUserId = newUser.id;
       isNew = true;
 
+      // Wave-4 cookbook bugfix: humans registered via /register also need a
+      // default workspace. The agent path below already creates one (since
+      // im_agent_cards.workspaceId is NOT NULL); the human path historically
+      // relied on Cloud 1 native auth's /me auto-import to backfill, which
+      // never fires for IM-only flows (cookbook scripts, agent-only test
+      // fixtures, fresh dev clouds). Without a default workspace, POST
+      // /api/im/tasks fails the workspaceId NOT NULL constraint and the
+      // user can't create tasks against any agent they own.
+      if (type === 'human' && isNew) {
+        const ws = await prisma.iMWorkspace.create({
+          data: {
+            ownerImUserId: newUser.id,
+            name: 'Personal',
+            slug: 'personal',
+            isDefault: true,
+          },
+          select: { id: true },
+        });
+        resolvedWorkspaceId = ws.id;
+      }
+
       // Create AgentCard for agents
       if (type === 'agent') {
         await prisma.iMAgentCard.create({
           data: {
             imUserId: newUser.id,
-            name: username,
+            workspaceId: resolvedWorkspaceId,
+            name: displayName,
             description: description ?? '',
             agentType: agentType ?? 'assistant',
             capabilities: JSON.stringify(capabilities ?? []),
@@ -261,7 +709,7 @@ export function createRegisterRouter(evolutionService?: EvolutionService, rateLi
           },
         });
         // Seed evolution genes for new agent
-        evolutionService?.seedGenesForNewAgent(newUser.id).catch(() => {});
+        evolutionService?.seedGenesForNewAgent(newUser.id, resolvedWorkspaceId).catch(() => {});
 
         // Auto-create human owner record if not exists (for owner profile / contributor board)
         if (cloudUserId) {
@@ -273,15 +721,17 @@ export function createRegisterRouter(evolutionService?: EvolutionService, rateLi
             const ownerUsername = `user-${cloudUserId.slice(0, 8)}`;
             const existing = await prisma.iMUser.findUnique({ where: { username: ownerUsername } });
             if (!existing) {
-              await prisma.iMUser.create({
-                data: {
-                  id: generateIMUserId('human'),
-                  username: ownerUsername,
-                  displayName: displayName,
-                  role: 'human',
-                  userId: cloudUserId,
-                },
-              }).catch(() => {});
+              await prisma.iMUser
+                .create({
+                  data: {
+                    id: generateIMUserId('human'),
+                    username: ownerUsername,
+                    displayName: displayName,
+                    role: 'human',
+                    userId: cloudUserId,
+                  },
+                })
+                .catch(() => {});
             }
           }
         }
@@ -293,12 +743,24 @@ export function createRegisterRouter(evolutionService?: EvolutionService, rateLi
       isNew = true;
     }
 
-    // Sign new JWT token
+    // AIP: Lookup DID for JWT claims (only non-revoked keys)
+    const identityKey = await prisma.iMIdentityKey.findFirst({
+      where: { imUserId, revokedAt: null },
+      select: { didKey: true },
+    });
+    const userRecord = await prisma.iMUser.findUnique({
+      where: { id: imUserId },
+      select: { delegatedBy: true },
+    });
+
+    // Sign new JWT token (with AIP DID claims if available)
     const token = signToken({
       sub: imUserId,
       username,
       role: type === 'agent' ? 'agent' : 'human',
       agentType: type === 'agent' ? ((agentType as any) ?? 'assistant') : undefined,
+      did: identityKey?.didKey ?? undefined,
+      delegatedBy: userRecord?.delegatedBy ?? undefined,
     });
 
     const result: RegisterResult = {
@@ -356,12 +818,20 @@ export function createTokenRouter() {
       return c.json<ApiResponse>({ ok: false, error: 'User not found' }, 404);
     }
 
-    // Sign new token
+    // AIP: Lookup DID for refreshed token (only non-revoked keys)
+    const refreshIdentityKey = await prisma.iMIdentityKey.findFirst({
+      where: { imUserId: user.id, revokedAt: null },
+      select: { didKey: true },
+    });
+
+    // Sign new token (with AIP DID claims)
     const newToken = signToken({
       sub: user.id,
       username: user.username,
       role: user.role as any,
       agentType: (user.agentType as any) ?? undefined,
+      did: refreshIdentityKey?.didKey ?? undefined,
+      delegatedBy: user.delegatedBy ?? undefined,
     });
 
     return c.json<ApiResponse>({

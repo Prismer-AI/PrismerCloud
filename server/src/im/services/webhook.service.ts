@@ -117,32 +117,12 @@ export class WebhookService {
   /**
    * POST payload to URL with HMAC signature and retry.
    */
-  private isBlockedUrl(url: string): boolean {
-    try {
-      const parsed = new URL(url);
-      if (!['http:', 'https:'].includes(parsed.protocol)) return true;
-      const host = parsed.hostname.toLowerCase();
-      return (
-        host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '0.0.0.0' ||
-        host.startsWith('10.') || host.startsWith('172.') || host.startsWith('192.168.') ||
-        host.startsWith('169.254.') || host.endsWith('.internal') || host.endsWith('.local')
-      );
-    } catch {
-      return true;
-    }
-  }
-
   private async deliver(
     url: string,
     payload: WebhookPayload,
     secret: string,
     attempt: number = 1,
   ): Promise<void> {
-    if (this.isBlockedUrl(url)) {
-      console.warn(`[Webhook] Blocked delivery to private/internal URL: ${url}`);
-      return;
-    }
-
     const body = JSON.stringify(payload);
     const signature = this.sign(body, secret);
 

@@ -10,10 +10,10 @@
  */
 
 // 主版本号 - 与根 /VERSION 同步（由 version.sh 改写）
-export const VERSION = '1.8.2';
+export const VERSION = '1.9.7';
 
 // 构建信息
-export const BUILD_DATE = '2026-04-13';
+export const BUILD_DATE = '2026-05-12';
 
 // 后端 API 兼容版本
 export const BACKEND_API_VERSION = '7.3';

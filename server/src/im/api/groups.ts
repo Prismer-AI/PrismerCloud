@@ -23,6 +23,33 @@ import { createRateLimitMiddleware } from '../middleware/rate-limit';
 import type { ApiResponse, MessageType } from '../types/index';
 import { resolveTargetUser } from '../utils/resolve-user';
 
+type GroupParticipantWithUser = {
+  imUserId: string;
+  role: string;
+  imUser: {
+    id: string;
+    username: string;
+    displayName: string;
+  };
+};
+
+function displayGroupTitleForViewer(
+  title: string | null,
+  participants: GroupParticipantWithUser[],
+  viewerImUserId: string,
+): string | null {
+  const others = participants.filter((p) => p.imUserId !== viewerImUserId);
+  if (participants.length === 2 && /^direct\s*[·:|-]/i.test(title ?? '')) {
+    const other = others[0]?.imUser;
+    return other?.displayName || other?.username || title;
+  }
+  if (title?.trim()) return title.trim();
+  const names = others.map((p) => p.imUser.displayName || p.imUser.username).filter(Boolean);
+  if (names.length === 0) return 'Group session';
+  if (names.length <= 3) return names.join(', ');
+  return `${names.slice(0, 3).join(', ')} +${names.length - 3}`;
+}
+
 export function createGroupsRouter(
   messageService: MessageService,
   conversationService: ConversationService,
@@ -45,6 +72,7 @@ export function createGroupsRouter(
     const user = c.get('user');
     const body = await c.req.json();
     const { title, description, members, metadata } = body;
+    let { workspaceId } = body as { workspaceId?: string };
 
     if (!title) {
       return c.json<ApiResponse>({ ok: false, error: 'title is required' }, 400);
@@ -61,11 +89,26 @@ export function createGroupsRouter(
       }
     }
 
+    // Wave-6 γ web /workspace gate: the page lists conversations under the
+    // caller's default workspace (`/conversations?workspaceId=...`). If the
+    // request body doesn't pass workspaceId we stamp the human's default
+    // workspace so the conversation lands in the expected scope. Cookbook
+    // scripts that don't filter by workspace are unaffected — they already
+    // ignore this field.
+    if (!workspaceId) {
+      const defaultWs = await prisma.iMWorkspace.findFirst({
+        where: { ownerImUserId: user.imUserId, isDefault: true, deletedAt: null },
+        select: { id: true },
+      });
+      if (defaultWs) workspaceId = defaultWs.id;
+    }
+
     // Create via ConversationService (writes sync events)
     const conv = await conversationService.createGroup({
       createdBy: user.imUserId,
       title,
       description,
+      workspaceId,
       memberIds: resolvedMembers,
       metadata,
     });
@@ -74,7 +117,7 @@ export function createGroupsRouter(
     const fullConv = await prisma.iMConversation.findUnique({
       where: { id: conv.id },
       include: {
-        participants: { include: { imUser: true } },
+        participants: { where: { leftAt: null }, include: { imUser: true } },
       },
     });
 
@@ -83,7 +126,12 @@ export function createGroupsRouter(
         ok: true,
         data: {
           groupId: conv.id,
-          title,
+          title: fullConv
+            ? displayGroupTitleForViewer(fullConv.title, fullConv.participants, user.imUserId)
+            : title.trim(),
+          displayTitle: fullConv
+            ? displayGroupTitleForViewer(fullConv.title, fullConv.participants, user.imUserId)
+            : title.trim(),
           description,
           members: fullConv?.participants.map((p: NonNullable<typeof fullConv>['participants'][number]) => ({
             userId: p.imUser.id,
@@ -111,7 +159,7 @@ export function createGroupsRouter(
       include: {
         conversation: {
           include: {
-            participants: { include: { imUser: true } },
+            participants: { where: { leftAt: null }, include: { imUser: true } },
           },
         },
       },
@@ -121,7 +169,8 @@ export function createGroupsRouter(
       ok: true,
       data: groups.map((g: (typeof groups)[number]) => ({
         groupId: g.conversation.id,
-        title: g.conversation.title,
+        title: displayGroupTitleForViewer(g.conversation.title, g.conversation.participants, user.imUserId),
+        displayTitle: displayGroupTitleForViewer(g.conversation.title, g.conversation.participants, user.imUserId),
         description: g.conversation.description,
         myRole: g.role,
         memberCount: g.conversation.participants.length,
@@ -134,7 +183,7 @@ export function createGroupsRouter(
    */
   router.get('/:groupId', async (c) => {
     const user = c.get('user');
-    const groupId = c.req.param('groupId')!;
+    const groupId = c.req.param('groupId');
 
     // Check membership
     const isMember = await conversationService.isParticipant(groupId, user.imUserId);
@@ -145,7 +194,7 @@ export function createGroupsRouter(
     const group = await prisma.iMConversation.findUnique({
       where: { id: groupId },
       include: {
-        participants: { include: { imUser: true } },
+        participants: { where: { leftAt: null }, include: { imUser: true } },
       },
     });
 
@@ -157,7 +206,8 @@ export function createGroupsRouter(
       ok: true,
       data: {
         groupId: group.id,
-        title: group.title,
+        title: displayGroupTitleForViewer(group.title, group.participants, user.imUserId),
+        displayTitle: displayGroupTitleForViewer(group.title, group.participants, user.imUserId),
         description: group.description,
         members: group.participants.map((p: (typeof group.participants)[number]) => ({
           userId: p.imUser.id,
@@ -177,7 +227,7 @@ export function createGroupsRouter(
   }
   router.post('/:groupId/messages', async (c) => {
     const user = c.get('user');
-    const groupId = c.req.param('groupId')!;
+    const groupId = c.req.param('groupId');
     const body = await c.req.json();
 
     const {
@@ -339,7 +389,7 @@ export function createGroupsRouter(
    */
   router.get('/:groupId/messages', async (c) => {
     const user = c.get('user');
-    const groupId = c.req.param('groupId')!;
+    const groupId = c.req.param('groupId');
 
     // Check membership
     const isMember = await conversationService.isParticipant(groupId, user.imUserId);
@@ -367,7 +417,7 @@ export function createGroupsRouter(
    */
   router.post('/:groupId/members', async (c) => {
     const user = c.get('user');
-    const groupId = c.req.param('groupId')!;
+    const groupId = c.req.param('groupId');
     const body = await c.req.json();
     const { userId, role } = body;
 
@@ -403,8 +453,8 @@ export function createGroupsRouter(
    */
   router.delete('/:groupId/members/:userId', async (c) => {
     const user = c.get('user');
-    const groupId = c.req.param('groupId')!;
-    const targetUserId = c.req.param('userId')!;
+    const groupId = c.req.param('groupId');
+    const targetUserId = c.req.param('userId');
 
     // Resolve target
     const resolvedUserId = await resolveTargetUser(targetUserId);

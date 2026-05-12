@@ -223,11 +223,21 @@ async function validateJwt(token: string, authHeader: string): Promise<AuthInfo 
     if (parts.length !== 3) return null;
 
     const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf-8'));
-    const userId = payload.sub || payload.user_id || payload.id;
-    if (!userId) return null;
+
+    // Prefer `numericId` (pc_users.id, canonical FK for FF_*_LOCAL paths
+    // like /api/keys → `Number(guard.auth.userId)`). Newer JWTs from
+    // local-auth.ts::issueToken set both `sub` (IMUser.id cuid) and
+    // `numericId` (pc_users.id int). Falling back to `sub` makes
+    // /api/keys cast NaN → 403 INVALID_USER for any Google/email-login
+    // user, so prefer numericId when available.
+    const resolvedUserId =
+      typeof payload.numericId === 'number' && Number.isFinite(payload.numericId)
+        ? payload.numericId
+        : payload.sub || payload.user_id || payload.id;
+    if (resolvedUserId === undefined || resolvedUserId === null || resolvedUserId === '') return null;
 
     return {
-      userId: String(userId),
+      userId: String(resolvedUserId),
       email: payload.email || '',
       authType: 'jwt',
       authHeader,
@@ -310,7 +320,13 @@ async function checkBalance(userId: string, estimatedCost: number): Promise<Bala
 // ============================================================================
 
 function getJWTSecret(): string {
-  return process.env.JWT_SECRET || process.env.NEXTAUTH_SECRET || 'dev-secret-change-me';
+  const secret = process.env.JWT_SECRET || process.env.NEXTAUTH_SECRET;
+  if (secret) return secret;
+  const appEnv = process.env.APP_ENV;
+  if (process.env.NODE_ENV === 'production' || appEnv === 'prod' || appEnv === 'test') {
+    throw new Error('[api-guard] FATAL: JWT_SECRET (or NEXTAUTH_SECRET) must be set in non-dev environments');
+  }
+  return 'dev-secret-change-me';
 }
 
 /**

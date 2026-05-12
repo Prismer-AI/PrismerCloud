@@ -17,6 +17,7 @@
  */
 
 import { useRef, useEffect, useCallback } from 'react';
+import { getIMClientToken } from '@/lib/im-token';
 import type {
   EvolutionMapData,
   MapLayout,
@@ -40,6 +41,7 @@ import {
   drawGhostNode,
   drawClusterHalo,
   drawClusterLabel,
+  resetLabelCollisions,
   drawHyperedge,
   drawCausalLink,
   drawGeneStoryEmbed,
@@ -409,10 +411,13 @@ export function MapCanvas({
   // ═══ SSE Event Stream ═══
   useEffect(() => {
     // Connect to SSE stream for real-time evolution events
+    const token = getIMClientToken();
+    if (!token) return;
+
     let es: EventSource | null = null;
 
     try {
-      es = new EventSource('/api/im/sync/stream');
+      es = new EventSource(`/api/im/sync/stream?token=${encodeURIComponent(token)}&since=0`);
       es.addEventListener('sync', (e: MessageEvent) => {
         try {
           const event = JSON.parse(e.data);
@@ -793,7 +798,10 @@ export function MapCanvas({
 
       // ─── L3+: Cluster labels (drawn after edges, before nodes) ───
       if (zoomLevel >= 3 && layout.clusters) {
-        for (const cluster of layout.clusters) {
+        // Sort by gene count descending — larger clusters get label priority
+        const sortedClusters = [...layout.clusters].sort((a, b) => b.geneIds.length - a.geneIds.length);
+        resetLabelCollisions();
+        for (const cluster of sortedClusters) {
           const clusterAdapter = {
             id: String(cluster.communityId),
             label: cluster.label,
@@ -801,7 +809,7 @@ export function MapCanvas({
             center: cluster.center,
             color: cluster.color,
           };
-          drawClusterLabel(stableCtx, clusterAdapter, dark);
+          drawClusterLabel(stableCtx, clusterAdapter, dark, view.zoom);
         }
       }
 

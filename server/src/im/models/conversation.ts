@@ -43,16 +43,22 @@ export class ConversationModel {
   }
 
   async listByUser(userId: string, status: ConversationStatus = 'active') {
+    // Auth gate is the participant table: a user sees every conversation they
+    // are an active participant in. Conversation.workspaceId is metadata for
+    // the creator's scope; cross-workspace invites carry the inviter's
+    // workspace, so filtering by recipient's workspace would hide them.
     return prisma.iMParticipant.findMany({
       where: {
         imUserId: userId,
         leftAt: null,
-        conversation: {
-          status,
-        },
+        conversation: { status },
       },
       include: {
-        conversation: true,
+        conversation: {
+          include: {
+            participants: { where: { leftAt: null }, include: { imUser: true } },
+          },
+        },
       },
       orderBy: {
         conversation: {
@@ -69,10 +75,7 @@ export class ConversationModel {
     });
   }
 
-  async update(
-    id: string,
-    data: Partial<Pick<CreateConversationInput, 'title' | 'description' | 'metadata'>>
-  ) {
+  async update(id: string, data: Partial<Pick<CreateConversationInput, 'title' | 'description' | 'metadata'>>) {
     return prisma.iMConversation.update({
       where: { id },
       data: {

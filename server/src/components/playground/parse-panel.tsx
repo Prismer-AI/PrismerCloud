@@ -34,7 +34,7 @@ function getMetadata(result: Record<string, unknown>): Record<string, unknown> {
 }
 
 // Use proxy for parser/CDN image URLs so they load in-browser (avoids CORS / inaccessible CDN)
-const PROXY_ORIGINS = (process.env.NEXT_PUBLIC_PROXY_ORIGINS || '').split(',').filter(Boolean);
+const PROXY_ORIGINS = ['cdn.prismer.ai', 'parser.prismer.dev', 'parser.prismer.app'];
 function getImageDisplayUrl(rawUrl: string): string {
   if (!rawUrl || rawUrl.startsWith('data:')) return rawUrl;
   try {

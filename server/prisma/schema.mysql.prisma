@@ -60,6 +60,16 @@ model IMUser {
   description     String?   @db.VarChar(500)
   lastSeenAt      DateTime? @db.DateTime(3)
 
+  // Native Auth (v1.9.4) — replaces Go-backend `prismer_info.users` for new accounts
+  email         String?  @unique @db.VarChar(255)
+  phone         String?  @unique @db.VarChar(20)
+  googleId      String?  @unique @db.VarChar(64)
+  githubId      String?  @unique @db.VarChar(64)
+  appleId       String?  @unique @db.VarChar(128)
+  twitterId     String?  @unique @db.VarChar(64)
+  emailVerified Boolean  @default(false)
+  numericId     BigInt?  @unique @default(autoincrement()) @db.UnsignedBigInt
+
   agentCard     IMAgentCard?
   identityKey   IMIdentityKey?
   participations IMParticipant[]
@@ -80,6 +90,8 @@ model IMUser {
   @@index([role])
   @@index([userId])
   @@index([primaryDid])
+  @@index([email])
+  @@index([numericId])
   @@map("im_users")
 }
 
@@ -109,7 +121,9 @@ model IMAgentCard {
 
   imUser          IMUser    @relation(fields: [imUserId], references: [id], onDelete: Cascade)
 
+  workspaceId String @db.VarChar(30) // 1.9.2 Phase 2: workspace-owned memory
   @@index([status])
+  @@index([workspaceId])
   @@map("im_agent_cards")
 }
 
@@ -172,7 +186,7 @@ model IMConversation {
   status        String    @default("active") @db.VarChar(20)
   metadata      String    @default("{}") @db.Text
   createdById   String    @db.VarChar(30)
-  workspaceId   String?   @unique @db.VarChar(50)
+  workspaceId   String?   @db.VarChar(50)             // 1.9.x: 1 ws → N conversations，去掉 1.8.2 误加的 @unique
   lastMessageAt DateTime? @db.DateTime(3)
   createdAt     DateTime  @default(now()) @db.DateTime(3)
   updatedAt     DateTime  @updatedAt @db.DateTime(3)
@@ -185,6 +199,7 @@ model IMConversation {
   @@index([status])
   @@index([createdById])
   @@index([lastMessageAt])
+  @@index([workspaceId])
   @@map("im_conversations")
 }
 
@@ -457,13 +472,16 @@ model IMTask {
   title         String    @db.VarChar(255)
   description   String?   @db.Text
   capability    String?   @db.VarChar(100)
+  // Cloud 3 / S3: task execution surface — agent | sandbox | shell
+  runtimeRoute  String?   @default("agent") @db.VarChar(20)
+  // Cloud 3 / S3: sandbox execution backref (set by dispatchToSandbox)
+  containerId   String?   @db.VarChar(30)
   input         String    @default("{}") @db.Text
   contextUri    String?   @db.VarChar(500)
 
   // Participants
   creatorId     String    @db.VarChar(36)
   assigneeId    String?   @db.VarChar(36)
-  scope         String    @default("global") @db.VarChar(100)
   conversationId String?  @db.VarChar(36)
 
   // State machine
@@ -504,15 +522,20 @@ model IMTask {
   updatedAt     DateTime  @updatedAt @db.DateTime(3)
 
   logs          IMTaskLog[]
+  runs          IMTaskRun[]
 
+  workspaceId String? @db.VarChar(30) // 1.9.2 Phase 1 (m2 NULLable, m3 NOT NULL + drop scope)
   @@index([status])
   @@index([assigneeId, status])
   @@index([capability, status])
   @@index([scheduleType, nextRunAt, status])
   @@index([creatorId])
-  @@index([creatorId, scope, status])
+  @@index([creatorId, status])
   @@index([conversationId])
   @@index([completedAt])
+  @@index([workspaceId])
+  @@index([runtimeRoute, status])
+  @@index([containerId])
   @@map("im_tasks")
 }
 
@@ -531,6 +554,70 @@ model IMTaskLog {
   @@map("im_task_logs")
 }
 
+model IMTaskRun {
+  id           String    @id @default(cuid()) @db.VarChar(30)
+
+  taskId           String?   @db.VarChar(30)
+  workspaceId      String?   @db.VarChar(30)
+  conversationId   String?   @db.VarChar(36)
+  triggerMessageId String?   @db.VarChar(30)
+  creatorId        String    @db.VarChar(36)
+  assigneeId       String?   @db.VarChar(36)
+  actorId          String?   @db.VarChar(36)
+  sourceKind       String    @default("task") @db.VarChar(30)
+  capability       String?   @db.VarChar(100)
+  status       String    @default("running") @db.VarChar(20)
+  runtimeRoute String?   @default("agent") @db.VarChar(20)
+  input        String    @default("{}") @db.Text
+  output       String?   @db.LongText
+  outputUri    String?   @db.VarChar(500)
+  error        String?   @db.Text
+
+  startedAt    DateTime? @db.DateTime(3)
+  completedAt  DateTime? @db.DateTime(3)
+  metadata     String    @default("{}") @db.Text
+  createdAt    DateTime  @default(now()) @db.DateTime(3)
+  updatedAt    DateTime  @updatedAt @db.DateTime(3)
+
+  task         IMTask?       @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  events       IMTaskEvent[]
+
+  @@index([taskId, createdAt])
+  @@index([workspaceId, status, createdAt])
+  @@index([conversationId, createdAt])
+  @@index([assigneeId, status])
+  @@index([creatorId, createdAt])
+  @@index([sourceKind, status])
+  @@index([actorId, status])
+  @@index([status, createdAt])
+  @@map("im_task_runs")
+}
+
+model IMTaskEvent {
+  id        String   @id @default(cuid()) @db.VarChar(30)
+
+  runId     String   @db.VarChar(30)
+  taskId    String?  @db.VarChar(30)
+  workspaceId String? @db.VarChar(30)
+  conversationId String? @db.VarChar(36)
+  actorId   String?  @db.VarChar(36)
+  type      String   @db.VarChar(50)
+  level     String   @default("info") @db.VarChar(20)
+  message   String?  @db.Text
+  payload   String   @default("{}") @db.Text
+
+  createdAt DateTime @default(now()) @db.DateTime(3)
+
+  run       IMTaskRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([runId, createdAt])
+  @@index([taskId, createdAt])
+  @@index([workspaceId, createdAt])
+  @@index([conversationId, createdAt])
+  @@index([type, createdAt])
+  @@map("im_task_events")
+}
+
 // ==============================================================================
 // v1.7.2 — Compaction Summaries (Working Memory)
 // ==============================================================================
@@ -544,7 +631,9 @@ model IMCompactionSummary {
   tokenCount        Int       @default(0)
   createdAt         DateTime  @default(now()) @db.DateTime(3)
 
+  workspaceId String? @db.VarChar(30) // 1.9.2 Phase 1 (m2 NULLable, m3 NOT NULL + drop scope)
   @@index([conversationId])
+  @@index([workspaceId])
   @@map("im_compaction_summaries")
 }
 
@@ -556,7 +645,6 @@ model IMMemoryFile {
   id          String    @id @default(cuid()) @db.VarChar(30)
   ownerId     String    @db.VarChar(30)
   ownerType   String    @default("agent") @db.VarChar(10)
-  scope       String    @default("global") @db.VarChar(50)
   path        String    @default("MEMORY.md") @db.VarChar(255)
   content     String    @default("") @db.MediumText
   version     Int       @default(1)
@@ -568,9 +656,197 @@ model IMMemoryFile {
   lastConsolidatedAt  DateTime? @db.DateTime(3)
   stale               Boolean   @default(false)
 
-  @@unique([ownerId, scope, path])
+  workspaceId String @db.VarChar(30) // 1.9.2 Phase 2: workspace-owned memory
+
+  visibility  String  @default("workspace") @db.VarChar(50)
+  aclJson     String? @db.Text
+  encrypted   Boolean @default(false)
+  contentHash String  @db.Char(64)
+  etag        String? @db.VarChar(64)
+  sourceKind  String? @db.VarChar(32)
+  sourceRef   String? @db.VarChar(500)
+
+  @@unique([workspaceId, path])
   @@index([ownerId, ownerType])
+  @@index([workspaceId])
+  @@index([workspaceId, sourceRef])
   @@map("im_memory_files")
+}
+
+// ==============================================================================
+// v5.4 — Workspace Memory Layer (Phase B cloud bridge)
+// ==============================================================================
+
+model IMMemoryPage {
+  id                String   @id @default(cuid()) @db.VarChar(30)
+  workspaceId       String   @db.VarChar(30)
+  path              String   @db.VarChar(500)
+  title             String?  @db.VarChar(500)
+  content           String   @db.LongText
+  // M-D (doc 25 §4): HTML is an INDEPENDENT source from `content`, not a
+  // derivation. Two parallel writable fields. The Library rich-text editor
+  // writes contentHtml directly; agents and ingest pipelines write content
+  // (markdown). Markdown writes do NOT clobber an existing contentHtml,
+  // and HTML writes do NOT clobber existing content. The backfill cron
+  // (scripts/ops/backfill-memory-html.ts) is the ONLY path that derives
+  // HTML from markdown, and it skips rows where contentHtmlVersion = 0
+  // (user-authored, opted out of derivation).
+  contentHtml        String?  @db.LongText
+  // contentHtmlVersion: 0 = user/agent-authored (independent — backfill cron
+  // never re-renders these); >=1 = backfill-rendered at markdown-render
+  // pipeline version N. Backfill upgrades rows where currentVersion <
+  // MARKDOWN_RENDER_VERSION (re-render with newer pipeline).
+  contentHtmlVersion Int?     @default(0)
+  version           Int      @default(1)
+  createdByImUserId String   @db.VarChar(30)
+  createdAt         DateTime @default(now()) @db.DateTime(3)
+  updatedAt         DateTime @updatedAt @db.DateTime(3)
+
+  parentPageId  String? @db.VarChar(30)
+  pageType      String  @default("hub") @db.VarChar(32)
+  sourceRef     String? @db.VarChar(500)
+  sourceKind    String? @db.VarChar(32)
+  sourceAssetId String? @db.VarChar(30)
+  ingestRunId   String? @db.VarChar(30)
+  ingestVersion Int?
+
+  stale       Boolean   @default(false)
+  staleReason String?   @db.VarChar(255)
+  archivedAt  DateTime? @db.DateTime(3)
+  deletedAt   DateTime? @db.DateTime(3)
+
+  provenanceJson String  @db.Text
+  visibility     String  @default("workspace") @db.VarChar(50)
+  aclJson        String? @db.Text
+
+  encrypted   Boolean @default(false)
+  contentHash String  @db.Char(64)
+
+  @@unique([workspaceId, path])
+  @@index([workspaceId, parentPageId])
+  @@index([workspaceId, sourceRef])
+  @@index([workspaceId, sourceAssetId])
+  @@index([workspaceId, stale])
+  @@index([workspaceId, pageType])
+  @@index([workspaceId, pageType, contentHash])
+  @@index([workspaceId, deletedAt])
+  @@map("im_memory_pages")
+}
+
+model IMMemoryPageVersion {
+  id                String   @id @default(cuid()) @db.VarChar(30)
+  workspaceId       String   @db.VarChar(30)
+  pageId            String   @db.VarChar(30)
+  version           Int
+  content           String   @db.LongText
+  contentHash       String   @db.Char(64)
+  createdByImUserId String   @db.VarChar(30)
+  createdAt         DateTime @default(now()) @db.DateTime(3)
+
+  parentVersion Int?
+  changeSummary String? @db.Text
+  payloadJson   String? @db.Text
+  encrypted     Boolean @default(false)
+  sourceKind    String? @db.VarChar(32)
+  sourceRef     String? @db.VarChar(500)
+
+  @@unique([pageId, version])
+  @@index([workspaceId, pageId])
+  @@index([workspaceId, contentHash])
+  @@map("im_memory_page_versions")
+}
+
+model IMMemoryLink {
+  id                   String   @id @default(cuid()) @db.VarChar(30)
+  workspaceId          String   @db.VarChar(30)
+  sourcePageId         String   @db.VarChar(30)
+  targetPageId         String?  @db.VarChar(30)
+  sourceUri            String   @db.VarChar(500)
+  targetUri            String   @db.VarChar(500)
+  relation             String   @default("markdown") @db.VarChar(50)
+  extractedFromVersion Int?
+  weight               Float    @default(1) @db.Double
+  broken               Boolean  @default(false)
+  createdAt            DateTime @default(now()) @db.DateTime(3)
+  updatedAt            DateTime @updatedAt @db.DateTime(3)
+
+  @@unique([workspaceId, sourcePageId, targetUri, relation])
+  @@index([workspaceId, sourcePageId])
+  @@index([workspaceId, targetPageId])
+  @@index([workspaceId, broken])
+  @@map("im_memory_links")
+}
+
+model IMMemorySyncEvent {
+  id             String    @id @default(cuid()) @db.VarChar(30)
+  workspaceId    String    @db.VarChar(30)
+  eventId        String    @db.VarChar(40)
+  direction      String    @db.VarChar(12)
+  eventType      String    @db.VarChar(64)
+  schemaVersion  Int       @default(1)
+  actorImUserId  String    @db.VarChar(30)
+  actorKind      String    @db.VarChar(12)
+  deviceId       String?   @db.VarChar(64)
+  pageId         String?   @db.VarChar(30)
+  status         String    @default("pending") @db.VarChar(20)
+  idempotencyKey String    @db.VarChar(255)
+  payloadJson    String    @db.LongText
+  errorJson      String?   @db.Text
+  conflictJson   String?   @db.Text
+  cursor         String?   @db.VarChar(128)
+  createdAt      DateTime  @default(now()) @db.DateTime(3)
+  processedAt    DateTime? @db.DateTime(3)
+
+  @@unique([workspaceId, eventId])
+  @@unique([workspaceId, idempotencyKey])
+  @@index([workspaceId, status, createdAt])
+  @@index([workspaceId, pageId])
+  @@index([workspaceId, cursor])
+  @@map("im_memory_sync_events")
+}
+
+model IMMemoryObservabilityEvent {
+  id            String   @id @default(cuid()) @db.VarChar(30)
+  workspaceId   String   @db.VarChar(30)
+  eventType     String   @db.VarChar(64)
+  actorImUserId String?  @db.VarChar(30)
+  actorKind     String?  @db.VarChar(12)
+  pageId        String?  @db.VarChar(30)
+  targetEventId String?  @db.VarChar(40)
+  query         String?  @db.Text
+  metricsJson   String?  @db.Text
+  metadataJson  String?  @db.Text
+  createdAt     DateTime @default(now()) @db.DateTime(3)
+
+  @@index([workspaceId, eventType, createdAt])
+  @@index([workspaceId, pageId])
+  @@index([workspaceId, actorImUserId])
+  @@map("im_memory_observability_events")
+}
+
+model IMMemoryProposal {
+  id                String    @id @default(cuid()) @db.VarChar(30)
+  workspaceId       String    @db.VarChar(30)
+  proposingAgentId  String    @db.VarChar(30)
+  sessionId         String?   @db.VarChar(50)
+  status            String    @default("pending") @db.VarChar(20)
+  pagePath          String    @db.VarChar(500)
+  baseVersion       Int
+  operation         String    @db.VarChar(20)
+  contentDiff       String    @db.LongText
+  rationale         String?   @db.Text
+  confidence        Float     @default(0) @db.Double
+  sourceRefs        String    @db.Text
+  expiresAt         DateTime  @db.DateTime(3)
+  createdAt         DateTime  @default(now()) @db.DateTime(3)
+  decidedAt         DateTime? @db.DateTime(3)
+  decidedByImUserId String?   @db.VarChar(30)
+  rejectionReason   String?   @db.Text
+
+  @@index([workspaceId, status, createdAt])
+  @@index([workspaceId, sessionId])
+  @@index([workspaceId, pagePath, status])
+  @@map("im_memory_proposals")
 }
 
 // ==============================================================================
@@ -601,18 +877,17 @@ model IMGene {
   breakerState     String    @default("closed") @db.VarChar(20)
   breakerFailCount Int       @default(0)
   breakerStateAt   DateTime? @db.DateTime(3)
-
-  scope            String    @default("global") @db.VarChar(60)
   encrypted        Boolean   @default(false)
   encryptionKeyId  String?   @db.VarChar(30)
 
   signalLinks      IMGeneSignal[]
 
+  workspaceId String? @db.VarChar(30) // 1.9.2 Phase 1 (m2 NULLable, m3 NOT NULL + drop scope)
   @@index([ownerAgentId])
   @@index([category])
   @@index([visibility])
   @@index([parentId])
-  @@index([scope, visibility])
+  @@index([workspaceId])
   @@map("im_genes")
 }
 
@@ -624,8 +899,10 @@ model IMGeneSignal {
 
   gene        IMGene  @relation(fields: [geneId], references: [id], onDelete: Cascade)
 
+  workspaceId String? @db.VarChar(30) // 1.9.2 Phase 1 (m2 NULLable, m3 NOT NULL + drop scope)
   @@id([geneId, signalId])
   @@index([signalId])
+  @@index([workspaceId])
   @@map("im_gene_signals")
 }
 
@@ -651,9 +928,8 @@ model IMEvolutionEdge {
   taskSuccessRate Float?    @db.Float
   coverageLevel   Int       @default(0) @db.TinyInt
   mode            String    @default("standard") @db.VarChar(20)
-  scope           String    @default("global") @db.VarChar(60)
 
-  @@unique([ownerAgentId, signalKey, geneId, mode, scope])
+  @@unique([ownerAgentId, signalKey, geneId, mode])
   @@index([ownerAgentId])
   @@index([geneId])
   @@index([signalType])
@@ -678,7 +954,6 @@ model IMEvolutionCapsule {
   metadata        String    @default("{}") @db.Text
   provider        String?   @db.VarChar(50)        // Provider tag for provider-scoped freeze
   mode            String    @default("standard") @db.VarChar(20)
-  scope           String    @default("global") @db.VarChar(60)
   encrypted       Boolean   @default(false)
   createdAt       DateTime  @default(now()) @db.DateTime(3)
 
@@ -686,12 +961,13 @@ model IMEvolutionCapsule {
   transitionReason    String?   @db.VarChar(100) // 'gene_applied' | 'fallback_relaxed' | 'baseline'
   contextSnapshot     String?   @db.Text         // JSON: capsule execution context
 
+  workspaceId String? @db.VarChar(30) // 1.9.2 Phase 1 (m2 NULLable, m3 NOT NULL + drop scope)
   @@index([ownerAgentId])
   @@index([geneId])
   @@index([ownerAgentId, outcome])
   @@index([provider])
   @@index([mode])
-  @@index([scope])
+    @@index([workspaceId])
   @@map("im_evolution_capsules")
 }
 
@@ -700,7 +976,6 @@ model IMEvolutionMetrics {
   ts                DateTime  @default(now()) @db.DateTime(3)
   window            String    @default("1h") @db.VarChar(10)
   mode              String    @default("standard") @db.VarChar(20)
-  scope             String    @default("global") @db.VarChar(30)
   ssr               Float?    @db.Float
   cs                Int?
   rp                Float?    @db.Float
@@ -717,8 +992,10 @@ model IMEvolutionMetrics {
   frrApprox         Float?    @db.Float
   errApprox         Float?    @db.Float
 
+  workspaceId String? @db.VarChar(30) // 1.9.2 Phase 1 (m2 NULLable, m3 NOT NULL + drop scope)
   @@index([ts, mode])
-  @@index([scope, ts])
+  @@index([ts])
+  @@index([workspaceId])
   @@map("im_evolution_metrics")
 }
 
@@ -728,7 +1005,9 @@ model IMAtom {
   value     String    @db.VarChar(255)
   createdAt DateTime  @default(now()) @db.DateTime(3)
   atoms     IMHyperedgeAtom[]
+  workspaceId String? @db.VarChar(30) // 1.9.2 Phase 1 (m2 NULLable, m3 NOT NULL + drop scope)
   @@unique([kind, value])
+  @@index([workspaceId])
   @@map("im_atoms")
 }
 
@@ -737,8 +1016,10 @@ model IMHyperedge {
   type      String    @default("execution") @db.VarChar(20)
   createdAt DateTime  @default(now()) @db.DateTime(3)
   atoms     IMHyperedgeAtom[]
+  workspaceId String? @db.VarChar(30) // 1.9.2 Phase 1 (m2 NULLable, m3 NOT NULL + drop scope)
   @@index([type])
   @@index([createdAt])
+  @@index([workspaceId])
   @@map("im_hyperedges")
 }
 
@@ -748,8 +1029,10 @@ model IMHyperedgeAtom {
   role        String? @db.VarChar(20)
   hyperedge   IMHyperedge @relation(fields: [hyperedgeId], references: [id])
   atom        IMAtom      @relation(fields: [atomId], references: [id])
+  workspaceId String? @db.VarChar(30) // 1.9.2 Phase 1 (m2 NULLable, m3 NOT NULL + drop scope)
   @@id([hyperedgeId, atomId])
   @@index([atomId, hyperedgeId])
+  @@index([workspaceId])
   @@map("im_hyperedge_atoms")
 }
 
@@ -759,8 +1042,10 @@ model IMCausalLink {
   linkType  String    @default("learning") @db.VarChar(20)
   strength  Float     @default(1.0) @db.Float
   createdAt DateTime  @default(now()) @db.DateTime(3)
+  workspaceId String? @db.VarChar(30) // 1.9.2 Phase 1 (m2 NULLable, m3 NOT NULL + drop scope)
   @@id([causeId, effectId])
   @@index([effectId])
+  @@index([workspaceId])
   @@map("im_causal_links")
 }
 
@@ -866,12 +1151,14 @@ model IMSkill {
   securityStatus String   @default("pending") @db.VarChar(20)
   changelog     String    @default("") @db.Text
 
+  workspaceId String? @db.VarChar(30) // 1.9.2 Phase 1 (m2 NULLable, m3 NOT NULL + drop scope)
   @@index([category])
   @@index([source])
   @@index([installs])
   @@index([status])
   @@index([sourceId])
   @@index([ownerAgentId])
+  @@index([workspaceId])
   @@map("im_skills")
 }
 
@@ -900,17 +1187,18 @@ model IMAgentSkill {
   agentId     String    @db.VarChar(30)
   skillId     String    @db.VarChar(30)
   geneId      String?   @db.VarChar(128)
-  scope       String    @default("global") @db.VarChar(100)
   installedAt DateTime  @default(now()) @db.DateTime(3)
   updatedAt   DateTime? @db.DateTime(3)
   config      String    @default("{}") @db.Text
   status      String    @default("active") @db.VarChar(20)
   version     String?   @db.VarChar(20)
 
-  @@unique([agentId, skillId, scope])
-  @@index([agentId, scope, status])
+  workspaceId String? @db.VarChar(30) // 1.9.2 Phase 1 (m2 NULLable, m3 NOT NULL + drop scope)
+  @@unique([agentId, skillId])
+  @@index([agentId, status])
   @@index([agentId])
   @@index([skillId])
+  @@index([workspaceId])
   @@map("im_agent_skills")
 }
 
@@ -925,13 +1213,14 @@ model IMUnmatchedSignal {
   context     String   @default("{}") @db.Text
   count       Int      @default(1)
   resolvedBy  String?  @db.VarChar(100)
-  scope       String   @default("global") @db.VarChar(60)
   createdAt   DateTime @default(now()) @db.DateTime(3)
   updatedAt   DateTime @updatedAt @db.DateTime(3)
 
-  @@unique([signalKey, agentId, scope])
+  workspaceId String? @db.VarChar(30) // 1.9.2 Phase 1 (m2 NULLable, m3 NOT NULL + drop scope)
+  @@unique([signalKey, agentId])
   @@index([signalKey])
   @@index([count])
+  @@index([workspaceId])
   @@map("im_unmatched_signals")
 }
 
@@ -943,10 +1232,11 @@ model IMEvolutionAchievement {
   badgeKey   String   @db.VarChar(100)
   unlockedAt DateTime @default(now()) @db.DateTime(3)
   metadata   String   @default("{}") @db.Text
-  scope      String   @default("global") @db.VarChar(60)
 
-  @@unique([agentId, badgeKey, scope])
+  workspaceId String? @db.VarChar(30) // 1.9.2 Phase 1 (m2 NULLable, m3 NOT NULL + drop scope)
+  @@unique([agentId, badgeKey])
   @@index([agentId])
+  @@index([workspaceId])
   @@map("im_evolution_achievements")
 }
 
@@ -955,7 +1245,6 @@ model IMEvolutionAchievement {
 model IMEvolutionACL {
   id            String    @id @default(cuid()) @db.VarChar(30)
   resourceType  String    @db.VarChar(20)
-  resourceId    String    @db.VarChar(100)
   subjectType   String    @db.VarChar(20)
   subjectId     String    @db.VarChar(100)
   permission    String    @db.VarChar(20)
@@ -963,9 +1252,12 @@ model IMEvolutionACL {
   createdAt     DateTime  @default(now()) @db.DateTime(3)
   expiresAt     DateTime? @db.DateTime(3)
 
-  @@unique([resourceType, resourceId, subjectType, subjectId, permission])
-  @@index([resourceId])
+  workspaceId String? @db.VarChar(30) // 1.9.2 Phase 1 (m2 NULLable, m3 NOT NULL + drop scope)
+  geneId      String? @db.VarChar(30) // 1.9.2 — split out from resourceId 三义
   @@index([subjectType, subjectId])
+  @@index([workspaceId])
+  @@index([geneId])
+  @@unique([resourceType, workspaceId, geneId, subjectType, subjectId, permission], map: "uq_acl_v2")
   @@map("im_evolution_acl")
 }
 
@@ -982,7 +1274,9 @@ model IMSignalCluster {
   createdAt     DateTime  @default(now()) @db.DateTime(3)
   updatedAt     DateTime  @updatedAt @db.DateTime(3)
 
+  workspaceId String? @db.VarChar(30) // 1.9.2 Phase 1 (m2 NULLable, m3 NOT NULL + drop scope)
   @@index([frequency])
+  @@index([workspaceId])
   @@map("im_signal_clusters")
 }
 
@@ -1124,11 +1418,11 @@ model IMValueMetrics {
   prevPeriodValue Float?   @db.Double
   growthRate      Float?   @db.Double
 
-  scope           String   @default("global") @db.VarChar(100)
-
+  workspaceId String? @db.VarChar(30) // 1.9.2 Phase 1 (m2 NULLable, m3 NOT NULL + drop scope)
   @@index([entityType, period, snapshotDate])
   @@index([entityType, entityId, period])
   @@index([period, rankByValue, snapshotDate])
+  @@index([workspaceId])
   @@map("im_value_metrics")
 }
 
@@ -1147,8 +1441,10 @@ model IMAntiCheatLog {
   reviewedAt   DateTime? @db.DateTime(3)
   createdAt    DateTime  @default(now()) @db.DateTime(3)
 
+  workspaceId String? @db.VarChar(30) // 1.9.2 Phase 1 (m2 NULLable, m3 NOT NULL + drop scope)
   @@index([ruleKey, createdAt])
   @@index([entityId])
+  @@index([workspaceId])
   @@map("im_anti_cheat_log")
 }
 
@@ -1163,6 +1459,8 @@ model IMTokenBaseline {
   sampleCount     Int
   updatedAt       DateTime @updatedAt @db.DateTime(3)
 
+  workspaceId String? @db.VarChar(30) // 1.9.2 Phase 1 (m2 NULLable, m3 NOT NULL + drop scope)
+  @@index([workspaceId])
   @@map("im_token_baseline")
 }
 
@@ -1178,13 +1476,13 @@ model IMKnowledgeLink {
   targetId   String   @db.VarChar(36)
   linkType   String   @default("related") @db.VarChar(20)
   strength   Float    @default(1.0) @db.Double
-  scope      String   @default("global") @db.VarChar(50)
   createdAt  DateTime @default(now()) @db.DateTime(3)
 
+  workspaceId String? @db.VarChar(30) // 1.9.2 Phase 1 (m2 NULLable, m3 NOT NULL + drop scope)
   @@unique([sourceType, sourceId, targetType, targetId, linkType])
   @@index([sourceType, sourceId])
   @@index([targetType, targetId])
-  @@index([scope])
+    @@index([workspaceId])
   @@map("im_knowledge_links")
 }
 
@@ -1229,7 +1527,6 @@ model IMCommunityPost {
   pinned        Boolean  @default(false)
   featured      Boolean  @default(false)
   autoGenerated Boolean  @default(false)
-  scope         String   @default("global") @db.VarChar(50)
 
   createdAt     DateTime @default(now()) @db.DateTime(3)
   updatedAt     DateTime @updatedAt @db.DateTime(3)
@@ -1299,8 +1596,10 @@ model IMCommunityBookmark {
 
   createdAt   DateTime @default(now()) @db.DateTime(3)
 
+  workspaceId String? @db.VarChar(30) // 1.9.2 Phase 1 (m2 NULLable, m3 NOT NULL + drop scope)
   @@unique([userId, postId])
   @@index([userId, createdAt])
+  @@index([workspaceId])
   @@map("im_community_bookmarks")
 }
 
@@ -1418,7 +1717,9 @@ model IMCommunityDraft {
   updatedAt   DateTime @updatedAt @db.DateTime(3)
   expiresAt   DateTime @db.DateTime(3) // 7 days TTL
 
+  workspaceId String? @db.VarChar(30) // 1.9.2 Phase 1 (m2 NULLable, m3 NOT NULL + drop scope)
   @@index([authorId, updatedAt])
+  @@index([workspaceId])
   @@map("im_community_drafts")
 }
 
@@ -1470,4 +1771,298 @@ model IMBlock {
 
   @@id([userId, blockedId])
   @@map("im_blocks")
+}
+
+// ==============================================================================
+// v1.9.x Workspace Data Model (Track A m1, migration 100)
+// ==============================================================================
+// 1.9.x 阶段 Workspace 是 first-class 用户数据上下文，1:1 with IMUser。
+// 详见 docs/refactor/02-workspace-data-model.md
+
+model IMWorkspace {
+  id            String    @id @default(cuid()) @db.VarChar(30)
+  ownerImUserId String    @db.VarChar(30)
+  name          String    @db.VarChar(128)
+  slug          String    @db.VarChar(64)
+  isDefault     Boolean   @default(false)
+  metadata      String    @default("{}") @db.Text
+  createdAt     DateTime  @default(now()) @db.DateTime(3)
+  updatedAt     DateTime  @updatedAt @db.DateTime(3)
+  deletedAt     DateTime? @db.DateTime(3)
+
+  members       IMWorkspaceMember[]
+  agentProfiles IMAgentProfile[]
+  assets        IMAsset[]
+  files         IMWorkspaceFile[]
+
+  @@unique([ownerImUserId, slug, deletedAt])
+  @@index([ownerImUserId, isDefault])
+  @@map("im_workspaces")
+}
+
+model IMWorkspaceMember {
+  id             String   @id @default(cuid()) @db.VarChar(30)
+  workspaceId    String   @db.VarChar(30)
+  memberImUserId String   @db.VarChar(30)
+  role           String   @db.VarChar(32)              // 'owner' | 'admin' | 'member'
+  joinedAt       DateTime @default(now()) @db.DateTime(3)
+
+  workspace IMWorkspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, memberImUserId])
+  @@index([memberImUserId])
+  @@map("im_workspace_members")
+}
+
+model IMAsset {
+  id                  String   @id @default(cuid()) @db.VarChar(30)
+  workspaceId         String   @db.VarChar(30)
+  ownerImUserId       String   @db.VarChar(30)
+  contentHash         String   @db.Char(64)                       // sha256 hex (64 chars)
+  storageUri          String   @db.VarChar(512)
+  sizeBytes           BigInt?  @db.BigInt
+  mime                String?  @db.VarChar(128)
+  kind                String   @default("file") @db.VarChar(32)   // 'file' | 'image' | 'transcript' | 'snippet'
+  sourceAgentImUserId String?  @db.VarChar(30)
+  sourceTaskId        String?  @db.VarChar(30)
+  metadata            String   @default("{}") @db.Text
+  createdAt           DateTime @default(now()) @db.DateTime(3)
+  updatedAt           DateTime @updatedAt @db.DateTime(3)
+  deletedAt           DateTime? @db.DateTime(3)
+
+  parentAssetId  String? @db.VarChar(30)
+  derivationKind String? @db.VarChar(32)
+  ingestStatus   String  @default("pending") @db.VarChar(32)
+  ingestVersion  Int     @default(1)
+  ingestError    String? @db.Text
+  assetIndexSeq  BigInt  @default(0) @db.BigInt
+  cdnUrl         String? @db.VarChar(500)
+  previewAssetId String? @db.VarChar(30)
+  folderPath     String? @db.VarChar(700)
+  filename       String? @db.VarChar(500)
+  sourceRef      String? @db.VarChar(500)
+  sourceKind     String? @db.VarChar(32)
+  sourceMetadata String? @db.Text
+  revision       Int     @default(1)
+  visibility     String  @default("workspace") @db.VarChar(50)
+  aclJson        String? @db.Text
+  description    String? @db.VarChar(500)                         // Wave-54 B2: optional agent-authored hint surfaced to other agents
+
+  workspace IMWorkspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  parentAsset IMAsset?        @relation("IMAssetDerivations", fields: [parentAssetId], references: [id])
+  derivedAssets IMAsset[]     @relation("IMAssetDerivations")
+  previewAsset IMAsset?       @relation("IMAssetPreview", fields: [previewAssetId], references: [id])
+  previewFor   IMAsset[]      @relation("IMAssetPreview")
+  files     IMWorkspaceFile[]
+
+  @@unique([workspaceId, contentHash, deletedAt])
+  @@index([contentHash])
+  @@index([workspaceId, kind])
+  @@index([workspaceId, sourceTaskId])
+  @@index([workspaceId, deletedAt])
+  @@index([workspaceId, assetIndexSeq])
+  @@index([workspaceId, sourceRef])
+  @@index([workspaceId, ingestStatus])
+  @@index([workspaceId, parentAssetId])
+  @@index([workspaceId, previewAssetId])
+  @@map("im_assets")
+}
+
+model IMAssetIndexCounter {
+  workspaceId String   @id @db.VarChar(30)
+  nextSeq     BigInt   @default(1) @db.BigInt
+  updatedAt   DateTime @updatedAt @db.DateTime(3)
+
+  @@map("im_asset_index_counters")
+}
+
+// Wave-54 B7: multi-daemon coordination for asset parse work.
+// Uniqueness on (workspaceId, assetId, ingestVersion) means one row per
+// version; takeover overwrites in place rather than creating a new row.
+model IMIngestClaim {
+  id               String    @id @default(cuid()) @db.VarChar(30)
+  workspaceId      String    @db.VarChar(30)
+  assetId          String    @db.VarChar(30)
+  ingestVersion    Int
+  claimantImUserId String    @db.VarChar(30)
+  claimantDeviceId String    @db.VarChar(120)
+  status           String    @default("active") @db.VarChar(20)
+  claimedAt        DateTime  @db.DateTime(3)
+  heartbeatAt      DateTime  @db.DateTime(3)
+  completedAt      DateTime? @db.DateTime(3)
+  createdAt        DateTime  @default(now()) @db.DateTime(3)
+  updatedAt        DateTime  @updatedAt @db.DateTime(3)
+
+  @@unique([workspaceId, assetId, ingestVersion], name: "uq_ingest_claim_target")
+  @@index([status, heartbeatAt])
+  @@index([claimantImUserId, claimantDeviceId])
+  @@map("im_ingest_claims")
+}
+
+model IMWorkspaceFile {
+  id               String    @id @default(cuid()) @db.VarChar(30)
+  workspaceId      String    @db.VarChar(30)
+  path             String    @db.VarChar(700)                          // capped to satisfy MySQL InnoDB 3072-byte unique-index limit (see sql/100)
+  assetId          String    @db.VarChar(30)
+  version          Int       @default(1)
+  parentVersionId  String?   @db.VarChar(30)                       // FK 自引用 (历史链)
+  modifierImUserId String    @db.VarChar(30)
+  createdAt        DateTime  @default(now()) @db.DateTime(3)
+  updatedAt        DateTime  @updatedAt @db.DateTime(3)
+  deletedAt        DateTime? @db.DateTime(3)
+
+  workspace IMWorkspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  asset     IMAsset     @relation(fields: [assetId], references: [id])
+
+  @@unique([workspaceId, path, deletedAt])
+  @@index([workspaceId, updatedAt])
+  @@index([assetId])
+  @@map("im_workspace_files")
+}
+
+model IMAgentProfile {
+  id            String    @id @default(cuid()) @db.VarChar(30)
+  workspaceId   String    @db.VarChar(30)
+  agentImUserId String    @db.VarChar(30)                          // FK → im_users.id (agent role)
+  adapterName   String    @db.VarChar(64)                          // 'hermes' | 'claude-code' | 'openclaw' | 'codex'
+  name          String    @db.VarChar(128)
+  config        String    @default("{}") @db.Text                 // JSON
+  version       Int       @default(1)
+  createdAt     DateTime  @default(now()) @db.DateTime(3)
+  updatedAt     DateTime  @updatedAt @db.DateTime(3)
+  deletedAt     DateTime? @db.DateTime(3)
+
+  workspace IMWorkspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, agentImUserId, name, deletedAt])
+  @@index([workspaceId, agentImUserId])
+  @@map("im_agent_profiles")
+}
+
+// ==============================================================================
+// v1.9.3 — QR pairing offer (m3 phase 2, see 03-ws-protocol.md §pair)
+// ==============================================================================
+
+model IMPairingOffer {
+  nonce            String    @id @db.VarChar(64)
+  devicePub        String?   @db.VarChar(256)
+  deviceName       String?   @db.VarChar(128)
+  approverImUserId String?   @db.VarChar(36)
+  approvedAt       DateTime? @db.DateTime(3)
+  apiKeyId         String?   @db.VarChar(36)
+  consumedAt       DateTime? @db.DateTime(3)
+  expiresAt        DateTime  @db.DateTime(3)
+  createdAt        DateTime  @default(now()) @db.DateTime(3)
+
+  @@index([expiresAt])
+  @@map("im_pairing_offers")
+}
+
+// ==============================================================================
+// Sandbox (Cloud 3 / S2): Container + Snapshot + RunLog
+// ==============================================================================
+
+model IMContainer {
+  id            String    @id @default(cuid()) @db.VarChar(30)
+  workspaceId   String    @db.VarChar(30)
+  tenantId      String    @db.VarChar(30)
+  agentImUserId String?   @db.VarChar(30)
+  taskId        String?   @db.VarChar(30)
+
+  podName       String    @unique @db.VarChar(64)
+  namespace     String    @default("default") @db.VarChar(64)
+  image         String    @db.VarChar(255)
+  imageTag      String    @db.VarChar(64)
+
+  status        String    @db.VarChar(32)
+
+  // Wave-8 W11 — runtime backing kind ("docker" legacy / "k8s" wizard).
+  // §26 B5 Stage 1: parallel `deviceType` field added (default mirrors this
+  // value via migration 317 backfill). Future stage will retire runtimeKind.
+  runtimeKind   String    @default("docker") @db.VarChar(16)
+
+  // §26 B5 Stage 1 — device-semantic fields (migration 317):
+  //   deviceType: 'local' | 'k8s' | 'docker-host' | (future) — supersedes
+  //     runtimeKind. Defaults 'k8s'; existing rows backfilled from runtimeKind.
+  //   daemonId:   1 device = 1 daemon. Nullable in Stage 1 so existing rows
+  //     don't fail. Stage 2 code populates on every write; Stage 3 flips NOT NULL.
+  deviceType    String    @default("k8s") @db.VarChar(16)
+  daemonId      String?   @db.VarChar(64)
+
+  // Migration 322 — provisioning progress signals. provisioningStep is the
+  // current step in the 7-step lifecycle (null when not in flight);
+  // provisioningHistory is a JSON array of step transitions. camelCase to
+  // match the rest of im_containers (runtimeKind, deviceType, ...) — no @map.
+  provisioningStep    String? @db.VarChar(32)
+  provisioningHistory Json?
+
+  // Migration 323 — §30 §2.6 device capacity model. Maximum agents that
+  // can register against this device. Default 3 (Web base subscription
+  // tier). Enforcement happens in agent.register (server-side) — schema-only
+  // here, read path lands in §30 B3.
+  maxAgents     Int       @default(3)
+
+  cpuRequest    String    @db.VarChar(16)
+  cpuLimit      String    @db.VarChar(16)
+  memoryRequest String    @db.VarChar(16)
+  memoryLimit   String    @db.VarChar(16)
+
+  gatewayUrl    String?   @db.VarChar(255)
+
+  startedAt     DateTime? @db.DateTime(3)
+  stoppedAt     DateTime? @db.DateTime(3)
+  createdAt     DateTime  @default(now()) @db.DateTime(3)
+  updatedAt     DateTime  @updatedAt @db.DateTime(3)
+
+  @@index([workspaceId, status])
+  @@index([tenantId])
+  @@index([taskId])
+  @@index([daemonId])
+  @@index([deviceType])
+  @@index([provisioningStep])
+  @@map("im_containers")
+}
+
+model IMContainerSnapshot {
+  id           String    @id @default(cuid()) @db.VarChar(30)
+  containerId  String    @db.VarChar(30)
+  // S3 (302): imageTag/imageDigest/sizeBytes are populated by docker-commit
+  // snapshots. Daemon-first manifest snapshots leave them null and store
+  // the file digest list in `metadata` (kind="fs-manifest").
+  imageTag     String?   @db.VarChar(64)
+  imageDigest  String?   @db.VarChar(80)
+  sizeBytes    BigInt?
+  createdBy    String    @db.VarChar(30)
+  createdAt    DateTime  @default(now()) @db.DateTime(3)
+  // FS manifest may be MB-scale (50k file cap × ~150 bytes JSON ≈ 7.5 MB).
+  // TEXT column would 500 on any non-trivial workspace. MediumText = 16 MB.
+  metadata     String    @default("{}") @db.MediumText
+
+  @@index([containerId, createdAt])
+  @@map("im_container_snapshots")
+}
+
+model IMSandboxRunLog {
+  id            String    @id @default(cuid()) @db.VarChar(30)
+  containerId   String    @db.VarChar(30)
+  workspaceId   String    @db.VarChar(30)
+  tenantId      String    @db.VarChar(30)
+
+  startedAt     DateTime  @db.DateTime(3)
+  endedAt       DateTime? @db.DateTime(3)
+  durationMs    Int?
+  cpuSeconds    Float?
+  memoryGbHours Float?
+
+  trigger       String    @db.VarChar(32)
+  taskId        String?   @db.VarChar(30)
+
+  exitReason    String?   @db.VarChar(32)
+  exitCode      Int?
+
+  createdAt     DateTime  @default(now()) @db.DateTime(3)
+
+  @@index([tenantId, startedAt])
+  @@index([workspaceId, startedAt])
+  @@map("im_sandbox_run_logs")
 }

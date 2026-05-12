@@ -151,7 +151,7 @@ async function testAuthBypass() {
   });
 
   await test('Access with expired-style JWT (random base64)', async () => {
-    const fakeJwt = ['eyJhbGciOiJIUzI1NiJ9', 'eyJzdWIiOiJoYWNrZXIiLCJleHAiOjB9', 'invalid'].join('.');
+    const fakeJwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJoYWNrZXIiLCJleHAiOjB9.invalid';
     const res = await get('/api/conversations', fakeJwt);
     assert(res.status === 401 || res.status === 403, `Expected 401/403, got ${res.status}`);
   });

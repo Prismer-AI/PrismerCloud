@@ -1,6 +1,6 @@
 /**
  * Database Operations for Billing
- * 
+ *
  * 操作表：pc_payment_methods, pc_payments, pc_subscriptions
  * 前端先行实现，与后端解耦
  */
@@ -90,7 +90,7 @@ export interface CreatePaymentMethodInput {
  */
 export async function createPaymentMethod(input: CreatePaymentMethodInput): Promise<PaymentMethod> {
   const id = generateUUID();
-  
+
   const sql = `
     INSERT INTO pc_payment_methods (
       id, user_id, stripe_payment_method_id, stripe_customer_id,
@@ -98,7 +98,7 @@ export async function createPaymentMethod(input: CreatePaymentMethodInput): Prom
       wallet_email, is_default, is_active
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE)
   `;
-  
+
   await execute(sql, [
     id,
     input.userId,
@@ -113,15 +113,12 @@ export async function createPaymentMethod(input: CreatePaymentMethodInput): Prom
     input.walletEmail || null,
     input.isDefault || false,
   ]);
-  
+
   // 如果设置为默认，取消其他默认
   if (input.isDefault) {
-    await execute(
-      `UPDATE pc_payment_methods SET is_default = FALSE WHERE user_id = ? AND id != ?`,
-      [input.userId, id]
-    );
+    await execute(`UPDATE pc_payment_methods SET is_default = FALSE WHERE user_id = ? AND id != ?`, [input.userId, id]);
   }
-  
+
   const pm = await getPaymentMethodById(id);
   return pm!;
 }
@@ -162,39 +159,27 @@ export async function getUserPaymentMethods(userId: number): Promise<PaymentMeth
  */
 export async function setDefaultPaymentMethod(userId: number, id: string): Promise<void> {
   // 取消其他默认
-  await execute(
-    `UPDATE pc_payment_methods SET is_default = FALSE WHERE user_id = ?`,
-    [userId]
-  );
+  await execute(`UPDATE pc_payment_methods SET is_default = FALSE WHERE user_id = ?`, [userId]);
   // 设置新默认
-  await execute(
-    `UPDATE pc_payment_methods SET is_default = TRUE WHERE id = ? AND user_id = ?`,
-    [id, userId]
-  );
+  await execute(`UPDATE pc_payment_methods SET is_default = TRUE WHERE id = ? AND user_id = ?`, [id, userId]);
 }
 
 /**
  * 删除支付方式 (软删除)
  */
 export async function deletePaymentMethod(id: string, userId: number): Promise<boolean> {
-  const result = await execute(
-    `UPDATE pc_payment_methods SET is_active = FALSE WHERE id = ? AND user_id = ?`,
-    [id, userId]
-  );
+  const result = await execute(`UPDATE pc_payment_methods SET is_active = FALSE WHERE id = ? AND user_id = ?`, [
+    id,
+    userId,
+  ]);
   return (result as any).affectedRows > 0;
 }
 
 /**
  * 更新 Stripe Customer ID
  */
-export async function updatePaymentMethodCustomerId(
-  id: string,
-  stripeCustomerId: string
-): Promise<void> {
-  await execute(
-    `UPDATE pc_payment_methods SET stripe_customer_id = ? WHERE id = ?`,
-    [stripeCustomerId, id]
-  );
+export async function updatePaymentMethodCustomerId(id: string, stripeCustomerId: string): Promise<void> {
+  await execute(`UPDATE pc_payment_methods SET stripe_customer_id = ? WHERE id = ?`, [stripeCustomerId, id]);
 }
 
 function formatPaymentMethodRow(row: PaymentMethod & RowDataPacket): PaymentMethod {
@@ -238,14 +223,14 @@ export interface CreatePaymentInput {
  */
 export async function createPayment(input: CreatePaymentInput): Promise<Payment> {
   const id = generateUUID();
-  
+
   const sql = `
     INSERT INTO pc_payments (
       id, user_id, stripe_payment_intent_id, payment_method_id, payment_method_type,
       amount_cents, currency, credits_purchased, type, status, description
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
   `;
-  
+
   await execute(sql, [
     id,
     input.userId,
@@ -258,7 +243,7 @@ export async function createPayment(input: CreatePaymentInput): Promise<Payment>
     input.type,
     input.description || null,
   ]);
-  
+
   const payment = await getPaymentById(id);
   return payment!;
 }
@@ -287,22 +272,29 @@ export async function getPaymentByStripeId(stripeId: string): Promise<Payment | 
 export async function getUserPayments(
   userId: number,
   page: number = 1,
-  limit: number = 20
+  limit: number = 20,
 ): Promise<{ payments: Payment[]; total: number }> {
   const offset = (page - 1) * limit;
-  
+
   const countSql = `SELECT COUNT(*) as total FROM pc_payments WHERE user_id = ?`;
   const countResult = await queryOne<{ total: number } & RowDataPacket>(countSql, [userId]);
   const total = countResult?.total || 0;
-  
+
+  // LIMIT/OFFSET inlined: mysql2 prepared statements (`pool.execute`) send
+  // bound integers as strings via the binary protocol, which MySQL 8 rejects
+  // with `Incorrect arguments to mysqld_stmt_execute` (errno 1210). limit/
+  // offset are validated below — not user-supplied SQL — so inlining them
+  // is safe.
+  const safeLimit = Math.max(1, Math.min(1000, Math.floor(Number(limit) || 20)));
+  const safeOffset = Math.max(0, Math.floor(Number(offset) || 0));
   const sql = `
     SELECT * FROM pc_payments
     WHERE user_id = ?
     ORDER BY created_at DESC
-    LIMIT ? OFFSET ?
+    LIMIT ${safeLimit} OFFSET ${safeOffset}
   `;
-  const rows = await query<(Payment & RowDataPacket)[]>(sql, [userId, Number(limit), Number(offset)]);
-  
+  const rows = await query<(Payment & RowDataPacket)[]>(sql, [userId]);
+
   return {
     payments: rows.map(formatPaymentRow),
     total,
@@ -315,44 +307,34 @@ export async function getUserPayments(
 export async function updatePaymentStatus(
   id: string,
   status: Payment['status'],
-  failureReason?: string
+  failureReason?: string,
 ): Promise<void> {
-  const completedAt = ['succeeded', 'failed', 'canceled', 'refunded'].includes(status)
-    ? new Date()
-    : null;
+  const completedAt = ['succeeded', 'failed', 'canceled', 'refunded'].includes(status) ? new Date() : null;
 
-  await execute(
-    `UPDATE pc_payments SET status = ?, failure_reason = ?, completed_at = ? WHERE id = ?`,
-    [status, failureReason || null, completedAt, id]
-  );
+  await execute(`UPDATE pc_payments SET status = ?, failure_reason = ?, completed_at = ? WHERE id = ?`, [
+    status,
+    failureReason || null,
+    completedAt,
+    id,
+  ]);
 
   // Fire-and-forget: emit payment notification for terminal states
   if (status === 'succeeded' || status === 'failed') {
-    getPaymentById(id).then(payment => {
-      if (payment) {
-        emitPaymentNotification(
-          payment.user_id,
-          status,
-          payment.amount_cents,
-          payment.credits_purchased,
-          id
-        );
-      }
-    }).catch(() => {});
+    getPaymentById(id)
+      .then((payment) => {
+        if (payment) {
+          emitPaymentNotification(payment.user_id, status, payment.amount_cents, payment.credits_purchased, id);
+        }
+      })
+      .catch(() => {});
   }
 }
 
 /**
  * 更新 Stripe PaymentIntent ID
  */
-export async function updatePaymentStripeId(
-  id: string,
-  stripePaymentIntentId: string
-): Promise<void> {
-  await execute(
-    `UPDATE pc_payments SET stripe_payment_intent_id = ? WHERE id = ?`,
-    [stripePaymentIntentId, id]
-  );
+export async function updatePaymentStripeId(id: string, stripePaymentIntentId: string): Promise<void> {
+  await execute(`UPDATE pc_payments SET stripe_payment_intent_id = ? WHERE id = ?`, [stripePaymentIntentId, id]);
 }
 
 function formatPaymentRow(row: Payment & RowDataPacket): Payment {
@@ -396,7 +378,7 @@ export interface CreateSubscriptionInput {
 export async function upsertSubscription(input: CreateSubscriptionInput): Promise<Subscription> {
   // 检查是否已有订阅
   const existing = await getUserSubscription(input.userId);
-  
+
   if (existing) {
     // 更新
     await execute(
@@ -415,11 +397,11 @@ export async function upsertSubscription(input: CreateSubscriptionInput): Promis
         input.priceCents || 0,
         input.creditsMonthly || 100,
         input.userId,
-      ]
+      ],
     );
     return (await getUserSubscription(input.userId))!;
   }
-  
+
   // 创建
   const id = generateUUID();
   await execute(
@@ -435,9 +417,9 @@ export async function upsertSubscription(input: CreateSubscriptionInput): Promis
       input.plan,
       input.priceCents || 0,
       input.creditsMonthly || 100,
-    ]
+    ],
   );
-  
+
   return (await getSubscriptionById(id))!;
 }
 
@@ -465,26 +447,24 @@ export async function getSubscriptionById(id: string): Promise<Subscription | nu
 export async function updateSubscriptionStatus(
   userId: number,
   status: Subscription['status'],
-  canceledAt?: Date
+  canceledAt?: Date,
 ): Promise<void> {
-  await execute(
-    `UPDATE pc_subscriptions SET status = ?, canceled_at = ? WHERE user_id = ?`,
-    [status, canceledAt || null, userId]
-  );
+  await execute(`UPDATE pc_subscriptions SET status = ?, canceled_at = ? WHERE user_id = ?`, [
+    status,
+    canceledAt || null,
+    userId,
+  ]);
 }
 
 /**
  * 更新订阅周期
  */
-export async function updateSubscriptionPeriod(
-  userId: number,
-  periodStart: Date,
-  periodEnd: Date
-): Promise<void> {
-  await execute(
-    `UPDATE pc_subscriptions SET current_period_start = ?, current_period_end = ? WHERE user_id = ?`,
-    [periodStart, periodEnd, userId]
-  );
+export async function updateSubscriptionPeriod(userId: number, periodStart: Date, periodEnd: Date): Promise<void> {
+  await execute(`UPDATE pc_subscriptions SET current_period_start = ?, current_period_end = ? WHERE user_id = ?`, [
+    periodStart,
+    periodEnd,
+    userId,
+  ]);
 }
 
 function formatSubscriptionRow(row: Subscription & RowDataPacket): Subscription {
@@ -517,31 +497,28 @@ export async function getUserStripeCustomerId(userId: number): Promise<string | 
   const pmSql = `SELECT stripe_customer_id FROM pc_payment_methods WHERE user_id = ? AND stripe_customer_id IS NOT NULL LIMIT 1`;
   const pmRow = await queryOne<{ stripe_customer_id: string } & RowDataPacket>(pmSql, [userId]);
   if (pmRow?.stripe_customer_id) return pmRow.stripe_customer_id;
-  
+
   // 再从 subscriptions 查
   const subSql = `SELECT stripe_customer_id FROM pc_subscriptions WHERE user_id = ? AND stripe_customer_id IS NOT NULL LIMIT 1`;
   const subRow = await queryOne<{ stripe_customer_id: string } & RowDataPacket>(subSql, [userId]);
   if (subRow?.stripe_customer_id) return subRow.stripe_customer_id;
-  
+
   return null;
 }
 
 /**
  * 保存用户的 Stripe Customer ID
  */
-export async function saveUserStripeCustomerId(
-  userId: number,
-  stripeCustomerId: string
-): Promise<void> {
+export async function saveUserStripeCustomerId(userId: number, stripeCustomerId: string): Promise<void> {
   // 更新该用户所有的 payment_methods
   await execute(
     `UPDATE pc_payment_methods SET stripe_customer_id = ? WHERE user_id = ? AND stripe_customer_id IS NULL`,
-    [stripeCustomerId, userId]
+    [stripeCustomerId, userId],
   );
-  
+
   // 更新 subscription
-  await execute(
-    `UPDATE pc_subscriptions SET stripe_customer_id = ? WHERE user_id = ? AND stripe_customer_id IS NULL`,
-    [stripeCustomerId, userId]
-  );
+  await execute(`UPDATE pc_subscriptions SET stripe_customer_id = ? WHERE user_id = ? AND stripe_customer_id IS NULL`, [
+    stripeCustomerId,
+    userId,
+  ]);
 }

@@ -502,21 +502,20 @@ export async function selectGene(
   const [agentCard, ownRows, globalRows, edges] = await Promise.all([
     agentCardPromise,
     prisma.iMGene.findMany({
-      where: { ownerAgentId: agentId, scope },
+      where: { ownerAgentId: agentId },
       include: { signalLinks: true },
     }),
     prisma.iMGene.findMany({
       where: {
         ownerAgentId: { not: agentId },
         visibility: { in: ['seed', 'published', 'canary'] },
-        scope,
       },
       include: { signalLinks: true },
       take: 200,
       orderBy: { successCount: 'desc' },
     }),
     prisma.iMEvolutionEdge.findMany({
-      where: { ownerAgentId: agentId, scope },
+      where: { ownerAgentId: agentId },
     }),
   ]);
 
@@ -623,7 +622,6 @@ export async function selectGene(
     by: ['geneId'],
     where: {
       mode: agentMode,
-      scope,
       ...(signalType ? { OR: [{ signalType }, { signalKey }] } : { signalKey }),
     },
     _sum: { successCount: true, failureCount: true },
@@ -761,7 +759,6 @@ export async function selectGene(
               by: ['geneId'],
               where: {
                 signalType,
-                scope,
                 geneId: { in: scoredGeneIds },
               },
               _sum: { successCount: true, failureCount: true },
@@ -777,7 +774,6 @@ export async function selectGene(
             ownerAgentId: agentId,
             signalKey,
             bimodalityIndex: { gt: 0.6 },
-            scope,
           },
           select: { geneId: true, bimodalityIndex: true },
         })

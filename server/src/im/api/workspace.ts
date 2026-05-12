@@ -7,7 +7,7 @@
  * - Generate agent tokens
  */
 
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { authMiddleware } from '../auth/middleware';
 import { WorkspaceBridgeService } from '../services/workspace-bridge.service';
 import { WorkspaceViewService } from '../services/workspace-view.service';
@@ -174,7 +174,7 @@ export function createWorkspaceRouter(redis: Redis) {
    * POST /api/workspace/:workspaceId/agents — Add agent to workspace
    */
   router.post('/:workspaceId/agents', authMiddleware, async (c) => {
-    const workspaceId = c.req.param('workspaceId')!;
+    const workspaceId = c.req.param('workspaceId');
     const body = await c.req.json();
     const { agentName, agentDisplayName, agentType, capabilities, metadata } = body;
 
@@ -220,7 +220,7 @@ export function createWorkspaceRouter(redis: Redis) {
    * GET /api/workspace/:workspaceId/agents — List agents in workspace
    */
   router.get('/:workspaceId/agents', authMiddleware, async (c) => {
-    const workspaceId = c.req.param('workspaceId')!;
+    const workspaceId = c.req.param('workspaceId');
 
     try {
       const agents = await workspaceBridge.listWorkspaceAgents(workspaceId);
@@ -244,7 +244,7 @@ export function createWorkspaceRouter(redis: Redis) {
    * POST /api/workspace/:workspaceId/agents/:agentId/token — Generate new token for agent
    */
   router.post('/:workspaceId/agents/:agentId/token', authMiddleware, async (c) => {
-    const agentId = c.req.param('agentId')!;
+    const agentId = c.req.param('agentId');
 
     try {
       const token = await workspaceBridge.generateAgentToken(agentId);
@@ -268,7 +268,7 @@ export function createWorkspaceRouter(redis: Redis) {
    * GET /api/workspace/:workspaceId/conversation — Get workspace conversation
    */
   router.get('/:workspaceId/conversation', authMiddleware, async (c) => {
-    const workspaceId = c.req.param('workspaceId')!;
+    const workspaceId = c.req.param('workspaceId');
 
     try {
       const conversation = await workspaceBridge.getWorkspaceConversation(workspaceId);
@@ -302,7 +302,7 @@ export function createWorkspaceRouter(redis: Redis) {
    * GET /api/workspace/:workspaceId/messages — Get workspace messages
    */
   router.get('/:workspaceId/messages', authMiddleware, async (c) => {
-    const workspaceId = c.req.param('workspaceId')!;
+    const workspaceId = c.req.param('workspaceId');
     const limit = parseInt(c.req.query('limit') ?? '50', 10);
 
     try {
@@ -365,13 +365,14 @@ export function createWorkspaceRouter(redis: Redis) {
 
   /**
    * GET /api/workspace — Superset aggregation view
+   * GET /api/workspace/view — alias (Python SDK ≥ v1.9.3 calls this path)
    *
    * Query params:
    *   scope     — workspace scope (default: 'global')
    *   slots     — comma-separated slot names (default: all 8 slots)
    *   includeContent — 'true' to include memory file content (default: false)
    */
-  router.get('/', authMiddleware, async (c) => {
+  const supersetViewHandler = async (c: Context) => {
     const user = c.get('user');
     const scope = c.req.query('scope') || 'global';
     if (!isValidScope(scope)) {
@@ -382,16 +383,19 @@ export function createWorkspaceRouter(redis: Redis) {
     const includeContent = c.req.query('includeContent') === 'true';
 
     try {
-      // Scope access check: non-global scopes require the user's agents to belong to the scope
+      // Scope access check: non-global scopes require the user's agents to belong to the scope.
+      // Migration 120 dropped the `scope` column on im_genes / im_agent_skills; the gate now
+      // only checks that the user has at least one gene or skill bound to a person-agent. Full
+      // workspace-scoped authorization is handled by the workspaceId path elsewhere.
       if (scope !== 'global') {
         const personAgentIds = await getPersonAgentIds(user.imUserId);
         const scopedAgent = await prisma.iMGene.findFirst({
-          where: { ownerAgentId: { in: personAgentIds }, scope },
+          where: { ownerAgentId: { in: personAgentIds } },
           select: { id: true },
         });
         const scopedSkill = !scopedAgent
           ? await prisma.iMAgentSkill.findFirst({
-              where: { agentId: { in: personAgentIds }, scope },
+              where: { agentId: { in: personAgentIds } },
               select: { id: true },
             })
           : scopedAgent;
@@ -406,7 +410,10 @@ export function createWorkspaceRouter(redis: Redis) {
       console.error('[WorkspaceAPI] View error:', err);
       return c.json<ApiResponse>({ ok: false, error: (err as Error).message }, 500);
     }
-  });
+  };
+
+  router.get('/', authMiddleware, supersetViewHandler);
+  router.get('/view', authMiddleware, supersetViewHandler);
 
   return router;
 }

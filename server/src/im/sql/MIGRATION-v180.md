@@ -43,3 +43,7 @@ source 034_v180_workspace_scope.sql;
 - 029 和 034 包含 ALTER TABLE 操作，对大表可能需要几秒到几分钟（取决于表行数）
 - 032 包含 INSERT IGNORE 种子数据，重复执行安全
 - 建议在低峰期执行，特别是 029（修改 im_memory_files 和 im_evolution_capsules）
+
+## v1.9.x 衔接
+
+v1.9.0 之后的 migration（100–132 三位数编号）见 [`MIGRATION-v19x.md`](./MIGRATION-v19x.md)，特别注意 122 是 120 的 follow-up（workspace orphan 兜底 + NOT NULL flip）。

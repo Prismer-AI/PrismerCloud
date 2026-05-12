@@ -1,37 +1,24 @@
 import { NextResponse } from 'next/server';
-import { githubCallback } from '@/lib/auth-api';
+import { loginWithGithubCode, LocalAuthError } from '@/lib/auth/local-auth';
 
 /**
- * POST /api/auth/github/callback
- * GitHub OAuth callback
+ * POST /api/auth/github/callback  { code }
+ * Native — exchanges the OAuth code for a GitHub access token, fetches
+ * the user profile + primary email, upserts im_users, and returns a JWT.
  */
 export async function POST(request: Request) {
   try {
-    const body = await request.json();
-    const { code } = body;
+    const { code: oauthCode } = await request.json();
 
-    if (!code) {
-      return NextResponse.json(
-        { error: { code: 400, msg: 'code is required' } },
-        { status: 400 }
-      );
+    if (!oauthCode) {
+      return NextResponse.json({ error: { code: 400, msg: 'code is required' } }, { status: 400 });
     }
 
-    const result = await githubCallback(code);
+    const result = await loginWithGithubCode(oauthCode);
     return NextResponse.json(result);
   } catch (error: any) {
-    return NextResponse.json(
-      { error: { code: 500, msg: error.message || 'GitHub authentication failed' } },
-      { status: 500 }
-    );
+    const status = error instanceof LocalAuthError ? error.status : 500;
+    const code = error instanceof LocalAuthError ? error.code : 500;
+    return NextResponse.json({ error: { code, msg: error.message || 'GitHub authentication failed' } }, { status });
   }
 }
-
-
-
-
-
-
-
-
-

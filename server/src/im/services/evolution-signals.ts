@@ -165,7 +165,7 @@ export async function trackUnmatchedSignals(
     .join('|');
   try {
     await prisma.iMUnmatchedSignal.upsert({
-      where: { signalKey_agentId_scope: { signalKey, agentId, scope } },
+      where: { signalKey_agentId: { signalKey, agentId } },
       update: {
         count: { increment: 1 },
         updatedAt: new Date(),
@@ -180,7 +180,6 @@ export async function trackUnmatchedSignals(
         signalTags: JSON.stringify(tags),
         agentId,
         count: 1,
-        scope,
       },
     });
   } catch (err) {

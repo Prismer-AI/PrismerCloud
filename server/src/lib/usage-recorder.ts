@@ -1,9 +1,9 @@
 /**
  * Usage Recorder - 使用量记录工具
- * 
+ *
  * 用于在 API 调用完成后自动记录使用量
  * 支持 load, save, compress, search, parse 等操作类型
- * 
+ *
  * Feature Flag: FF_USAGE_RECORD_LOCAL
  * - true: 直连数据库 (pc_usage_records)
  * - false: 代理到后端
@@ -21,14 +21,14 @@ import { emitLowCreditAlert } from './notification-emitter';
 // ============================================================================
 // 定价模型 (基于成本 + 利润率 50%)
 // ============================================================================
-// 
+//
 // 成本基线:
 //   - OCR (Parse): 1000页 = $2, 即 $0.002/页
 //   - 大模型输出: $8/百万 tokens, 即 $0.008/1K tokens
 //   - Exa 搜索: ~$0.02/次
-// 
+//
 // Credit 换算 (1 Credit = $0.002):
-// 
+//
 // | 操作 | 成本 | 售价(50%利润) | Credits |
 // |------|------|---------------|---------|
 // | Parse Fast | $0.002/页 | $0.004/页 | 2 |
@@ -38,7 +38,7 @@ import { emitLowCreditAlert } from './notification-emitter';
 // | Load URL | 按压缩计费 | - | 按 tokens |
 // | Save | 免费 | 免费 | 0 |
 // | 缓存命中 | 免费 | 免费 | 0 |
-// 
+//
 // 配置项格式 (在 Nacos 中设置):
 //   PRICING_SEARCH_CREDIT_COST=20
 //   PRICING_COMPRESSION_TOKEN_RATE=0.008
@@ -52,30 +52,30 @@ const DEFAULT_PRICING = {
   // Exa 搜索: 20 credits/次
   // 成本: ~$0.02/次, 售价: $0.04/次, 利润率 50%
   SEARCH_CREDIT_COST: 20,
-  
+
   // 大模型压缩 (HQCC): 0.008 credits/token = 8 credits/1K tokens
   // 成本: $0.008/1K, 售价: $0.016/1K, 利润率 50%
   COMPRESSION_TOKEN_RATE: 0.008,
-  
+
   // 缓存命中不收费
   CACHE_HIT_CREDIT: 0,
-  
+
   // Parse Fast: 2 credits/页
   // 成本: $0.002/页, 售价: $0.004/页, 利润率 50%
   PARSE_FAST_PAGE_COST: 2,
-  
+
   // Parse HiRes: 5 credits/页 (含图片提取)
   // 成本: ~$0.005/页, 售价: $0.01/页, 利润率 50%
   PARSE_HIRES_PAGE_COST: 5,
-  
+
   // HiRes 图片: 0 credits (已包含在页面费用中)
   PARSE_HIRES_IMAGE_COST: 0,
 
   // IM API 定价 (极低费用，主要用于跟踪使用量)
   // 0.001 credits ≈ $0.000002
-  IM_SEND_MESSAGE_COST: 0.001,      // 发送消息
-  IM_WORKSPACE_INIT_COST: 0.01,    // 初始化 Workspace
-  IM_AGENT_INGEST_COST: 0.001,     // Agent 内容处理
+  IM_SEND_MESSAGE_COST: 0.001, // 发送消息
+  IM_WORKSPACE_INIT_COST: 0.01, // 初始化 Workspace
+  IM_AGENT_INGEST_COST: 0.001, // Agent 内容处理
 
   // IM 文件上传: 0.5 credits/MB
   // 成本: ~$0.0005/MB (S3 PUT + bandwidth), 售价: $0.001/MB, 利润率 50%
@@ -113,7 +113,9 @@ export const PRICING = {
     return parseFloat(process.env.PRICING_IM_AGENT_INGEST_COST || '') || DEFAULT_PRICING.IM_AGENT_INGEST_COST;
   },
   get IM_FILE_UPLOAD_COST_PER_MB(): number {
-    return parseFloat(process.env.PRICING_IM_FILE_UPLOAD_COST_PER_MB || '') || DEFAULT_PRICING.IM_FILE_UPLOAD_COST_PER_MB;
+    return (
+      parseFloat(process.env.PRICING_IM_FILE_UPLOAD_COST_PER_MB || '') || DEFAULT_PRICING.IM_FILE_UPLOAD_COST_PER_MB
+    );
   },
 };
 
@@ -150,7 +152,18 @@ export interface UsageSource {
 // 完整的使用记录请求
 export interface UsageRecordRequest {
   task_id: string;
-  task_type: 'load' | 'save' | 'search' | 'compress' | 'parse' | 'send' | 'receive' | 'agent_ingest' | 'file_upload';
+  task_type:
+    | 'load'
+    | 'save'
+    | 'search'
+    | 'compress'
+    | 'parse'
+    | 'send'
+    | 'receive'
+    | 'agent_ingest'
+    | 'file_upload'
+    | 'llm_proxy'
+    | 'llm_proxy_anthropic';
   input: {
     type: 'query' | 'url' | 'urls' | 'file' | 'content';
     value: string;
@@ -176,39 +189,36 @@ export function calculateCost(metrics: UsageMetrics): UsageCost {
   const searchCredits = (metrics.exa_searches || 0) * PRICING.SEARCH_CREDIT_COST;
   const tokensTotal = (metrics.tokens_input || 0) + (metrics.tokens_output || 0);
   const compressionCredits = tokensTotal * PRICING.COMPRESSION_TOKEN_RATE;
-  
+
   // Parse 费用计算 (根据模式区分)
   let parseCredits = 0;
   if (metrics.pages_parsed) {
     const isHires = metrics.parse_mode === 'hires';
     const pageRate = isHires ? PRICING.PARSE_HIRES_PAGE_COST : PRICING.PARSE_FAST_PAGE_COST;
     parseCredits = metrics.pages_parsed * pageRate;
-    
+
     // HiRes 模式还要计算图片费用
     if (isHires && metrics.images_extracted) {
       parseCredits += metrics.images_extracted * PRICING.PARSE_HIRES_IMAGE_COST;
     }
   }
-  
+
   return {
     search_credits: Math.round(searchCredits * 10000) / 10000,
     compression_credits: Math.round(compressionCredits * 10000) / 10000,
     parse_credits: parseCredits > 0 ? Math.round(parseCredits * 10000) / 10000 : undefined,
-    total_credits: Math.round((searchCredits + compressionCredits + parseCredits) * 10000) / 10000
+    total_credits: Math.round((searchCredits + compressionCredits + parseCredits) * 10000) / 10000,
   };
 }
 
 /**
  * 记录使用量 (异步后台执行，不阻塞主流程)
- * 
+ *
  * @param record - 使用记录请求
  * @param authHeader - 认证头 (Bearer token)
  * @returns Promise<boolean> - 是否成功记录
  */
-export async function recordUsage(
-  record: UsageRecordRequest,
-  authHeader: string | null
-): Promise<boolean> {
+export async function recordUsage(record: UsageRecordRequest, authHeader: string | null): Promise<boolean> {
   // 如果没有认证，跳过记录
   if (!authHeader) {
     console.log('[UsageRecorder] Skipping - no auth header');
@@ -218,11 +228,11 @@ export async function recordUsage(
   try {
     // 确保 Nacos 配置已加载
     await ensureNacosConfig();
-    
+
     // 检查 Feature Flag
     const useLocal = FEATURE_FLAGS.USAGE_RECORD_LOCAL;
     console.log(`[UsageRecorder] FF_USAGE_RECORD_LOCAL=${process.env.FF_USAGE_RECORD_LOCAL}, useLocal=${useLocal}`);
-    
+
     if (useLocal) {
       return recordUsageLocal(record, authHeader);
     } else {
@@ -237,12 +247,9 @@ export async function recordUsage(
 /**
  * 本地实现：直连数据库
  */
-async function recordUsageLocal(
-  record: UsageRecordRequest,
-  authHeader: string
-): Promise<boolean> {
+async function recordUsageLocal(record: UsageRecordRequest, authHeader: string): Promise<boolean> {
   console.log('[UsageRecorder] Using LOCAL implementation');
-  
+
   try {
     // 解析用户 ID
     const authResult = await getUserFromAuth(authHeader);
@@ -250,10 +257,10 @@ async function recordUsageLocal(
       console.error('[UsageRecorder] Auth failed:', authResult.error);
       return false;
     }
-    
+
     const userId = authResult.user.id;
     const totalCredits = record.cost?.total_credits || 0;
-    
+
     console.log(`[UsageRecorder] User: ${userId}, Task: ${record.task_id}, Credits: ${totalCredits}`);
 
     // 注意：input.type 可能包含 'content'，需要映射到数据库支持的类型
@@ -263,12 +270,12 @@ async function recordUsageLocal(
       task_type: record.task_type,
       input: {
         type: inputType as 'query' | 'url' | 'urls' | 'file',
-        value: record.input.value
+        value: record.input.value,
       },
       metrics: record.metrics,
       cost: record.cost,
       sources: record.sources,
-      status: 'completed' as const
+      status: 'completed' as const,
     };
 
     // Atomic: create usage record + deduct credits in a single transaction
@@ -306,7 +313,7 @@ async function recordUsageLocal(
       task_type: record.task_type,
       record_id: recordId,
       credits_deducted: totalCredits,
-      credits_remaining: creditsRemaining
+      credits_remaining: creditsRemaining,
     });
 
     // Fire-and-forget: check if credits are low
@@ -322,13 +329,10 @@ async function recordUsageLocal(
 /**
  * 代理实现：调用后端 API
  */
-async function recordUsageProxy(
-  record: UsageRecordRequest,
-  authHeader: string
-): Promise<boolean> {
+async function recordUsageProxy(record: UsageRecordRequest, authHeader: string): Promise<boolean> {
   const backendBase = await getBackendApiBase();
   const url = `${backendBase}/cloud/usage/record`;
-  
+
   // 清理 undefined 字段，确保 JSON 格式正确
   const cleanRecord = {
     task_id: record.task_id,
@@ -341,26 +345,26 @@ async function recordUsageProxy(
       urls_compressed: record.metrics.urls_compressed || 0,
       tokens_input: record.metrics.tokens_input || 0,
       tokens_output: record.metrics.tokens_output || 0,
-      processing_time_ms: record.metrics.processing_time_ms || 0
+      processing_time_ms: record.metrics.processing_time_ms || 0,
     },
     cost: {
       search_credits: record.cost.search_credits || 0,
       compression_credits: record.cost.compression_credits || 0,
-      total_credits: record.cost.total_credits || 0
+      total_credits: record.cost.total_credits || 0,
     },
-    sources: record.sources || []
+    sources: record.sources || [],
   };
-  
+
   console.log('[UsageRecorder] POST', url);
   console.log('[UsageRecorder] Request body:', JSON.stringify(cleanRecord, null, 2));
-  
+
   const response = await fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': authHeader
+      Authorization: authHeader,
     },
-    body: JSON.stringify(cleanRecord)
+    body: JSON.stringify(cleanRecord),
   });
 
   if (!response.ok) {
@@ -374,7 +378,7 @@ async function recordUsageProxy(
   console.log('[UsageRecorder] Recorded successfully:', {
     task_id: record.task_id,
     task_type: record.task_type,
-    credits_deducted: data.data?.credits_deducted
+    credits_deducted: data.data?.credits_deducted,
   });
   return true;
 }
@@ -383,16 +387,13 @@ async function recordUsageProxy(
  * 后台记录使用量 (fire-and-forget)
  * 不等待结果，不阻塞主流程
  */
-export function recordUsageBackground(
-  record: UsageRecordRequest,
-  authHeader: string | null
-): void {
+export function recordUsageBackground(record: UsageRecordRequest, authHeader: string | null): void {
   if (!authHeader) {
     return;
   }
 
   // 异步执行，不等待
-  recordUsage(record, authHeader).catch(err => {
+  recordUsage(record, authHeader).catch((err) => {
     console.error('[UsageRecorder] Background record failed:', err);
   });
 }
@@ -420,7 +421,7 @@ export function createLoadUsageRecord(params: {
     urls_compressed: params.urlsCompressed,
     tokens_input: params.tokensInput || 0,
     tokens_output: params.tokensOutput || 0,
-    processing_time_ms: params.processingTimeMs
+    processing_time_ms: params.processingTimeMs,
   };
 
   return {
@@ -428,11 +429,11 @@ export function createLoadUsageRecord(params: {
     task_type: 'load',
     input: {
       type: params.inputType === 'urls' ? 'urls' : params.inputType,
-      value: params.input
+      value: params.input,
     },
     metrics,
     cost: calculateCost(metrics),
-    sources: params.sources
+    sources: params.sources,
   };
 }
 
@@ -447,7 +448,7 @@ export function createSaveUsageRecord(params: {
 }): UsageRecordRequest {
   const metrics: UsageMetrics = {
     urls_processed: params.itemCount,
-    processing_time_ms: params.processingTimeMs
+    processing_time_ms: params.processingTimeMs,
   };
 
   // Save 操作目前免费
@@ -456,10 +457,10 @@ export function createSaveUsageRecord(params: {
     task_type: 'save',
     input: {
       type: params.itemCount > 1 ? 'urls' : 'url',
-      value: params.url
+      value: params.url,
     },
     metrics,
-    cost: { total_credits: 0 }
+    cost: { total_credits: 0 },
   };
 }
 
@@ -497,7 +498,7 @@ export function createFileUploadUsageRecord(params: {
 
 /**
  * 创建 Parse API 的使用记录
- * 
+ *
  * 费用计算:
  * - Fast 模式: 0.01 credits/页
  * - HiRes 模式: 0.1 credits/页 + 0.05 credits/图
@@ -516,7 +517,7 @@ export function createParseUsageRecord(params: {
     images_extracted: params.imageCount || 0,
     parse_mode: params.mode || 'fast',
     tokens_output: params.tokensOutput || 0,
-    processing_time_ms: params.processingTimeMs
+    processing_time_ms: params.processingTimeMs,
   };
 
   return {
@@ -524,9 +525,9 @@ export function createParseUsageRecord(params: {
     task_type: 'parse',
     input: {
       type: 'file',
-      value: params.fileName
+      value: params.fileName,
     },
     metrics,
-    cost: calculateCost(metrics)
+    cost: calculateCost(metrics),
   };
 }

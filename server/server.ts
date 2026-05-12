@@ -131,6 +131,10 @@ async function setupWSHandler(wss: WebSocketServer): Promise<void> {
         presenceService: services.presenceService,
         agentService: services.agentService,
         streamService: services.streamService,
+        // Required for v1.9.x daemon protocol — without it the WS handler's
+        // host.declare branch silently skips redispatchPending() on reconnect
+        // and emitDaemonDispatchRequest() on @-mention task creation.
+        taskService: services.taskService,
       });
       console.log('[Server] WebSocket handler ready');
       return;

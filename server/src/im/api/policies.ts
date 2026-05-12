@@ -69,7 +69,7 @@ export function createPoliciesRouter(conversationService: ConversationService) {
    */
   router.post('/:id/policies', async (c) => {
     const user = c.get('user');
-    const conversationId = c.req.param('id')!;
+    const conversationId = c.req.param('id');
 
     // Verify participation and admin/owner role
     const authResult = await verifyPolicyAdmin(conversationId, user.imUserId);
@@ -149,7 +149,7 @@ export function createPoliciesRouter(conversationService: ConversationService) {
    */
   router.get('/:id/policies', async (c) => {
     const user = c.get('user');
-    const conversationId = c.req.param('id')!;
+    const conversationId = c.req.param('id');
     const actionFilter = c.req.query('action');
 
     // Any participant can view policies
@@ -176,8 +176,8 @@ export function createPoliciesRouter(conversationService: ConversationService) {
    */
   router.delete('/:id/policies/:policyId', async (c) => {
     const user = c.get('user');
-    const conversationId = c.req.param('id')!;
-    const policyId = c.req.param('policyId')!;
+    const conversationId = c.req.param('id');
+    const policyId = c.req.param('policyId');
 
     // Verify participation and admin/owner role
     const authResult = await verifyPolicyAdmin(conversationId, user.imUserId);

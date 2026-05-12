@@ -1,13 +1,13 @@
 /**
  * Authentication API Client
+ * Proxies requests to backend API, whose base URL is provided via:
+ * - BACKEND_API_BASE (full base, may already include /api/v1)
+ * - BACKGROUND_BASE_URL (root domain, we append /api/v1)
  *
- * FF_AUTH_LOCAL=true  → local auth via pc_users table (self-host mode)
- * FF_AUTH_LOCAL=false → proxy to backend Go service
+ * See `src/lib/backend-api.ts` for resolution logic.
  */
 
 import { getBackendApiBase } from '@/lib/backend-api';
-import { FEATURE_FLAGS } from '@/lib/feature-flags';
-import * as localAuth from '@/lib/db-auth';
 
 export interface AuthUser {
   id: number;
@@ -42,11 +42,8 @@ export interface ErrorResponse {
  * Uses /auth/cloud/github/callback (new v7.3+ path)
  */
 export async function githubCallback(code: string): Promise<AuthResponse> {
-  if (FEATURE_FLAGS.AUTH_LOCAL) {
-    throw new Error('GitHub OAuth is not available in self-host mode. Use email/password login, or configure GITHUB_CLIENT_ID/SECRET and disable FF_AUTH_LOCAL.');
-  }
-
   const backendBase = await getBackendApiBase();
+  // New path: /auth/cloud/github/callback (v7.3+)
   const res = await fetch(`${backendBase}/auth/cloud/github/callback`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -66,11 +63,8 @@ export async function githubCallback(code: string): Promise<AuthResponse> {
  * Uses /auth/cloud/google/callback (new v7.3+ path)
  */
 export async function googleCallback(accessToken: string): Promise<AuthResponse> {
-  if (FEATURE_FLAGS.AUTH_LOCAL) {
-    throw new Error('Google OAuth is not available in self-host mode. Use email/password login, or configure GOOGLE_CLIENT_ID/SECRET and disable FF_AUTH_LOCAL.');
-  }
-
   const backendBase = await getBackendApiBase();
+  // New path: /auth/cloud/google/callback (v7.3+)
   const res = await fetch(`${backendBase}/auth/cloud/google/callback`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -89,11 +83,6 @@ export async function googleCallback(accessToken: string): Promise<AuthResponse>
  * Email/Password login
  */
 export async function login(email: string, passwordHash: string): Promise<AuthResponse> {
-  if (FEATURE_FLAGS.AUTH_LOCAL) {
-    const result = await localAuth.loginUser(email, passwordHash);
-    return { user: result.user as unknown as AuthUser, token: result.token };
-  }
-
   const backendBase = await getBackendApiBase();
   const authBase = `${backendBase}/auth`;
   const res = await fetch(`${authBase}/login`, {
@@ -116,14 +105,9 @@ export async function login(email: string, passwordHash: string): Promise<AuthRe
 export async function register(
   email: string,
   passwordHash: string,
-  _confirmPasswordHash: string,
-  _code: string
+  confirmPasswordHash: string,
+  code: string
 ): Promise<AuthResponse> {
-  if (FEATURE_FLAGS.AUTH_LOCAL) {
-    const result = await localAuth.registerUser(email, passwordHash);
-    return { user: result.user as unknown as AuthUser, token: result.token };
-  }
-
   const backendBase = await getBackendApiBase();
   const authBase = `${backendBase}/auth`;
   const res = await fetch(`${authBase}/register`, {
@@ -132,8 +116,8 @@ export async function register(
     body: JSON.stringify({
       email,
       password: passwordHash,
-      confirm_password: _confirmPasswordHash,
-      code: _code
+      confirm_password: confirmPasswordHash,
+      code
     })
   });
 
@@ -154,10 +138,6 @@ export async function resetPassword(
   passwordHash: string,
   confirmPasswordHash: string
 ): Promise<{ message: string }> {
-  if (FEATURE_FLAGS.AUTH_LOCAL) {
-    return localAuth.resetUserPassword(email, code, passwordHash);
-  }
-
   const backendBase = await getBackendApiBase();
   const authBase = `${backendBase}/auth`;
   const res = await fetch(`${authBase}/reset-password`, {
@@ -186,10 +166,6 @@ export async function sendCode(
   email: string,
   type: 'signup' | 'reset-password'
 ): Promise<{ code: number; message: string; verification_code?: string }> {
-  if (FEATURE_FLAGS.AUTH_LOCAL) {
-    return localAuth.sendVerificationCode(email, type);
-  }
-
   const backendBase = await getBackendApiBase();
   const authBase = `${backendBase}/auth`;
   const res = await fetch(`${authBase}/send-code`, {
@@ -214,10 +190,6 @@ export async function verifyCode(
   code: string,
   type: 'signup' | 'reset-password'
 ): Promise<{ code: number; message: string }> {
-  if (FEATURE_FLAGS.AUTH_LOCAL) {
-    return localAuth.verifyUserCode(email, code, type);
-  }
-
   const backendBase = await getBackendApiBase();
   const authBase = `${backendBase}/auth`;
   const res = await fetch(`${authBase}/verify-code`, {

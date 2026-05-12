@@ -21,6 +21,7 @@ const ACTION_LIMITS: Record<string, number> = {
   parse: 10,
   'billing/topup': 5,
   'billing/methods': 10,
+  llm: 30,
   default: 60,
 };
 

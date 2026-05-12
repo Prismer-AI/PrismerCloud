@@ -41,6 +41,7 @@ function sanitizePath(raw: string): string {
 }
 
 export interface ExtractInput {
+  workspaceId: string;
   agentId: string;
   journal: string;
   scope?: string;
@@ -91,7 +92,7 @@ Return a JSON array of extracted memories. If nothing is worth extracting, retur
  * Extract structured memories from a session journal.
  */
 export async function extractMemories(memoryService: MemoryService, input: ExtractInput): Promise<ExtractResult> {
-  const { agentId, journal, scope = 'global' } = input;
+  const { workspaceId, agentId, journal, scope = 'global' } = input;
 
   if (!journal || journal.trim().length < 50) {
     return { extracted: [], saved: 0, skipped: 0 };
@@ -100,7 +101,7 @@ export async function extractMemories(memoryService: MemoryService, input: Extra
   // Load existing memory manifest for dedup context
   let existingManifest = '';
   try {
-    const existing = await memoryService.listMemoryFiles(agentId, scope);
+    const existing = await memoryService.listMemoryFiles(workspaceId, agentId, scope);
     if (existing.length > 0) {
       existingManifest =
         '\n\nExisting memories (check for duplicates/updates):\n' +
@@ -201,14 +202,15 @@ Extract durable memories. Return JSON array only.`;
       }
 
       try {
-        const existing = await memoryService.readMemoryFileByPath(agentId, scope, mem.path);
+        const existing = await memoryService.readMemoryFileByPath(workspaceId, agentId, scope, mem.path);
 
         if (existing) {
-          await memoryService.updateMemoryFile(existing.id, 'replace', mem.content);
+          await memoryService.updateMemoryFile(existing.id, workspaceId, 'replace', mem.content);
           mem.action = 'update';
           console.log(`${LOG} Updated memory: ${mem.path}`);
         } else {
           await memoryService.writeMemoryFile(
+            workspaceId,
             agentId,
             'agent',
             mem.path,

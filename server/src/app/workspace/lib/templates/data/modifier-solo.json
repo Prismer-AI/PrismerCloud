@@ -1,0 +1,16 @@
+{
+  "id": "modifier-solo",
+  "type": "modifier",
+  "sizeKey": "A",
+  "name": { "zh": "一人公司", "en": "Solo Founder" },
+  "headcountRange": [1, 2],
+  "maxRoles": 3,
+  "renameRule": "CASUAL_NAME",
+  "skipRolesWithoutCorporateName": false,
+  "description": "CEO + 2 most essential industry specialists. Use casual role names (Engineer not CTO).",
+  "tagline": {
+    "zh": "CEO 一肩挑,加 2 个最关键的专才",
+    "en": "CEO carries most weight + 2 essential specialists"
+  },
+  "selectionPriority": ["primary", "appliesAtSize-A-and-industry-specific", "appliesAtSize-A-core"]
+}

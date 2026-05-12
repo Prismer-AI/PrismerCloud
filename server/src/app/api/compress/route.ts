@@ -2,8 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import OpenAI from 'openai';
 import { SOURCE_QUALIFIER_SYSTEM, getPromptForStrategy } from '@/lib/prompts';
 import { ensureNacosConfig } from '@/lib/nacos-config';
-import { apiGuard } from '@/lib/api-guard';
 import { metrics } from '@/lib/metrics';
+import { apiGuard } from '@/lib/api-guard';
 import { openaiBreaker } from '@/lib/circuit-breaker';
 import { checkRateLimit, rateLimitResponse, rateLimitHeaders } from '@/lib/rate-limit';
 import { createModuleLogger } from '@/lib/logger';
@@ -110,13 +110,7 @@ export async function POST(request: NextRequest) {
     const config = getOpenAIConfig();
 
     if (!config.apiKey) {
-      return NextResponse.json(
-        {
-          error:
-            'Content compression not available. Set OPENAI_API_KEY in your .env file. Get one at https://platform.openai.com/api-keys',
-        },
-        { status: 503 },
-      );
+      return NextResponse.json({ error: 'OpenAI API key not configured' }, { status: 500 });
     }
 
     const body = await request.json();

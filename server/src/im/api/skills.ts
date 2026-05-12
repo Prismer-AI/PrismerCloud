@@ -187,28 +187,48 @@ export function createSkillsRouter(skillService: SkillService, rateLimiter?: Rat
 
   /**
    * POST /api/skills — Create a skill (community submission)
+   *
+   * Catches Prisma P2002 (unique constraint on slug — derived from name) and
+   * returns a clean 409 instead of a 500 text/plain. Closes the Python SDK
+   * regression where repeated `evolution.create_skill()` calls with the same
+   * `name` collided on `slug` and crashed the route.
    */
   router.post('/', authMiddleware, async (c) => {
     const user = c.get('user');
-    const body = await c.req.json();
+    let body: any;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json<ApiResponse>({ ok: false, error: 'Invalid JSON body' }, 400);
+    }
 
     if (!body.name || !body.description || !body.category) {
       return c.json<ApiResponse>({ ok: false, error: 'name, description, and category are required' }, 400);
     }
 
-    const skill = await skillService.create({
-      name: body.name,
-      description: body.description,
-      category: body.category,
-      tags: body.tags,
-      author: body.author || user.username || 'anonymous',
-      content: body.content,
-      sourceUrl: body.sourceUrl,
-      signals: Array.isArray(body.signals) ? body.signals : undefined,
-      ownerAgentId: user.imUserId,
-    });
+    try {
+      const skill = await skillService.create({
+        name: body.name,
+        description: body.description,
+        category: body.category,
+        tags: body.tags,
+        author: body.author || user.username || 'anonymous',
+        content: body.content,
+        sourceUrl: body.sourceUrl,
+        signals: Array.isArray(body.signals) ? body.signals : undefined,
+        ownerAgentId: user.imUserId,
+      });
 
-    return c.json<ApiResponse>({ ok: true, data: skill }, 201);
+      return c.json<ApiResponse>({ ok: true, data: skill }, 201);
+    } catch (err) {
+      const e = err as { code?: string; message?: string };
+      // Prisma unique-constraint violation — derived slug already exists.
+      if (e?.code === 'P2002') {
+        return c.json<ApiResponse>({ ok: false, error: 'A skill with this name already exists (slug collision)' }, 409);
+      }
+      console.error('[Skills] create failed', { err: e?.message });
+      return c.json<ApiResponse>({ ok: false, error: 'Skill create failed' }, 500);
+    }
   });
 
   /**

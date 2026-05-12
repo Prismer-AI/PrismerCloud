@@ -13,6 +13,14 @@ import { createConversationsRouter } from './conversations';
 import { createMessagesRouter } from './messages';
 import { createAgentsRouter } from './agents';
 import { createWorkspaceRouter } from './workspace';
+import { createWorkspacesRouter } from './workspaces';
+import { createWorkspaceFilesRouter } from './workspace-files';
+import { createWorkspaceRuntimeRouter } from './workspace-runtime';
+import { createAgentProfilesRouter } from './agent-profiles';
+import { createAssetsRouter } from './assets';
+import { createIngestClaimsRouter } from './ingest-claims';
+import { createPairRouter } from './pair';
+import { PairService } from '../services/pair.service';
 import { createDirectRouter } from './direct';
 import { createGroupsRouter } from './groups';
 import { createRegisterRouter, createTokenRouter } from './register';
@@ -20,6 +28,7 @@ import { createMeRouter } from './me';
 import { createContactsRouter, createDiscoverRouter } from './contacts';
 import { createBindingsRouter } from './bindings';
 import { createCreditsRouter } from './credits';
+import { createRemoteRouter } from './remote';
 import { createFilesRouter } from './files';
 import { createSyncRouter } from './sync';
 import { createSyncStreamRouter } from './sync-stream';
@@ -29,6 +38,8 @@ import { createEvolutionRouter } from './evolution';
 import { createSkillsRouter } from './skills';
 import { createIdentityRouter } from './identity';
 import { createTasksRouter } from './tasks';
+import { createRunsRouter } from './runs';
+import { createGoalsRouter } from './goals';
 import { createSubscriptionsRouter } from './subscriptions';
 import { createPoliciesRouter } from './policies';
 import { createAdminRouter } from './admin';
@@ -174,8 +185,20 @@ export function createApiRouter(deps: RouterDeps): Hono {
       rateLimiter,
     ),
   );
-  api.route('/agents', createAgentsRouter(deps.agentService, deps.agentRegistry, deps.presenceService));
+  api.route('/agents', createAgentsRouter(deps.agentService, deps.agentRegistry, deps.presenceService, deps.rooms));
   api.route('/workspace', createWorkspaceRouter(deps.redis));
+
+  // v1.9.x Track A m1: workspace data model (5 new resources)
+  api.route('/workspaces', createWorkspacesRouter());
+  api.route('/workspaces', createWorkspaceFilesRouter(deps.rooms)); // mounted at same prefix; nested paths /:wsId/files
+  api.route('/workspaces', createWorkspaceRuntimeRouter(deps.redis)); // /:wsId/runtime + /:wsId/runtime/events
+  api.route('/agent_profiles', createAgentProfilesRouter(deps.rooms));
+  api.route('/assets', createAssetsRouter());
+  // Wave-54 B7: multi-daemon coordination for asset parse work.
+  api.route('/ingest', createIngestClaimsRouter());
+
+  // v1.9.3 Track C: QR-based daemon ↔ cloud pairing.
+  api.route('/pair', createPairRouter(new PairService({ redis: deps.redis })));
 
   // Simplified APIs (QQ-like)
   api.route(
@@ -202,17 +225,22 @@ export function createApiRouter(deps: RouterDeps): Hono {
   );
 
   // v0.2.0: Self-registration, self-awareness, contacts, discovery
-  api.route('/', createRegisterRouter(deps.evolutionService, rateLimiter));
+  api.route('/', createRegisterRouter(deps.evolutionService, rateLimiter, deps.redis));
   api.route('/token', createTokenRouter());
   api.route('/me', createMeRouter(deps.creditService));
   api.route('/contacts', createContactsRouter());
   const contactService = new ContactService();
-  api.route('/contacts', createFriendRouter(contactService, deps.rooms));
+  api.route('/contacts', createFriendRouter(contactService, deps.rooms, deps.syncService));
   api.route('/discover', createDiscoverRouter());
 
   // v0.3.0: Social bindings, credits
   api.route('/bindings', createBindingsRouter(deps.bindingService));
   api.route('/credits', createCreditsRouter(deps.creditService));
+
+  // Wave-7 ζ: surface paired daemons under /remote/bindings (mobile expects
+  // this on app launch). Derived from IMAgentCard.metadata.daemonId until
+  // a first-class IMDesktopBinding model lands.
+  api.route('/remote', createRemoteRouter());
 
   // v0.4.0: File upload
   api.route('/files', createFilesRouter(deps.fileService, rateLimiter));
@@ -231,6 +259,7 @@ export function createApiRouter(deps: RouterDeps): Hono {
       knowledgeLinkService,
       rateLimiter,
       deps.eventBusService,
+      deps.rooms,
     ),
   );
 
@@ -274,6 +303,8 @@ export function createApiRouter(deps: RouterDeps): Hono {
 
   // v1.7.2: Task Orchestration (Cloud Task Store + Scheduler)
   api.route('/tasks', createTasksRouter(deps.taskService, rateLimiter, deps.eventBusService));
+  api.route('/runs', createRunsRouter(deps.taskService));
+  api.route('/goals', createGoalsRouter(deps.taskService));
 
   // v1.7.3: Event Subscriptions
   api.route('/subscriptions', createSubscriptionsRouter(deps.eventBusService));

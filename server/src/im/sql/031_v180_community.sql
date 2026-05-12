@@ -199,5 +199,22 @@ CREATE TABLE IF NOT EXISTS im_community_drafts (
 );
 
 -- ── v1.5: ALTER existing tables ────────────────────────────────────
+-- Track A m3 phase 2 fix: replaced MariaDB-only `ADD COLUMN IF NOT EXISTS`
+-- with INFORMATION_SCHEMA guard.
 
-ALTER TABLE im_community_posts ADD COLUMN IF NOT EXISTS contentJson LONGTEXT AFTER contentHtml;
+SET @col := (
+  SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+   WHERE TABLE_SCHEMA = DATABASE()
+     AND TABLE_NAME = 'im_community_posts'
+     AND COLUMN_NAME = 'contentJson'
+);
+SET @tbl := (
+  SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES
+   WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'im_community_posts'
+);
+SET @stmt := IF(
+  @tbl > 0 AND @col = 0,
+  'ALTER TABLE im_community_posts ADD COLUMN contentJson LONGTEXT AFTER contentHtml',
+  'SELECT ''skip contentJson'' AS status'
+);
+PREPARE s FROM @stmt; EXECUTE s; DEALLOCATE PREPARE s;

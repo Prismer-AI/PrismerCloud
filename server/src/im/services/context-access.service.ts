@@ -1,120 +1,199 @@
 /**
- * Context Access Control — validates prismer:// URI access in messages.
- * Layer 3 of the security model.
+ * Prismer IM — Context Access Control Service
  *
- * prismer:// URI format: prismer://{visibility}/{owner}/{contentId}
- *   - visibility: public | unlisted | private
- *   - owner: u_{userId} (user namespace)
- *   - contentId: opaque content identifier
- *
- * Access rules:
- *   - public: always accessible
- *   - unlisted: accessible to anyone with the link
- *   - private: only accessible to the owner
+ * E2E Layer 3: Validates that senders have access to context URIs
+ * referenced in their messages, and enforces conversation-level policies.
  */
 
 import prisma from '../db';
 
-// Only match valid visibility prefixes: public, unlisted, private
-const PRISMER_URI_RE = /prismer:\/\/(?:public|unlisted|private)\/u_[a-z0-9_]+\/c_[a-z0-9_]+/gi;
+// ─── Types ──────────────────────────────────────────────────
+
+export interface ContextRef {
+  uri: string;
+  type: 'prismer' | 'url' | 'file' | 'unknown';
+}
+
+export interface AccessCheckResult {
+  allowed: boolean;
+  deniedRefs: ContextRef[];
+  reason?: string;
+}
+
+// ─── Context Ref Extraction ─────────────────────────────────
+
+const PRISMER_URI_RE = /prismer:\/\/ctx\/[a-zA-Z0-9_-]+/g;
+
+/**
+ * Extract context references from message content and metadata.
+ */
+export function extractContextRefs(content: string, metadata?: Record<string, any>): ContextRef[] {
+  const refs: ContextRef[] = [];
+  const seen = new Set<string>();
+
+  const prismerMatches = content.match(PRISMER_URI_RE) || [];
+  for (const uri of prismerMatches) {
+    if (!seen.has(uri)) {
+      refs.push({ uri, type: 'prismer' });
+      seen.add(uri);
+    }
+  }
+
+  const metadataRefs = metadata?.contextRefs as string[] | undefined;
+  if (metadataRefs && Array.isArray(metadataRefs)) {
+    for (const uri of metadataRefs) {
+      if (!seen.has(uri)) {
+        const type = uri.startsWith('prismer://')
+          ? 'prismer'
+          : uri.startsWith('http')
+            ? 'url'
+            : uri.startsWith('file:')
+              ? 'file'
+              : 'unknown';
+        refs.push({ uri, type });
+        seen.add(uri);
+      }
+    }
+  }
+
+  return refs;
+}
+
+// ─── Context Access Service ─────────────────────────────────
 
 export class ContextAccessService {
   /**
-   * Extract prismer:// URIs from message content and metadata.
-   * Only matches well-formed URIs with valid visibility prefix.
+   * Instance method for extracting context refs (used by message.service.ts).
    */
-  extractContextRefs(content: string, metadata?: Record<string, any>): string[] {
-    const fromContent = content.match(PRISMER_URI_RE) || [];
-    const fromMetadata: string[] = [];
-
-    if (metadata?.contextUri && typeof metadata.contextUri === 'string') {
-      if (PRISMER_URI_RE.test(metadata.contextUri)) {
-        PRISMER_URI_RE.lastIndex = 0; // reset regex state
-        fromMetadata.push(metadata.contextUri);
-      }
-    }
-    if (metadata?.contextRefs && Array.isArray(metadata.contextRefs)) {
-      for (const ref of metadata.contextRefs) {
-        if (typeof ref === 'string' && PRISMER_URI_RE.test(ref)) {
-          PRISMER_URI_RE.lastIndex = 0;
-          fromMetadata.push(ref);
-        }
-      }
-    }
-    PRISMER_URI_RE.lastIndex = 0;
-
-    return [...new Set([...fromContent, ...fromMetadata])];
+  extractContextRefs(content: string, metadata?: Record<string, any>): ContextRef[] {
+    return extractContextRefs(content, metadata);
   }
 
   /**
-   * Validate that a user has access to all context refs.
-   * Only processes well-formed URIs with known visibility values.
+   * Validate access for a sender to a list of context refs.
+   * Compatible with the message.service.ts integration interface.
    */
-  async validateAccess(userId: string, contextRefs: string[]): Promise<{ allowed: boolean; deniedRefs: string[] }> {
-    if (contextRefs.length === 0) return { allowed: true, deniedRefs: [] };
-
-    const deniedRefs: string[] = [];
-
-    for (const uri of contextRefs) {
-      const stripped = uri.replace('prismer://', '');
-      const parts = stripped.split('/');
-      if (parts.length < 3) continue;
-
-      const [visibility, owner] = parts;
-
-      if (visibility === 'public' || visibility === 'unlisted') continue;
-
-      if (visibility === 'private') {
-        const ownerUserId = owner.replace('u_', '');
-        if (ownerUserId !== userId) {
-          deniedRefs.push(uri);
-        }
-        continue;
-      }
-
-      // Regex already filters to valid visibility — this shouldn't be reached
-      deniedRefs.push(uri);
-    }
-
-    return { allowed: deniedRefs.length === 0, deniedRefs };
+  async validateAccess(
+    senderId: string,
+    refs: ContextRef[] | string[],
+  ): Promise<{ allowed: boolean; deniedRefs: string[] }> {
+    // Normalize: accept either ContextRef[] or string[]
+    const contextRefs: ContextRef[] = (refs as any[]).map((r: any) =>
+      typeof r === 'string'
+        ? { uri: r, type: r.startsWith('prismer://') ? ('prismer' as const) : ('url' as const) }
+        : r,
+    );
+    const result = await this.checkAccess({ senderId, conversationId: '', contextRefs });
+    return {
+      allowed: result.allowed,
+      deniedRefs: result.deniedRefs.map((r) => r.uri),
+    };
   }
 
   /**
-   * Check conversation policy for a specific action.
-   * Evaluates ALL deny rules (not just first), then allow rules.
+   * Check if a sender has access to all context refs in a message.
+   *
+   * - prismer:// URIs: sender must have previously loaded/referenced this context
+   * - URL refs: open by default (public web content)
+   * - file: refs: sender must be the uploader
+   * - unknown: denied by default
    */
-  async checkConversationPolicy(
-    conversationId: string,
-    userId: string,
-    action: string = 'send',
-  ): Promise<{ allowed: boolean; reason?: string }> {
-    // Check ALL deny rules for this action
-    const denyRules = await prisma.iMConversationPolicy.findMany({
-      where: { conversationId, rule: 'deny', action },
-    });
-
-    for (const rule of denyRules) {
-      if (rule.subjectType === 'user' && rule.subjectId === userId) {
-        return { allowed: false, reason: `User denied: ${action}` };
-      }
-      // Future: role/trustTier matching
+  async checkAccess(params: {
+    senderId: string;
+    conversationId: string;
+    contextRefs: ContextRef[];
+  }): Promise<AccessCheckResult> {
+    if (params.contextRefs.length === 0) {
+      return { allowed: true, deniedRefs: [] };
     }
 
-    // Check allow rules (if any exist, only allowed subjects can proceed)
-    const allowRules = await prisma.iMConversationPolicy.findMany({
-      where: { conversationId, rule: 'allow', action },
-    });
+    const deniedRefs: ContextRef[] = [];
 
-    if (allowRules.length > 0) {
-      const isAllowed = allowRules.some((r: any) => {
-        if (r.subjectType === 'user') return r.subjectId === userId;
-        return false;
-      });
-      if (!isAllowed) {
-        return { allowed: false, reason: `Not in allow list for: ${action}` };
+    for (const ref of params.contextRefs) {
+      switch (ref.type) {
+        case 'prismer': {
+          const contextId = ref.uri.replace('prismer://ctx/', '');
+          const hasAccess = await this.checkPrismerContextAccess(params.senderId, contextId);
+          if (!hasAccess) deniedRefs.push(ref);
+          break;
+        }
+        case 'file': {
+          const hasAccess = await this.checkFileAccess(params.senderId, ref.uri);
+          if (!hasAccess) deniedRefs.push(ref);
+          break;
+        }
+        case 'url':
+          break; // open by default
+        case 'unknown':
+          deniedRefs.push(ref);
+          break;
       }
+    }
+
+    if (deniedRefs.length > 0) {
+      return {
+        allowed: false,
+        deniedRefs,
+        reason: `Access denied to ${deniedRefs.length} context ref(s): ${deniedRefs.map((r) => r.uri).join(', ')}`,
+      };
+    }
+
+    return { allowed: true, deniedRefs: [] };
+  }
+
+  /**
+   * Enforce conversation-level policies on a message.
+   */
+  async enforcePolicy(params: {
+    conversationId: string;
+    senderId: string;
+    senderType: 'human' | 'agent';
+    contentLength: number;
+  }): Promise<{ allowed: boolean; reason?: string }> {
+    const security = await prisma.iMConversationSecurity.findUnique({
+      where: { conversationId: params.conversationId },
+    });
+    if (!security) return { allowed: true };
+
+    const policy = security.metadata ? JSON.parse(security.metadata as string) : {};
+
+    if (policy.allowedSenderTypes?.length) {
+      if (!policy.allowedSenderTypes.includes(params.senderType)) {
+        return { allowed: false, reason: `sender_type_${params.senderType}_not_allowed` };
+      }
+    }
+
+    if (policy.maxMessageLength && params.contentLength > policy.maxMessageLength) {
+      return { allowed: false, reason: 'message_too_long' };
     }
 
     return { allowed: true };
+  }
+
+  private async checkPrismerContextAccess(senderId: string, contextId: string): Promise<boolean> {
+    try {
+      const message = await prisma.iMMessage.findFirst({
+        where: { senderId, content: { contains: contextId } },
+        select: { id: true },
+      });
+      return message !== null;
+    } catch {
+      return false;
+    }
+  }
+
+  private async checkFileAccess(senderId: string, fileUri: string): Promise<boolean> {
+    try {
+      const upload = await prisma.iMFileUpload.findFirst({
+        where: {
+          uploaderId: senderId,
+          url: { contains: fileUri.replace('file:', '') },
+        },
+        select: { id: true },
+      });
+      return upload !== null;
+    } catch {
+      return false;
+    }
   }
 }

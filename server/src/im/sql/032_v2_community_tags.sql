@@ -36,4 +36,21 @@ WHERE boardId IS NOT NULL
   AND NOT JSON_CONTAINS(tags, CONCAT('"', LOWER(boardId), '"'));
 
 -- PostTag performance index (efficient unlink by postId on delete/update)
-CREATE INDEX IF NOT EXISTS idx_community_post_tags_postId ON im_community_post_tags(postId);
+-- Track A m3 phase 2 fix: replaced MariaDB-only `CREATE INDEX IF NOT EXISTS`
+-- with INFORMATION_SCHEMA guard.
+SET @idx := (
+  SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
+   WHERE TABLE_SCHEMA = DATABASE()
+     AND TABLE_NAME = 'im_community_post_tags'
+     AND INDEX_NAME = 'idx_community_post_tags_postId'
+);
+SET @tbl := (
+  SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES
+   WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'im_community_post_tags'
+);
+SET @stmt := IF(
+  @tbl > 0 AND @idx = 0,
+  'CREATE INDEX idx_community_post_tags_postId ON im_community_post_tags(postId)',
+  'SELECT ''skip idx_community_post_tags_postId'' AS status'
+);
+PREPARE s FROM @stmt; EXECUTE s; DEALLOCATE PREPARE s;

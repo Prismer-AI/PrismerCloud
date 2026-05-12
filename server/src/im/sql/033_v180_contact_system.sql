@@ -42,12 +42,30 @@ CREATE TABLE IF NOT EXISTS im_blocks (
   CONSTRAINT fk_bl_blocked FOREIGN KEY (blockedId) REFERENCES im_users(id)
 );
 
+-- 4 + 5: ADD COLUMN guards (Track A m3 phase 2 fix — MariaDB-only `IF NOT
+-- EXISTS` syntax replaced with MySQL 8 INFORMATION_SCHEMA pattern).
+DROP PROCEDURE IF EXISTS _033_add_col;
+DELIMITER //
+CREATE PROCEDURE _033_add_col(IN tbl VARCHAR(64), IN col VARCHAR(64), IN col_def TEXT)
+BEGIN
+  IF (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = tbl) > 0
+     AND (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+           WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = tbl AND COLUMN_NAME = col) = 0 THEN
+    SET @stmt := CONCAT('ALTER TABLE `', tbl, '` ADD COLUMN `', col, '` ', col_def);
+    PREPARE s FROM @stmt; EXECUTE s; DEALLOCATE PREPARE s;
+  END IF;
+END //
+DELIMITER ;
+
 -- 4. Conversation controls (on existing table)
-ALTER TABLE im_participants ADD COLUMN IF NOT EXISTS pinned TINYINT(1) NOT NULL DEFAULT 0;
-ALTER TABLE im_participants ADD COLUMN IF NOT EXISTS muted TINYINT(1) NOT NULL DEFAULT 0;
-ALTER TABLE im_participants ADD COLUMN IF NOT EXISTS pinnedAt DATETIME(3) DEFAULT NULL;
+CALL _033_add_col('im_participants', 'pinned',   'TINYINT(1) NOT NULL DEFAULT 0');
+CALL _033_add_col('im_participants', 'muted',    'TINYINT(1) NOT NULL DEFAULT 0');
+CALL _033_add_col('im_participants', 'pinnedAt', 'DATETIME(3) DEFAULT NULL');
 
 -- 5. User profile extensions
-ALTER TABLE im_users ADD COLUMN IF NOT EXISTS institution VARCHAR(200) DEFAULT NULL;
-ALTER TABLE im_users ADD COLUMN IF NOT EXISTS description VARCHAR(500) DEFAULT NULL;
-ALTER TABLE im_users ADD COLUMN IF NOT EXISTS lastSeenAt DATETIME(3) DEFAULT NULL;
+CALL _033_add_col('im_users', 'institution', 'VARCHAR(200) DEFAULT NULL');
+CALL _033_add_col('im_users', 'description', 'VARCHAR(500) DEFAULT NULL');
+CALL _033_add_col('im_users', 'lastSeenAt',  'DATETIME(3) DEFAULT NULL');
+
+DROP PROCEDURE _033_add_col;

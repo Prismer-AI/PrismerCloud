@@ -25,10 +25,15 @@ interface ApiPreviewPanelProps {
   onCopy: (text: string) => void;
 }
 
-const DEFAULT_API_BASE = process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000';
+// API base URL - always use production endpoint for stability
+// cloud.prismer.dev is for frontend dev only, API calls go to prismer.cloud
+const DEFAULT_API_BASE = 'https://prismer.cloud';
 
+// Get API base URL - always use production for API calls
 function getApiBaseUrl(): string {
-  return process.env.NEXT_PUBLIC_BASE_URL || DEFAULT_API_BASE;
+  // Always use prismer.cloud for API - it's the stable production endpoint
+  // cloud.prismer.dev is for frontend development only
+    return 'https://prismer.cloud';
 }
 
 // Mask API key for display (show first 14 and last 4 chars)

@@ -1,8 +1,12 @@
 import type { Metadata } from 'next';
 import { Inter, JetBrains_Mono } from 'next/font/google';
 import './globals.css';
+import 'react-pdf/dist/Page/AnnotationLayer.css';
+import 'react-pdf/dist/Page/TextLayer.css';
+import 'react-data-grid/lib/styles.css';
 import { AppProvider } from '@/contexts/app-context';
 import { ThemeProvider } from '@/contexts/theme-context';
+import { I18nProvider } from '@/contexts/i18n-context';
 import { ClientLayout } from './client-layout';
 
 const inter = Inter({
@@ -51,9 +55,11 @@ export default function RootLayout({
     <html lang="en" className="dark" suppressHydrationWarning>
       <body className={`${inter.variable} ${jetbrainsMono.variable} font-sans antialiased`}>
         <ThemeProvider>
-          <AppProvider>
-            <ClientLayout>{children}</ClientLayout>
-          </AppProvider>
+          <I18nProvider>
+            <AppProvider>
+              <ClientLayout>{children}</ClientLayout>
+            </AppProvider>
+          </I18nProvider>
         </ThemeProvider>
       </body>
     </html>

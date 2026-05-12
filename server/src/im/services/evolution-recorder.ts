@@ -263,12 +263,11 @@ export async function recordOutcome(
   const [existingEdge, isProviderFrozenVal] = await Promise.all([
     prisma.iMEvolutionEdge.findUnique({
       where: {
-        ownerAgentId_signalKey_geneId_mode_scope: {
+        ownerAgentId_signalKey_geneId_mode: {
           ownerAgentId: agentId,
           signalKey,
           geneId: input.gene_id,
           mode: agentMode,
-          scope,
         },
       },
     }),
@@ -321,7 +320,6 @@ export async function recordOutcome(
         signalType: signalType ?? undefined,
         taskSuccessRate: isSuccess ? 1.0 : 0.0,
         mode: agentMode,
-        scope,
       },
     });
   }
@@ -356,7 +354,6 @@ export async function recordOutcome(
         }),
         provider: provider ?? null,
         mode: agentMode,
-        scope,
         transitionReason: input.transition_reason ?? 'gene_applied',
         contextSnapshot: input.context_snapshot ? JSON.stringify(input.context_snapshot).slice(0, 16384) : null,
       },
@@ -456,15 +453,21 @@ export async function recordOutcome(
 
     // v1.8.0 Phase 2c.1: Cross-layer sediment (evolution → memory)
     if (isSuccess && (input.score ?? 0) >= 0.8 && deps.memoryService) {
-      await crossLayerSediment(
-        agentId,
-        input.gene_id,
-        signalKey,
-        targetGene.title ?? input.gene_id,
-        input.summary ?? '',
-        deps.memoryService,
-        scope,
-      ).catch((err) => console.warn('[Evolution] Cross-layer sediment failed:', (err as Error).message));
+      const workspaceId = typeof input.metadata?.workspaceId === 'string' ? input.metadata.workspaceId : null;
+      if (!workspaceId) {
+        console.warn('[Evolution] Cross-layer sediment skipped: missing workspaceId');
+      } else {
+        await crossLayerSediment(
+          agentId,
+          workspaceId,
+          input.gene_id,
+          signalKey,
+          targetGene.title ?? input.gene_id,
+          input.summary ?? '',
+          deps.memoryService,
+          scope,
+        ).catch((err) => console.warn('[Evolution] Cross-layer sediment failed:', (err as Error).message));
+      }
     }
 
     // v1.8.0: Auto-create knowledge links between gene and related memories
@@ -477,7 +480,7 @@ export async function recordOutcome(
     if (existingEdge) {
       try {
         const recentCapsules = await prisma.iMEvolutionCapsule.findMany({
-          where: { geneId: input.gene_id, ownerAgentId: agentId, signalKey, scope },
+          where: { geneId: input.gene_id, ownerAgentId: agentId, signalKey },
           orderBy: { createdAt: 'asc' },
           take: 100,
           select: { outcome: true },
@@ -548,6 +551,7 @@ In ONE sentence (max 100 tokens), explain the root cause of why this strategy ${
 
 async function crossLayerSediment(
   agentId: string,
+  workspaceId: string,
   geneId: string,
   signalKey: string,
   geneTitle: string,
@@ -572,16 +576,17 @@ async function crossLayerSediment(
   const insightLine = `- **${geneTitle}** on \`${signalKey}\`: ${summary.slice(0, 200)} (${recentSuccesses} successes, ${new Date().toISOString().slice(0, 10)})`;
 
   try {
-    const existing = await memoryService.readMemoryFileByPath(agentId, scope, insightPath);
+    const existing = await memoryService.readMemoryFileByPath(workspaceId, agentId, scope, insightPath);
     if (existing) {
       if (existing.content.includes(geneTitle) && existing.content.includes(signalKey)) {
         return;
       }
       const updated = existing.content + '\n' + insightLine;
-      await memoryService.updateMemoryFile(existing.id, 'replace', updated);
+      await memoryService.updateMemoryFile(existing.id, workspaceId, 'replace', updated);
       console.log(`[Evolution] Cross-layer sediment: appended insight to ${insightPath}`);
     } else {
       await memoryService.writeMemoryFile(
+        workspaceId,
         agentId,
         'agent',
         insightPath,

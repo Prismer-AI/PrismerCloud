@@ -1,12 +1,12 @@
 /**
  * Feature Flags
- * 
+ *
  * 控制前端先行实现与后端代理的切换
- * 
+ *
  * 使用方式：
  * - true: 使用 Next.js 直连数据库（前端先行）
  * - false: 代理到后端 API
- * 
+ *
  * 环境变量：
  * - FF_USAGE_RECORD_LOCAL=true
  * - FF_ACTIVITIES_LOCAL=true
@@ -17,7 +17,7 @@
 
 /**
  * Feature Flags - 动态读取
- * 
+ *
  * 使用 getter 确保每次访问时都读取最新的环境变量值
  * 这解决了 Nacos 配置异步加载的时序问题
  */
@@ -30,7 +30,7 @@ export const FEATURE_FLAGS = {
     const value = process.env.FF_USAGE_RECORD_LOCAL === 'true';
     return value;
   },
-  
+
   /**
    * Activities API
    * GET /api/activities → 读取 pc_usage_records
@@ -39,7 +39,7 @@ export const FEATURE_FLAGS = {
     const value = process.env.FF_ACTIVITIES_LOCAL === 'true';
     return value;
   },
-  
+
   /**
    * Dashboard Stats API
    * GET /api/dashboard/stats → 聚合 pc_usage_records
@@ -48,7 +48,7 @@ export const FEATURE_FLAGS = {
     const value = process.env.FF_DASHBOARD_STATS_LOCAL === 'true';
     return value;
   },
-  
+
   /**
    * User Credits API
    * GET /api/credits/balance → 读取 pc_user_credits
@@ -57,7 +57,7 @@ export const FEATURE_FLAGS = {
     const value = process.env.FF_USER_CREDITS_LOCAL === 'true';
     return value;
   },
-  
+
   /**
    * Billing API (Payment Methods, Topup, Subscriptions)
    * /api/billing/* → 直接调用 Stripe + 写入 pc_payment_methods, pc_payments
@@ -96,29 +96,11 @@ export const FEATURE_FLAGS = {
   },
 
   /**
-   * Auth (self-host mode)
-   * /api/auth/* → local pc_users table + JWT signing
-   * When false, proxies to backend Go service
+   * LLM Proxy (OpenAI-compatible) — POST /api/chat/completions and /api/embeddings.
+   * Forwarded to the NewAPI gateway via src/lib/llm-proxy.ts.
    */
-  get AUTH_LOCAL(): boolean {
-    return process.env.FF_AUTH_LOCAL === 'true';
-  },
-
-  /**
-   * Unlimited credits (self-host mode)
-   * When true, new users get 999999 credits and balance checks are skipped
-   */
-  get UNLIMITED_CREDITS(): boolean {
-    return process.env.UNLIMITED_CREDITS === 'true';
-  },
-
-  /**
-   * Disable authentication (self-host mode)
-   * When true, all API requests are treated as the default admin user.
-   * WARNING: Only use in private/local deployments!
-   */
-  get AUTH_DISABLED(): boolean {
-    return process.env.AUTH_DISABLED === 'true';
+  get LLM_PROXY_ENABLED(): boolean {
+    return process.env.FF_LLM_PROXY_ENABLED === 'true';
   },
 };
 
@@ -134,8 +116,7 @@ export function isAnyLocalEnabled(): boolean {
     FEATURE_FLAGS.BILLING_LOCAL ||
     FEATURE_FLAGS.API_KEYS_LOCAL ||
     FEATURE_FLAGS.CONTEXT_CACHE_LOCAL ||
-    FEATURE_FLAGS.NOTIFICATIONS_LOCAL ||
-    FEATURE_FLAGS.AUTH_LOCAL
+    FEATURE_FLAGS.NOTIFICATIONS_LOCAL
   );
 }
 
@@ -152,9 +133,6 @@ export function getEnabledFlags(): string[] {
   if (FEATURE_FLAGS.API_KEYS_LOCAL) flags.push('API_KEYS_LOCAL');
   if (FEATURE_FLAGS.CONTEXT_CACHE_LOCAL) flags.push('CONTEXT_CACHE_LOCAL');
   if (FEATURE_FLAGS.NOTIFICATIONS_LOCAL) flags.push('NOTIFICATIONS_LOCAL');
-  if (FEATURE_FLAGS.AUTH_LOCAL) flags.push('AUTH_LOCAL');
-  if (FEATURE_FLAGS.UNLIMITED_CREDITS) flags.push('UNLIMITED_CREDITS');
-  if (FEATURE_FLAGS.AUTH_DISABLED) flags.push('AUTH_DISABLED');
   return flags;
 }
 
@@ -171,9 +149,6 @@ export function logFeatureFlags(): void {
     API_KEYS_LOCAL: FEATURE_FLAGS.API_KEYS_LOCAL,
     CONTEXT_CACHE_LOCAL: FEATURE_FLAGS.CONTEXT_CACHE_LOCAL,
     NOTIFICATIONS_LOCAL: FEATURE_FLAGS.NOTIFICATIONS_LOCAL,
-    AUTH_LOCAL: FEATURE_FLAGS.AUTH_LOCAL,
-    UNLIMITED_CREDITS: FEATURE_FLAGS.UNLIMITED_CREDITS,
-    AUTH_DISABLED: FEATURE_FLAGS.AUTH_DISABLED,
   });
 }
 

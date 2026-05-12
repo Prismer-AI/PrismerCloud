@@ -51,7 +51,7 @@ export function createBindingsRouter(bindingService: BindingService) {
    */
   router.post("/:id/verify", async (c) => {
     const user = c.get("user");
-    const bindingId = c.req.param("id")!;
+    const bindingId = c.req.param("id");
     const body = await c.req.json<{ code: string }>();
 
     if (!body.code) {
@@ -100,7 +100,7 @@ export function createBindingsRouter(bindingService: BindingService) {
    */
   router.delete("/:id", async (c) => {
     const user = c.get("user");
-    const bindingId = c.req.param("id")!;
+    const bindingId = c.req.param("id");
 
     try {
       await bindingService.revoke(bindingId, user.imUserId);

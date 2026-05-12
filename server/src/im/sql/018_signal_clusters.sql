@@ -1,16 +1,22 @@
--- Migration 017: Signal Clusters
+-- Migration 018: Signal Clusters
 -- Co-occurrence based grouping of signals for better gene matching.
+--
+-- Track A m3 phase 2 fix: the `memberSignals TEXT NOT NULL DEFAULT '[]'`
+-- column declaration is rejected by MySQL 8 strict mode (literal DEFAULT
+-- not allowed on TEXT/JSON/BLOB). Switched to MySQL 8.0.13+ expression-
+-- default syntax `DEFAULT ('[]')`. CREATE TABLE remains IF NOT EXISTS so
+-- legacy environments are unaffected.
 
 CREATE TABLE IF NOT EXISTS `im_signal_clusters` (
-  `id` VARCHAR(30) NOT NULL,
-  `clusterKey` VARCHAR(200) NOT NULL,
-  `memberSignals` TEXT NOT NULL DEFAULT '[]',
-  `frequency` INT NOT NULL DEFAULT 0,
-  `agentCount` INT NOT NULL DEFAULT 0,
-  `topGeneId` VARCHAR(100) DEFAULT NULL,
-  `topGeneRate` DOUBLE DEFAULT NULL,
-  `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-  `updatedAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  `id`            VARCHAR(30)  NOT NULL,
+  `clusterKey`    VARCHAR(200) NOT NULL,
+  `memberSignals` TEXT         NOT NULL DEFAULT ('[]'),
+  `frequency`     INT          NOT NULL DEFAULT 0,
+  `agentCount`    INT          NOT NULL DEFAULT 0,
+  `topGeneId`     VARCHAR(100) DEFAULT NULL,
+  `topGeneRate`   DOUBLE       DEFAULT NULL,
+  `createdAt`     DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  `updatedAt`     DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_cluster_key` (`clusterKey`),
   KEY `idx_frequency` (`frequency`)

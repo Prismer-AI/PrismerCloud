@@ -45,6 +45,7 @@ export function SkillUploadSheet({ open, onOpenChange, isDark, onCreated }: Skil
   const [tagsInput, setTagsInput] = useState('');
   const [content, setContent] = useState('');
   const [sourceUrl, setSourceUrl] = useState('');
+  const [signalsInput, setSignalsInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
@@ -56,6 +57,7 @@ export function SkillUploadSheet({ open, onOpenChange, isDark, onCreated }: Skil
     setTagsInput('');
     setContent('');
     setSourceUrl('');
+    setSignalsInput('');
     setError(null);
     setSuccessMessage(null);
   }, []);
@@ -101,6 +103,12 @@ export function SkillUploadSheet({ open, onOpenChange, isDark, onCreated }: Skil
       if (content.trim()) body.content = content.trim();
       if (sourceUrl.trim()) body.sourceUrl = sourceUrl.trim();
 
+      const signals = signalsInput
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      if (signals.length > 0) body.signals = signals;
+
       const res = await fetch('/api/im/skills', {
         method: 'POST',
         headers: {
@@ -131,7 +139,19 @@ export function SkillUploadSheet({ open, onOpenChange, isDark, onCreated }: Skil
     } finally {
       setLoading(false);
     }
-  }, [isValid, loading, name, description, category, tagsInput, content, sourceUrl, onCreated, handleClose]);
+  }, [
+    isValid,
+    loading,
+    name,
+    description,
+    category,
+    tagsInput,
+    content,
+    sourceUrl,
+    signalsInput,
+    onCreated,
+    handleClose,
+  ]);
 
   const inputClasses = `w-full bg-transparent outline-none text-sm py-2 px-3 rounded-lg transition-colors ${
     isDark
@@ -270,6 +290,46 @@ export function SkillUploadSheet({ open, onOpenChange, isDark, onCreated }: Skil
               placeholder="https://github.com/..."
               className={inputClasses}
             />
+          </div>
+
+          {/* Signals */}
+          <div>
+            <label className={labelClasses}>
+              Signals
+              <span className={`font-normal ml-1 ${isDark ? 'text-zinc-600' : 'text-zinc-400'}`}>
+                (comma-separated, for gene auto-conversion)
+              </span>
+            </label>
+            <input
+              type="text"
+              value={signalsInput}
+              onChange={(e) => setSignalsInput(e.target.value)}
+              placeholder="e.g. error:timeout, error:429, perf:high_latency"
+              className={inputClasses}
+            />
+            {signalsInput.trim() && (
+              <div className="flex flex-wrap gap-1 mt-2">
+                {signalsInput
+                  .split(',')
+                  .map((s) => s.trim())
+                  .filter(Boolean)
+                  .map((sig) => (
+                    <span
+                      key={sig}
+                      className={`text-[10px] px-2 py-0.5 rounded-full font-mono ${
+                        isDark
+                          ? 'bg-cyan-500/10 text-cyan-300 border border-cyan-500/20'
+                          : 'bg-cyan-50 text-cyan-600 border border-cyan-200'
+                      }`}
+                    >
+                      {sig}
+                    </span>
+                  ))}
+              </div>
+            )}
+            <p className={`text-[10px] mt-1.5 ${isDark ? 'text-zinc-600' : 'text-zinc-400'}`}>
+              When an agent installs this skill, matching signals auto-create a private Gene.
+            </p>
           </div>
 
           {/* Content (SKILL.md) */}

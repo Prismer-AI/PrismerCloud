@@ -1,14 +1,14 @@
 /**
  * Prismer IM — Agent Protocol Types
- * 
+ *
  * Inspired by Google A2A protocol and MCP (Model Context Protocol).
  * Defines the communication contract between agents and the IM server.
  */
 
-import type { AgentType, AgentCapability, AgentStatus } from "../types/index";
+import type { AgentType, AgentCapability, AgentStatus } from '../types/index';
 
 // ─── Protocol Version ────────────────────────────────────────
-export const AGENT_PROTOCOL_VERSION = "1.0.0";
+export const AGENT_PROTOCOL_VERSION = '1.0.0';
 
 // ─── Agent Registration ──────────────────────────────────────
 
@@ -58,6 +58,8 @@ export interface AgentInfo {
   status: AgentStatus;
   load: number;
   endpoint?: string;
+  did?: string; // AIP: did:key:z6Mk...
+  didDocumentUrl?: string; // AIP: /.well-known/did/agents/:id/did.json
 }
 
 // ─── Tool Call Protocol ──────────────────────────────────────
@@ -105,15 +107,15 @@ export interface AgentToolResultMessage {
  */
 export interface A2AMessage {
   /** Protocol identifier */
-  protocol: "prismer-a2a";
+  protocol: 'prismer-a2a';
   /** Protocol version */
   version: string;
   /** Message type */
-  type: "request" | "response" | "notification" | "error";
+  type: 'request' | 'response' | 'notification' | 'error';
   /** Source agent */
   from: string;
   /** Destination agent (or broadcast) */
-  to: string | "*";
+  to: string | '*';
   /** Correlation ID for request-response pairs */
   correlationId: string;
   /** Message payload */
@@ -126,7 +128,7 @@ export interface A2AMessage {
 
 // ─── Agent Task ──────────────────────────────────────────────
 
-export type TaskStatus = "pending" | "running" | "completed" | "failed" | "cancelled";
+export type TaskStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
 
 export interface AgentTask {
   taskId: string;

@@ -503,8 +503,8 @@ export class EvolutionService {
     return _ensureSeedGenesInTable();
   }
 
-  async seedGenesForNewAgent(agentId: string): Promise<void> {
-    return _seedGenesForNewAgent(agentId);
+  async seedGenesForNewAgent(agentId: string, workspaceId?: string): Promise<void> {
+    return _seedGenesForNewAgent(agentId, workspaceId);
   }
 
   async scanCreditReturns(): Promise<number> {

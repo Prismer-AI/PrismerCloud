@@ -27,7 +27,7 @@
 准备以下信息：
 
 ```bash
-MYSQL_HOST=<your-mysql-host>      # 例如: db.example.com
+MYSQL_HOST=<your-mysql-host>      # 例如: test-db.prismer.dev
 MYSQL_PORT=3306                   # 默认端口
 MYSQL_USER=<your-username>        # 例如: prismer_test
 MYSQL_PASSWORD=<your-password>    # 数据库密码
@@ -66,7 +66,7 @@ cd src/im/sql
 **方式二：使用环境变量**
 
 ```bash
-export MYSQL_HOST=your-db-host
+export MYSQL_HOST=test-db.prismer.dev
 export MYSQL_PORT=3306
 export MYSQL_USER=prismer_test
 export MYSQL_PASSWORD=your_password

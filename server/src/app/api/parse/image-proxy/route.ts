@@ -3,18 +3,14 @@ import { createModuleLogger } from '@/lib/logger';
 
 const log = createModuleLogger('ParseImageProxy');
 
-const DEFAULT_ALLOWED_ORIGINS = 'cdn.prismer.ai,parser.prismer.dev,parser.prismer.app,localhost';
-const ALLOWED_ORIGINS = (process.env.IMAGE_PROXY_ORIGINS || DEFAULT_ALLOWED_ORIGINS)
-  .split(',')
-  .map((s) => s.trim())
-  .filter(Boolean);
+const ALLOWED_ORIGINS = ['cdn.prismer.ai', 'parser.prismer.dev', 'parser.prismer.app', 'localhost'];
 
 /**
  * GET /api/parse/image-proxy?url=<encoded-image-url>
  *
  * Proxies parser/CDN image URLs so the browser can load them same-origin.
  * Avoids CORS or "image cannot be accessed" when Parse result images
- * point to CDN or parser service.
+ * point to cdn.prismer.ai or parser service.
  *
  * Only allows URLs from ALLOWED_ORIGINS. No auth required (URL is opaque).
  */

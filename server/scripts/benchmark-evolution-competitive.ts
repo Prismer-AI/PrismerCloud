@@ -36,16 +36,13 @@ const BASE_URLS: Record<string, string> = {
   test: 'https://cloud.prismer.dev',
   prod: 'https://prismer.cloud',
 };
+const API_KEYS: Record<string, string> = {
+  test: 'sk-prismer-live-8203d352cc8d2b41d17efe877b4b9c9420afd1e89666b5b0ae7161e80c39acd2',
+  prod: 'sk-prismer-live-dea50222cb9aec9eca33f2e947d9f49dbb4a719cae8b58ce9e197290302e5f06',
+};
+
 const BASE = process.env.BASE_URL || BASE_URLS[ENV] || BASE_URLS.test;
-const API_KEY =
-  process.env.API_KEY ||
-  process.env[`PRISMER_API_KEY_${ENV.toUpperCase()}`] ||
-  process.env.PRISMER_API_KEY ||
-  '';
-if (!API_KEY) {
-  console.error(`Set API_KEY or PRISMER_API_KEY_${ENV.toUpperCase()} for env=${ENV}.`);
-  process.exit(1);
-}
+const API_KEY = process.env.API_KEY || API_KEYS[ENV] || '';
 
 // ─── Types ──────────────────────────────────────────────────────────
 

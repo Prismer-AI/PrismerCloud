@@ -84,7 +84,6 @@ export async function submitReport(
       }),
       provider: input.provider ?? null,
       mode: await getAgentMode(agentId),
-      scope: 'global',
     },
   });
 
@@ -256,12 +255,11 @@ export async function processOneReport(
     const mode = await getAgentMode(agentId);
     const existingEdge = await prisma.iMEvolutionEdge.findUnique({
       where: {
-        ownerAgentId_signalKey_geneId_mode_scope: {
+        ownerAgentId_signalKey_geneId_mode: {
           ownerAgentId: agentId,
           signalKey,
           geneId: matchedGeneId,
           mode,
-          scope: 'global',
         },
       },
     });
@@ -283,7 +281,6 @@ export async function processOneReport(
           signalKey,
           geneId: matchedGeneId,
           mode,
-          scope: 'global',
           successCount: isSuccess ? 1 : 0,
           failureCount: isSuccess ? 0 : 1,
           lastScore: input.score ?? null,
@@ -370,6 +367,9 @@ export async function processPendingReports(
 
 /**
  * Get evolution edges for an agent, optionally filtered by signals.
+ *
+ * v1.9.3 m3: the `scope` column was dropped from im_evolution_edges (migration
+ * 120). The `scope` option is accepted for back-compat but no longer applied.
  */
 export async function getEdges(
   agentId: string,
@@ -380,7 +380,7 @@ export async function getEdges(
     scope?: string;
   },
 ): Promise<EvolutionEdgeInfo[]> {
-  const where: Record<string, unknown> = { ownerAgentId: agentId, scope: options?.scope ?? 'global' };
+  const where: Record<string, unknown> = { ownerAgentId: agentId };
   if (options?.signalKey) where.signalKey = options.signalKey;
   if (options?.geneId) where.geneId = options.geneId;
 
@@ -409,11 +409,15 @@ export async function getEdges(
 
 /**
  * Generate a comprehensive evolution report for an agent.
+ *
+ * v1.9.3 m3: `scope` parameter retained for back-compat; the column was
+ * dropped from im_evolution_capsules in migration 120 and is no longer
+ * part of the Prisma where clause.
  */
 export async function generateReport(agentId: string, scope = 'global'): Promise<EvolutionReport> {
   const [capsules, personality, genes] = await Promise.all([
     prisma.iMEvolutionCapsule.findMany({
-      where: { ownerAgentId: agentId, scope },
+      where: { ownerAgentId: agentId },
       orderBy: { createdAt: 'desc' },
       take: 100,
     }),
@@ -465,21 +469,26 @@ export async function generateReport(agentId: string, scope = 'global'): Promise
   };
 }
 
-/** GET /capsules — Paginated capsules for agent */
+/** GET /capsules — Paginated capsules for agent
+ *
+ * v1.9.3 m3: `scope` parameter retained for back-compat; the column was
+ * dropped from im_evolution_capsules in migration 120.
+ */
 export async function getCapsules(
   agentId: string,
   page: number,
   limit: number,
-  scope = 'global',
+  _scope = 'global',
 ): Promise<{ capsules: unknown[]; total: number }> {
+  void _scope;
   const [capsules, total] = await Promise.all([
     prisma.iMEvolutionCapsule.findMany({
-      where: { ownerAgentId: agentId, scope },
+      where: { ownerAgentId: agentId },
       orderBy: { createdAt: 'desc' },
       skip: (page - 1) * limit,
       take: limit,
     }),
-    prisma.iMEvolutionCapsule.count({ where: { ownerAgentId: agentId, scope } }),
+    prisma.iMEvolutionCapsule.count({ where: { ownerAgentId: agentId } }),
   ]);
 
   return {

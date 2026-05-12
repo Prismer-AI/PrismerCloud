@@ -675,7 +675,7 @@ export class SkillService {
 
     // 2. Check if already installed and active
     const existing = await prisma.iMAgentSkill.findUnique({
-      where: { agentId_skillId_scope: { agentId, skillId: skill.id, scope } },
+      where: { agentId_skillId: { agentId, skillId: skill.id } },
     });
     if (existing?.status === 'active') {
       return { agentSkill: existing, gene: null, skill, installGuide: this.generateInstallGuide(skill) };
@@ -733,8 +733,8 @@ export class SkillService {
 
     // 6. Create/update agent-skill record
     const agentSkill = await prisma.iMAgentSkill.upsert({
-      where: { agentId_skillId_scope: { agentId, skillId: skill.id, scope } },
-      create: { agentId, skillId: skill.id, scope, geneId: gene?.id, version: skill.version, status: 'active' },
+      where: { agentId_skillId: { agentId, skillId: skill.id } },
+      create: { agentId, skillId: skill.id, geneId: gene?.id, version: skill.version, status: 'active' },
       update: { geneId: gene?.id, version: skill.version, status: 'active', updatedAt: new Date() },
     });
 
@@ -762,7 +762,7 @@ export class SkillService {
 
     // Find the agent-skill record to get geneId before updating
     const agentSkill = await prisma.iMAgentSkill.findUnique({
-      where: { agentId_skillId_scope: { agentId, skillId: skill.id, scope } },
+      where: { agentId_skillId: { agentId, skillId: skill.id } },
     });
     if (!agentSkill || agentSkill.status !== 'active') return false;
 

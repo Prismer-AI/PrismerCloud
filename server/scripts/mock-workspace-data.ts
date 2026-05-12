@@ -11,6 +11,7 @@ const prisma = new PrismaClient();
 
 const AGENT_ID = 'mock-agent-001';
 const USER_ID = 'mock-user-001';
+const WORKSPACE_ID = 'mock-workspace-001';
 
 async function main() {
   console.log('Seeding workspace mock data...');
@@ -58,6 +59,19 @@ async function main() {
       metadata: JSON.stringify({
         personality: { rigor: 0.72, creativity: 0.55, risk_tolerance: 0.3 },
       }),
+    },
+  });
+
+  await prisma.iMWorkspace.upsert({
+    where: { id: WORKSPACE_ID },
+    update: { ownerImUserId: USER_ID, name: 'Mock Workspace', slug: 'mock-workspace' },
+    create: {
+      id: WORKSPACE_ID,
+      ownerImUserId: USER_ID,
+      name: 'Mock Workspace',
+      slug: 'mock-workspace',
+      isDefault: true,
+      metadata: '{}',
     },
   });
 
@@ -391,15 +405,30 @@ async function main() {
   ];
 
   for (const m of memoryFiles) {
+    const contentHash = require('crypto').createHash('sha256').update(m.content).digest('hex');
     await prisma.iMMemoryFile.upsert({
-      where: { ownerId_scope_path: { ownerId: AGENT_ID, scope: 'global', path: m.path } },
+      where: { workspaceId_path: { workspaceId: WORKSPACE_ID, path: m.path } },
       update: {
+        ownerId: AGENT_ID,
+        ownerType: 'agent',
         content: m.content,
         memoryType: m.memoryType,
         description: m.description,
         stale: (m as any).stale || false,
+        contentHash,
+        etag: contentHash,
       },
-      create: { ownerId: AGENT_ID, scope: 'global', ...m, stale: (m as any).stale || false },
+      create: {
+        ownerId: AGENT_ID,
+        ownerType: 'agent',
+        workspaceId: WORKSPACE_ID,
+        ...m,
+        stale: (m as any).stale || false,
+        visibility: 'workspace',
+        encrypted: false,
+        contentHash,
+        etag: contentHash,
+      },
     });
   }
 

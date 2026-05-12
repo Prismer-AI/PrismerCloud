@@ -23,22 +23,23 @@ const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
 const SPIRAL_A = 0; // initial radius offset
 
 /** Force-directed simulation parameters for cluster layout */
-const CLUSTER_REPULSION = 400_000;
-const CLUSTER_ATTRACTION = 0.002;
+const CLUSTER_REPULSION = 600_000;
+const CLUSTER_ATTRACTION = 0.0015;
 const CLUSTER_DAMPING = 0.85;
-const CLUSTER_ITERATIONS = 100;
+const CLUSTER_ITERATIONS = 120;
 
 // ─── Adaptive helpers ───────────────────────────────────────
 
 /** Adaptive coordinate range — keeps density constant as gene count changes */
 function getCoordRange(geneCount: number): number {
-  // Compact layout: sqrt scaling so large gene counts don't spread too thin
-  return Math.max(600, Math.sqrt(geneCount) * 150);
+  // Wider spread for large gene counts to prevent L3 overlap
+  return Math.max(600, Math.sqrt(geneCount) * 280);
 }
 
 /** Adaptive spiral spacing — tighter when a cluster has more genes */
 function getSpiralB(genesInCluster: number): number {
-  return Math.max(30, Math.min(55, 200 / Math.sqrt(Math.max(1, genesInCluster))));
+  // Wider spacing within clusters to reduce overlap
+  return Math.max(45, Math.min(90, 350 / Math.sqrt(Math.max(1, genesInCluster))));
 }
 
 // ─── Deterministic RNG ──────────────────────────────────────
@@ -138,11 +139,11 @@ export function computeGeneLayout(
       const vel = new Map<string, { x: number; y: number }>();
       for (const id of ids) vel.set(id, { x: 0, y: 0 });
 
-      const NODE_REPULSION = 8000;
+      const NODE_REPULSION = 18000;
       const SIGNAL_ATTRACTION = 0.003;
-      const CENTER_GRAVITY = 0.001;
+      const CENTER_GRAVITY = 0.0008;
       const DAMPING = 0.8;
-      const ITERATIONS = 60;
+      const ITERATIONS = 80;
 
       for (let iter = 0; iter < ITERATIONS; iter++) {
         const forces = new Map<string, { x: number; y: number }>();

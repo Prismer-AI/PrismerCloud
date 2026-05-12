@@ -20,6 +20,7 @@ interface ProxyContext {
   method: string;
   authHeader: string | null;
   originalAuthHeader: string | null;
+  searchParamOverrides?: Record<string, string>;
   startTime: number;
 }
 
@@ -40,6 +41,11 @@ async function callIMApp(ctx: ProxyContext): Promise<Response> {
   ctx.request.nextUrl.searchParams.forEach((value, key) => {
     internalUrl.searchParams.set(key, value);
   });
+  if (ctx.searchParamOverrides) {
+    for (const [key, value] of Object.entries(ctx.searchParamOverrides)) {
+      internalUrl.searchParams.set(key, value);
+    }
+  }
 
   // Build headers
   const headers: Record<string, string> = {
@@ -52,6 +58,12 @@ async function callIMApp(ctx: ProxyContext): Promise<Response> {
   const imAgent = ctx.request.headers.get('x-im-agent');
   if (imAgent) {
     headers['X-IM-Agent'] = imAgent;
+  }
+  // Wave-8 W6: forward Range header so /assets/:id can serve partial content
+  // for native <video>/<audio> scrubbing.
+  const range = ctx.request.headers.get('range');
+  if (range) {
+    headers['Range'] = range;
   }
 
   // Build request for Hono
@@ -75,29 +87,40 @@ async function callIMApp(ctx: ProxyContext): Promise<Response> {
 
   // Convert Hono response to NextResponse
   const contentType = response.headers.get('content-type') || '';
+  const location = response.headers.get('location');
 
-  // SSE: pass through the streaming response directly
-  if (contentType.includes('text/event-stream')) {
-    return new Response(response.body, {
+  // Preserve IM redirects, especially /assets/:id -> S3 presigned URLs.
+  // Without forwarding Location, browser preview/download fetches cannot
+  // follow object-storage backed assets.
+  if (location && response.status >= 300 && response.status < 400) {
+    return new NextResponse(null, {
       status: response.status,
-      headers: {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        Connection: 'keep-alive',
-      },
+      headers: { Location: location },
     });
+  }
+
+  // SSE: return the Hono Response directly so the underlying ReadableStream
+  // and its initial headers (Content-Type: text/event-stream + Hono's own
+  // SSE markers) reach the client without re-buffering. Wrapping in a fresh
+  // `new Response(response.body, …)` previously caused header flushing to
+  // wait for the first event, which never arrives until a task changes.
+  if (contentType.includes('text/event-stream')) {
+    return response;
   }
 
   // Collect Hono response headers to forward (rate limit, cache, custom)
   const forwardHeaders = new Headers();
   response.headers.forEach((value, key) => {
-    // Forward rate limit, cache, and custom headers
+    // Forward rate limit, cache, custom, and Range-related headers (Wave-8 W6).
     if (
       key.startsWith('x-') ||
       key === 'cache-control' ||
       key === 'retry-after' ||
       key === 'deprecation' ||
-      key === 'sunset'
+      key === 'sunset' ||
+      key === 'accept-ranges' ||
+      key === 'content-range' ||
+      key === 'content-length'
     ) {
       forwardHeaders.set(key, value);
     }
@@ -108,6 +131,17 @@ async function callIMApp(ctx: ProxyContext): Promise<Response> {
     const res = NextResponse.json(data, { status: response.status });
     forwardHeaders.forEach((value, key) => res.headers.set(key, value));
     return res;
+  }
+
+  // For binary content (video/audio/pdf/images/etc.) preserve the underlying
+  // stream so 206 Partial Content + body bytes pass through unchanged. This is
+  // required for native <video>/<audio> seeking against /api/im/assets/:id.
+  if (contentType && !contentType.startsWith('text/') && !contentType.includes('xml')) {
+    forwardHeaders.set('Content-Type', contentType);
+    return new NextResponse(response.body, {
+      status: response.status,
+      headers: forwardHeaders,
+    });
   }
 
   const text = await response.text();
@@ -224,12 +258,18 @@ async function handleRequest(request: NextRequest, params: { path: string[] }): 
     const method = request.method;
     const isHealthCheck = path === 'health';
     const isRegister = path === 'register' && method === 'POST';
-    // SSE sync/stream uses ?token= query param (EventSource can't set headers)
+    // SSE endpoints: EventSource cannot set Authorization headers, so they
+    // pass the bearer in `?token=` and verify it inside the Hono handler
+    // (against the same JWT_SECRET — see src/im/api/tasks.ts SSE handler).
+    // apiGuard would reject these for missing Authorization header.
     const isSyncStream = path === 'sync/stream' && method === 'GET';
+    const isTaskEvents = path === 'tasks/events' && method === 'GET';
+    const isSSEStream = isSyncStream || isTaskEvents;
 
     let authHeader = request.headers.get('authorization');
     const originalAuthHeader = authHeader;
     let auth: AuthInfo | null = null;
+    let searchParamOverrides: Record<string, string> | undefined;
 
     // Public endpoints bypass auth (no login required)
     const isPublicEvolution =
@@ -265,21 +305,63 @@ async function handleRequest(request: NextRequest, params: { path: string[] }): 
         path.startsWith('community/boards') ||
         path.startsWith('community/autocomplete/'));
 
-    // Health, register, SSE sync/stream, and public read endpoints bypass apiGuard
-    if (!isHealthCheck && !isRegister && !isSyncStream && !isPublicEvolution && !isPublicSkills && !isPublicCommunity) {
+    // QR-pair bootstrap (v1.9.3 Track C, Cloud 4): the daemon has no API key
+    // until pair/poll completes, so /pair/offer and /pair/poll/:nonce must
+    // bypass apiGuard. /pair/approve stays auth-required — that's the mobile-
+    // user-clicks-Approve step and is enforced inside the Hono router.
+    // /pair/local-only-approve (Wave-6 α) replaces /pair/approve in LAN-dev
+    // mode and gates itself on `LOCAL_ONLY=1 && NODE_ENV !== 'production'`
+    // inside the Hono handler — apiGuard would reject it for missing
+    // Authorization, so we bypass apiGuard here and let the route's own
+    // gate decide.
+    const isPublicPair =
+      (path === 'pair/offer' && method === 'POST') ||
+      (/^pair\/poll\/[^/]+$/.test(path) && method === 'GET') ||
+      (path === 'pair/local-only-approve' && method === 'POST');
+
+    // Health, register, SSE streams, and public read endpoints bypass normal
+    // header auth. SSE handlers verify `?token=` themselves; API keys in that
+    // query param are translated here because EventSource cannot attach an
+    // Authorization header for the usual apiGuard path.
+    if (isSSEStream) {
+      const queryToken = request.nextUrl.searchParams.get('token');
+      if (queryToken?.startsWith('sk-prismer-')) {
+        const headers = new Headers(request.headers);
+        headers.set('authorization', `Bearer ${queryToken}`);
+        const guardRequest = new NextRequest(request.url, { headers, method: request.method });
+        const guard = await apiGuard(guardRequest, { tier: 'tracked' });
+        if (!guard.ok) return guard.response;
+        auth = guard.auth;
+        if (guard.auth.imToken) {
+          authHeader = `Bearer ${guard.auth.imToken}`;
+          searchParamOverrides = { token: guard.auth.imToken };
+        }
+      }
+    } else if (
+      !isHealthCheck &&
+      !isRegister &&
+      !isSSEStream &&
+      !isPublicEvolution &&
+      !isPublicSkills &&
+      !isPublicCommunity &&
+      !isPublicPair
+    ) {
       const guard = await apiGuard(request, { tier: 'tracked' });
       if (!guard.ok) return guard.response;
       auth = guard.auth;
 
-      // Replace auth header with IM JWT (both API Key and platform JWT users)
+      // Replace auth header with IM JWT for API Key users (translation needed).
+      // Platform JWT users keep their original Bearer header — native auth
+      // (Cloud 1, 54release) signs platform JWT with the same JWT_SECRET that
+      // the IM Hono authMiddleware uses, and `sub` is already the IMUser.id.
+      // Regenerating into an api_key_proxy IM token caused authMiddleware to
+      // call ensureIMUser(payload.sub) where sub is the IMUser.id, treating
+      // it as a cloud-user-id — which silently auto-created a phantom IMUser
+      // and made workspace queries return [] for the real owner.
       if (guard.auth.authType === 'api_key' && guard.auth.imToken) {
         authHeader = `Bearer ${guard.auth.imToken}`;
-      } else if (guard.auth.authType === 'jwt') {
-        // Platform JWT is signed by backend — IM server uses a different secret.
-        // Generate an IM-compatible JWT so Hono authMiddleware can verify it.
-        const { generateIMTokenForUser } = await import('@/lib/api-guard');
-        authHeader = `Bearer ${generateIMTokenForUser(guard.auth.userId, guard.auth.email)}`;
       }
+      // jwt: leave authHeader as the original Bearer (forward-as-is)
     } else if (isRegister && authHeader) {
       // Register with API Key: optional auth for binding agent to human
       try {
@@ -301,23 +383,30 @@ async function handleRequest(request: NextRequest, params: { path: string[] }): 
       method,
       authHeader,
       originalAuthHeader,
+      searchParamOverrides,
       startTime,
     };
 
     const response = await callIMApp(ctx);
 
-    // Post-processing in background (usage recording + agent registration bonus)
-    try {
-      const responseClone = response.clone();
-      const data = await responseClone.json();
-      recordIMUsage(path, ctx, data, auth);
+    // Post-processing in background (usage recording + agent registration bonus).
+    // Skip for SSE streams: `.clone().json()` would hang forever waiting for
+    // an end-of-stream that never arrives, and SSE traffic is per-connection
+    // (one open stream, not per-message), so usage accounting doesn't apply.
+    const responseContentType = response.headers.get('content-type') || '';
+    if (!responseContentType.includes('text/event-stream')) {
+      try {
+        const responseClone = response.clone();
+        const data = await responseClone.json();
+        recordIMUsage(path, ctx, data, auth);
 
-      // Agent registration → bonus credits
-      if (path === 'register' && method === 'POST') {
-        handleAgentRegistration(data, auth).catch(() => {});
+        // Agent registration → bonus credits
+        if (path === 'register' && method === 'POST') {
+          handleAgentRegistration(data, auth).catch(() => {});
+        }
+      } catch {
+        // Ignore post-processing errors
       }
-    } catch {
-      // Ignore post-processing errors
     }
 
     return response;

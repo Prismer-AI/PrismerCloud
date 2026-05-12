@@ -18,6 +18,11 @@ import type { MemoryService } from '../services/memory.service';
 import { createRateLimitMiddleware } from '../middleware/rate-limit';
 import { isValidScope } from '../utils/scope';
 import type { ApiResponse } from '../types/index';
+import {
+  WorkspaceResolutionError,
+  memoryWorkspaceErrorResponse,
+  resolveMemoryWorkspaceIdForRequest,
+} from './workspace-resolver';
 
 /** Extract and validate scope from query, return null on invalid */
 function getScope(c: any): string | null {
@@ -32,6 +37,16 @@ export function createEvolutionRouter(
   memoryService?: MemoryService,
 ) {
   const router = new Hono();
+  const resolveWorkspace = async (c: any, explicit?: unknown) => {
+    try {
+      return { workspaceId: await resolveMemoryWorkspaceIdForRequest(c, explicit) };
+    } catch (err) {
+      if (err instanceof WorkspaceResolutionError) {
+        return { response: memoryWorkspaceErrorResponse(c, err) };
+      }
+      throw err;
+    }
+  };
 
   // ─── Public Endpoints (no auth) ────────────────────────────
 
@@ -208,7 +223,7 @@ export function createEvolutionRouter(
       const days = Math.min(parseInt(c.req.query('days') || '14', 10), 90);
       const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
       const rows = await prisma.iMEvolutionMetrics.findMany({
-        where: { mode: 'standard', scope: 'global', ts: { gte: since } },
+        where: { mode: 'standard', ts: { gte: since } },
         orderBy: { ts: 'asc' },
       });
       c.header('Cache-Control', 'public, max-age=300');
@@ -222,31 +237,16 @@ export function createEvolutionRouter(
 
   /**
    * GET /api/evolution/scopes — List scopes the agent participates in
+   *
+   * v1.9.3 m3: the `scope` column was dropped from im_genes and
+   * im_evolution_edges (migration 120). Workspace isolation now happens via
+   * the `workspaceId` column. For backwards compatibility this endpoint still
+   * returns a string list — always at minimum ['global'] — so existing SDK
+   * callers continue to render a "scope picker" without errors.
    */
   router.get('/scopes', authMiddleware, async (c) => {
-    const user = c.get('user');
-    // Person-level: query scopes from all agent instances of the same person
-    const personAgentIds = await getPersonAgentIds(user.imUserId);
-    const [geneScopes, edgeScopes] = await Promise.all([
-      prisma.iMGene.findMany({
-        where: { ownerAgentId: { in: personAgentIds } },
-        select: { scope: true },
-        distinct: ['scope'],
-      }),
-      prisma.iMEvolutionEdge.findMany({
-        where: { ownerAgentId: { in: personAgentIds } },
-        select: { scope: true },
-        distinct: ['scope'],
-      }),
-    ]);
-    const scopes = [
-      ...new Set([
-        ...geneScopes.map((g: any) => g.scope),
-        ...edgeScopes.map((e: any) => e.scope),
-        'global', // always include global
-      ]),
-    ];
-    return c.json({ ok: true, data: scopes });
+    void getPersonAgentIds; // legacy import retained for other handlers
+    return c.json({ ok: true, data: ['global'] });
   });
 
   /**
@@ -278,28 +278,33 @@ export function createEvolutionRouter(
    * Returns immediately with trace_id. LLM processes in background.
    */
   router.post('/report', authMiddleware, rl('tool_call'), async (c) => {
-    const user = c.get('user');
-    const body = await c.req.json();
+    try {
+      const user = c.get('user');
+      const body = await c.req.json();
 
-    if (!body.raw_context || typeof body.raw_context !== 'string') {
-      return c.json<ApiResponse>({ ok: false, error: 'raw_context is required (string)' }, 400);
+      if (!body.raw_context || typeof body.raw_context !== 'string') {
+        return c.json<ApiResponse>({ ok: false, error: 'raw_context is required (string)' }, 400);
+      }
+      if (!body.outcome || !['success', 'failed'].includes(body.outcome)) {
+        return c.json<ApiResponse>({ ok: false, error: 'outcome is required (success|failed)' }, 400);
+      }
+
+      const result = await evolutionService.submitReport(user.imUserId, {
+        raw_context: body.raw_context,
+        task: body.task,
+        outcome: body.outcome,
+        score: body.score,
+        provider: body.provider,
+        stage: body.stage,
+        severity: body.severity,
+        gene_id: body.gene_id,
+      });
+
+      return c.json<ApiResponse>({ ok: true, data: result });
+    } catch (err) {
+      console.error('[Evolution] /report failed:', err instanceof Error ? err.stack : err);
+      return c.json<ApiResponse>({ ok: false, error: err instanceof Error ? err.message : 'report failed' }, 500);
     }
-    if (!body.outcome || !['success', 'failed'].includes(body.outcome)) {
-      return c.json<ApiResponse>({ ok: false, error: 'outcome is required (success|failed)' }, 400);
-    }
-
-    const result = await evolutionService.submitReport(user.imUserId, {
-      raw_context: body.raw_context,
-      task: body.task,
-      outcome: body.outcome,
-      score: body.score,
-      provider: body.provider,
-      stage: body.stage,
-      severity: body.severity,
-      gene_id: body.gene_id,
-    });
-
-    return c.json<ApiResponse>({ ok: true, data: result });
   });
 
   /**
@@ -334,89 +339,97 @@ export function createEvolutionRouter(
    * Returns: EvolutionAdvice
    */
   router.post('/analyze', authMiddleware, rl('tool_call'), async (c) => {
-    const user = c.get('user');
-    const body = await c.req.json();
+    try {
+      const user = c.get('user');
+      const body = await c.req.json();
 
-    // Extract signals from context or use provided signals
-    // v0.3.0: signals[] can be string[] (old) or SignalTag[] (new)
-    let signals: string[] | object[];
-    let rawSignals = body.signals;
-    if (typeof rawSignals === 'string') {
-      try {
-        rawSignals = JSON.parse(rawSignals);
-      } catch {
-        rawSignals = [rawSignals];
+      // Extract signals from context or use provided signals
+      // v0.3.0: signals[] can be string[] (old) or SignalTag[] (new)
+      let signals: string[] | object[];
+      let rawSignals = body.signals;
+      if (typeof rawSignals === 'string') {
+        try {
+          rawSignals = JSON.parse(rawSignals);
+        } catch {
+          rawSignals = [rawSignals];
+        }
       }
-    }
-    if (rawSignals && Array.isArray(rawSignals) && rawSignals.length > 0) {
-      signals = rawSignals;
-    } else {
-      signals = evolutionService.extractSignals({
-        taskStatus: body.task_status,
-        taskCapability: body.task_capability,
-        error: body.error,
-        tags: body.tags,
-        customSignals: body.custom_signals,
-        provider: body.provider,
-        stage: body.stage,
-        severity: body.severity,
-      });
-    }
+      if (rawSignals && Array.isArray(rawSignals) && rawSignals.length > 0) {
+        signals = rawSignals;
+      } else {
+        signals = evolutionService.extractSignals({
+          taskStatus: body.task_status,
+          taskCapability: body.task_capability,
+          error: body.error,
+          tags: body.tags,
+          customSignals: body.custom_signals,
+          provider: body.provider,
+          stage: body.stage,
+          severity: body.severity,
+        });
+      }
 
-    if (signals.length === 0) {
-      return c.json<ApiResponse>(
-        {
-          ok: false,
-          error: 'No signals could be extracted. Provide signals[] or context fields (task_status, error, tags).',
-        },
-        400,
-      );
-    }
-
-    // Extract scope from query (default: 'global')
-    const scope = getScope(c);
-    if (!scope) return c.json<ApiResponse>({ ok: false, error: 'Invalid scope format' }, 400);
-    const advice = await evolutionService.selectGene(signals as string[], user.imUserId, scope);
-
-    // v1.8.0: search for related memory files using signal key as query
-    if (memoryService && advice.signals?.length > 0) {
-      try {
-        const signalTypes = advice.signals.map((s: any) => (typeof s === 'string' ? s : s.type));
-        const searchTerms = signalTypes.map((t: string) =>
-          t.replace(/^(error|perf|tag|capability):/, '').replace(/_/g, ' '),
+      if (signals.length === 0) {
+        return c.json<ApiResponse>(
+          {
+            ok: false,
+            error: 'No signals could be extracted. Provide signals[] or context fields (task_status, error, tags).',
+          },
+          400,
         );
-        const uniqueTerms = [...new Set(searchTerms)].slice(0, 3);
+      }
 
-        const memoryResults = await Promise.all(
-          uniqueTerms.map((term: string) => memoryService.searchMemoryFiles(user.imUserId, term, 3)),
-        );
+      // Extract scope from query (default: 'global')
+      const scope = getScope(c);
+      if (!scope) return c.json<ApiResponse>({ ok: false, error: 'Invalid scope format' }, 400);
+      const advice = await evolutionService.selectGene(signals as string[], user.imUserId, scope);
 
-        const seen = new Set<string>();
-        const relatedMemories: Array<{ id: string; path: string; snippet: string; relevance: number }> = [];
-        for (const results of memoryResults) {
-          for (const r of results) {
-            if (!seen.has(r.id)) {
-              seen.add(r.id);
-              relatedMemories.push({
-                id: r.id,
-                path: r.path,
-                snippet: r.snippet,
-                relevance: (r as any).relevance ?? 0.5,
-              });
+      // v1.8.0: search for related memory files using signal key as query
+      if (memoryService && advice.signals?.length > 0) {
+        try {
+          const resolved = await resolveWorkspace(c, body.workspaceId ?? c.req.query('workspaceId'));
+          if (resolved.response) return resolved.response;
+
+          const signalTypes = advice.signals.map((s: any) => (typeof s === 'string' ? s : s.type));
+          const searchTerms = signalTypes.map((t: string) =>
+            t.replace(/^(error|perf|tag|capability):/, '').replace(/_/g, ' '),
+          );
+          const uniqueTerms = [...new Set(searchTerms)].slice(0, 3);
+
+          const memoryResults = await Promise.all(
+            uniqueTerms.map((term: string) => memoryService.searchMemoryFiles(resolved.workspaceId!, term, 3)),
+          );
+
+          const seen = new Set<string>();
+          const relatedMemories: Array<{ id: string; path: string; snippet: string; relevance: number }> = [];
+          for (const results of memoryResults) {
+            for (const r of results) {
+              if (!seen.has(r.id)) {
+                seen.add(r.id);
+                relatedMemories.push({
+                  id: r.id,
+                  path: r.path,
+                  snippet: r.snippet,
+                  relevance: (r as any).relevance ?? 0.5,
+                });
+              }
             }
           }
-        }
 
-        advice.relatedMemories = relatedMemories.sort((a, b) => b.relevance - a.relevance).slice(0, 5);
-      } catch (err) {
-        console.error('[Evolution] Related memory search error:', err);
+          advice.relatedMemories = relatedMemories.sort((a, b) => b.relevance - a.relevance).slice(0, 5);
+        } catch (err) {
+          console.error('[Evolution] Related memory search error:', err);
+          advice.relatedMemories = [];
+        }
+      } else {
         advice.relatedMemories = [];
       }
-    } else {
-      advice.relatedMemories = [];
-    }
 
-    return c.json<ApiResponse>({ ok: true, data: advice });
+      return c.json<ApiResponse>({ ok: true, data: advice });
+    } catch (err) {
+      console.error('[Evolution] /analyze failed:', err instanceof Error ? err.stack : err);
+      return c.json<ApiResponse>({ ok: false, error: err instanceof Error ? err.message : 'analyze failed' }, 500);
+    }
   });
 
   /**
@@ -474,6 +487,12 @@ export function createEvolutionRouter(
     if (!scope) return c.json<ApiResponse>({ ok: false, error: 'Invalid scope format' }, 400);
 
     try {
+      const resolved = await resolveWorkspace(
+        c,
+        body.workspaceId ?? body.metadata?.workspaceId ?? c.req.query('workspaceId'),
+      );
+      if (resolved.response) return resolved.response;
+
       const result = await evolutionService.recordOutcome(
         user.imUserId,
         {
@@ -483,7 +502,7 @@ export function createEvolutionRouter(
           score: body.score,
           summary: body.summary,
           cost_credits: body.cost_credits,
-          metadata: body.metadata,
+          metadata: { ...(body.metadata ?? {}), workspaceId: resolved.workspaceId },
           transition_reason: body.transition_reason,
           context_snapshot: body.context_snapshot,
         },
@@ -650,16 +669,17 @@ export function createEvolutionRouter(
   router.get('/genes/:geneId', authMiddleware, async (c) => {
     const user = c.get('user');
     const geneId = c.req.param('geneId');
-    const scope = getScope(c) || 'global';
+    // v1.9.3 m3: `scope` query param accepted for back-compat but no longer
+    // applied to the where clause (column dropped in migration 120).
 
     try {
       const gene = await prisma.iMGene.findFirst({
-        where: { id: geneId, ownerAgentId: user.imUserId, scope },
+        where: { id: geneId, ownerAgentId: user.imUserId },
       });
       if (!gene) {
         // Fallback: try public gene (not owner but published)
         const publicGene = await prisma.iMGene.findFirst({
-          where: { id: geneId, visibility: 'published', scope },
+          where: { id: geneId, visibility: 'published' },
         });
         if (!publicGene) {
           return c.json<ApiResponse>({ ok: false, error: 'Gene not found' }, 404);
@@ -827,14 +847,13 @@ export function createEvolutionRouter(
     if (!scope) return c.json<ApiResponse>({ ok: false, error: 'Invalid scope format' }, 400);
 
     try {
-      // Person-level sync: pull genes from all agent instances of the same person
+      // Person-level sync: pull genes from all agent instances of the same person.
+      // Migration 120 dropped scope from im_genes; the legacy widen-with-global pattern is gone.
       const personAgentIds = await getPersonAgentIds(user.imUserId);
-      const scopeFilter = scope !== 'global' ? { scope: { in: [scope, 'global'] } } : {};
       const genes = await prisma.iMGene.findMany({
         where: {
           OR: [{ ownerAgentId: { in: personAgentIds } }, { visibility: { in: ['seed', 'published'] } }],
           ...(since > 0 ? { updatedAt: { gt: new Date(since) } } : {}),
-          ...scopeFilter,
         },
         take: 500,
         orderBy: { updatedAt: 'desc' },
@@ -898,7 +917,19 @@ export function createEvolutionRouter(
       try {
         if (o.gene_id && o.signals && o.outcome && o.summary) {
           const pushScope = c.req.query('scope') || body?.push?.scope || 'global';
-          await evolutionService.recordOutcome(user.imUserId, o, pushScope);
+          const resolved = await resolveWorkspace(
+            c,
+            o.workspaceId ?? o.metadata?.workspaceId ?? body?.push?.workspaceId,
+          );
+          if (resolved.response) {
+            rejected.push(`outcome[${i}]: workspace resolution failed`);
+            continue;
+          }
+          await evolutionService.recordOutcome(
+            user.imUserId,
+            { ...o, metadata: { ...(o.metadata ?? {}), workspaceId: resolved.workspaceId } },
+            pushScope,
+          );
           accepted++;
         } else {
           rejected.push(`outcome[${i}]: missing fields`);
@@ -908,21 +939,21 @@ export function createEvolutionRouter(
       }
     }
 
-    // Pull: person-level delta (all agent instances of the same person)
+    // Pull: person-level delta (all agent instances of the same person).
+    // Migration 120 dropped scope from im_genes / im_evolution_edges; sync no longer differentiates
+    // by scope. We still parse the param for legacy clients but the filter is dropped.
     const rawSyncScope = c.req.query('scope') || body?.pull?.scope || 'global';
-    const syncScope = isValidScope(rawSyncScope) ? rawSyncScope : 'global';
-    const syncScopeFilter = syncScope !== 'global' ? { scope: { in: [syncScope, 'global'] } } : {};
+    void (isValidScope(rawSyncScope) ? rawSyncScope : 'global');
     const personAgentIds = await getPersonAgentIds(user.imUserId);
     const genes = await prisma.iMGene.findMany({
       where: {
         OR: [{ ownerAgentId: { in: personAgentIds } }, { visibility: { in: ['seed', 'published'] } }],
         updatedAt: { gt: new Date(pullSince) },
-        ...syncScopeFilter,
       },
       take: 200,
     });
     const edges = await prisma.iMEvolutionEdge.findMany({
-      where: { ownerAgentId: user.imUserId, updatedAt: { gt: new Date(pullSince) }, ...syncScopeFilter },
+      where: { ownerAgentId: user.imUserId, updatedAt: { gt: new Date(pullSince) } },
     });
 
     let cursor = pullSince;
@@ -1436,7 +1467,7 @@ ${strategy.map((s: string, i: number) => `${i + 1}. ${s}`).join('\n')}
         prisma.iMEvolutionAchievement.findMany({ where: { agentId }, select: { badgeKey: true } }),
         (async () => {
           const bestEdge = await prisma.iMEvolutionEdge.findFirst({
-            where: { ownerAgentId: agentId, scope: 'global', successCount: { gte: 1 } },
+            where: { ownerAgentId: agentId, successCount: { gte: 1 } },
             orderBy: { successCount: 'desc' },
             select: { geneId: true, successCount: true, failureCount: true },
           });
@@ -1491,7 +1522,7 @@ ${strategy.map((s: string, i: number) => `${i + 1}. ${s}`).join('\n')}
       let liveErr = null;
       if (trend.length === 0) {
         const edges = await prisma.iMEvolutionEdge.findMany({
-          where: { ownerAgentId: agentId, scope: 'global' },
+          where: { ownerAgentId: agentId },
           select: { successCount: true, failureCount: true },
         });
         const totalS = edges.reduce((s: number, e: any) => s + e.successCount, 0);

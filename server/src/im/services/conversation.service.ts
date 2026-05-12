@@ -6,7 +6,7 @@
  */
 
 import type Redis from 'ioredis';
-import { ConversationModel, type CreateConversationInput } from '../models/conversation';
+import { ConversationModel } from '../models/conversation';
 import { ParticipantModel } from '../models/participant';
 import type { ConversationStatus, ParticipantRole } from '../types/index';
 import type { SyncService } from './sync.service';
@@ -32,7 +32,10 @@ export class ConversationService {
   private convModel: ConversationModel;
   private participantModel: ParticipantModel;
 
-  constructor(private redis: Redis, private syncService?: SyncService) {
+  constructor(
+    private redis: Redis,
+    private syncService?: SyncService,
+  ) {
     this.convModel = new ConversationModel();
     this.participantModel = new ParticipantModel();
   }
@@ -47,9 +50,9 @@ export class ConversationService {
     participantIds?: string[],
   ): Promise<void> {
     if (!this.syncService) return;
-    const ids = participantIds ?? (
-      await this.participantModel.listByConversation(conversationId)
-    ).map((p: { imUserId: string }) => p.imUserId);
+    const ids =
+      participantIds ??
+      (await this.participantModel.listByConversation(conversationId)).map((p: { imUserId: string }) => p.imUserId);
     for (const userId of ids) {
       if (userId) {
         await this.syncService.writeEvent(type, data, conversationId, userId);
@@ -61,6 +64,40 @@ export class ConversationService {
    * Create a 1:1 direct conversation.
    */
   async createDirect(input: CreateDirectInput) {
+    const existing = await prisma.iMConversation.findFirst({
+      where: {
+        type: 'direct',
+        status: { not: 'deleted' },
+        AND: [
+          { participants: { some: { imUserId: input.createdBy, leftAt: null } } },
+          { participants: { some: { imUserId: input.otherUserId, leftAt: null } } },
+        ],
+      },
+    });
+    if (existing) {
+      if (input.workspaceId && !existing.workspaceId) {
+        const patched = await prisma.iMConversation.update({
+          where: { id: existing.id },
+          data: { workspaceId: input.workspaceId },
+        });
+        await this.writeSyncForParticipants(
+          'conversation.update',
+          { id: existing.id, workspaceId: input.workspaceId },
+          existing.id,
+        );
+        return patched;
+      }
+      if (existing.status === 'archived') {
+        const reactivated = await prisma.iMConversation.update({
+          where: { id: existing.id },
+          data: { status: 'active' },
+        });
+        await this.writeSyncForParticipants('conversation.update', { id: existing.id, status: 'active' }, existing.id);
+        return reactivated;
+      }
+      return existing;
+    }
+
     const conv = await this.convModel.create({
       type: 'direct',
       createdBy: input.createdBy,
@@ -81,9 +118,11 @@ export class ConversationService {
     });
 
     // v1.8.0 S3: Create security record with 'recommended' signing policy
-    await prisma.iMConversationSecurity.create({
-      data: { conversationId: conv.id, signingPolicy: 'recommended', encryptionMode: 'none' },
-    }).catch(() => {}); // Ignore if already exists (race condition guard)
+    await prisma.iMConversationSecurity
+      .create({
+        data: { conversationId: conv.id, signingPolicy: 'recommended', encryptionMode: 'none' },
+      })
+      .catch(() => {}); // Ignore if already exists (race condition guard)
 
     // Sync event for both participants
     const participants = [input.createdBy, input.otherUserId];
@@ -129,12 +168,14 @@ export class ConversationService {
     }
 
     // v1.8.0 S3: Create security record with 'recommended' signing policy
-    await prisma.iMConversationSecurity.create({
-      data: { conversationId: conv.id, signingPolicy: 'recommended', encryptionMode: 'none' },
-    }).catch(() => {});
+    await prisma.iMConversationSecurity
+      .create({
+        data: { conversationId: conv.id, signingPolicy: 'recommended', encryptionMode: 'none' },
+      })
+      .catch(() => {});
 
     // Sync event for all members
-    const allMembers = [input.createdBy, ...input.memberIds.filter(m => m !== input.createdBy)];
+    const allMembers = [input.createdBy, ...input.memberIds.filter((m) => m !== input.createdBy)];
     await this.writeSyncForParticipants(
       'conversation.create',
       { id: conv.id, type: 'group', title: input.title, members: allMembers },
@@ -163,37 +204,22 @@ export class ConversationService {
     return result;
   }
 
-  async update(
-    id: string,
-    data: { title?: string; description?: string; metadata?: Record<string, unknown> }
-  ) {
+  async update(id: string, data: { title?: string; description?: string; metadata?: Record<string, unknown> }) {
     const result = await this.convModel.update(id, data);
     await this.writeSyncForParticipants('conversation.update', { id, ...data }, id);
     return result;
   }
 
-  async addParticipant(
-    conversationId: string,
-    userId: string,
-    role: ParticipantRole = 'member'
-  ) {
+  async addParticipant(conversationId: string, userId: string, role: ParticipantRole = 'member') {
     const result = await this.participantModel.add({ conversationId, userId, role });
     // Notify all existing participants + the new one
-    await this.writeSyncForParticipants(
-      'participant.add',
-      { conversationId, userId, role },
-      conversationId,
-    );
+    await this.writeSyncForParticipants('participant.add', { conversationId, userId, role }, conversationId);
     return result;
   }
 
   async removeParticipant(conversationId: string, userId: string) {
     // Write sync event BEFORE removal so the removed user also sees it
-    await this.writeSyncForParticipants(
-      'participant.remove',
-      { conversationId, userId },
-      conversationId,
-    );
+    await this.writeSyncForParticipants('participant.remove', { conversationId, userId }, conversationId);
     return this.participantModel.remove(conversationId, userId);
   }
 

@@ -3,9 +3,11 @@
 import Link from 'next/link';
 import { Github, Twitter } from 'lucide-react';
 import { useTheme } from '@/contexts/theme-context';
+import { useI18n } from '@/contexts/i18n-context';
 
 export function Footer() {
   const { resolvedTheme } = useTheme();
+  const { t } = useI18n();
   const isDark = resolvedTheme === 'dark';
 
   return (
@@ -42,7 +44,7 @@ export function Footer() {
                   href="/playground"
                   className={`transition-colors ${isDark ? 'hover:text-white' : 'hover:text-zinc-900'}`}
                 >
-                  Playground
+                  {t('nav.playground')}
                 </Link>
               </li>
               <li>
@@ -58,7 +60,7 @@ export function Footer() {
                   href="/#pricing"
                   className={`transition-colors ${isDark ? 'hover:text-white' : 'hover:text-zinc-900'}`}
                 >
-                  Pricing
+                  {t('nav.pricing')}
                 </Link>
               </li>
               <li>
@@ -66,7 +68,7 @@ export function Footer() {
                   href="/dashboard"
                   className={`transition-colors ${isDark ? 'hover:text-white' : 'hover:text-zinc-900'}`}
                 >
-                  Dashboard
+                  {t('nav.dashboard')}
                 </Link>
               </li>
             </ul>

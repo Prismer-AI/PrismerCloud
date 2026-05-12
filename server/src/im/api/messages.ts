@@ -93,7 +93,7 @@ export function createMessagesRouter(
    */
   router.get('/:conversationId', async (c) => {
     const user = c.get('user');
-    const conversationId = c.req.param('conversationId')!;
+    const conversationId = c.req.param('conversationId');
 
     // Check participation (use imUserId for resolved identity)
     const isMember = await conversationService.isParticipant(conversationId, user.imUserId);
@@ -103,7 +103,24 @@ export function createMessagesRouter(
 
     const before = c.req.query('before') ?? undefined;
     const after = c.req.query('after') ?? undefined;
-    const limit = parseInt(c.req.query('limit') ?? '50', 10);
+    const q = c.req.query('q')?.trim() ?? '';
+    const parsedLimit = parseInt(c.req.query('limit') ?? (q ? '20' : '50'), 10);
+    const limit = Number.isFinite(parsedLimit) ? parsedLimit : q ? 20 : 50;
+
+    if (q) {
+      const result = await messageService.searchMessages({
+        conversationId,
+        query: q,
+        before,
+        limit,
+      });
+
+      return c.json<ApiResponse>({
+        ok: true,
+        data: result.messages,
+        meta: { total: result.total, pageSize: Math.min(Math.max(limit, 1), 50), query: q },
+      });
+    }
 
     const messages = await messageService.getHistory({
       conversationId,
@@ -153,7 +170,7 @@ export function createMessagesRouter(
   }
   router.post('/:conversationId', async (c) => {
     const user = c.get('user');
-    const conversationId = c.req.param('conversationId')!;
+    const conversationId = c.req.param('conversationId');
     const body = await c.req.json();
 
     const {
@@ -333,8 +350,8 @@ export function createMessagesRouter(
    */
   router.patch('/:conversationId/:messageId', async (c) => {
     const user = c.get('user');
-    const conversationId = c.req.param('conversationId')!;
-    const messageId = c.req.param('messageId')!;
+    const conversationId = c.req.param('conversationId');
+    const messageId = c.req.param('messageId');
     const body = await c.req.json();
 
     const msg = await messageService.getById(messageId);
@@ -381,8 +398,8 @@ export function createMessagesRouter(
    */
   router.delete('/:conversationId/:messageId', async (c) => {
     const user = c.get('user');
-    const conversationId = c.req.param('conversationId')!;
-    const messageId = c.req.param('messageId')!;
+    const conversationId = c.req.param('conversationId');
+    const messageId = c.req.param('messageId');
 
     const msg = await messageService.getById(messageId);
     if (!msg) {
