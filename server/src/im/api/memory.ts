@@ -780,8 +780,7 @@ export function createMemoryRouter(
    */
   router.get('/files/:id', async (c) => {
     try {
-      const resolved = await resolveWorkspace(c, c.req.query('workspaceId'));
-      if (resolved.response) return resolved.response;
+      const file = await memoryService.readMemoryFile(c.req.param('id')!);
 
       const file = await memoryService.readMemoryFile(c.req.param('id'), resolved.workspaceId!);
       const user = c.get('user');
@@ -841,14 +840,13 @@ export function createMemoryRouter(
       if (resolved.response) return resolved.response;
 
       // Pre-check ownership
-      const existing = await memoryService.readMemoryFile(c.req.param('id'), resolved.workspaceId!);
+      const existing = await memoryService.readMemoryFile(c.req.param('id')!);
       if (existing.ownerId !== user.imUserId) {
         return c.json<ApiResponse>({ ok: false, error: 'Not found' }, 404);
       }
 
       const result = await memoryService.updateMemoryFile(
-        c.req.param('id'),
-        resolved.workspaceId!,
+        c.req.param('id')!,
         operation,
         String(content),
         version,
@@ -877,15 +875,12 @@ export function createMemoryRouter(
     const user = c.get('user');
 
     try {
-      const resolved = await resolveWorkspace(c, c.req.query('workspaceId'));
-      if (resolved.response) return resolved.response;
-
-      const existing = await memoryService.readMemoryFile(c.req.param('id'), resolved.workspaceId!);
+      const existing = await memoryService.readMemoryFile(c.req.param('id')!);
       if (existing.ownerId !== user.imUserId) {
         return c.json<ApiResponse>({ ok: false, error: 'Not found' }, 404);
       }
 
-      await memoryService.deleteMemoryFile(c.req.param('id'), resolved.workspaceId!);
+      await memoryService.deleteMemoryFile(c.req.param('id')!);
       return c.json<ApiResponse>({ ok: true });
     } catch (err) {
       if (err instanceof MemoryNotFoundError) {
@@ -934,7 +929,7 @@ export function createMemoryRouter(
    */
   router.get('/compact/:conversationId', async (c) => {
     const user = c.get('user');
-    const conversationId = c.req.param('conversationId');
+    const conversationId = c.req.param('conversationId')!;
 
     // Verify user is a participant of the conversation
     if (conversationService) {
