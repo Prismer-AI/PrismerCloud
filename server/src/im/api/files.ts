@@ -38,8 +38,8 @@ export function createFilesRouter(fileService: FileService, rateLimiter?: RateLi
       return c.json<ApiResponse>({ ok: false, error: 'Dev download not available when S3 is configured' }, 400);
     }
 
-    const uploadId = c.req.param('uploadId');
-    const fileName = decodeURIComponent(c.req.param('fileName'));
+    const uploadId = c.req.param('uploadId')!;
+    const fileName = decodeURIComponent(c.req.param('fileName')!);
 
     // Block path traversal attempts at route level
     if (fileName.includes('..') || fileName.includes('/') || fileName.includes('\\')) {
@@ -203,7 +203,7 @@ export function createFilesRouter(fileService: FileService, rateLimiter?: RateLi
 
   router.delete('/:uploadId', async (c) => {
     const user = c.get('user') as { imUserId: string };
-    const uploadId = c.req.param('uploadId');
+    const uploadId = c.req.param('uploadId')!;
 
     try {
       await fileService.deleteFile(uploadId, user.imUserId);
@@ -232,7 +232,7 @@ export function createFilesRouter(fileService: FileService, rateLimiter?: RateLi
       return c.json<ApiResponse>({ ok: false, error: 'Dev upload not available when S3 is configured' }, 400);
     }
 
-    const uploadId = c.req.param('uploadId');
+    const uploadId = c.req.param('uploadId')!;
 
     try {
       const body = await c.req.parseBody();
