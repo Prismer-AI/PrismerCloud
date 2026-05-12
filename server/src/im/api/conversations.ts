@@ -238,9 +238,9 @@ export function createConversationsRouter(conversationService: ConversationServi
    * and pin are participant-level, not conversation-level — we resolve them
    * from the caller's IMParticipant row.
    */
-  router.get('/:id', async (c) => {
-    const user = c.get('user');
-    const convId = c.req.param('id');
+  router.get("/:id", async (c) => {
+    const user = c.get("user");
+    const convId = c.req.param("id")!;
 
     const conv = await conversationService.getById(convId);
     if (!conv) {
@@ -290,9 +290,9 @@ export function createConversationsRouter(conversationService: ConversationServi
   /**
    * PATCH /api/conversations/:id — Update conversation
    */
-  router.patch('/:id', async (c) => {
-    const user = c.get('user');
-    const convId = c.req.param('id');
+  router.patch("/:id", async (c) => {
+    const user = c.get("user");
+    const convId = c.req.param("id")!;
     const body = await c.req.json();
 
     const isMember = await conversationService.isParticipant(convId, user.imUserId);
@@ -307,9 +307,9 @@ export function createConversationsRouter(conversationService: ConversationServi
   /**
    * POST /api/conversations/:id/read — Mark conversation as read
    */
-  router.post('/:id/read', async (c) => {
-    const user = c.get('user');
-    const convId = c.req.param('id');
+  router.post("/:id/read", async (c) => {
+    const user = c.get("user");
+    const convId = c.req.param("id")!;
 
     // Verify participation
     const isMember = await conversationService.isParticipant(convId, user.imUserId);
@@ -364,8 +364,8 @@ export function createConversationsRouter(conversationService: ConversationServi
   /**
    * POST /api/conversations/:id/archive — Archive conversation
    */
-  router.post('/:id/archive', async (c) => {
-    const convId = c.req.param('id');
+  router.post("/:id/archive", async (c) => {
+    const convId = c.req.param("id")!;
     const updated = await conversationService.archive(convId);
     return c.json<ApiResponse>({ ok: true, data: updated });
   });
@@ -442,8 +442,8 @@ export function createConversationsRouter(conversationService: ConversationServi
   /**
    * POST /api/conversations/:id/participants — Add participant
    */
-  router.post('/:id/participants', async (c) => {
-    const convId = c.req.param('id');
+  router.post("/:id/participants", async (c) => {
+    const convId = c.req.param("id")!;
     const body = await c.req.json();
     const { userId, role } = body;
 
@@ -458,9 +458,9 @@ export function createConversationsRouter(conversationService: ConversationServi
   /**
    * DELETE /api/conversations/:id/participants/:userId — Remove participant
    */
-  router.delete('/:id/participants/:userId', async (c) => {
-    const convId = c.req.param('id');
-    const userId = c.req.param('userId');
+  router.delete("/:id/participants/:userId", async (c) => {
+    const convId = c.req.param("id")!;
+    const userId = c.req.param("userId")!;
 
     const removed = await conversationService.removeParticipant(convId, userId);
     return c.json<ApiResponse>({ ok: true, data: removed });
