@@ -67,19 +67,7 @@ interface Props {
 }
 
 export function ActivitySection({ stories, isDark }: Props) {
-  const visibleStories = useMemo(() => {
-    if (!stories) return [];
-    // Deduplicate: same agent + same gene within 60s = one entry
-    const seen = new Set<string>();
-    const deduped = stories.filter((s) => {
-      const ts = Math.floor(new Date(s.timestamp).getTime() / 60000); // per-minute bucket
-      const key = `${s.agent?.id || s.agent?.name}-${s.gene?.id || s.gene?.name}-${ts}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-    return deduped.slice(0, 6);
-  }, [stories]);
+  const visibleStories = useMemo(() => (stories ?? []).slice(0, 6), [stories]);
 
   const isEmpty = !stories || stories.length === 0;
 
