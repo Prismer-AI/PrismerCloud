@@ -15,7 +15,7 @@
 --   pc_subscriptions     - 订阅记录 (可选)
 -- =============================================================================
 
-USE prismer_info;
+USE prismer_cloud;
 
 -- =============================================================================
 -- 预检查：确认不会影响现有表
@@ -25,15 +25,15 @@ SELECT '=== 预检查：确认现有表状态 ===' AS step;
 -- 检查现有 pc_ 表（之前创建的）
 SELECT TABLE_NAME, TABLE_ROWS, CREATE_TIME 
 FROM information_schema.TABLES 
-WHERE TABLE_SCHEMA = 'prismer_info' 
+WHERE TABLE_SCHEMA = 'prismer_cloud' 
   AND TABLE_NAME LIKE 'pc_%'
 ORDER BY TABLE_NAME;
 
 -- 确认要创建的表不存在
 SELECT '新表预检查:' AS info,
-  (SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'prismer_info' AND TABLE_NAME = 'pc_payment_methods') AS pc_payment_methods_exists,
-  (SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'prismer_info' AND TABLE_NAME = 'pc_payments') AS pc_payments_exists,
-  (SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'prismer_info' AND TABLE_NAME = 'pc_subscriptions') AS pc_subscriptions_exists;
+  (SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'prismer_cloud' AND TABLE_NAME = 'pc_payment_methods') AS pc_payment_methods_exists,
+  (SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'prismer_cloud' AND TABLE_NAME = 'pc_payments') AS pc_payments_exists,
+  (SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'prismer_cloud' AND TABLE_NAME = 'pc_subscriptions') AS pc_subscriptions_exists;
 
 
 -- =============================================================================
@@ -197,7 +197,7 @@ DESCRIBE pc_subscriptions;
 SELECT '=== 确认现有表未受影响 ===' AS step;
 SELECT TABLE_NAME, TABLE_ROWS
 FROM information_schema.TABLES 
-WHERE TABLE_SCHEMA = 'prismer_info' 
+WHERE TABLE_SCHEMA = 'prismer_cloud' 
   AND TABLE_NAME IN ('users', 'api_keys', 'usage_records', 'pc_usage_records', 'pc_user_credits', 'pc_credit_transactions')
 ORDER BY TABLE_NAME;
 
