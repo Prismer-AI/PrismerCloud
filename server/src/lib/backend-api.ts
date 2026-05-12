@@ -7,11 +7,9 @@ import { ensureNacosConfig } from '@/lib/nacos-config';
  * Priority:
  * 1. BACKEND_API_BASE (full base, may already include /api/v1)
  * 2. BACKGROUND_BASE_URL (root domain, we append /api/v1)
- * 3. Fallback: https://prismer.app/api/v1
+ * 3. Fallback: empty (self-host mode uses local implementations)
  *
- * Nacos will typically provide BACKGROUND_BASE_URL:
- * - test: https://prismer.dev
- * - prod: https://prismer.app
+ * Nacos will typically provide BACKGROUND_BASE_URL if configured.
  */
 function resolveBackendBaseFromEnv(): string {
   const explicit = process.env.BACKEND_API_BASE;
@@ -32,8 +30,8 @@ function resolveBackendBaseFromEnv(): string {
     return `${root}/api/v1`;
   }
 
-  // Default to production app domain
-  return 'https://prismer.app/api/v1';
+  // No backend configured — self-host mode uses local implementations via Feature Flags
+  return '';
 }
 
 /**
