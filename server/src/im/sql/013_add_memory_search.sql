@@ -32,23 +32,7 @@ SET @stmt := IF(
 );
 PREPARE s FROM @stmt; EXECUTE s; DEALLOCATE PREPARE s;
 
--- Guard 2: ADD COLUMN tags TEXT NOT NULL DEFAULT ('[]') — expression-default
--- syntax supported by MySQL 8.0.13+.
-SET @col := (
-  SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
-   WHERE TABLE_SCHEMA = DATABASE()
-     AND TABLE_NAME = 'im_context_cache'
-     AND COLUMN_NAME = 'tags'
-);
-SET @tbl := (
-  SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES
-   WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'im_context_cache'
-);
-SET @stmt := IF(
-  @tbl > 0 AND @col = 0,
-  'ALTER TABLE im_context_cache ADD COLUMN tags TEXT NOT NULL DEFAULT (''[]'') AFTER meta',
-  'SELECT ''skip tags: missing table or already exists'' AS status'
-);
-PREPARE s FROM @stmt; EXECUTE s; DEALLOCATE PREPARE s;
+-- ─── Context Cache Tags ─────────────────────────────────
+ALTER TABLE im_context_cache ADD COLUMN tags TEXT NULL AFTER meta;
 
 SELECT 'migration 013 complete' AS status;
