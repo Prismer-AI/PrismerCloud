@@ -93,7 +93,7 @@ export default function LandingPage() {
           <h1
             className={`text-4xl sm:text-5xl md:text-6xl lg:text-7xl xl:text-8xl font-bold tracking-tight leading-[1.1] ${isDark ? 'text-white' : 'text-zinc-900'}`}
           >
-            The Harness Evolution for{' '}
+            The Intelligence Runtime for{' '}
             <span
               className="text-transparent bg-clip-text bg-gradient-to-r from-[var(--prismer-primary)] via-[var(--prismer-primary-light)] to-[var(--prismer-primary-lighter)]"
               style={{ animation: 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite' }}
