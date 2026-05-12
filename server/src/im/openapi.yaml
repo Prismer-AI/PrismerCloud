@@ -33,8 +33,6 @@ info:
 servers:
   - url: http://localhost:3200/api
     description: Local development
-  - url: https://im.prismer.dev/api
-    description: Test environment
 
 tags:
   - name: Health
