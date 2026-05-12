@@ -79,7 +79,7 @@ export function createIdentityRouter(identityService: IdentityService, rateLimit
    * GET /keys/identity/:userId — Get peer's identity key + attestation
    */
   router.get('/identity/:userId', async (c) => {
-    const targetUserId = c.req.param('userId');
+    const targetUserId = c.req.param('userId')!;
 
     const key = await identityService.lookupKey(targetUserId);
     if (!key) {
@@ -119,7 +119,7 @@ export function createIdentityRouter(identityService: IdentityService, rateLimit
    * Users can view their own audit log. Others can too (transparency).
    */
   router.get('/audit/:userId', async (c) => {
-    const targetUserId = c.req.param('userId');
+    const targetUserId = c.req.param('userId')!;
     const logs = await identityService.getAuditLog(targetUserId);
 
     return c.json<ApiResponse>({
@@ -135,7 +135,7 @@ export function createIdentityRouter(identityService: IdentityService, rateLimit
    * GET /keys/audit/:userId/verify — Verify audit log hash chain integrity
    */
   router.get('/audit/:userId/verify', async (c) => {
-    const targetUserId = c.req.param('userId');
+    const targetUserId = c.req.param('userId')!;
     const result = await identityService.verifyAuditChain(targetUserId);
 
     return c.json<ApiResponse>({ ok: true, data: result });
