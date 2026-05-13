@@ -4,135 +4,156 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Is
 
-PrismerCloud is a multi-language SDK monorepo for the [Prismer Cloud](https://prismer.cloud) API platform. It provides Context (web content), Parse (PDF/OCR), IM (agent messaging), and Evolution (cross-agent learning) APIs with real-time WebSocket/SSE support. All SDK code lives under `sdk/`.
+**The Harness for AI Agent Evolution** — open-source side of Prismer Cloud. The repo has two halves:
 
-## Critical: SDK Source of Truth
+- `sdk/` — multi-language client SDKs and plugins. Two product families (AIP identity + Prismer Cloud platform), four target languages each, plus runtime/MCP/adapter/plugin surfaces.
+- `server/` — Next.js 16 self-host backend (Context + Parse + IM + Evolution APIs, WebSocket/SSE on a single custom port). Has its own [`server/CLAUDE.md`](server/CLAUDE.md) — read it before touching anything under `server/`.
 
-**`sdk/` 目录是从 `/Users/prismer/workspace/prismer-cloud-next/sdk/` 同步过来的，不是本地开发的。**
+Both halves are mirrored from closed-source sources; **do not hand-edit either tree** (see *Two Sync Pipelines* below).
 
-任何对 SDK 的修改都必须：
-1. 先在闭源仓库 `prismer-cloud-next/sdk/` 中修改
-2. 然后通过 `sdk/build/sync.sh` 同步到本仓库
-3. 在本仓库执行 release
+## Two Sync Pipelines (critical mental model)
 
-**绝对不要直接修改 `PrismerCloud/sdk/` 下的文件** — 下次 sync 会覆盖。
+This repo is the *target* of two independent sync flows. Mixing them up will create lost-work bugs.
 
-**分工：** 闭源仓库跑编译/打包/测试（到 pack 为止），开源仓库执行 release。两边 `sdk/build/` 脚本完全一致。
+| Pipeline | Source | Target | Driver |
+|---|---|---|---|
+| **SDK sync** | closed-source `prismer-cloud-next/sdk/` | `sdk/` (whole-directory rsync --delete) | `sdk/build/sync.sh` |
+| **Server sync** | closed-source `gitlab.app:prismer/prismercloud` | `server/` (whitelist + content-scrub + author-attributed patches) | `build/sync-server/sync-server.sh` |
 
-## Build & Release Pipeline
+Implications:
 
-```bash
-# 脚本统一在 sdk/build/ 下
-sdk/build/sync.sh                          # 闭源 → 开源同步
-sdk/build/test.sh --scope aip              # 测试 AIP
-sdk/build/test.sh --scope prismer-cloud    # 测试 Cloud
-sdk/build/verify.sh --scope all            # 版本一致性 + 编译验证
-sdk/build/pack.sh --scope all --clean      # 打包产物
-sdk/build/version.sh --scope aip 1.7.4     # AIP 版本 bump
-sdk/build/version.sh --scope prismer-cloud 1.7.4  # Cloud 版本 bump
-sdk/build/release.sh --scope aip           # 发布 AIP（先发）
-sdk/build/release.sh --scope prismer-cloud # 发布 Cloud（后发）
+- **Never edit files under `sdk/` or `server/` directly in this repo** — the next sync overwrites them. Make the change in the closed-source source, then re-sync.
+- The two `build/` dirs are different: `sdk/build/` = SDK release pipeline; `build/sync-server/` (top-level) = server sync tool with its own `whitelist.txt`/`blacklist.txt`/`content-scrub.txt`.
+- Split of duties: closed-source repo runs compile/pack/test (up to `pack`); **this repo runs release** (`sdk/build/release.sh`).
+- Server sync emits per-patch commits like `[PATCH NNN/TOTAL] feat(self-host): modify <path>` — preserve that prefix when rebasing or squashing.
+
+## SDK Layout
+
+```
+sdk/
+├── aip/                          # AIP — Agent Identity Protocol (4 publishable packages)
+│   ├── typescript/   python/  golang/  rust/
+│   └── docs/
+├── prismer-cloud/                # Prismer Cloud platform (14 publishable surfaces)
+│   ├── typescript/  python/  golang/  rust/    # language SDKs
+│   ├── runtime/                  # @prismer/runtime
+│   ├── mcp/                      # @prismer/mcp-server
+│   ├── claude-code-plugin/  opencode-plugin/  openclaw-channel/
+│   ├── adapters/   adapters-core/   wire/       # independent 0.x line (hotfix release)
+│   ├── sandbox-runtime/  samples/  skill/  scripts/
+│   └── icon/  smallicon/
+├── build/                        # shared release pipeline (see below)
+└── README.md                     # canonical family overview
 ```
 
-完整文档见 `sdk/build/WORKFLOW.md`。
+`@prismer/aip-sdk` is a peer of `@prismer/sdk` (Prismer Cloud TS SDK depends on it). Go module paths differ: `github.com/nicepkg/aip-sdk-go` for AIP vs `github.com/Prismer-AI/PrismerCloud/sdk/prismer-cloud/golang` for Cloud.
 
-## Build Commands
+## Build & Release Pipeline (sdk/build/)
 
-### Build All
 ```bash
-cd sdk && chmod +x scripts/build-all.sh && ./scripts/build-all.sh
+# Closed-source → open-source sync (whole-directory replace under sdk/)
+sdk/build/sync.sh
+
+# Scope-aware build/test/verify gates
+sdk/build/test.sh    --scope aip|prismer-cloud|all
+sdk/build/pack.sh    --scope all --clean       # build artifacts only
+sdk/build/release.sh --scope aip               # publish AIP first
+sdk/build/release.sh --scope prismer-cloud     # then Cloud
+
+# Version bumps
+sdk/build/version.sh --scope aip <semver>           # coordinated 1.x packages
+sdk/build/version.sh --scope prismer-cloud <semver>
+sdk/build/hotfix.sh                                  # independent 0.x packages (@prismer/wire, adapters-core, hermes adapters)
 ```
 
-### Individual SDKs
+Release gates (build → local-install → sandbox smoke) must all pass before `release.sh` publishes. Full workflow lives in [`sdk/build/WORKFLOW.md`](sdk/build/WORKFLOW.md).
 
-| SDK | Install deps | Build | Test |
-|-----|-------------|-------|------|
-| TypeScript | `cd sdk/typescript && npm install` | `npm run build` (tsup) | `npm test` (vitest) |
-| Python | `cd sdk/python && pip install -e '.[dev]'` | `python -m build` | `pytest` |
-| Go | `cd sdk/golang` | `go build ./...` | `go test ./...` |
-| Rust | `cd sdk/rust` | `cargo build` | `cargo test` |
-| MCP Server | `cd sdk/mcp && npm install` | `npm run build` (tsup) | N/A |
-| OpenCode Plugin | `cd sdk/opencode-plugin && npm install` | `npm run build` (tsup) | N/A |
-| Claude Code Plugin | N/A | No build step | N/A |
-| OpenClaw Channel | N/A | No build step | N/A |
+## Individual SDK Commands
+
+| Package | Install | Build | Test |
+|---|---|---|---|
+| `sdk/aip/typescript` | `npm install` | `npm run build` (tsup) | `npm test` (plain `tsx test/aip.test.ts`) |
+| `sdk/aip/python` | `pip install -e '.[dev]'` | `python -m build` | `pytest` |
+| `sdk/aip/golang` | — | `go build ./...` | `go test ./...` |
+| `sdk/aip/rust` | — | `cargo build` | `cargo test` |
+| `sdk/prismer-cloud/typescript` | `npm install` | `npm run build` (tsup) | `npm test` (vitest) |
+| `sdk/prismer-cloud/python` | `pip install -e '.[dev]'` | `python -m build` | `pytest` |
+| `sdk/prismer-cloud/golang` | — | `go build ./...` | `go test ./...` |
+| `sdk/prismer-cloud/rust` | — | `cargo build` | `cargo test` |
+| `sdk/prismer-cloud/mcp` | `npm install` | `npm run build` (tsup) | N/A |
+| `sdk/prismer-cloud/runtime` | `npm install` | `npm run build` | varies |
+| `sdk/prismer-cloud/{claude-code-plugin,opencode-plugin,openclaw-channel}` | varies | varies | N/A |
 
 ### Run a single test
+
 ```bash
-# TypeScript — single test file
-cd sdk/typescript && npx vitest run tests/webhook.test.ts
+# Prismer Cloud TS — single vitest file
+cd sdk/prismer-cloud/typescript && npx vitest run tests/webhook.test.ts
+
+# AIP TS — pick a test in the harness (no vitest)
+cd sdk/aip/typescript && npx tsx test/aip.test.ts
 
 # Python — single test
-cd sdk/python && pytest tests/test_webhook.py -v
+cd sdk/prismer-cloud/python && pytest tests/test_webhook.py -v
 
 # Go — single test function
-cd sdk/golang && go test -run TestVerifySignature -v
+cd sdk/prismer-cloud/golang && go test -run TestVerifySignature -v
 
 # Rust — single test
-cd sdk/rust && cargo test test_verify_signature
+cd sdk/prismer-cloud/rust && cargo test test_verify_signature
 ```
 
 ### Lint
+
 ```bash
-cd sdk/typescript && npm run lint          # eslint
-cd sdk/python && ruff check . && mypy .    # ruff + mypy (strict mode, target py3.8)
-cd sdk/rust && cargo clippy
+cd sdk/prismer-cloud/typescript && npm run lint        # eslint
+cd sdk/prismer-cloud/python      && ruff check . && mypy .
+cd sdk/prismer-cloud/rust        && cargo clippy
 ```
 
 ### Integration tests (against production)
+
 ```bash
-# Requires PRISMER_API_KEY_TEST env var
-PRISMER_API_KEY_TEST="sk-prismer-..." build/test.sh
-
-# Against test environment
-PRISMER_API_KEY_TEST="sk-prismer-..." PRISMER_BASE_URL_TEST="https://cloud.prismer.dev" build/test.sh
+# Requires PRISMER_API_KEY_TEST env var; never hardcode (GitGuardian blocks PRs)
+PRISMER_API_KEY_TEST="sk-prismer-..." sdk/build/test.sh --scope all
+PRISMER_API_KEY_TEST="sk-prismer-..." PRISMER_BASE_URL_TEST="https://cloud.prismer.dev" sdk/build/test.sh --scope all
 ```
 
-## Architecture
+## Server (Next.js 16 SaaS)
 
-### SDK structure — all four SDKs mirror the same module layout:
+The `server/` tree is a complete Next.js 16 app — it has its own `package.json`, Prisma schemas, custom HTTP+WS+SSE server, and embedded IM (Hono) service. **Defer to [`server/CLAUDE.md`](server/CLAUDE.md) for**: dev/build/start commands, IM standalone test runners, dual Prisma schema setup (sqlite local / mysql prod), self-host docker compose, feature-flag matrix, and Next.js 16 routing conventions.
 
-```
-PrismerClient (main entry)
-├── context     — load/search/save web content (HQCC compressed)
-├── parse       — PDF/image → markdown (sync fast + async hires modes)
-├── im          — IM sub-client
-│   ├── account/direct/groups/conversations/contacts/credits
-│   └── evolution — gene CRUD, analyze, record, sync
-├── realtime    — WebSocket + SSE clients for live message delivery
-├── offline     — queue mutations when offline, replay on reconnect
-├── encryption  — E2E encryption (ECDH key exchange)
-├── webhook     — HMAC-SHA256 signature verification
-├── evolution-cache    — local gene cache with Thompson Sampling selection (<1ms)
-├── evolution-runtime  — high-level API composing cache + signal enrichment + outbox
-└── signal-rules       — pattern matching to extract signal tags from errors
-```
+Quick top-level pointers for cross-references:
 
-### EvolutionRuntime — the key cross-cutting pattern
+- Self-host installer: top-level `install.sh` (also published at `https://prismer.cloud/install.sh`).
+- Server sync state lives in `build/sync-server/state/` (gitignored runtime cache); patches are in `build/sync-server/patches/`.
 
-The most important abstraction across all SDKs. It composes three layers:
-1. **EvolutionCache** — local Thompson Sampling gene selection (sub-millisecond, no network)
-2. **Signal enrichment** — extracts signal tags from error strings to match genes
-3. **Async outbox** — fire-and-forget outcome recording
+## EvolutionRuntime — key cross-cutting pattern
 
-Two-method API: `suggest(error) → strategy` and `learned(error, outcome, summary)`.
+The most important abstraction across all Prismer Cloud SDKs. It composes three layers:
 
-### Plugin architecture
+1. **EvolutionCache** — local Thompson Sampling gene selection (sub-millisecond, no network).
+2. **Signal enrichment** — extracts signal tags from error strings to match genes.
+3. **Async outbox** — fire-and-forget outcome recording.
+
+Two-method API: `suggest(error) → strategy` and `learned(error, outcome, summary)`. Implemented in each language under `sdk/prismer-cloud/<lang>/`. Signal patterns live in `signal-rules` module.
+
+## Plugin Architecture
 
 Three coding-agent plugins share the same evolution loop pattern:
-- **Claude Code Plugin** (`sdk/claude-code-plugin/`) — hooks (PreToolUse/PostToolUse) + MCP server (.mcp.json) + skills. No build step; files are used directly by Claude Code's plugin system.
-- **OpenCode Plugin** (`sdk/opencode-plugin/`) — TypeScript entry points compiled with tsup. Uses `tool.execute.before`/`tool.execute.after` hooks.
-- **OpenClaw Channel** (`sdk/openclaw-channel/`) — TypeScript source distributed as-is (OpenClaw compiles it). Registered via `openclaw.plugin.json`.
+
+- **Claude Code Plugin** (`sdk/prismer-cloud/claude-code-plugin/`) — hooks (`PreToolUse`/`PostToolUse`) + MCP server via `.mcp.json` + skills. No build step; files are consumed directly by Claude Code's plugin loader.
+- **OpenCode Plugin** (`sdk/prismer-cloud/opencode-plugin/`) — TypeScript entry points compiled with tsup. Uses `tool.execute.before` / `tool.execute.after` hooks.
+- **OpenClaw Channel** (`sdk/prismer-cloud/openclaw-channel/`) — TypeScript source distributed as-is (OpenClaw compiles it). Registered via `openclaw.plugin.json`.
 
 ## Key Conventions
 
 - All SDKs authenticate with API keys prefixed `sk-prismer-`. Base URL: `https://prismer.cloud`.
-- TypeScript SDK exports CJS + ESM + DTS. The `webhook` module has a separate export path (`@prismer/sdk/webhook`).
-- Python targets `>=3.8` with `httpx` (async HTTP) + `pydantic` (models) + `websockets` (realtime).
-- Go module path: `github.com/Prismer-AI/Prismer/sdk/golang` (uses cobra CLI + nhooyr websocket).
-- Rust crate: `prismer-sdk` (async with reqwest + tokio).
-- MCP Server uses `@modelcontextprotocol/sdk` and exposes 23 tools (context, parse, IM, evolution, memory, tasks).
-- Version is `1.7.4` across all packages — keep them in sync when bumping.
+- TypeScript SDKs export CJS + ESM + DTS via tsup. The Cloud SDK's `webhook` module has a separate export path (`@prismer/sdk/webhook`).
+- Python SDKs use `httpx` (async HTTP) + `pydantic` (models) + `websockets` (realtime). AIP targets `>=3.9`; Cloud may target older.
+- AIP coordinated `1.x` packages share a version; Prismer Cloud has mixed cadence — coordinated `1.x` SDKs vs independent `0.x` adapters / wire (released via `hotfix.sh`). Never hardcode versions in this doc; consult each package's manifest.
+- MCP Server exposes ~23 tools across context, parse, IM, evolution, memory, tasks namespaces.
 
 ## API Surface
 
-85+ endpoints across 15 groups. The `sdk/Skill.md` file contains the complete CLI reference with all commands and flags — use it as the authoritative API reference.
+85+ endpoints across 15 groups. `sdk/prismer-cloud/skill/` (and `sdk/Skill.md` if present) contains the canonical CLI reference — use it as the authoritative API surface map rather than scraping individual SDK clients.
