@@ -82,13 +82,29 @@ COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 # 复制 Prisma schemas + generated MySQL client（standalone trace 可能不包含）
 COPY --from=builder --chown=nextjs:nodejs /app/prisma ./prisma
 
+# Prisma CLI binary + engines — runner needs them to apply migrations at startup.
+# Standalone trace strips devDependencies, so copy explicitly here.
+COPY --from=builder --chown=nextjs:nodejs /app/node_modules/prisma ./node_modules/prisma
+COPY --from=builder --chown=nextjs:nodejs /app/node_modules/@prisma ./node_modules/@prisma
+COPY --from=builder --chown=nextjs:nodejs /app/node_modules/.bin/prisma ./node_modules/.bin/prisma
+
+# Entrypoint — runs migrations then exec server.js
+COPY --from=builder --chown=nextjs:nodejs /app/scripts/docker-entrypoint.sh ./docker-entrypoint.sh
+# Also copy the SQL migration directories the entrypoint applies via the mysql client.
+COPY --from=builder --chown=nextjs:nodejs /app/scripts/sql ./scripts/sql
+COPY --from=builder --chown=nextjs:nodejs /app/src/im/sql ./src/im/sql
+RUN chmod +x ./docker-entrypoint.sh
+
+# Install mysql-client so the entrypoint can apply src/im/sql/*.sql against MySQL.
+USER root
+RUN apk add --no-cache mysql-client
+USER nextjs
+
 # OpenAPI spec — read at runtime by /api/docs/openapi for docs page
 COPY --from=builder --chown=nextjs:nodejs /app/docs/openapi.yaml ./docs/openapi.yaml
 
 # Seed gene data — read at runtime by EvolutionService via process.cwd()/src/im/data/
 COPY --from=builder --chown=nextjs:nodejs /app/src/im/data ./src/im/data
-
-USER nextjs
 
 EXPOSE 3000
 
@@ -100,9 +116,12 @@ ENV HOSTNAME="0.0.0.0"
 # IM_SERVER_ENABLED=true/false, REDIS_URL, JWT_SECRET
 
 # K8s liveness/readiness probe — 检测进程存活 + 服务可用
+# Use 127.0.0.1 explicitly: BusyBox wget resolves `localhost` to ::1 in Alpine,
+# but server.ts binds to 0.0.0.0 (IPv4 only) → connection refused, perma-unhealthy.
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-  CMD wget -q --spider http://localhost:3000/api/health || exit 1
+  CMD wget -q --spider http://127.0.0.1:3000/api/health || exit 1
 
 # 运行自定义服务器 — HTTP + WebSocket + SSE on same port
 # IM Server 通过 instrumentation.ts 在同一进程启动
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
 CMD ["node", "server.js"]

@@ -36,7 +36,7 @@ CREATE TABLE IF NOT EXISTS im_workspaces (
   UNIQUE KEY uk_owner_slug_deleted (ownerImUserId, slug, deletedAt),
   INDEX idx_owner_default (ownerImUserId, isDefault),
   CONSTRAINT fk_workspace_owner FOREIGN KEY (ownerImUserId) REFERENCES im_users(id)
-);
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Note: "one default workspace per owner" is enforced at the application layer.
 -- MySQL 8 doesn't support partial unique indexes, so backfill + creation paths
@@ -65,7 +65,7 @@ CREATE TABLE IF NOT EXISTS im_workspace_members (
   INDEX idx_member (memberImUserId),
   CONSTRAINT fk_member_workspace FOREIGN KEY (workspaceId) REFERENCES im_workspaces(id) ON DELETE CASCADE,
   CONSTRAINT fk_member_user FOREIGN KEY (memberImUserId) REFERENCES im_users(id)
-);
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ----------------------------------------------------------------------------
 -- 3. im_assets — content-addressed immutable blobs
@@ -89,7 +89,7 @@ CREATE TABLE IF NOT EXISTS im_assets (
   INDEX idx_ws_task (workspaceId, sourceTaskId),
   CONSTRAINT fk_asset_workspace FOREIGN KEY (workspaceId) REFERENCES im_workspaces(id) ON DELETE CASCADE,
   CONSTRAINT fk_asset_owner FOREIGN KEY (ownerImUserId) REFERENCES im_users(id)
-);
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ----------------------------------------------------------------------------
 -- 4. im_workspace_files — mutable path → asset binding
@@ -116,7 +116,7 @@ CREATE TABLE IF NOT EXISTS im_workspace_files (
   CONSTRAINT fk_file_asset FOREIGN KEY (assetId) REFERENCES im_assets(id),
   CONSTRAINT fk_file_modifier FOREIGN KEY (modifierImUserId) REFERENCES im_users(id),
   CONSTRAINT fk_file_parent FOREIGN KEY (parentVersionId) REFERENCES im_workspace_files(id) ON DELETE SET NULL
-);
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ----------------------------------------------------------------------------
 -- 5. im_agent_profiles — adapter-local config
@@ -138,4 +138,4 @@ CREATE TABLE IF NOT EXISTS im_agent_profiles (
   INDEX idx_ws_agent (workspaceId, agentImUserId),
   CONSTRAINT fk_profile_workspace FOREIGN KEY (workspaceId) REFERENCES im_workspaces(id) ON DELETE CASCADE,
   CONSTRAINT fk_profile_agent FOREIGN KEY (agentImUserId) REFERENCES im_users(id)
-);
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

@@ -63,28 +63,53 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   // Toast State
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
 
-  // Restore auth state from localStorage on mount
+  // Restore auth state from localStorage on mount.
+  // Self-host gate: GET /api/config/runtime first — if AUTH_DISABLED is set on the
+  // server, synthesise a session for the default admin user so private deployments
+  // skip the login wall entirely.
   useEffect(() => {
-    try {
-      const stored = localStorage.getItem(AUTH_STORAGE_KEY);
-      if (stored) {
-        const authData = JSON.parse(stored);
-        // Check if the auth token is still valid (e.g., not expired)
-        if (authData.token && authData.user && authData.expiresAt > Date.now()) {
-          setIsAuthenticated(true);
-          setUser(authData.user);
-          setToken(authData.token);
-        } else {
-          // Clear expired auth data
-          localStorage.removeItem(AUTH_STORAGE_KEY);
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/config/runtime', { cache: 'no-store' });
+        if (res.ok) {
+          const cfg = (await res.json()) as { authDisabled?: boolean; defaultUser?: User | null };
+          if (!cancelled && cfg.authDisabled && cfg.defaultUser) {
+            setIsAuthenticated(true);
+            setUser(cfg.defaultUser);
+            setToken('local-auth-disabled');
+            return;
+          }
         }
+      } catch (error) {
+        console.error('Failed to fetch /api/config/runtime, falling back to localStorage', error);
       }
-    } catch (error) {
-      console.error('Failed to restore auth state', error);
-      localStorage.removeItem(AUTH_STORAGE_KEY);
-    } finally {
-      setIsAuthLoading(false);
-    }
+
+      if (cancelled) return;
+
+      try {
+        const stored = localStorage.getItem(AUTH_STORAGE_KEY);
+        if (stored) {
+          const authData = JSON.parse(stored);
+          if (authData.token && authData.user && authData.expiresAt > Date.now()) {
+            setIsAuthenticated(true);
+            setUser(authData.user);
+            setToken(authData.token);
+          } else {
+            localStorage.removeItem(AUTH_STORAGE_KEY);
+          }
+        }
+      } catch (error) {
+        console.error('Failed to restore auth state', error);
+        localStorage.removeItem(AUTH_STORAGE_KEY);
+      }
+    })().finally(() => {
+      if (!cancelled) setIsAuthLoading(false);
+    });
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Restore active API key from localStorage on mount
