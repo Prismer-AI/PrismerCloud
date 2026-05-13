@@ -39,8 +39,8 @@ const BASE_URLS: Record<string, string> = {
 };
 
 const API_KEYS: Record<string, string> = {
-  test: 'sk-prismer-live-8203d352cc8d2b41d17efe877b4b9c9420afd1e89666b5b0ae7161e80c39acd2',
-  prod: 'sk-prismer-live-dea50222cb9aec9eca33f2e947d9f49dbb4a719cae8b58ce9e197290302e5f06',
+  test: 'sk-prismer-live-REDACTED-SET-VIA-ENV',
+  prod: 'sk-prismer-live-REDACTED-SET-VIA-ENV',
 };
 
 const BASE = process.env.BASE_URL || BASE_URLS[ENV] || BASE_URLS.local;
