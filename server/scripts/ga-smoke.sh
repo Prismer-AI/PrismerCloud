@@ -22,7 +22,7 @@ set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
-DEV_KEY="sk-prismer-live-a2ec8ab7966295e2f1ed1817f571e10b9470e96cd8156325497ff2eee3e25842"
+DEV_KEY="sk-prismer-live-REDACTED-SET-VIA-ENV"
 CLOUD_BASE="http://127.0.0.1:3000"
 NEXT_LOG="$REPO_ROOT/.dev-stack/next.log"
 SMOKE_DIR="$REPO_ROOT/.dev-stack/smoke"

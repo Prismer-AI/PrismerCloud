@@ -19,7 +19,7 @@
  */
 
 const PRISMER_BASE = 'https://cloud.prismer.dev';
-const PRISMER_KEY = 'sk-prismer-live-8203d352cc8d2b41d17efe877b4b9c9420afd1e89666b5b0ae7161e80c39acd2';
+const PRISMER_KEY = 'sk-prismer-live-REDACTED-SET-VIA-ENV';
 const EVOMAP_BASE = 'https://evomap.ai';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
