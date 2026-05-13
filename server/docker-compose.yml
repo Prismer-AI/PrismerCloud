@@ -57,7 +57,26 @@ services:
 
   mysql:
     image: mysql:8.0
-    command: --sql-mode="NO_ENGINE_SUBSTITUTION"
+    # Default auth plugin → mysql_native_password so the Alpine app image
+    # (which only ships MariaDB client) can connect for entrypoint migrations.
+    # caching_sha2_password (MySQL 8 default) is missing from MariaDB client libs.
+    # MySQL command flags:
+    #   --default-authentication-plugin: Alpine app image only ships MariaDB
+    #     client; switching to native_password lets it auth without
+    #     caching_sha2_password.so.
+    #   --collation-server: matches the explicit COLLATE used by im_users +
+    #     im_messages baseline (001_create_tables.sql). Without this, fresh
+    #     tables default to utf8mb4_0900_ai_ci → FK constraints to im_users.id
+    #     fail with "incompatible columns".
+    #   --log_bin_trust_function_creators: IM migrations 110/122/130/132 create
+    #     stored functions; binary logging is on by default → without this they
+    #     need SUPER privilege the prismer user doesn't have.
+    command: >-
+      --sql-mode=NO_ENGINE_SUBSTITUTION
+      --default-authentication-plugin=mysql_native_password
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_unicode_ci
+      --log_bin_trust_function_creators=ON
     environment:
       - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD:-rootpass}
       - MYSQL_DATABASE=prismer_cloud
