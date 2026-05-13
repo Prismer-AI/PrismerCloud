@@ -31,3 +31,7 @@ sdk/golang/prismer
 
 # OS
 .DS_Store
+
+# Local agent runtime / settings (not project state)
+.gstack/
+.claude/
