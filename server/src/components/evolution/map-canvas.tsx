@@ -17,6 +17,7 @@
  */
 
 import { useRef, useEffect, useCallback } from 'react';
+import { useI18n } from '@/contexts/i18n-context';
 import { getIMClientToken } from '@/lib/im-token';
 import type {
   EvolutionMapData,
@@ -74,6 +75,25 @@ const MAX_PARTICLES = 80;
 const MAX_RIPPLES = 8;
 const TRAIL_LENGTH = 3;
 const OPACITY_LERP_SPEED = 0.12; // per frame, ~200ms to 95%
+type EvolutionT = ReturnType<typeof useI18n>['t'];
+
+function localizedCanvasTimeAgo(iso: string, t: EvolutionT): string {
+  const diff = Date.now() - new Date(iso).getTime();
+  const secs = Math.floor(diff / 1000);
+  if (secs < 60) return t('evolution.common.secondsAgo', { count: Math.max(secs, 0) });
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return t('evolution.common.minutesAgo', { count: mins });
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return t('evolution.common.hoursAgo', { count: hours });
+  return t('evolution.common.daysAgo', { count: Math.floor(hours / 24) });
+}
+
+function categoryLabel(category: string | undefined, t: EvolutionT): string {
+  const key = category || 'all';
+  const translationKey = `evolution.common.categoryLabels.${key}` as `evolution.${string}`;
+  const translated = t(translationKey);
+  return translated === translationKey ? key : translated;
+}
 
 export function MapCanvas({
   data,
@@ -88,6 +108,7 @@ export function MapCanvas({
   focusNodeCmd,
   onNewEvent,
 }: Props) {
+  const { t } = useI18n();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rafRef = useRef<number>(0);
 
@@ -112,6 +133,18 @@ export function MapCanvas({
   const dataRef = useRef(data);
   const isDarkRef = useRef(isDark);
   const storiesRef = useRef(stories);
+  const canvasLabelsRef = useRef({
+    gene: {
+      successPct: (value: number) => `${value}% success`,
+      pqi: (value: number) => `PQI ${value}`,
+      runsAgents: (runs: number, agents: number) => `${runs} runs · ${agents} agents`,
+      runsAgentsPqi: (runs: number, agents: number, pqi: number) => `${runs} runs · ${agents} agents · PQI ${pqi}`,
+    },
+    signal: {
+      timeAgo: (iso: string) => localizedCanvasTimeAgo(iso, t),
+    },
+    storyTimeAgo: (iso: string) => localizedCanvasTimeAgo(iso, t),
+  });
   const needsInitRef = useRef(true);
   const startTimeRef = useRef(performance.now());
   const originalPosRef = useRef<Map<string, { x: number; y: number }> | null>(null);
@@ -123,6 +156,20 @@ export function MapCanvas({
 
   // Gene flash state: geneId → { color, opacity }
   const geneFlashRef = useRef(new Map<string, { color: string; opacity: number }>());
+
+  canvasLabelsRef.current = {
+    gene: {
+      successPct: (value: number) => t('evolution.map.canvas.successPct', { value }),
+      pqi: (value: number) => t('evolution.common.pqi', { value }),
+      runsAgents: (runs: number, agents: number) => t('evolution.map.canvas.runsAgents', { runs, agents }),
+      runsAgentsPqi: (runs: number, agents: number, pqi: number) =>
+        t('evolution.map.canvas.runsAgentsPqi', { runs, agents, pqi }),
+    },
+    signal: {
+      timeAgo: (iso: string) => localizedCanvasTimeAgo(iso, t),
+    },
+    storyTimeAgo: (iso: string) => localizedCanvasTimeAgo(iso, t),
+  };
 
   // Touch state
   const touchStateRef = useRef<{
@@ -879,7 +926,17 @@ export function MapCanvas({
         const opacity = isConnected ? 1 : renderMode === 'dim' ? baseOpacity * 0.4 : baseOpacity;
 
         stableCtx.save();
-        drawSignalNode(stableCtx, node, view.zoom, zoomLevel, opacity, isDirectHit, dark, time);
+        drawSignalNode(
+          stableCtx,
+          node,
+          view.zoom,
+          zoomLevel,
+          opacity,
+          isDirectHit,
+          dark,
+          time,
+          canvasLabelsRef.current.signal,
+        );
         stableCtx.restore();
       }
 
@@ -947,6 +1004,7 @@ export function MapCanvas({
           dark,
           time,
           flash?.color ?? null,
+          canvasLabelsRef.current.gene,
         );
         stableCtx.restore();
 
@@ -954,7 +1012,7 @@ export function MapCanvas({
         if (zoomLevel === 1 && isDirectHit) {
           const geneStories = geneStoryMap.get(node.id);
           if (geneStories && geneStories.length > 0) {
-            drawGeneStoryEmbed(stableCtx, node, geneStories, dark, view.zoom);
+            drawGeneStoryEmbed(stableCtx, node, geneStories, dark, view.zoom, canvasLabelsRef.current.storyTimeAgo);
           }
         }
       }
@@ -1318,7 +1376,11 @@ export function MapCanvas({
         ref={canvasRef}
         className="w-full h-full block touch-none"
         role="img"
-        aria-label={`Evolution network: ${data.genes.length} strategies, ${data.edges.length} connections, ${Math.round((data.stats?.systemSuccessRate ?? 0) * 100)}% success rate`}
+        aria-label={t('evolution.map.srNetwork', {
+          strategies: data.genes.length,
+          connections: data.edges.length,
+          success: Math.round((data.stats?.systemSuccessRate ?? 0) * 100),
+        })}
         onMouseMove={onMouseMove}
         onMouseDown={onMouseDown}
         onMouseUp={onMouseUp}
@@ -1330,20 +1392,20 @@ export function MapCanvas({
         onTouchEnd={onTouchEnd}
       />
       {/* Screen reader fallback: hidden table of top genes */}
-      <table className="sr-only" aria-label="Evolution strategies summary">
+      <table className="sr-only" aria-label={t('evolution.map.srSummary')}>
         <thead>
           <tr>
-            <th>Strategy</th>
-            <th>Category</th>
-            <th>Success Rate</th>
-            <th>Runs</th>
+            <th>{t('evolution.map.srStrategy')}</th>
+            <th>{t('evolution.map.srCategory')}</th>
+            <th>{t('evolution.map.srSuccessRate')}</th>
+            <th>{t('evolution.map.srRuns')}</th>
           </tr>
         </thead>
         <tbody>
           {data.genes.slice(0, 20).map((g) => (
             <tr key={g.id}>
               <td>{g.title}</td>
-              <td>{g.category}</td>
+              <td>{categoryLabel(g.category, t)}</td>
               <td>{Math.round(g.successRate * 100)}%</td>
               <td>{g.totalExecutions}</td>
             </tr>
