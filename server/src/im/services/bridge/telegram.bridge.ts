@@ -10,38 +10,47 @@ import type {
   BindingRecord,
   BindingConfig,
   InboundHandler,
-} from "./bridge.interface";
-import type { BridgeResult } from "../../types/index";
+  BridgeSendRecord,
+  BridgeOutboundTarget,
+} from './bridge.interface';
+import { LEGACY_BRIDGE_CAPABILITIES } from './bridge.interface';
+import type { BridgeResult } from '../../types/index';
 
-const TELEGRAM_API = "https://api.telegram.org";
+const TELEGRAM_API = 'https://api.telegram.org';
 
 export class TelegramBridge implements MessageBridge {
-  platform = "telegram";
+  platform = 'telegram';
+  capabilities = LEGACY_BRIDGE_CAPABILITIES;
 
   /** Active polling handles keyed by bindingId */
   private pollers = new Map<string, { abort: AbortController }>();
 
   async sendMessage(
-    binding: BindingRecord,
-    content: string
+    binding: BridgeSendRecord,
+    content: string,
+    _metadata?: Record<string, unknown>,
+    target?: BridgeOutboundTarget,
   ): Promise<BridgeResult> {
-    if (!binding.botToken || !binding.channelId) {
-      return { success: false, error: "Missing botToken or channelId" };
+    const botToken = 'botToken' in binding ? binding.botToken : undefined;
+    const channelId =
+      target?.externalConversationId ??
+      target?.externalGroupId ??
+      ('channelId' in binding ? binding.channelId : undefined);
+
+    if (!botToken || !channelId) {
+      return { success: false, error: 'Missing botToken or channelId' };
     }
 
     try {
-      const res = await fetch(
-        `${TELEGRAM_API}/bot${binding.botToken}/sendMessage`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            chat_id: binding.channelId,
-            text: content,
-            parse_mode: "Markdown",
-          }),
-        }
-      );
+      const res = await fetch(`${TELEGRAM_API}/bot${botToken}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: channelId,
+          text: content,
+          parse_mode: 'Markdown',
+        }),
+      });
 
       const data = (await res.json()) as {
         ok: boolean;
@@ -50,7 +59,7 @@ export class TelegramBridge implements MessageBridge {
       };
 
       if (!data.ok) {
-        return { success: false, error: data.description ?? "Telegram API error" };
+        return { success: false, error: data.description ?? 'Telegram API error' };
       }
 
       return {
@@ -62,11 +71,9 @@ export class TelegramBridge implements MessageBridge {
     }
   }
 
-  async startListening(
-    binding: BindingRecord,
-    onMessage: InboundHandler
-  ): Promise<void> {
-    if (!binding.botToken) return;
+  async startListening(binding: BridgeSendRecord, onMessage: InboundHandler): Promise<void> {
+    const botToken = 'botToken' in binding ? binding.botToken : undefined;
+    if (!botToken) return;
 
     const abort = new AbortController();
     this.pollers.set(binding.id, { abort });
@@ -76,10 +83,9 @@ export class TelegramBridge implements MessageBridge {
     const poll = async () => {
       while (!abort.signal.aborted) {
         try {
-          const res = await fetch(
-            `${TELEGRAM_API}/bot${binding.botToken}/getUpdates?offset=${offset}&timeout=30`,
-            { signal: abort.signal }
-          );
+          const res = await fetch(`${TELEGRAM_API}/bot${botToken}/getUpdates?offset=${offset}&timeout=30`, {
+            signal: abort.signal,
+          });
           const data = (await res.json()) as {
             ok: boolean;
             result: Array<{
@@ -101,19 +107,16 @@ export class TelegramBridge implements MessageBridge {
                   bindingId: binding.id,
                   externalMessageId: String(update.message.message_id),
                   content: update.message.text,
-                  senderName:
-                    update.message.from?.username ??
-                    update.message.from?.first_name ??
-                    "unknown",
-                  senderId: String(update.message.from?.id ?? "0"),
+                  senderName: update.message.from?.username ?? update.message.from?.first_name ?? 'unknown',
+                  senderId: String(update.message.from?.id ?? '0'),
                   timestamp: new Date(update.message.date * 1000),
                 });
               }
             }
           }
         } catch (err) {
-          if ((err as Error).name === "AbortError") break;
-          console.warn("[TelegramBridge] Poll error:", (err as Error).message);
+          if ((err as Error).name === 'AbortError') break;
+          console.warn('[TelegramBridge] Poll error:', (err as Error).message);
           // Wait before retry
           await new Promise((r) => setTimeout(r, 5000));
         }
@@ -134,9 +137,7 @@ export class TelegramBridge implements MessageBridge {
   async validateCredentials(config: BindingConfig): Promise<boolean> {
     if (!config.botToken) return false;
     try {
-      const res = await fetch(
-        `${TELEGRAM_API}/bot${config.botToken}/getMe`
-      );
+      const res = await fetch(`${TELEGRAM_API}/bot${config.botToken}/getMe`);
       const data = (await res.json()) as { ok: boolean };
       return data.ok;
     } catch {
@@ -144,14 +145,11 @@ export class TelegramBridge implements MessageBridge {
     }
   }
 
-  async sendVerification(
-    binding: BindingRecord,
-    code: string
-  ): Promise<boolean> {
+  async sendVerification(binding: BindingRecord, code: string): Promise<boolean> {
     if (!binding.botToken || !binding.channelId) return false;
     const result = await this.sendMessage(
       binding,
-      `Your Prismer IM verification code: *${code}*\n\nEnter this code in your Prismer dashboard to complete the binding.`
+      `Your Prismer IM verification code: *${code}*\n\nEnter this code in your Prismer dashboard to complete the binding.`,
     );
     return result.success;
   }
