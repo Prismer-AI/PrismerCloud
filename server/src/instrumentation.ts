@@ -11,6 +11,29 @@
 
 export async function register() {
   if (process.env.NEXT_RUNTIME === 'nodejs' && process.env.IM_SERVER_ENABLED !== 'false') {
+    // PDF text extraction (src/im/api/assets.ts → pdf-parse → pdfjs-dist) needs
+    // the browser globals DOMMatrix / Path2D / ImageData. Node has none, and the
+    // standalone PROD build drops the transitive @napi-rs/canvas that accidentally
+    // polyfilled them in local dev — so PDF processing crashed only on the pods
+    // ("works locally, breaks on test"). Set them DETERMINISTICALLY here, once per
+    // pod, BEFORE the IM server (and any PDF request) starts. Best-effort: if the
+    // native module is missing on a pod, PDF text extraction degrades to "no text"
+    // rather than crashing the upload/delivery (see extractPdfTextContent).
+    try {
+      const g = globalThis as Record<string, unknown>;
+      if (typeof g.DOMMatrix === 'undefined') {
+        const canvas = (await import('@napi-rs/canvas')) as unknown as Record<string, unknown>;
+        g.DOMMatrix ??= canvas.DOMMatrix;
+        g.Path2D ??= canvas.Path2D;
+        g.ImageData ??= canvas.ImageData;
+      }
+    } catch (e) {
+      console.warn(
+        '[Instrumentation] @napi-rs/canvas DOMMatrix polyfill unavailable — server-side PDF text extraction will degrade:',
+        e instanceof Error ? e.message : e,
+      );
+    }
+
     // Load Nacos config BEFORE IM server so DB/Redis env vars are set
     try {
       const { ensureNacosConfig } = await import('./lib/nacos-config');
