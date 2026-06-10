@@ -8,27 +8,22 @@
 import prisma from '../db';
 import type { PrismerGene, SignalTag } from '../types/index';
 import { normalizeSignals } from './evolution-signals';
-import { dbGeneToModel, loadSeedGenes } from './evolution-lifecycle';
+import { dbGeneToModel, loadSeedGenes } from './evolution-shared';
+import { getPublicGenesCache, setPublicGenesCache, invalidatePublicGenesCache } from './evolution-public-cache';
+
+// Re-export so external consumers (evolution.service.ts, etc.) keep their
+// existing `from './evolution-public'` import paths.
+export { invalidatePublicGenesCache };
 
 // ===== Internal Helpers =====
 
-/** In-memory cache for public genes + stats (30s TTL) */
-let _publicGenesCache: {
-  genes: PrismerGene[];
-  stats: Map<string, { success_count: number; failure_count: number }>;
-  ts: number;
-} | null = null;
 const CACHE_TTL = 30_000;
-
-/** Invalidate cache — call after publish/unpublish/import/delete */
-export function invalidatePublicGenesCache(): void {
-  _publicGenesCache = null;
-}
 
 /** Get all public/seed genes — cached 30s to avoid full-table scan per request */
 export async function getAllPublicGenes(): Promise<PrismerGene[]> {
-  if (_publicGenesCache && Date.now() - _publicGenesCache.ts < CACHE_TTL) {
-    return _publicGenesCache.genes;
+  const cached = getPublicGenesCache();
+  if (cached && Date.now() - cached.ts < CACHE_TTL) {
+    return cached.genes;
   }
   const rows = await prisma.iMGene.findMany({
     where: {
@@ -37,20 +32,22 @@ export async function getAllPublicGenes(): Promise<PrismerGene[]> {
     },
     include: { signalLinks: true },
   });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const genes = rows.map((r: any) => dbGeneToModel(r));
   // Pre-fetch stats together (avoids second full-scan on every browse call)
   const stats = await _aggregateStats();
-  _publicGenesCache = { genes, stats, ts: Date.now() };
+  setPublicGenesCache({ genes, stats, ts: Date.now() });
   return genes;
 }
 
 /** Get cached stats (piggybacked on gene cache) */
 async function getCachedStats(): Promise<Map<string, { success_count: number; failure_count: number }>> {
-  if (_publicGenesCache && Date.now() - _publicGenesCache.ts < CACHE_TTL) {
-    return _publicGenesCache.stats;
+  const cached = getPublicGenesCache();
+  if (cached && Date.now() - cached.ts < CACHE_TTL) {
+    return cached.stats;
   }
   await getAllPublicGenes(); // triggers cache refresh
-  return _publicGenesCache!.stats;
+  return getPublicGenesCache()!.stats;
 }
 
 /** Internal stats aggregation */
