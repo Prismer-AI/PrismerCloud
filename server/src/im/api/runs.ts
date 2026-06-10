@@ -22,6 +22,7 @@ function handleRunError(err: unknown, c: any): Response {
 
 export function createRunsRouter(taskService: TaskService): Hono {
   const router = new Hono();
+  // eslint-disable-next-line custom/no-wildcard-sub-router-middleware -- mounted at /runs in routes.ts; wildcard scoped to that prefix
   router.use('*', authMiddleware);
 
   router.get('/', async (c) => {
