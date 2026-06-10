@@ -182,17 +182,32 @@ async function withRetry(label: string, attempt: (n: number) => Promise<EmailSen
 // ─── Public API ──────────────────────────────────────────────
 
 /**
+ * Dispatches an arbitrary pre-rendered email through the same provider-select
+ * + retry pipeline as verification mail. Resend if `RESEND_API_KEY`, else SMTP
+ * if `SMTP_HOST`+`SMTP_USER`+`SMTP_PASS`, else `{ configured: false }` so the
+ * caller can decide whether the missing provider is fatal.
+ *
+ * `label` is only used for log correlation (e.g. `workspace-invite`).
+ */
+export async function sendEmail(
+  to: string,
+  rendered: { subject: string; text: string; html: string },
+  label: string,
+): Promise<EmailSendResult> {
+  if (process.env.RESEND_API_KEY) {
+    return withRetry(`resend:${label}`, () => sendViaResendOnce(to, rendered));
+  }
+  if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
+    return withRetry(`smtp:${label}`, () => sendViaSmtpOnce(to, rendered));
+  }
+  return { success: false, configured: false };
+}
+
+/**
  * Dispatches a verification email. Returns `{ configured: false }` if no
  * provider is wired so the caller can fall back to dev behavior.
  */
 export async function sendVerificationEmail(to: string, code: string, purpose: CodePurpose): Promise<EmailSendResult> {
   const rendered = renderEmailTemplate(code, purpose);
-
-  if (process.env.RESEND_API_KEY) {
-    return withRetry(`resend:${purpose}`, () => sendViaResendOnce(to, rendered));
-  }
-  if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
-    return withRetry(`smtp:${purpose}`, () => sendViaSmtpOnce(to, rendered));
-  }
-  return { success: false, configured: false };
+  return sendEmail(to, rendered, purpose);
 }
