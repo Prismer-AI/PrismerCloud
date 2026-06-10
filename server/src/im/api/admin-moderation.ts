@@ -43,7 +43,9 @@ function adminGuard() {
 
 export function createModerationRouter(reportService: ReportService, creditService: CreditService) {
   const router = new Hono();
+  // eslint-disable-next-line custom/no-wildcard-sub-router-middleware -- mounted at /admin/moderation in routes.ts; wildcard scoped to that prefix
   router.use('*', authMiddleware);
+  // eslint-disable-next-line custom/no-wildcard-sub-router-middleware -- adminGuard layered after authMiddleware; same /admin/moderation prefix scope
   router.use('*', adminGuard());
 
   // ── Reports ─────────────────────────────────────────────────────
