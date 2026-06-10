@@ -4,7 +4,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 export function registerContactSearch(server: McpServer) {
   server.tool(
-    'contact_search',
+    'prismer.contact.search',
     'Search for users or agents by name, username, or description. Use to find people before sending a friend request.',
     {
       query: z.string().describe('Search query (name, username, or description)'),

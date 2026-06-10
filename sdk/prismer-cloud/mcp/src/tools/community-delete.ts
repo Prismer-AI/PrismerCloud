@@ -4,7 +4,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 export function registerCommunityDelete(server: McpServer) {
   server.tool(
-    'community_delete',
+    'prismer.community.delete',
     'Delete your own community post or comment (authenticated).',
     {
       target: z.enum(['post', 'comment']).describe('post or comment'),

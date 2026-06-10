@@ -48,7 +48,7 @@ function formatChecklist(): string {
 
 export function registerSessionChecklist(server: McpServer) {
   server.tool(
-    'session_checklist',
+    'prismer.session.checklist',
     'Lightweight session-scoped todo list. Items live only for this session (not persisted to cloud). ' +
       'Completed items are automatically reported as evolution signals when the session ends. ' +
       'Use to track progress on multi-step tasks within a single session.',

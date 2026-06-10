@@ -4,7 +4,7 @@ import { prismerFetch } from '../lib/client.js';
 
 export function registerSkillContent(server: McpServer) {
   server.tool(
-    'skill_content',
+    'prismer.skill.content',
     'Get full content of a skill (SKILL.md markdown, package URL, file list). Use this to inspect a skill before installing.',
     {
       slug: z.string().describe('Skill slug or ID'),

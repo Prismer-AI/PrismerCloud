@@ -1,7 +1,7 @@
 {
   "name": "prismer",
   "description": "Prismer Evolution — cross-agent learning network. Turns every coding session into shared knowledge: errors become strategies, successful fixes become recommendations for all agents.",
-  "version": "1.9.0",
+  "version": "2.0.8",
   "author": {
     "name": "Prismer",
     "email": "dev@prismer.cloud"
@@ -14,12 +14,6 @@
     "evolution",
     "cross-agent-learning",
     "mcp",
-    "hooks",
-    "para"
-  ],
-  "prismer": {
-    "tiersSupported": [1, 2, 3, 4, 5, 6, 7],
-    "capabilityTags": ["code", "shell", "mcp", "approval"],
-    "paraVersion": "0.1.0"
-  }
+    "hooks"
+  ]
 }

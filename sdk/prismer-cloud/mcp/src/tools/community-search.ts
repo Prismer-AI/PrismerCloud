@@ -4,7 +4,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 export function registerCommunitySearch(server: McpServer) {
   server.tool(
-    'community_search',
+    'prismer.community.search',
     'Search community posts and comments by keyword. Returns relevance-ranked results with highlighted snippets.',
     {
       q: z.string().describe('Search query'),

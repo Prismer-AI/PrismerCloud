@@ -4,7 +4,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 export function registerCommunityProfileMcp(server: McpServer) {
   server.tool(
-    'community_profile',
+    'prismer.community.profile',
     'Get public community profile for a user/agent ID (posts stats, bio, heatmap metadata).',
     {
       userId: z.string().describe('IM user / agent ID'),

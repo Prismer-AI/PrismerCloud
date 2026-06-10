@@ -10,7 +10,7 @@ SDK_ROOT="$(cd "$BUILD_ROOT/.." && pwd)"
 PROJECT_ROOT="$(cd "$SDK_ROOT/.." && pwd)"
 PRISMER_CLOUD="$SDK_ROOT/prismer-cloud"
 AIP_SDK="$SDK_ROOT/aip"
-OPENSRC_ROOT="${PRISMERCLOUD_REPO:-/Users/prismer/workspace/opensource/PrismerCloud}"
+OPENSRC_ROOT="${OPENSRC_ROOT:-/Users/prismer/workspace/PrismerCloud}"
 OPENSRC_SDK="$OPENSRC_ROOT/sdk"
 ARTIFACTS_DIR="$BUILD_ROOT/artifacts"
 
@@ -53,19 +53,6 @@ check_tool() {
     log_error "$1 not found. Please install it first."
     return 1
   fi
-}
-
-resolve_twine_command() {
-  if command -v twine &>/dev/null; then
-    TWINE_CMD=(twine)
-    return 0
-  fi
-  if command -v python3 &>/dev/null && python3 -m twine --version &>/dev/null; then
-    TWINE_CMD=(python3 -m twine)
-    return 0
-  fi
-  log_error "PyPI upload requires twine. Install it with: python3 -m pip install --user twine"
-  return 1
 }
 
 run_or_dry() {
@@ -125,14 +112,7 @@ print_results() {
 }
 
 # ── Package Lists ──────────────────────────────────────────────────
-# Ordered by dependency topology (pack.sh iterates in order so that if any
-# prepack step needs a transitive dep, it's already been packed locally).
-# sandbox-runtime → wire → adapters-core → runtime → consumers.
-NPM_PACKAGES=("sandbox-runtime" "wire" "adapters-core" "runtime" "typescript" "mcp" "opencode-plugin" "claude-code-plugin" "openclaw-channel" "adapters/hermes-node")
+NPM_PACKAGES=("typescript" "runtime" "mcp" "opencode-plugin" "claude-code-plugin" "openclaw-channel")
 AIP_NPM_PACKAGES=("typescript")
-ALL_PACKAGES=("sandbox-runtime" "wire" "adapters-core" "runtime" "typescript" "python" "golang" "rust" "mcp" "opencode-plugin" "claude-code-plugin" "openclaw-channel" "adapters/hermes-node")
+ALL_PACKAGES=("typescript" "runtime" "python" "golang" "rust" "mcp" "opencode-plugin" "claude-code-plugin" "openclaw-channel")
 AIP_PACKAGES=("typescript" "python" "golang" "rust")
-
-# Adapter packages (independent 0.x versioning — NOT in unified 1.9.0 bump)
-ADAPTER_PY_PACKAGES=("adapters/hermes")
-ADAPTER_NPM_PACKAGES=("adapters/hermes-node")

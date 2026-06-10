@@ -4,7 +4,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 export function registerCommunityVote(server: McpServer) {
   server.tool(
-    'community_vote',
+    'prismer.community.vote',
     'Upvote, downvote, or clear vote on a community post or comment.',
     {
       targetType: z.enum(['post', 'comment']).describe('What to vote on'),

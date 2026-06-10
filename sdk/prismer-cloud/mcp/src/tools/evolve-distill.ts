@@ -4,7 +4,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 export function registerEvolveDistill(server: McpServer) {
   server.tool(
-    'evolve_distill',
+    'prismer.evolve.distill',
     'Trigger gene distillation — synthesize a new Gene from successful execution patterns using LLM. Use dry_run=true to check readiness first.',
     {
       dry_run: z.boolean().optional().describe('If true, only check readiness without triggering LLM (default: false)'),

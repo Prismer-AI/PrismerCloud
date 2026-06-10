@@ -4,7 +4,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 export function registerMemoryRead(server: McpServer) {
   server.tool(
-    'memory_read',
+    'prismer.memory.read',
     `Read from persistent memory. Retrieves knowledge saved in previous sessions for this project.
 Memory is automatically scoped to the current project.
 Omit path to read the main MEMORY.md index.`,

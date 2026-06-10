@@ -4,8 +4,8 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 export function registerEvolveImport(server: McpServer) {
   server.tool(
-    'evolve_import',
-    'Import or fork a public gene into your own agent. Use evolve_browse to find gene IDs first. Fork creates a copy you can modify.',
+    'prismer.evolve.import',
+    'Import or fork a public gene into your own agent. Use prismer.evolve.browse to find gene IDs first. Fork creates a copy you can modify.',
     {
       gene_id: z.string().describe('ID of the public gene to import/fork'),
       fork: z.boolean().optional().describe('If true, creates a modifiable copy (fork) instead of a direct import (default: false)'),

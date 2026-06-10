@@ -91,11 +91,6 @@ describe('Context API', () => {
     const result = await client.load('What is TypeScript?', {
       inputType: 'query',
     });
-    // Search depends on Exa upstream — may fail with SEARCH_ERROR
-    if (!result.success && (result as any).error?.code === 'SEARCH_ERROR') {
-      console.warn('[SKIP] Exa upstream unavailable, skipping search assertion');
-      return;
-    }
     expect(result.success).toBe(true);
     // mode could be 'query' for search-based load
     expect(result.requestId).toBeDefined();
@@ -111,11 +106,6 @@ describe('Context API', () => {
 
   it('search() — performs a search query', async () => {
     const result = await client.search('example domain');
-    // Search depends on Exa upstream — may fail with SEARCH_ERROR
-    if (!result.success && (result as any).error?.code === 'SEARCH_ERROR') {
-      console.warn('[SKIP] Exa upstream unavailable, skipping search assertion');
-      return;
-    }
     expect(result.success).toBe(true);
     expect(result.requestId).toBeDefined();
   }, 60_000);
@@ -133,11 +123,6 @@ describe('Parse API', () => {
       'https://arxiv.org/pdf/2401.00001.pdf',
       'fast',
     );
-    // Parse depends on external PDF URL + parser service — may be unavailable
-    if (!result.success && (result as any).error?.code === 'PARSE_ERROR') {
-      console.warn('[SKIP] Parse upstream unavailable, skipping');
-      return;
-    }
     expect(result.success).toBe(true);
     expect(result.requestId).toBeDefined();
     // The response may be synchronous (document) or async (taskId)
@@ -150,11 +135,6 @@ describe('Parse API', () => {
       url: 'https://arxiv.org/pdf/2401.00001.pdf',
       mode: 'auto',
     });
-    // Parse depends on external PDF URL + parser service — may be unavailable
-    if (!result.success && (result as any).error?.code === 'PARSE_ERROR') {
-      console.warn('[SKIP] Parse upstream unavailable, skipping');
-      return;
-    }
     expect(result.success).toBe(true);
     expect(result.requestId).toBeDefined();
   }, 60_000);
@@ -219,12 +199,9 @@ describe('IM API', () => {
       expect(me.ok).toBe(true);
       expect(me.data).toBeDefined();
       expect(me.data!.user).toBeDefined();
-      // Username may differ from registered name when API key proxy auto-creates an IM user
-      expect(typeof me.data!.user.username).toBe('string');
-      // agentCard may be absent when API key proxy auto-creates an IM user without agent registration
-      if (me.data!.agentCard) {
-        expect(me.data!.agentCard.agentType).toBe('assistant');
-      }
+      expect(me.data!.user.username).toBe(agentAUsername);
+      expect(me.data!.agentCard).toBeDefined();
+      expect(me.data!.agentCard!.agentType).toBe('assistant');
     });
 
     it('refreshToken() — returns a new token', async () => {
@@ -842,8 +819,7 @@ describe('Real-Time: WebSocket', () => {
     const receivedMsg = await messagePromise;
     if (receivedMsg) {
       expect(receivedMsg.content).toBe(`Realtime WS test ${RUN_ID}`);
-      // senderId may differ from agentBId when API key proxy auto-creates IM users
-      expect(typeof receivedMsg.senderId).toBe('string');
+      expect(receivedMsg.senderId).toBe(agentBId);
     }
 
     // Disconnect
@@ -904,8 +880,7 @@ describe('Real-Time: SSE', () => {
     const receivedMsg = await messagePromise;
     if (receivedMsg) {
       expect(receivedMsg.content).toBe(`Realtime SSE test ${RUN_ID}`);
-      // senderId may differ from agentBId when API key proxy auto-creates IM users
-      expect(typeof receivedMsg.senderId).toBe('string');
+      expect(receivedMsg.senderId).toBe(agentBId);
     }
 
     // Disconnect

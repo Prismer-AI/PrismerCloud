@@ -309,6 +309,195 @@ type IMMessage struct {
 	CreatedAt        string          `json:"createdAt"`
 	UpdatedAt        string          `json:"updatedAt,omitempty"`
 	Metadata         json.RawMessage `json:"metadata,omitempty"`
+	// v2.0 §4.6 — multimodal content blocks (coexists with `content` during
+	// the 6-sprint double-write window).
+	ContentBlocks []ContentBlock `json:"contentBlocks,omitempty"`
+	// v2.0 §4.1 — per-conversation strict-monotonic seq from Wave 2-B1
+	// server outbox path. SDKs persist this as their reconcile cursor.
+	BoundarySeq int64 `json:"boundarySeq,omitempty"`
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// v2.0 §4.6 ContentBlock — multimodal protocol-layer typing
+//
+// Anthropic-shape discriminated union keyed by `kind`. Adapters translate to
+// vendor-specific wire format (OpenAI image_url / Anthropic source.base64 /
+// Gemini inline_data) at dispatch time. NOT OpenAI's `image_url` shape — see
+// docs/release200/14b "与 14 主文档的关系".
+//
+// Go doesn't have sum types, so ContentBlock is a struct with `Kind` plus
+// the union of all variant fields. Callers populate only the fields that
+// match their kind. The optional fields are pointer-or-omitempty so the
+// wire JSON stays clean.
+// ────────────────────────────────────────────────────────────────────────────
+
+// ContentBlockKind enumerates the 8 §4.6 variants.
+type ContentBlockKind string
+
+const (
+	ContentBlockKindText       ContentBlockKind = "text"
+	ContentBlockKindImage      ContentBlockKind = "image"
+	ContentBlockKindAudio      ContentBlockKind = "audio"
+	ContentBlockKindVideo      ContentBlockKind = "video"
+	ContentBlockKindFile       ContentBlockKind = "file"
+	ContentBlockKindToolUse    ContentBlockKind = "tool_use"
+	ContentBlockKindToolResult ContentBlockKind = "tool_result"
+	ContentBlockKindReasoning  ContentBlockKind = "reasoning"
+)
+
+// ContentBlock is the §4.6 multimodal block. `Kind` is the discriminator;
+// only the fields applicable to that kind are non-zero. Constructor helpers
+// (NewTextBlock, NewImageBlock, …) below produce well-formed blocks.
+type ContentBlock struct {
+	Kind ContentBlockKind `json:"kind"`
+
+	// text / reasoning
+	Text     string `json:"text,omitempty"`
+	Redacted bool   `json:"redacted,omitempty"`
+
+	// image / audio / video / file — shared `assetId` + `mediaType`
+	AssetID   string `json:"assetId,omitempty"`
+	MediaType string `json:"mediaType,omitempty"`
+	// image-only
+	Alt string `json:"alt,omitempty"`
+	// audio / video
+	DurationMs int64 `json:"durationMs,omitempty"`
+	// video-only
+	ThumbnailURL string `json:"thumbnailUrl,omitempty"`
+	// file-only
+	Filename string `json:"filename,omitempty"`
+
+	// tool_use
+	ToolCallID string          `json:"toolCallId,omitempty"`
+	ToolName   string          `json:"toolName,omitempty"`
+	InputJSON  json.RawMessage `json:"inputJson,omitempty"`
+
+	// tool_result
+	Output []ContentBlock `json:"output,omitempty"`
+}
+
+// Constructor helpers (well-formed §4.6 blocks).
+
+func NewTextBlock(text string) ContentBlock {
+	return ContentBlock{Kind: ContentBlockKindText, Text: text}
+}
+
+func NewImageBlock(assetID, mediaType, alt string) ContentBlock {
+	return ContentBlock{Kind: ContentBlockKindImage, AssetID: assetID, MediaType: mediaType, Alt: alt}
+}
+
+func NewAudioBlock(assetID, mediaType string, durationMs int64) ContentBlock {
+	return ContentBlock{Kind: ContentBlockKindAudio, AssetID: assetID, MediaType: mediaType, DurationMs: durationMs}
+}
+
+func NewVideoBlock(assetID, mediaType string, durationMs int64, thumbnailURL string) ContentBlock {
+	return ContentBlock{Kind: ContentBlockKindVideo, AssetID: assetID, MediaType: mediaType, DurationMs: durationMs, ThumbnailURL: thumbnailURL}
+}
+
+func NewFileBlock(assetID, mediaType, filename string) ContentBlock {
+	return ContentBlock{Kind: ContentBlockKindFile, AssetID: assetID, MediaType: mediaType, Filename: filename}
+}
+
+func NewToolUseBlock(toolCallID, toolName string, inputJSON json.RawMessage) ContentBlock {
+	return ContentBlock{Kind: ContentBlockKindToolUse, ToolCallID: toolCallID, ToolName: toolName, InputJSON: inputJSON}
+}
+
+func NewToolResultBlock(toolCallID string, output []ContentBlock) ContentBlock {
+	return ContentBlock{Kind: ContentBlockKindToolResult, ToolCallID: toolCallID, Output: output}
+}
+
+func NewReasoningBlock(text string, redacted bool) ContentBlock {
+	return ContentBlock{Kind: ContentBlockKindReasoning, Text: text, Redacted: redacted}
+}
+
+// ChatMessage — v2.0 §4.6 multi-turn dispatch message. Content may be a
+// plain string (legacy / single-text) or a slice of ContentBlock
+// (multimodal). Use Content for the string path or Blocks for blocks; the
+// MarshalJSON below picks the right `content` shape.
+type ChatMessage struct {
+	Role       string         `json:"role"` // "system" | "user" | "assistant" | "tool"
+	Content    string         `json:"-"`
+	Blocks     []ContentBlock `json:"-"`
+	Name       string         `json:"name,omitempty"`
+	ToolCallID string         `json:"toolCallId,omitempty"`
+}
+
+// MarshalJSON emits `content` as either a JSON string (when Content is set
+// and Blocks is empty) or a JSON array of blocks.
+func (m ChatMessage) MarshalJSON() ([]byte, error) {
+	type alias struct {
+		Role       string      `json:"role"`
+		Content    interface{} `json:"content"`
+		Name       string      `json:"name,omitempty"`
+		ToolCallID string      `json:"toolCallId,omitempty"`
+	}
+	var content interface{}
+	if len(m.Blocks) > 0 {
+		content = m.Blocks
+	} else {
+		content = m.Content
+	}
+	return json.Marshal(alias{Role: m.Role, Content: content, Name: m.Name, ToolCallID: m.ToolCallID})
+}
+
+// UnmarshalJSON handles both shapes.
+func (m *ChatMessage) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		Role       string          `json:"role"`
+		Content    json.RawMessage `json:"content"`
+		Name       string          `json:"name,omitempty"`
+		ToolCallID string          `json:"toolCallId,omitempty"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	m.Role = raw.Role
+	m.Name = raw.Name
+	m.ToolCallID = raw.ToolCallID
+	if len(raw.Content) == 0 {
+		return nil
+	}
+	// Try string first
+	if raw.Content[0] == '"' {
+		var s string
+		if err := json.Unmarshal(raw.Content, &s); err != nil {
+			return err
+		}
+		m.Content = s
+		return nil
+	}
+	// Else expect array of blocks
+	var blocks []ContentBlock
+	if err := json.Unmarshal(raw.Content, &blocks); err != nil {
+		return err
+	}
+	m.Blocks = blocks
+	return nil
+}
+
+// TaskInput is the §4.6 task dispatch input. `Prompt` is the legacy
+// single-text path; `Messages` is the multimodal-ready multi-turn path.
+// Adapter chooses `Messages` when present.
+type TaskInput struct {
+	Prompt   string                 `json:"prompt,omitempty"`
+	Messages []ChatMessage          `json:"messages,omitempty"`
+	// Extra capability-specific fields can be stashed here.
+	Extra map[string]interface{} `json:"-"`
+}
+
+// MarshalJSON flattens Extra into the top-level object.
+func (t TaskInput) MarshalJSON() ([]byte, error) {
+	out := map[string]interface{}{}
+	for k, v := range t.Extra {
+		out[k] = v
+	}
+	if t.Prompt != "" {
+		out["prompt"] = t.Prompt
+	}
+	if t.Messages != nil {
+		out["messages"] = t.Messages
+	}
+	return json.Marshal(out)
 }
 
 type IMRoutingTarget struct {
@@ -446,6 +635,15 @@ type IMSendOptions struct {
 	Metadata        map[string]any `json:"metadata,omitempty"`
 	ParentID        string         `json:"parentId,omitempty"`
 	QuotedMessageID string         `json:"quotedMessageId,omitempty"`
+	// v2.0 §3.0.2 Gap A-④ — when empty, SDK auto-generates a UUID v4 and
+	// stamps it into the X-Idempotency-Key HTTP header. Pass the same key
+	// across retry attempts to trigger server-side dedup (UNIQUE
+	// (conversationId, idempotencyKey)).
+	IdempotencyKey string `json:"-"`
+	// v2.0 §4.6 — multimodal content blocks. When set, the SDK sends them
+	// as `contentBlocks` in the JSON body. `content` (string) remains the
+	// legacy fallback for non-ContentBlock-aware renderers.
+	ContentBlocks []ContentBlock `json:"-"`
 }
 
 type IMPaginationOptions struct {

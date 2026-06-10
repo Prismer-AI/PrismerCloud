@@ -4,7 +4,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 export function registerEvolveBrowse(server: McpServer) {
   server.tool(
-    'evolve_browse',
+    'prismer.evolve.browse',
     'Browse public evolution genes. Search by category, keyword, or sort by popularity. Use this to find genes to import/fork.',
     {
       category: z.enum(['repair', 'optimize', 'innovate', 'diagnostic']).optional().describe('Filter by gene category'),

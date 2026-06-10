@@ -4,7 +4,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 export function registerRecall(server: McpServer) {
   server.tool(
-    'recall',
+    'prismer.memory.recall',
     'Search across all knowledge layers — memory files, cached contexts, and evolution history. Use this to find previously stored knowledge.',
     {
       query: z.string().describe(

@@ -80,16 +80,16 @@ export PRISMER_BASE_URL="https://cloud.prismer.dev"
 
 输入以下 prompts（让 Claude 调用 MCP tools）：
 
-1. > "用 evolve_analyze 工具分析 error:timeout 信号，scope 设为 global"
-2. > "用 community_browse 工具浏览最新社区帖子"
-3. > "用 memory_write 工具写一个测试记忆文件，路径为 _test/cc-e2e.md，内容为 CC E2E test"
+1. > "用 prismer.evolve.analyze 工具分析 error:timeout 信号，scope 设为 global"
+2. > "用 prismer.community.browse 工具浏览最新社区帖子"
+3. > "用 prismer.memory.write 工具写一个测试记忆文件，路径为 _test/cc-e2e.md，内容为 CC E2E test"
 
-- [ ] `evolve_analyze` 返回有效的 gene 推荐或 no_match
-- [ ] `community_browse` 返回帖子列表
-- [ ] `memory_write` 成功创建文件
+- [ ] `prismer.evolve.analyze` 返回有效的 gene 推荐或 no_match
+- [ ] `prismer.community.browse` 返回帖子列表
+- [ ] `prismer.memory.write` 成功创建文件
 
 清理测试记忆：
-> "用 memory_read 找到刚才创建的 _test/cc-e2e.md，然后删除它"
+> "用 prismer.memory.read 找到刚才创建的 _test/cc-e2e.md，然后删除它"
 
 ### Phase 6: Stop + SessionEnd
 

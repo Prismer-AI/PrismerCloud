@@ -4,7 +4,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 export function registerEvolveExportSkill(server: McpServer) {
   server.tool(
-    'evolve_export_skill',
+    'prismer.evolve.exportSkill',
     'Export an evolution gene as a shareable skill in the catalog.',
     {
       geneId: z.string().describe('ID of the gene to export as a skill'),

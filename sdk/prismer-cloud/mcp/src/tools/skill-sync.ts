@@ -7,9 +7,9 @@ import { existsSync, mkdirSync, writeFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { homedir } from 'os';
 
-export function registerSkillSync(server: McpServer) {
+export function registerSkillSync(server: McpServer, toolName = 'prismer.skill.sync') {
   server.tool(
-    'skill_sync',
+    toolName,
     'Sync installed skills from Prismer Cloud to local filesystem',
     {
       platform: z.enum(['claude-code', 'opencode', 'openclaw', 'all']).optional()
@@ -18,6 +18,7 @@ export function registerSkillSync(server: McpServer) {
         v => (v === '' || v === null ? undefined : v),
         z.string().optional().describe('Workspace scope. Default: auto-detected or "global"'),
       ),
+      agentId: z.string().optional().describe('Optional IM agent ID for installed-skill lookup.'),
     },
     async (args) => {
       const platform = args.platform || 'claude-code';
@@ -36,6 +37,7 @@ export function registerSkillSync(server: McpServer) {
       try {
         const wsData = await prismerFetch('/api/im/workspace', {
           query: { scope, slots: 'strategies' },
+          toolName,
         }) as { data?: { strategies?: unknown[]; scope: string } };
 
         if (wsData?.data?.strategies?.length) {
@@ -59,7 +61,10 @@ export function registerSkillSync(server: McpServer) {
       // Fallback: legacy installed → per-skill content
       if (usedLegacy || localFiles.length === 0) {
         usedLegacy = true;
-        const installed = await prismerFetch('/api/im/skills/installed') as {
+        const installed = await prismerFetch('/api/im/skills/installed', {
+          query: args.agentId ? { agentId: args.agentId } : undefined,
+          toolName,
+        }) as {
           data?: { skills?: Array<{ skill?: { slug: string }; slug?: string }> } | Array<{ skill?: { slug: string }; slug?: string }>;
         };
         const skills = Array.isArray(installed?.data) ? installed.data : ((installed?.data as any)?.skills || []);
@@ -69,7 +74,9 @@ export function registerSkillSync(server: McpServer) {
           if (!slug) continue;
           const safeSlug = slug.replace(/[^a-zA-Z0-9_-]/g, '');
           try {
-            const contentData = await prismerFetch(`/api/im/skills/${encodeURIComponent(slug)}/content`) as { data?: { content?: string } };
+            const contentData = await prismerFetch(`/api/im/skills/${encodeURIComponent(slug)}/content`, {
+              toolName,
+            }) as { data?: { content?: string } };
             if (contentData?.data?.content) {
               localFiles.push({
                 relativePath: `skills/${safeSlug}/SKILL.md`,

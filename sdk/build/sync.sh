@@ -5,22 +5,6 @@ parse_common_flags "$@"
 
 log_step "Sync SDK → PrismerCloud (WHOLE-DIRECTORY REPLACE)"
 
-SOURCE_SDK_REAL="$(cd "$SDK_ROOT" && pwd -P)"
-TARGET_SDK_REAL=""
-if [[ -d "$OPENSRC_SDK" ]]; then
-  TARGET_SDK_REAL="$(cd "$OPENSRC_SDK" && pwd -P)"
-fi
-
-if [[ -n "$TARGET_SDK_REAL" && "$SOURCE_SDK_REAL" == "$TARGET_SDK_REAL" ]]; then
-  log_error "Source sdk/ and target sdk/ resolve to the same directory."
-  log_error "Run sync.sh from the private source repo, not from the open-source mirror."
-  exit 1
-fi
-
-if [[ "$SCOPE" != "all" ]]; then
-  log_warn "sync.sh always mirrors the whole sdk/ tree; --scope=$SCOPE is informational only."
-fi
-
 # ── Validate ───────────────────────────────────────────────────────
 if [[ ! -d "$PRISMER_CLOUD" ]]; then
   log_error "Source not found: $PRISMER_CLOUD"
@@ -79,6 +63,9 @@ if [[ $DRY_RUN -eq 0 ]]; then
   # Keep build/artifacts/ — contains packed tgz/whl/crate for publish
 fi
 
+# ── Step 4: Also sync build/ scripts to open source ────────────────
+# The open source repo has its own build/ — sync ours as reference
+# but don't overwrite their release.sh/pack.sh (they have registry-specific logic)
 log_step "Step 3: Verify"
 if [[ $DRY_RUN -eq 0 ]]; then
   FILE_COUNT=$(find "$OPENSRC_SDK" -type f 2>/dev/null | wc -l | tr -d ' ')
@@ -86,7 +73,7 @@ if [[ $DRY_RUN -eq 0 ]]; then
   log_success "Synced: $FILE_COUNT files in $DIR_COUNT directories"
 
   # Verify key packages exist
-  for pkg in typescript python golang rust mcp; do
+  for pkg in typescript python golang rust mcp runtime built-in-skills opencode-plugin claude-code-plugin openclaw-channel; do
     if [[ -d "$OPENSRC_SDK/prismer-cloud/$pkg" ]]; then
       log_success "  ✓ prismer-cloud/$pkg"
     else
@@ -100,4 +87,4 @@ else
   log_dry "Dry run complete"
 fi
 
-log_success "Sync complete. Next: inspect $OPENSRC_ROOT with git status."
+log_success "Sync complete. Next: cd $OPENSRC_ROOT && build/verify.sh"

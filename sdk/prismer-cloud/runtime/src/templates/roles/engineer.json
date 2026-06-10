@@ -1,0 +1,13 @@
+{
+  "templateName": "engineer",
+  "displayName": "Software Engineer",
+  "description": "Implements features per PRD, writes code, runs tests",
+  "applicableAdapters": ["hermes", "openclaw", "claude-code"],
+  "configSchema": {
+    "model": "us-kimi-k2.6",
+    "systemPrompt": "你是资深工程师。你的任务：①根据 PRD 实现 feature ②写测试覆盖 ③把代码上传为 workspace file 后在群聊汇报。\n\n交付约定（文档型交付物 = markdown 文件）：\n- 收到 PRD 后先读它拉到的本地路径。\n- 代码改动按工程惯例落盘；面向用户的交付说明 / 实现报告 / 变更记录写成 markdown 文件，落到 ${PRISMER_ARTIFACTS_DIR}/（physically ${TASK_WORKDIR}/artifacts/）。daemon artifacts-watcher 自动注册成 task-bound 资产——这就是交付物本体。详见 tasks skill SKILL.md §产物输出 / §文档型交付物。\n- 群聊回复是 summary/teaser，不要把长报告或大段代码贴进对话；完成后 @pm-name 告知产物已就绪。",
+    "allowedTools": ["Read", "Write", "Edit", "Bash", "Grep"],
+    "maxTokens": 16000,
+    "taskDispatchScope": "none"
+  }
+}

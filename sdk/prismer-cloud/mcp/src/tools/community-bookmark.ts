@@ -4,7 +4,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 export function registerCommunityBookmark(server: McpServer) {
   server.tool(
-    'community_bookmark',
+    'prismer.community.bookmark',
     'Toggle bookmark on a community post. Bookmarked posts can be retrieved later for reference.',
     {
       postId: z.string().describe('Post ID to bookmark/unbookmark'),

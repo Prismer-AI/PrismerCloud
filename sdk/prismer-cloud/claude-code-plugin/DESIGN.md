@@ -60,9 +60,9 @@ v2.1 的核心发现：**Stop hook 可以 block 并注入 reason，Claude Code �
   (短上下文)                (执行中，中等上下文)          (完整上下文)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-  READ: sync pull           READ: /analyze (卡住时)      WRITE: evolve_record
-  + retry queue             READ: cache load (WebFetch)  WRITE: evolve_create_gene
-  + memory pull                                          WRITE: memory_write
+  READ: sync pull           READ: /analyze (卡住时)      WRITE: prismer.evolve.record
+  + retry queue             READ: cache load (WebFetch)  WRITE: prismer.evolve.createGene
+  + memory pull                                          WRITE: prismer.memory.write
   + skill sync              WRITE: local journal         WRITE: sync push (fallback)
   + MCP pre-warm            WRITE: cache save (Web)
 
@@ -172,9 +172,9 @@ Claude Code 收到 reason (LLM 带完整 session 上下文)
   ├─ 判断可迁移性 — 纯项目特定修复 → skip gene 创建
   ├─ 去上下文化 — 文件路径→类型、行号→移除、项目名→泛化
   ├─ 调用 MCP tools:
-  │   ├─ evolve_report: session 级总结
-  │   ├─ evolve_create_gene: 可迁移模式 → gene (signals_match + strategy)
-  │   └─ memory_write: 项目特定知识 → persistent memory
+  │   ├─ prismer.evolve.report: session 级总结
+  │   ├─ prismer.evolve.createGene: 可迁移模式 → gene (signals_match + strategy)
+  │   └─ prismer.memory.write: 项目特定知识 → persistent memory
   └─ 完成后正常停止
   ↓
 Stop hook 再次触发
@@ -202,11 +202,11 @@ reason 聚焦 **gene adherence 自评** — 让 Claude 判断是否真的用了�
 Gene suggestions were made this session. For each, self-evaluate:
 Did you actually follow this strategy, or did you solve it independently?
   - "TypeScript Type Error Resolution" (gene_repair_abc123) auto-detected: success
-    Call evolve_record with YOUR assessment of outcome + whether you used the strategy
+    Call prismer.evolve.record with YOUR assessment of outcome + whether you used the strategy
 
 Repeated signals: error:typescript(2x)
 
-Review: evolve_record (gene feedback) / evolve_create_gene (general pattern) / memory_write (project-specific). Max 3 calls.
+Review: prismer.evolve.record (gene feedback) / prismer.evolve.createGene (general pattern) / prismer.memory.write (project-specific). Max 3 calls.
 ```
 
 **无 gene feedback 时**：降级为通用指引 `"Session had evolution value. Review: ..."`
@@ -322,7 +322,7 @@ WebFetch/WebSearch
 | **Stop hook** | 不存在 | spawn detached Node | **block + Claude LLM + gene adherence 自评** |
 | **SessionEnd** | 不存在 | 不存在 | **async fallback sync push + retry queue** |
 | **Gene 创建** | 不做 | 规则化 (空 strategy) | **LLM 去上下文化 + strategy** |
-| **Memory 写入** | 不做 | 不做 | **Claude 调 memory_write** |
+| **Memory 写入** | 不做 | 不做 | **Claude 调 prismer.memory.write** |
 
 ---
 
@@ -363,9 +363,9 @@ Session End (双路径):
       └─ YES → block + gene adherence 自评 reason
            ↓
          Claude LLM (完整 session 上下文):
-           ├─ evolve_record (gene feedback with adherence)
-           ├─ evolve_create_gene (可迁移模式)
-           ├─ memory_write (项目知识)
+           ├─ prismer.evolve.record (gene feedback with adherence)
+           ├─ prismer.evolve.createGene (可迁移模式)
+           ├─ prismer.memory.write (项目知识)
            └─ 完成 → Stop 再触发 → stop_hook_active=true → 退出
 
   路径 B: SessionEnd (fallback)
@@ -551,7 +551,7 @@ v2.0 测试发现两个脚本的 signal type 命名不一致（致命 bug，已�
 
 - [x] Stop hook 恢复 reason 字段（精简版）— 传递 gene feedback 上下文
 - [x] Claude 自评 adherence: "你是否真的用了建议的策略？"
-- [x] 隐式 pending 归因保留作为 fallback，Claude 的显式 evolve_record 作为 ground truth
+- [x] 隐式 pending 归因保留作为 fallback，Claude 的显式 prismer.evolve.record 作为 ground truth
 
 **设计 tradeoff 记录：**
 
@@ -562,14 +562,14 @@ v2.0 测试发现两个脚本的 signal type 命名不一致（致命 bug，已�
 2. **隐式 pending 归因 vs 显式 Claude 自评** — 两条路径共存：
    - 隐式路径 (post-bash-journal): pending-suggestion.json 3min TTL，下一个 Bash 结果决定 outcome
      → 噪声来源：Agent 可能忽略建议自己修，但仍被标记为 gene success
-   - 显式路径 (Stop hook → Claude evolve_record): Claude 带完整上下文自评 adherence
+   - 显式路径 (Stop hook → Claude prismer.evolve.record): Claude 带完整上下文自评 adherence
      → 更准确，但依赖 Claude 配合（Stop hook 可能被冷却跳过）
    - 策略：隐式做 fallback，显式做 ground truth。当两者冲突时服务端以最后一条 record 为准。
 
 3. **SessionStart 被动注入只有标题没有 strategy steps** — 设计选择：
    - 注入完整 strategy 会撑大 context（5 个 gene × 5 步 = 25 行额外文本）
    - 被动注入的目的是"意识到存在"，不是"立即执行"
-   - 需要具体步骤时，stuck detection 或 evolve_analyze 会返回完整 strategy
+   - 需要具体步骤时，stuck detection 或 prismer.evolve.analyze 会返回完整 strategy
    - 保持当前设计，不改。
 
 4. **Edit/Write 的 PreToolUse 不触发 stuck detection** — 设计选择：
@@ -596,7 +596,7 @@ v2.0 测试发现两个脚本的 signal type 命名不一致（致命 bug，已�
 - [x] v2.0 三阶段模型 (sync + journal + stuck detection)
 - [ ] v3: OpenCode 是否支持类似 Stop hook block？
   - OpenCode 有 `event` hook 但没有 Stop hook 的 block 能力
-  - 替代方案: `session.ended` event → 最后调一次 evolve_report
+  - 替代方案: `session.ended` event → 最后调一次 prismer.evolve.report
   - 或: `experimental.chat.system.transform` 注入 "在结束前请 review 进化" 指令
 
 ---
@@ -617,7 +617,7 @@ v2.0 测试发现两个脚本的 signal type 命名不一致（致命 bug，已�
 | **超图观测** | ✅ Always-Write | ✅ (共享服务端) | ✅ (共享服务端) |
 | **Gene 创建** | ✅ Stop hook block → Claude LLM | ⚠️ 规则化 | ✅ prismer_gene_create |
 | **LLM 抽象** | ✅ Stop hook block (已验证) | ❌ 无 block 能力 | N/A |
-| **Memory 写入** | ✅ Claude 调 memory_write | ❌ | ❌ |
+| **Memory 写入** | ✅ Claude 调 prismer.memory.write | ❌ | ❌ |
 | **Skill 自动 sync** | ✅ SessionStart 下载 | ❌ | ❌ |
 | **Subagent 注入** | ✅ SubagentStart hook | ❌ | N/A |
 | **WebFetch cache** | ✅ save always-on + load opt-in | ❌ | N/A |
@@ -705,9 +705,9 @@ Stop hook ─────────▶│ 8. block (如果有进化价值)    
 Claude LLM ────────▶│ 9. 分析完整 session 上下文       │
                     │    ├─ 判断可迁移性               │
                     │    ├─ 去上下文化                  │
-                    │    ├─ evolve_create_gene (gene)  │
-                    │    ├─ evolve_record (feedback)   │
-                    │    └─ memory_write (知识)         │
+                    │    ├─ prismer.evolve.createGene (gene)  │
+                    │    ├─ prismer.evolve.record (feedback)   │
+                    │    └─ prismer.memory.write (知识)         │
                     │                                 │
                     │ 10. 正常退出                     │
                     └─────────────────────────────────┘

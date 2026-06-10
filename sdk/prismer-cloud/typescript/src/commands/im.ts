@@ -9,22 +9,62 @@ export function register(parent: Command, getIMClient: ClientFactory, _getAPICli
     .description('IM messaging, groups, conversations, and credits');
 
   // ---------------------------------------------------------------------------
-  // im send <user-id> <message>
+  // im send <user-id-or-username> <message>
   // ---------------------------------------------------------------------------
   im
-    .command('send <user-id> <message>')
-    .description('Send a direct message to a user')
+    .command('send <user-id-or-username> <message>')
+    .description('Send a direct message to a user (id by default, --by-username to resolve)')
     .option('-t, --type <type>', 'Message type: text, markdown, code, file, etc.', 'text')
     .option('--reply-to <msg-id>', 'Reply to a specific message ID (parentId)')
+    .option('--conversation-id <id>', 'Pin message to a specific conversation/session')
+    .option('--asset-id <id>', 'Attach a previously uploaded asset (treats type as file)')
+    .option('--by-username', 'Treat the first arg as a username; resolve to imUserId first')
     .option('--json', 'Output raw JSON response')
-    .action(async (userId: string, message: string, opts: { type: string; replyTo?: string; json: boolean }) => {
+    .action(async (target: string, message: string, opts: {
+      type: string;
+      replyTo?: string;
+      conversationId?: string;
+      assetId?: string;
+      byUsername?: boolean;
+      json: boolean;
+    }) => {
       const client = getIMClient();
       try {
+        let userId = target;
+        if (opts.byUsername) {
+          const discoverRes = await client.im.contacts.discover();
+          if (!discoverRes.ok || !Array.isArray(discoverRes.data)) {
+            process.stderr.write(`Error: could not resolve username "${target}" — discover failed.\n`);
+            process.exit(1);
+          }
+          const needle = target.trim().toLowerCase().replace(/^@/, '');
+          const match = (discoverRes.data as unknown as Array<Record<string, unknown>>).find((u) => {
+            const vals = [u.username, u.displayName, u.userId].map((v) =>
+              typeof v === 'string' ? v.trim().toLowerCase() : '',
+            );
+            return vals.includes(needle);
+          });
+          if (!match?.userId || typeof match.userId !== 'string') {
+            process.stderr.write(`Error: could not resolve username "${target}" to an IM user.\n`);
+            process.exit(1);
+          }
+          userId = match.userId;
+        }
+
+        let effectiveType = opts.type;
+        if (opts.assetId && (!effectiveType || effectiveType === 'text')) effectiveType = 'file';
+
         const sendOpts: Parameters<typeof client.im.direct.send>[2] = {
-          type: opts.type as 'text' | 'markdown' | 'code' | 'image' | 'file' | 'tool_call' | 'tool_result' | 'system_event' | 'thinking',
+          type: effectiveType as 'text' | 'markdown' | 'code' | 'image' | 'file' | 'tool_call' | 'tool_result' | 'system_event' | 'thinking',
         };
         if (opts.replyTo) sendOpts!.parentId = opts.replyTo;
-        const res = await client.im.direct.send(userId, message, sendOpts);
+        if (opts.assetId) {
+          sendOpts!.attachments = [{ kind: 'asset', assetId: opts.assetId, role: 'attachment' }];
+        }
+
+        const res = opts.conversationId
+          ? await client.im.messages.send(opts.conversationId, message, sendOpts)
+          : await client.im.direct.send(userId, message, sendOpts);
         if (!res.ok) {
           process.stderr.write(`Error: ${res.error?.message || JSON.stringify(res.error)}\n`);
           process.exit(1);
@@ -135,13 +175,18 @@ export function register(parent: Command, getIMClient: ClientFactory, _getAPICli
     .description('Discover available agents')
     .option('--type <type>', 'Filter by agent type')
     .option('--capability <cap>', 'Filter by capability')
+    .option('--online-only', 'Only return agents currently online')
     .option('--json', 'Output raw JSON response')
-    .action(async (opts: { type?: string; capability?: string; json: boolean }) => {
+    .action(async (opts: { type?: string; capability?: string; onlineOnly?: boolean; json: boolean }) => {
       const client = getIMClient();
       try {
         const discoverOpts: Record<string, string> = {};
         if (opts.type) discoverOpts.type = opts.type;
         if (opts.capability) discoverOpts.capability = opts.capability;
+        if (opts.onlineOnly) {
+          discoverOpts.status = 'online';
+          discoverOpts.onlineOnly = 'true';
+        }
         const res = await client.im.contacts.discover(Object.keys(discoverOpts).length ? discoverOpts : undefined);
         if (!res.ok) {
           process.stderr.write(`Error: ${res.error?.message || JSON.stringify(res.error)}\n`);
@@ -209,16 +254,61 @@ export function register(parent: Command, getIMClient: ClientFactory, _getAPICli
     });
 
   // ---------------------------------------------------------------------------
-  // im conversations
+  // im conversations [conversation-id]
+  //   - Without arg: list conversations
+  //   - With arg:    show conversation details (--members for participant list)
   // ---------------------------------------------------------------------------
   im
-    .command('conversations')
-    .description('List conversations')
-    .option('--unread', 'Show only conversations with unread messages')
+    .command('conversations [conversation-id]')
+    .description('List conversations, or show details for one (use --members to list participants)')
+    .option('--unread', 'Show only conversations with unread messages (list mode only)')
+    .option('--members', 'When a conversation id is provided, list its agent + human participants')
     .option('--json', 'Output raw JSON response')
-    .action(async (opts: { unread: boolean; json: boolean }) => {
+    .action(async (
+      conversationId: string | undefined,
+      opts: { unread: boolean; members: boolean; json: boolean },
+    ) => {
       const client = getIMClient();
       try {
+        // Single-conversation mode
+        if (conversationId) {
+          const res = await client.im.conversations.get(conversationId);
+          if (!res.ok) {
+            process.stderr.write(`Error: ${res.error?.message || JSON.stringify(res.error)}\n`);
+            process.exit(1);
+          }
+          const conv = res.data as Record<string, unknown> | undefined;
+          if (opts.json) {
+            process.stdout.write(JSON.stringify(opts.members ? (conv?.participants ?? []) : conv, null, 2) + '\n');
+            return;
+          }
+          if (opts.members) {
+            const participants = (conv?.participants as Array<Record<string, unknown>> | undefined) ?? [];
+            if (participants.length === 0) {
+              process.stdout.write('No participants.\n');
+              return;
+            }
+            process.stdout.write(
+              'User ID'.padEnd(36) + 'Role'.padEnd(12) + 'Type'.padEnd(10) + 'Display Name\n',
+            );
+            for (const p of participants) {
+              const user = (p.user as Record<string, unknown> | undefined) ?? {};
+              process.stdout.write(
+                `${String(user.id ?? '').padEnd(36)}${String(p.role ?? '').padEnd(12)}${String(user.role ?? '').padEnd(10)}${String(user.displayName ?? user.username ?? '')}\n`,
+              );
+            }
+            return;
+          }
+          // No --members → print summary
+          process.stdout.write(`ID:           ${conv?.id ?? ''}\n`);
+          process.stdout.write(`Type:         ${conv?.type ?? ''}\n`);
+          process.stdout.write(`Title:        ${conv?.title ?? ''}\n`);
+          const participantCount = Array.isArray(conv?.participants) ? (conv?.participants as unknown[]).length : 0;
+          process.stdout.write(`Participants: ${participantCount}\n`);
+          return;
+        }
+
+        // List mode
         const listOpts: { withUnread?: boolean; unreadOnly?: boolean } = {};
         if (opts.unread) {
           listOpts.withUnread = true;

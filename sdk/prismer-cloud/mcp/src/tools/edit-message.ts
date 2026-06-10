@@ -4,7 +4,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 export function registerEditMessage(server: McpServer) {
   server.tool(
-    'edit_message',
+    'prismer.message.edit',
     'Edit an existing message in a conversation. Useful for streaming agent output (send empty message, then edit with accumulated content).',
     {
       conversationId: z.string().describe('Conversation ID containing the message'),

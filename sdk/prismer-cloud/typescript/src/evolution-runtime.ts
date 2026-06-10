@@ -21,15 +21,35 @@
 
 import { EvolutionCache } from './evolution-cache';
 import { extractSignals, createEnrichedExtractor } from './signal-enrichment';
-import type { SignalTag, ExecutionContext, SignalEnrichmentConfig, IMGene } from './types';
+import type {
+  SignalTag,
+  ExecutionContext,
+  SignalEnrichmentConfig,
+  IMGene,
+  IMAnalyzeOptions,
+  IMAnalyzeResult,
+  IMRecordOutcomeOptions,
+  IMResult,
+  EvolutionSyncSnapshot,
+  EvolutionSyncDelta,
+} from './types';
 
 /** Minimal interface for the evolution client — avoids circular import */
 interface EvolutionClientLike {
-  getSyncSnapshot(since?: number): Promise<{ data?: any }>;
-  analyze(options: Record<string, any>): Promise<{ data?: any }>;
-  record(options: Record<string, any>): Promise<{ data?: any }>;
-  sync(options: Record<string, any>): Promise<{ data?: any }>;
+  getSyncSnapshot(since?: number): Promise<IMResult<EvolutionSyncSnapshot>>;
+  analyze(options: IMAnalyzeOptions & { scope?: string }): Promise<IMResult<IMAnalyzeResult>>;
+  record(options: IMRecordOutcomeOptions & { scope?: string }): Promise<IMResult<unknown>>;
+  sync(options: {
+    pushOutcomes?: IMRecordOutcomeOptions[];
+    pullSince?: number;
+    push?: { outcomes?: IMRecordOutcomeOptions[]; scope?: string };
+    pull?: { since?: number; scope?: string };
+    scope?: string;
+  }): Promise<IMResult<{ pulled?: EvolutionSyncDelta['pulled'] }>>;
 }
+
+/** Recorded-outcome action used by the suggestion builder. */
+type SuggestionAction = 'apply_gene' | 'create_suggested' | 'none';
 
 // ─── Types ──────────────────────────────────────────────
 
@@ -44,6 +64,20 @@ export interface EvolutionRuntimeConfig {
   outboxMaxSize?: number;
   /** Outbox flush interval in ms (default: 5000) */
   outboxFlushMs?: number;
+  /**
+   * Max attempts per outbox entry before it is moved to the dead-letter array
+   * and a `console.warn` fires (default: 5). Use `Infinity` for unbounded
+   * retries (legacy behaviour).
+   */
+  outboxMaxAttempts?: number;
+}
+
+/** Entry shape exposed via `evolutionRuntime.deadLetter`. */
+export interface DeadLetterEntry extends OutboxEntry {
+  /** Last error message observed while trying to flush this entry. */
+  lastError?: string;
+  /** Timestamp at which the entry was moved to the dead-letter array. */
+  droppedAt: number;
 }
 
 export interface Suggestion {
@@ -67,7 +101,12 @@ interface OutboxEntry {
   metadata?: Record<string, any>;
   timestamp: number;
   sessionId?: string;
+  /** Number of times this entry has been pushed to the server and failed. */
+  attempts?: number;
 }
+
+/** Default ceiling for outbox retry attempts before an entry is dropped. */
+const DEFAULT_OUTBOX_MAX_ATTEMPTS = 5;
 
 /** Tracks a single suggest→learned cycle within a task. */
 export interface EvolutionSession {
@@ -123,6 +162,8 @@ export class EvolutionRuntime {
   private cache: EvolutionCache;
   private enricher: (ctx: ExecutionContext) => Promise<SignalTag[]>;
   private outbox: OutboxEntry[] = [];
+  /** Entries that exceeded `outboxMaxAttempts`. Public-readable for tests/ops. */
+  readonly deadLetter: DeadLetterEntry[] = [];
   private syncTimer?: ReturnType<typeof setInterval>;
   private flushTimer?: ReturnType<typeof setInterval>;
   private lastSuggestedGeneId?: string;
@@ -145,6 +186,7 @@ export class EvolutionRuntime {
       scope: config?.scope ?? 'global',
       outboxMaxSize: config?.outboxMaxSize ?? 50,
       outboxFlushMs: config?.outboxFlushMs ?? 5_000,
+      outboxMaxAttempts: config?.outboxMaxAttempts ?? DEFAULT_OUTBOX_MAX_ATTEMPTS,
     };
     this.scope = this.config.scope;
     this.cache = new EvolutionCache();
@@ -220,8 +262,14 @@ export class EvolutionRuntime {
     }
 
     const buildSuggestion = (
-      action: string, geneId: string | undefined, gene: any, strategy: any,
-      confidence: number, fromCache: boolean, reason?: string, alternatives?: any,
+      action: string,
+      geneId: string | undefined,
+      gene: IMGene | undefined,
+      strategy: string[] | undefined,
+      confidence: number,
+      fromCache: boolean,
+      reason?: string,
+      alternatives?: Array<{ gene_id: string; confidence: number; title?: string }>,
     ): Suggestion => {
       this.lastSuggestedGeneId = geneId;
       // Start session tracking
@@ -234,9 +282,22 @@ export class EvolutionRuntime {
         confidence,
         fromCache,
       };
+      // Narrow the action string to the Suggestion union; unrecognised values
+      // collapse to 'none' so we never let a stray cloud value leak through.
+      const narrowed: SuggestionAction =
+        action === 'apply_gene' || action === 'create_suggested' || action === 'none'
+          ? action
+          : 'none';
       return {
-        action: action as any, geneId, gene, strategy, confidence,
-        signals, fromCache, reason, alternatives,
+        action: narrowed,
+        geneId,
+        gene,
+        strategy,
+        confidence,
+        signals,
+        fromCache,
+        reason,
+        alternatives,
       };
     };
 
@@ -254,7 +315,7 @@ export class EvolutionRuntime {
     // Fallback to server
     try {
       const result = await this.client.analyze({
-        signals: signals as any,
+        signals,
         scope: this.scope,
       });
       if (result.data) {
@@ -382,7 +443,7 @@ export class EvolutionRuntime {
       const result = await this.client.sync({
         pull: { since: this.cache.cursor },
         scope: this.scope,
-      } as any);
+      });
       if (result.data?.pulled) {
         this.cache.applyDelta({ pulled: result.data.pulled });
       }
@@ -391,26 +452,57 @@ export class EvolutionRuntime {
     }
   }
 
-  /** Flush outbox to server */
+  /**
+   * Flush outbox to server. Fire-and-forget contract: never blocks the caller's
+   * critical path and never throws. Failed entries are retried until they hit
+   * `outboxMaxAttempts`, then moved to `deadLetter` and reported via
+   * `console.warn` so ops can detect a persistent failure.
+   */
   private async flush(): Promise<void> {
     if (this.outbox.length === 0) return;
 
     const batch = this.outbox.splice(0, this.config.outboxMaxSize);
-    const promises = batch.map(entry =>
-      this.client.record({
-        gene_id: entry.geneId,
-        signals: entry.signals.map(s => s.type),
-        outcome: entry.outcome,
-        summary: entry.summary,
-        score: entry.score,
-        metadata: entry.metadata,
-        scope: this.scope,
-      } as any).catch(() => {
-        // Put back on failure
-        this.outbox.push(entry);
-      })
-    );
+    const promises = batch.map(async (entry) => {
+      try {
+        const res = await this.client.record({
+          gene_id: entry.geneId,
+          signals: entry.signals.map((s) => s.type),
+          outcome: entry.outcome,
+          summary: entry.summary,
+          score: entry.score,
+          metadata: entry.metadata,
+          scope: this.scope,
+        });
+        // Envelope-level error counts as failure too — the request resolved but
+        // the cloud rejected it (e.g. validation, quota).
+        if (!res.ok) {
+          this._handleOutboxFailure(entry, res.error?.message ?? 'record returned ok=false');
+        }
+      } catch (err) {
+        this._handleOutboxFailure(entry, err instanceof Error ? err.message : String(err));
+      }
+    });
 
     await Promise.allSettled(promises);
+  }
+
+  /**
+   * Bump the attempt counter and either re-queue (under ceiling) or move to
+   * dead-letter. Always synchronous — caller's `flush()` already wraps in a
+   * promise.allSettled.
+   */
+  private _handleOutboxFailure(entry: OutboxEntry, lastError: string): void {
+    const attempts = (entry.attempts ?? 0) + 1;
+    const ceiling = this.config.outboxMaxAttempts;
+    if (attempts >= ceiling) {
+      const dropped: DeadLetterEntry = { ...entry, attempts, lastError, droppedAt: Date.now() };
+      this.deadLetter.push(dropped);
+      console.warn(
+        `[EvolutionRuntime] outbox entry dropped after ${attempts} attempts: ` +
+          `gene=${entry.geneId} outcome=${entry.outcome} error=${lastError}`,
+      );
+      return;
+    }
+    this.outbox.push({ ...entry, attempts });
   }
 }

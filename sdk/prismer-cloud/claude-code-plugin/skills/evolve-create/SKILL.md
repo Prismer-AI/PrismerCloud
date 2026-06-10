@@ -15,10 +15,10 @@ Only when explicitly asked, or when the Stop hook review identifies a transferab
 
 ## How
 
-Use MCP tool `evolve_create_gene`:
+Use MCP tool `prismer.evolve.createGene`:
 
 ```
-evolve_create_gene({
+prismer.evolve.createGene({
   category: "repair",  // repair | optimize | innovate | diagnostic
   signals_match: ["error:typescript", "error:build_failure"],
   strategy: [

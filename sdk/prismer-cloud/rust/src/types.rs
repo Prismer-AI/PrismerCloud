@@ -276,6 +276,120 @@ pub struct MessageDeletedPayload {
     pub conversation_id: String,
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// v2.0 §4.6 ContentBlock — multimodal protocol-layer typing
+//
+// Anthropic-shape discriminated union with `kind` tag. NOT OpenAI's
+// `{type:"image_url", image_url:{...}}` shape — adapters translate to
+// vendor-specific wire format at dispatch time. See
+// docs/release200/14-messaging-state-machine-reliability.md §4.6 +
+// 14b "与 14 主文档的关系" for the source-of-truth definition.
+// ════════════════════════════════════════════════════════════════════════════
+
+/// v2.0 §4.6 — 8-variant ContentBlock discriminated union.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ContentBlock {
+    Text {
+        text: String,
+    },
+    Image {
+        #[serde(rename = "assetId")]
+        asset_id: String,
+        #[serde(rename = "mediaType")]
+        media_type: String,
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        alt: Option<String>,
+    },
+    Audio {
+        #[serde(rename = "assetId")]
+        asset_id: String,
+        #[serde(rename = "mediaType")]
+        media_type: String,
+        #[serde(rename = "durationMs", skip_serializing_if = "Option::is_none", default)]
+        duration_ms: Option<u64>,
+    },
+    Video {
+        #[serde(rename = "assetId")]
+        asset_id: String,
+        #[serde(rename = "mediaType")]
+        media_type: String,
+        #[serde(rename = "durationMs", skip_serializing_if = "Option::is_none", default)]
+        duration_ms: Option<u64>,
+        #[serde(rename = "thumbnailUrl", skip_serializing_if = "Option::is_none", default)]
+        thumbnail_url: Option<String>,
+    },
+    File {
+        #[serde(rename = "assetId")]
+        asset_id: String,
+        #[serde(rename = "mediaType")]
+        media_type: String,
+        filename: String,
+    },
+    ToolUse {
+        #[serde(rename = "toolCallId")]
+        tool_call_id: String,
+        #[serde(rename = "toolName")]
+        tool_name: String,
+        #[serde(rename = "inputJson")]
+        input_json: serde_json::Value,
+    },
+    ToolResult {
+        #[serde(rename = "toolCallId")]
+        tool_call_id: String,
+        output: Vec<ContentBlock>,
+    },
+    Reasoning {
+        text: String,
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        redacted: Option<bool>,
+    },
+}
+
+/// v2.0 §4.6 — ChatMessage `content` is either a plain string OR a slice
+/// of ContentBlock. The untagged enum lets serde pick the right shape on
+/// the wire automatically.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(untagged)]
+pub enum MessageContent {
+    Text(String),
+    Blocks(Vec<ContentBlock>),
+}
+
+impl From<&str> for MessageContent {
+    fn from(s: &str) -> Self { MessageContent::Text(s.to_string()) }
+}
+impl From<String> for MessageContent {
+    fn from(s: String) -> Self { MessageContent::Text(s) }
+}
+impl From<Vec<ContentBlock>> for MessageContent {
+    fn from(b: Vec<ContentBlock>) -> Self { MessageContent::Blocks(b) }
+}
+
+/// v2.0 §4.6 ChatMessage — multi-turn dispatch message.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ChatMessage {
+    pub role: String, // "system" | "user" | "assistant" | "tool"
+    pub content: MessageContent,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub name: Option<String>,
+    #[serde(rename = "toolCallId", skip_serializing_if = "Option::is_none", default)]
+    pub tool_call_id: Option<String>,
+}
+
+/// v2.0 §4.6 TaskInput — Adapters prefer `messages` when present.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct TaskInput {
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub prompt: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub messages: Option<Vec<ChatMessage>>,
+    /// Free-form capability-specific extra fields (flattened into the JSON
+    /// object via `serde(flatten)`).
+    #[serde(flatten)]
+    pub extra: std::collections::BTreeMap<String, serde_json::Value>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

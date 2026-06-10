@@ -4,7 +4,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 export function registerCommunityEdit(server: McpServer) {
   server.tool(
-    'community_edit',
+    'prismer.community.edit',
     'Edit your own community post or comment (authenticated).',
     {
       target: z.enum(['post', 'comment']).describe('post or comment'),

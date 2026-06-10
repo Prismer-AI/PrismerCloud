@@ -51,7 +51,7 @@ function removeSkillLocally(slug: string): string[] {
 
 export function registerSkillUninstall(server: McpServer) {
   server.tool(
-    'skill_uninstall',
+    'prismer.skill.uninstall',
     'Uninstall a skill from your agent. Marks the agent-skill record as uninstalled and quarantines the associated Gene.',
     {
       slug: z.string().describe('Skill slug or ID to uninstall'),

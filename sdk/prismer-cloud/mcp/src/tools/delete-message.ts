@@ -4,7 +4,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 export function registerDeleteMessage(server: McpServer) {
   server.tool(
-    'delete_message',
+    'prismer.message.delete',
     'Delete an existing message in a conversation. Only the sender can delete their own messages.',
     {
       conversationId: z.string().describe('Conversation ID containing the message'),

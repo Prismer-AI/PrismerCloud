@@ -20,9 +20,21 @@ impl<'a> IMClient<'a> {
         path: &str,
         body: Option<serde_json::Value>,
     ) -> Result<ApiResponse<T>, PrismerError> {
+        self.im_request_with_headers(method, path, body, &[]).await
+    }
+
+    /// v2.0 §3.0.2 — same as `im_request`, additionally forwards extra HTTP
+    /// headers (e.g. `X-Idempotency-Key` for message sends). The auto-sign
+    /// path is unchanged.
+    async fn im_request_with_headers<T: serde::de::DeserializeOwned>(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        body: Option<serde_json::Value>,
+        extra_headers: &[(&str, &str)],
+    ) -> Result<ApiResponse<T>, PrismerError> {
         let body = if method == reqwest::Method::POST && path.contains("/messages") {
             if let Some(mut b) = body {
-                // Only sign if not already signed
                 if b.get("signature").is_none() {
                     let content = b.get("content").and_then(|v| v.as_str()).unwrap_or("");
                     let msg_type = b.get("type").and_then(|v| v.as_str()).unwrap_or("text");
@@ -43,7 +55,9 @@ impl<'a> IMClient<'a> {
         } else {
             body
         };
-        self.client.request(method, path, body).await
+        self.client
+            .request_with_headers(method, path, body, extra_headers)
+            .await
     }
 
     /// Health check for the IM server.
@@ -76,33 +90,38 @@ impl<'a> IMClient<'a> {
     }
 
     /// Send a direct message (auto-signs if identity is set).
+    ///
+    /// v2.0 §3.0.2 Gap A-④ — SDK auto-stamps an `X-Idempotency-Key` header.
+    /// Use [`send_message_with_options`] with an explicit `idempotency_key`
+    /// to drive server-side retry dedup.
     pub async fn send_message(&self, user_id: &str, content: &str) -> Result<ApiResponse<serde_json::Value>, PrismerError> {
-        self.im_request(
-            reqwest::Method::POST,
-            &format!("/api/im/direct/{}/messages", user_id),
-            Some(json!({ "content": content })),
-        ).await
+        self.send_message_with_options(user_id, content, SendMessageOptions::default()).await
     }
 
-    /// Send a direct message with options (type, metadata, parentId, quotedMessageId).
+    /// Send a direct message with options. v2.0 §3.0.2 + §4.6.
     pub async fn send_message_with_options(&self, user_id: &str, content: &str, options: SendMessageOptions) -> Result<ApiResponse<serde_json::Value>, PrismerError> {
-        let mut body = json!({ "content": content });
-        if let Some(t) = &options.msg_type {
-            body["type"] = json!(t);
-        }
-        if let Some(m) = &options.metadata {
-            body["metadata"] = m.clone();
-        }
-        if let Some(p) = &options.parent_id {
-            body["parentId"] = json!(p);
-        }
-        if let Some(q) = &options.quoted_message_id {
-            body["quotedMessageId"] = json!(q);
-        }
-        self.im_request(
+        let (body, key) = build_send_payload(content, &options);
+        self.im_request_with_headers(
             reqwest::Method::POST,
             &format!("/api/im/direct/{}/messages", user_id),
             Some(body),
+            &[("X-Idempotency-Key", &key)],
+        ).await
+    }
+
+    /// v2.0 §4.6 — send a multimodal direct message (ContentBlock[]).
+    pub async fn send_message_blocks(
+        &self,
+        user_id: &str,
+        blocks: Vec<ContentBlock>,
+        options: SendMessageOptions,
+    ) -> Result<ApiResponse<serde_json::Value>, PrismerError> {
+        let (body, key) = build_send_payload_blocks(blocks, &options);
+        self.im_request_with_headers(
+            reqwest::Method::POST,
+            &format!("/api/im/direct/{}/messages", user_id),
+            Some(body),
+            &[("X-Idempotency-Key", &key)],
         ).await
     }
 
@@ -128,33 +147,36 @@ impl<'a> IMClient<'a> {
     }
 
     /// Send a message to a group (auto-signs if identity is set).
+    ///
+    /// v2.0 §3.0.2 Gap A-④ — SDK auto-stamps an `X-Idempotency-Key` header.
     pub async fn send_group_message(&self, group_id: &str, content: &str) -> Result<ApiResponse<serde_json::Value>, PrismerError> {
-        self.im_request(
-            reqwest::Method::POST,
-            &format!("/api/im/groups/{}/messages", group_id),
-            Some(json!({ "content": content })),
-        ).await
+        self.send_group_message_with_options(group_id, content, SendMessageOptions::default()).await
     }
 
-    /// Send a message to a group with options (auto-signs if identity is set).
+    /// Send a message to a group with options. v2.0 §3.0.2 + §4.6.
     pub async fn send_group_message_with_options(&self, group_id: &str, content: &str, options: SendMessageOptions) -> Result<ApiResponse<serde_json::Value>, PrismerError> {
-        let mut body = json!({ "content": content });
-        if let Some(t) = &options.msg_type {
-            body["type"] = json!(t);
-        }
-        if let Some(m) = &options.metadata {
-            body["metadata"] = m.clone();
-        }
-        if let Some(p) = &options.parent_id {
-            body["parentId"] = json!(p);
-        }
-        if let Some(q) = &options.quoted_message_id {
-            body["quotedMessageId"] = json!(q);
-        }
-        self.im_request(
+        let (body, key) = build_send_payload(content, &options);
+        self.im_request_with_headers(
             reqwest::Method::POST,
             &format!("/api/im/groups/{}/messages", group_id),
             Some(body),
+            &[("X-Idempotency-Key", &key)],
+        ).await
+    }
+
+    /// v2.0 §4.6 — multimodal group message via ContentBlock[].
+    pub async fn send_group_message_blocks(
+        &self,
+        group_id: &str,
+        blocks: Vec<ContentBlock>,
+        options: SendMessageOptions,
+    ) -> Result<ApiResponse<serde_json::Value>, PrismerError> {
+        let (body, key) = build_send_payload_blocks(blocks, &options);
+        self.im_request_with_headers(
+            reqwest::Method::POST,
+            &format!("/api/im/groups/{}/messages", group_id),
+            Some(body),
+            &[("X-Idempotency-Key", &key)],
         ).await
     }
 
@@ -193,33 +215,41 @@ impl<'a> IMClient<'a> {
     // ─── Conversation-level Messaging ──────────────
 
     /// Send a message to a conversation by ID (auto-signs if identity is set).
+    ///
+    /// v2.0 §3.0.2 Gap A-④ — SDK auto-stamps an `X-Idempotency-Key` header.
     pub async fn send_conversation_message(&self, conversation_id: &str, content: &str) -> Result<ApiResponse<serde_json::Value>, PrismerError> {
-        self.im_request(
-            reqwest::Method::POST,
-            &format!("/api/im/messages/{}", conversation_id),
-            Some(json!({ "content": content })),
-        ).await
+        self.send_conversation_message_with_options(conversation_id, content, SendMessageOptions::default()).await
     }
 
-    /// Send a message to a conversation with options (auto-signs if identity is set).
+    /// Send a message to a conversation with options. v2.0 §3.0.2 + §4.6.
+    ///
+    /// When `options.idempotency_key` is `None`, the SDK generates a UUID v4
+    /// per call and stamps it into `X-Idempotency-Key`. The server applies
+    /// UNIQUE `(conversationId, idempotencyKey)` — pass the same key across
+    /// retries to trigger server-side dedup.
     pub async fn send_conversation_message_with_options(&self, conversation_id: &str, content: &str, options: SendMessageOptions) -> Result<ApiResponse<serde_json::Value>, PrismerError> {
-        let mut body = json!({ "content": content });
-        if let Some(t) = &options.msg_type {
-            body["type"] = json!(t);
-        }
-        if let Some(m) = &options.metadata {
-            body["metadata"] = m.clone();
-        }
-        if let Some(p) = &options.parent_id {
-            body["parentId"] = json!(p);
-        }
-        if let Some(q) = &options.quoted_message_id {
-            body["quotedMessageId"] = json!(q);
-        }
-        self.im_request(
+        let (body, key) = build_send_payload(content, &options);
+        self.im_request_with_headers(
             reqwest::Method::POST,
             &format!("/api/im/messages/{}", conversation_id),
             Some(body),
+            &[("X-Idempotency-Key", &key)],
+        ).await
+    }
+
+    /// v2.0 §4.6 — multimodal conversation message via ContentBlock[].
+    pub async fn send_conversation_message_blocks(
+        &self,
+        conversation_id: &str,
+        blocks: Vec<ContentBlock>,
+        options: SendMessageOptions,
+    ) -> Result<ApiResponse<serde_json::Value>, PrismerError> {
+        let (body, key) = build_send_payload_blocks(blocks, &options);
+        self.im_request_with_headers(
+            reqwest::Method::POST,
+            &format!("/api/im/messages/{}", conversation_id),
+            Some(body),
+            &[("X-Idempotency-Key", &key)],
         ).await
     }
 
@@ -492,4 +522,98 @@ pub struct SendMessageOptions {
     pub metadata: Option<serde_json::Value>,
     pub parent_id: Option<String>,
     pub quoted_message_id: Option<String>,
+    /// v2.0 §3.0.2 Gap A-④ — when None, the SDK auto-generates a UUID v4
+    /// and stamps it into the `X-Idempotency-Key` HTTP header.
+    pub idempotency_key: Option<String>,
+    /// v2.0 §4.6 — multimodal content blocks (alongside `content` string).
+    pub content_blocks: Option<Vec<ContentBlock>>,
+}
+
+/// Generate a UUID v4 idempotency key (RFC 4122 layout) using SHA-256 over
+/// `SystemTime::now()` + a process-wide monotonic counter + thread id. We
+/// intentionally avoid adding a new `rand` / `uuid` dependency — the server
+/// only needs the key to be **unique per send call** (not
+/// cryptographically unguessable), since UNIQUE
+/// `(conversationId, idempotencyKey)` is the dedup invariant.
+///
+/// `pub` so external test crates / advanced callers can inspect / pre-seed
+/// the key path without going through `SendMessageOptions`.
+pub fn generate_idempotency_key() -> String {
+    use sha2::{Digest, Sha256};
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let counter = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    // Hash time + counter + thread-local marker (address of a stack var
+    // varies across threads and over time, giving cheap entropy).
+    let stack_marker: u64 = (&counter as *const _) as u64;
+
+    let mut hasher = Sha256::new();
+    hasher.update(nanos.to_le_bytes());
+    hasher.update(counter.to_le_bytes());
+    hasher.update(stack_marker.to_le_bytes());
+    let digest = hasher.finalize();
+
+    let mut b = [0u8; 16];
+    b.copy_from_slice(&digest[..16]);
+    b[6] = (b[6] & 0x0f) | 0x40; // version 4
+    b[8] = (b[8] & 0x3f) | 0x80; // variant 1
+    format!(
+        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], b[8], b[9],
+        b[10], b[11], b[12], b[13], b[14], b[15]
+    )
+}
+
+/// v2.0 §3.0.2 + §4.6 — build the JSON body + idempotency key for a send.
+/// `content` is the string path; pass `content_blocks` for multimodal.
+/// Returns `(body, key)` so the caller can stamp the same key into the
+/// X-Idempotency-Key header.
+pub fn build_send_payload(
+    content: &str,
+    options: &SendMessageOptions,
+) -> (serde_json::Value, String) {
+    let key = options.idempotency_key.clone().unwrap_or_else(generate_idempotency_key);
+    let mut body = json!({
+        "content": content,
+        "type": options.msg_type.clone().unwrap_or_else(|| "text".to_string()),
+        "idempotencyKey": &key,
+    });
+    if let Some(m) = &options.metadata {
+        body["metadata"] = m.clone();
+    }
+    if let Some(p) = &options.parent_id {
+        body["parentId"] = json!(p);
+    }
+    if let Some(q) = &options.quoted_message_id {
+        body["quotedMessageId"] = json!(q);
+    }
+    if let Some(blocks) = &options.content_blocks {
+        body["contentBlocks"] = serde_json::to_value(blocks).unwrap_or(json!([]));
+    }
+    (body, key)
+}
+
+/// v2.0 §4.6 — ContentBlock[]-first payload (content placeholder = "").
+pub fn build_send_payload_blocks(
+    blocks: Vec<ContentBlock>,
+    options: &SendMessageOptions,
+) -> (serde_json::Value, String) {
+    let mut opts = SendMessageOptions {
+        msg_type: options.msg_type.clone(),
+        metadata: options.metadata.clone(),
+        parent_id: options.parent_id.clone(),
+        quoted_message_id: options.quoted_message_id.clone(),
+        idempotency_key: options.idempotency_key.clone(),
+        content_blocks: options.content_blocks.clone(),
+    };
+    if opts.content_blocks.is_none() {
+        opts.content_blocks = Some(blocks);
+    }
+    build_send_payload("", &opts)
 }

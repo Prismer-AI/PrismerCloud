@@ -18,6 +18,10 @@ from .client import (
     TasksClient, MemoryClient, IdentityClient, EvolutionClient,
     # v1.7.2 sub-clients (async)
     AsyncTasksClient, AsyncMemoryClient, AsyncIdentityClient, AsyncEvolutionClient,
+    # v1.9.3 sub-clients (sync)
+    WorkspacesClient, WorkspaceFilesClient, AssetsClient, RuntimeInstallationsClient,
+    # v1.9.3 sub-clients (async)
+    AsyncWorkspacesClient, AsyncWorkspaceFilesClient, AsyncAssetsClient, AsyncRuntimeInstallationsClient,
 )
 from ._signing import MessageSigner
 from .realtime import (
@@ -83,6 +87,17 @@ from .types import (
     IMConversation,
     IMWorkspaceData,
     IMAutocompleteResult,
+    # v1.9.3 refactor surface
+    WorkspaceDTO,
+    WorkspaceFileDTO,
+    AssetDTO,
+    AgentProfileDTO,
+    RuntimeInstallationDTO,
+    RuntimeInstallationResources,
+    EnrichedTaskDTO,
+    TaskEvent,
+    TaskRuntimeRoute,
+    TaskKind,
 )
 from .offline import (
     OfflineManager,
@@ -94,11 +109,23 @@ from .offline import (
     SyncResult,
 )
 from .daemon import start_daemon, stop_daemon, daemon_status, append_to_outbox, install_daemon_service, uninstall_daemon_service
+from .dispatch_reply import (
+    PendingReplyCache,
+    PendingReplyRow,
+    DispatchReplyAbortedError,
+    DispatchReplyPrepareError,
+    DispatchReplyCommitError,
+    send_dispatch_reply_two_phase,
+    recover_pending_replies,
+    send_dispatch_reply_legacy,
+    generate_idempotency_key as generate_dispatch_idempotency_key,
+    DEFAULT_CACHE_DB_PATH as DISPATCH_REPLY_CACHE_PATH,
+)
 from .evolution_cache import EvolutionCache, GeneSelectionResult, SignalTag
 from .evolution_runtime import EvolutionRuntime, AsyncEvolutionRuntime, EvolutionRuntimeConfig, Suggestion, EvolutionSession, SessionMetrics
 from .signal_rules import extract_signals
 
-__version__ = "1.9.0"
+__version__ = "2.0.8"
 __all__ = [
     # Clients
     "PrismerClient",
@@ -174,6 +201,26 @@ __all__ = [
     "AsyncMemoryClient",
     "AsyncIdentityClient",
     "AsyncEvolutionClient",
+    # IM Sub-Clients (v1.9.3 refactor surface)
+    "WorkspacesClient",
+    "WorkspaceFilesClient",
+    "AssetsClient",
+    "RuntimeInstallationsClient",
+    "AsyncWorkspacesClient",
+    "AsyncWorkspaceFilesClient",
+    "AsyncAssetsClient",
+    "AsyncRuntimeInstallationsClient",
+    # v1.9.3 DTOs
+    "WorkspaceDTO",
+    "WorkspaceFileDTO",
+    "AssetDTO",
+    "AgentProfileDTO",
+    "RuntimeInstallationDTO",
+    "RuntimeInstallationResources",
+    "EnrichedTaskDTO",
+    "TaskEvent",
+    "TaskRuntimeRoute",
+    "TaskKind",
     # Evolution Mechanism Modules
     "EvolutionCache",
     "GeneSelectionResult",
@@ -200,4 +247,15 @@ __all__ = [
     "append_to_outbox",
     "install_daemon_service",
     "uninstall_daemon_service",
+    # Dispatch reply two-phase (Wave 5 F2)
+    "PendingReplyCache",
+    "PendingReplyRow",
+    "DispatchReplyAbortedError",
+    "DispatchReplyPrepareError",
+    "DispatchReplyCommitError",
+    "send_dispatch_reply_two_phase",
+    "recover_pending_replies",
+    "send_dispatch_reply_legacy",
+    "generate_dispatch_idempotency_key",
+    "DISPATCH_REPLY_CACHE_PATH",
 ]

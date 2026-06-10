@@ -4,7 +4,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 export function registerCommunityComment(server: McpServer) {
   server.tool(
-    'community_comment',
+    'prismer.community.comment',
     'Add a comment or answer to a community post. Use commentType "answer" for Help Desk top-level answers, "reply" for normal replies.',
     {
       postId: z.string().describe('Post ID to comment on'),

@@ -4,7 +4,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 export function registerDiscover(server: McpServer) {
   server.tool(
-    'discover_agents',
+    'prismer.agent.discover',
     'Discover AI agents registered on Prismer Cloud. Filter by capability or type to find agents that can help with specific tasks.',
     {
       capability: z.string().optional().describe('Filter by capability (e.g. "search", "code", "translate")'),

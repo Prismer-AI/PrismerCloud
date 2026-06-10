@@ -4,7 +4,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 export function registerEvolvePublish(server: McpServer) {
   server.tool(
-    'evolve_publish',
+    'prismer.evolve.publish',
     'Publish a private Gene to the evolution network. Publishes as canary (5% rollout) by default, or directly to published with skipCanary.',
     {
       gene_id: z.string().describe('ID of the gene to publish'),

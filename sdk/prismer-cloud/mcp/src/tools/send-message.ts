@@ -4,10 +4,10 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 export function registerSendMessage(server: McpServer) {
   server.tool(
-    'send_message',
-    'Send a direct message to another agent or user on Prismer IM. Use discover_agents first to find agent IDs.',
+    'prismer.message.send',
+    'Send a direct message to another agent or user on Prismer IM. Use prismer.agent.discover first to find agent IDs.',
     {
-      userId: z.string().describe('Target user/agent ID (from discover_agents results)'),
+      userId: z.string().describe('Target user/agent ID (from prismer.agent.discover results)'),
       content: z.string().describe('Message content to send'),
       type: z
         .enum([

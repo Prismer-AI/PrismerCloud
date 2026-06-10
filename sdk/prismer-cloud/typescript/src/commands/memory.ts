@@ -3,6 +3,8 @@ import { PrismerClient } from '../index';
 
 type ClientFactory = () => PrismerClient;
 
+const MEMORY_TYPES = new Set(['user', 'feedback', 'project', 'reference']);
+
 export function register(parent: Command, getIMClient: ClientFactory, _getAPIClient: ClientFactory): void {
   const mem = parent
     .command('memory')
@@ -15,15 +17,30 @@ export function register(parent: Command, getIMClient: ClientFactory, _getAPICli
     .requiredOption('-s, --scope <scope>', 'memory scope')
     .requiredOption('-p, --path <path>', 'file path within scope')
     .requiredOption('-c, --content <content>', 'file content')
+    .option('--type <type>', 'memory type: user | feedback | project | reference')
+    .option('--description <description>', 'human-readable description of this memory')
     .option('--json', 'output raw JSON response')
-    .action(async (opts: { scope: string; path: string; content: string; json: boolean }) => {
+    .action(async (opts: {
+      scope: string;
+      path: string;
+      content: string;
+      type?: string;
+      description?: string;
+      json: boolean;
+    }) => {
       const client = getIMClient();
       try {
-        const res = await client.im.memory.createFile({
+        if (opts.type && !MEMORY_TYPES.has(opts.type)) {
+          throw new Error(`Invalid --type "${opts.type}". Use one of: user, feedback, project, reference.`);
+        }
+        const body: Record<string, unknown> = {
           scope: opts.scope,
           path: opts.path,
           content: opts.content,
-        });
+        };
+        if (opts.type) body.memoryType = opts.type;
+        if (opts.description) body.description = opts.description;
+        const res = await client.im.memory.createFile(body as any);
 
         if (opts.json) {
           process.stdout.write(JSON.stringify(res, null, 2) + '\n');
@@ -36,6 +53,7 @@ export function register(parent: Command, getIMClient: ClientFactory, _getAPICli
         }
 
         const file = res.data;
+        if (!file) throw new Error('Memory file response missing data');
         process.stdout.write(`Memory file created\n`);
         process.stdout.write(`  ID:    ${file.id}\n`);
         process.stdout.write(`  Scope: ${file.scope}\n`);
@@ -72,6 +90,7 @@ export function register(parent: Command, getIMClient: ClientFactory, _getAPICli
           }
 
           const file = res.data;
+          if (!file) throw new Error('Memory file response missing data');
           process.stdout.write(`ID:    ${file.id}\n`);
           process.stdout.write(`Scope: ${file.scope}\n`);
           process.stdout.write(`Path:  ${file.path}\n`);
@@ -87,7 +106,9 @@ export function register(parent: Command, getIMClient: ClientFactory, _getAPICli
 
         if (opts.json) {
           if (listRes.ok && Array.isArray(listRes.data) && listRes.data.length === 1) {
-            const detailRes = await client.im.memory.getFile(listRes.data[0].id);
+            const first = listRes.data[0];
+            if (!first) throw new Error('Memory file response missing data');
+            const detailRes = await client.im.memory.getFile(first.id);
             process.stdout.write(JSON.stringify(detailRes, null, 2) + '\n');
           } else {
             process.stdout.write(JSON.stringify(listRes, null, 2) + '\n');
@@ -109,12 +130,15 @@ export function register(parent: Command, getIMClient: ClientFactory, _getAPICli
 
         if (files.length === 1) {
           // Auto-read single match
-          const detailRes = await client.im.memory.getFile(files[0].id);
+          const first = files[0];
+          if (!first) throw new Error('Memory file response missing data');
+          const detailRes = await client.im.memory.getFile(first.id);
           if (!detailRes.ok) {
             process.stderr.write(`Error: ${detailRes.error?.message || 'Unknown error'}\n`);
             process.exit(1);
           }
           const file = detailRes.data;
+          if (!file) throw new Error('Memory file response missing data');
           process.stdout.write(`ID:    ${file.id}\n`);
           process.stdout.write(`Scope: ${file.scope}\n`);
           process.stdout.write(`Path:  ${file.path}\n`);
@@ -199,11 +223,12 @@ export function register(parent: Command, getIMClient: ClientFactory, _getAPICli
   mem
     .command('compact <conversation-id>')
     .description('Create a compaction summary for a conversation')
+    .requiredOption('--summary <text>', 'summary text to persist')
     .option('--json', 'output raw JSON response')
-    .action(async (conversationId: string, opts: { json: boolean }) => {
+    .action(async (conversationId: string, opts: { summary: string; json: boolean }) => {
       const client = getIMClient();
       try {
-        const res = await client.im.memory.compact({ conversationId });
+        const res = await client.im.memory.compact({ conversationId, summary: opts.summary });
 
         if (opts.json) {
           process.stdout.write(JSON.stringify(res, null, 2) + '\n');
@@ -222,6 +247,84 @@ export function register(parent: Command, getIMClient: ClientFactory, _getAPICli
         }
         if (summary?.conversationId) {
           process.stdout.write(`  Conversation ID: ${summary.conversationId}\n`);
+        }
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        process.stderr.write(`Error: ${message}\n`);
+        process.exit(1);
+      }
+    });
+
+  // memory extract --journal <text>
+  mem
+    .command('extract')
+    .description('Extract structured memory entries from a session journal (v1.8.0 P1)')
+    .requiredOption('--journal <text>', 'session journal text (min 50 chars)')
+    .option('--scope <scope>', 'evolution scope', 'global')
+    .option('--json', 'output raw JSON response')
+    .action(async (opts: { journal: string; scope: string; json: boolean }) => {
+      const client = getIMClient();
+      try {
+        const res = await (client.im.memory as unknown as {
+          _r: (method: string, path: string, body?: unknown) => Promise<{ ok: boolean; data?: unknown; error?: { message?: string } }>;
+        })._r('POST', '/api/im/memory/extract', { journal: opts.journal, scope: opts.scope });
+
+        if (opts.json) {
+          process.stdout.write(JSON.stringify(res, null, 2) + '\n');
+          return;
+        }
+
+        if (!res.ok) {
+          process.stderr.write(`Error: ${res.error?.message || 'Unknown error'}\n`);
+          process.exit(1);
+        }
+
+        process.stdout.write('Memory extraction complete\n');
+        const data = res.data as { extracted?: unknown[]; created?: unknown[]; updated?: unknown[] } | undefined;
+        if (data) {
+          if (Array.isArray(data.extracted)) {
+            process.stdout.write(`  Extracted: ${data.extracted.length}\n`);
+          }
+          if (Array.isArray(data.created)) {
+            process.stdout.write(`  Created:   ${data.created.length}\n`);
+          }
+          if (Array.isArray(data.updated)) {
+            process.stdout.write(`  Updated:   ${data.updated.length}\n`);
+          }
+        }
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        process.stderr.write(`Error: ${message}\n`);
+        process.exit(1);
+      }
+    });
+
+  // memory consolidate
+  mem
+    .command('consolidate')
+    .description('Trigger Dream consolidation (cluster + reflect across memories)')
+    .option('--scope <scope>', 'evolution scope', 'global')
+    .option('--json', 'output raw JSON response')
+    .action(async (opts: { scope: string; json: boolean }) => {
+      const client = getIMClient();
+      try {
+        const res = await (client.im.memory as unknown as {
+          _r: (method: string, path: string, body?: unknown) => Promise<{ ok: boolean; data?: unknown; error?: { message?: string } }>;
+        })._r('POST', '/api/im/memory/consolidate', { scope: opts.scope });
+
+        if (opts.json) {
+          process.stdout.write(JSON.stringify(res, null, 2) + '\n');
+          return;
+        }
+
+        if (!res.ok) {
+          process.stderr.write(`Error: ${res.error?.message || 'Unknown error'}\n`);
+          process.exit(1);
+        }
+
+        process.stdout.write('Dream consolidation triggered\n');
+        if (res.data && typeof res.data === 'object') {
+          process.stdout.write(JSON.stringify(res.data, null, 2) + '\n');
         }
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);

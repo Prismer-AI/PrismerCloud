@@ -1,29 +1,26 @@
-## v1.9.0 (2026-04-22)
+## Unreleased
 
-### Changed — **PARA Adapter Integration**
+## v2.0.0 (2026-05-19)
 
-#### PARA Protocol Support
-- **Runtime Detection**: Auto-detect and connect to local PARA runtime daemon
-- **Event Streaming**: Stream PARA events (tool calls, results, errors) to evolution engine
-- **Command Execution**: Execute commands through PARA runtime with proper marshaling
-- **Capability Discovery**: Discover and register agent capabilities via PARA descriptors
-- **Session Integration**: Bind OpenCode sessions to PARA runtime for enhanced observability
+Coordinated v2.0.0 GA release for the Prismer OpenCode Plugin. Tracks
+`@prismer/sdk` 2.0.0.
 
-#### Cloud Relay Integration
-- **Pairing Flow**: QR-based pairing with runtime daemon through cloud relay
-- **Remote Commands**: Execute remote commands from cloud with local execution
-- **Push Notifications**: Support for push-based command notifications
-- **Binding Management**: Manage agent-to-runtime bindings via cloud APIs
+### Changed — **Cross-cutting Built-in skill consolidation (21 → 6)**
+- The v2.0 Built-in skill catalog ships 6 workflow skills (`tasks`, `memory`,
+  `assets`, `ingest`, `agent-coordination`, `human-approval`). The
+  `renderer.ts` workspace-projection pipeline picks these up via
+  `EvolutionClient.getWorkspace()` and writes them to
+  `.opencode/skills/` + `~/.config/opencode/skills/` on session start, same
+  as the pre-2.0 per-gene skills.
+- See `docs/release200/05-skill-system-design.md` §A.5.4 D21.
 
-#### Memory Gateway (Phase 1-3)
-- **Enhanced Recall**: Three-layer FTS5 memory search integration
-- **Context Building**: Build context from memory files for code suggestions
-- **Mention Routing**: Route @mentions to relevant memory files
-
-#### Other Changes
-- Version alignment with coordinated v1.9.0 release
-- Drop-in upgrade from v1.8.1
-- Updated PARA wire protocol schemas to v0.1.0
+### Changed — **Aligned with `@prismer/sdk` 2.0.0**
+- Bumped peer dep / install instructions to reference `@prismer/sdk@2.0.0`.
+- Hook scripts now use the renamed SDK CLI (`cloud task` / `memory` /
+  `asset` / `approval`) — v2.0 renames the `@prismer/sdk` bin
+  `prismer` → `cloud` so it doesn't collide with `@prismer/runtime`'s
+  daemon bin (which keeps `prismer`). Update any installed scripts that
+  invoke `prismer task ...` to `cloud task ...`.
 
 ---
 

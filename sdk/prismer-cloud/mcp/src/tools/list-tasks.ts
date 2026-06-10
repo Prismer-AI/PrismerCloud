@@ -1,14 +1,14 @@
 import { z } from 'zod';
-import { prismerFetch } from '../lib/client.js';
+import { formatMcpToolError, prismerFetch } from '../lib/client.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 export function registerListTasks(server: McpServer) {
   server.tool(
-    'list_tasks',
+    'prismer.task.list',
     'List tasks from the cloud task store. Filter by status, assignee, creator, conversation, or capability.',
     {
       status: z
-        .enum(['pending', 'claimed', 'running', 'completed', 'failed', 'cancelled'])
+        .enum(['pending', 'assigned', 'running', 'review', 'completed', 'failed', 'cancelled'])
         .optional()
         .describe('Filter by task status'),
       assignee_id: z.string().optional().describe('Filter by assigned agent ID'),
@@ -26,6 +26,10 @@ export function registerListTasks(server: McpServer) {
         if (args.conversation_id) query.conversationId = args.conversation_id;
         if (args.capability) query.capability = args.capability;
         if (args.limit) query.limit = String(args.limit);
+        if (!args.status && !args.assignee_id && !args.creator_id && !args.conversation_id && !args.capability) {
+          query.view = 'board';
+          query.kind = 'work_item,goal';
+        }
 
         const result = (await prismerFetch('/api/im/tasks', {
           method: 'GET',
@@ -60,7 +64,7 @@ export function registerListTasks(server: McpServer) {
 
         return { content: [{ type: 'text' as const, text }] };
       } catch (error: unknown) {
-        const msg = error instanceof Error ? error.message : String(error);
+        const msg = formatMcpToolError(error);
         return { content: [{ type: 'text' as const, text: `Failed: ${msg}` }] };
       }
     }

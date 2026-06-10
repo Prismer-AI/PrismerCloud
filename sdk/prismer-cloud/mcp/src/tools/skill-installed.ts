@@ -4,12 +4,17 @@ import { prismerFetch } from '../lib/client.js';
 
 export function registerSkillInstalled(server: McpServer) {
   server.tool(
-    'skill_installed',
+    'prismer.skill.installed',
     'List all skills currently installed for your agent, including associated Genes and versions.',
-    {},
-    async () => {
+    {
+      agentId: z.string().optional().describe('Optional IM agent ID. Defaults to the authenticated/current agent.'),
+    },
+    async (args) => {
       try {
-        const result = (await prismerFetch('/api/im/skills/installed')) as Record<string, unknown>;
+        const result = (await prismerFetch('/api/im/skills/installed', {
+          query: args.agentId ? { agentId: args.agentId } : undefined,
+          toolName: 'prismer.skill.installed',
+        })) as Record<string, unknown>;
 
         if (!result.ok) {
           const err = result.error as string | undefined;

@@ -1,12 +1,102 @@
 # prismer-sdk (Rust) -- Changelog
 
-## v1.9.0 (2026-04-22)
-
-Version bump to 1.9.0 coordinated release. No API changes. Drop-in upgrade.
-
----
-
 ## Unreleased
+
+### Added — v2.0 §4.6 `ContentBlock` protocol-layer types + §3.0.2 Gap A-④ `X-Idempotency-Key` (Wave 3 Agent D1)
+
+`src/types.rs`:
+
+- New `ContentBlock` `#[serde(tag = "kind", rename_all = "snake_case")]`
+  discriminated enum (Anthropic-shape) covering all 8 §4.6 variants:
+  `Text` / `Image` / `Audio` / `Video` / `File` / `ToolUse` / `ToolResult`
+  / `Reasoning`. Camel-case `serde(rename = ...)` ensures the wire JSON
+  matches the TS/Go/Python siblings (`assetId`, `mediaType`,
+  `thumbnailUrl`, `toolCallId`, `toolName`, `inputJson`, `durationMs`).
+- New `MessageContent` `#[serde(untagged)]` enum (`Text(String)` |
+  `Blocks(Vec<ContentBlock>)`) — `ChatMessage.content` on the wire can be
+  either shape, picked automatically by serde.
+- New `ChatMessage` (`role` + `content: MessageContent` + optional `name`
+  / `toolCallId`) and `TaskInput` (`prompt` + optional `messages` +
+  `#[serde(flatten)] extra` for capability-specific fields).
+- Convenience `From<&str>` / `From<String>` / `From<Vec<ContentBlock>>`
+  impls on `MessageContent` so call sites read naturally:
+  `MessageContent::from("hello")` or `MessageContent::from(blocks)`.
+
+`src/im.rs`:
+
+- `SendMessageOptions` gained `idempotency_key: Option<String>` +
+  `content_blocks: Option<Vec<ContentBlock>>`.
+- New public helpers `generate_idempotency_key()`, `build_send_payload()`,
+  `build_send_payload_blocks()` shared across all send methods. Auto-key
+  uses a SHA-256-mixed `SystemTime + AtomicU64 counter + thread marker`
+  source — laid out as RFC 4122 v4 — to avoid pulling in a new `rand` or
+  `uuid` dependency (server-side `(conversationId, idempotencyKey)`
+  UNIQUE is the dedup invariant; the key only needs per-call uniqueness).
+- `IMClient::send_message_with_options` /
+  `send_group_message_with_options` /
+  `send_conversation_message_with_options` now build the payload via the
+  shared helper and forward `X-Idempotency-Key` through the new
+  `im_request_with_headers` path. The shorthand `send_message` /
+  `send_group_message` / `send_conversation_message` delegate to the
+  same path with `SendMessageOptions::default()`.
+- New `send_message_blocks` / `send_group_message_blocks` /
+  `send_conversation_message_blocks` for first-class multimodal sends.
+
+`src/lib.rs`:
+
+- New `PrismerClient::request_with_headers` (public) that takes an
+  `extra_headers: &[(&str, &str)]` slice. The existing
+  `PrismerClient::request` is preserved as a 0-extra-headers convenience
+  wrapper — fully backward compatible.
+
+Spec refs:
+
+- `docs/release200/14-messaging-state-machine-reliability.md` §3.0.2 Gap
+  A-④ + §4.6
+- `docs/release200/14b-multimodal-input-pipeline.md` "与 14 主文档的关系"
+- `evidence/14-p1-server-wave2-b1.md` (server scope
+  `(conversationId, idempotencyKey)`)
+
+Tests: `tests/v200_content_block_idempotency.rs` (9/9 pass via
+`cargo test --test v200_content_block_idempotency`) — ContentBlock JSON
+round-trip, MessageContent polymorphism, TaskInput.extra flatten,
+generate_idempotency_key UUID v4 layout + 200/200 uniqueness,
+build_send_payload behaviours.
+
+No version bump (wave-close coordinator handles batch bump).
+
+## v2.0.0 (2026-05-19)
+
+Coordinated v2.0.0 GA release. `/VERSION` (single source of truth) → 2.0.0.
+`Cargo.toml` version bumped to align with the rest of the SDK suite.
+
+### Changed — **Cross-cutting Built-in skill consolidation (21 → 6)**
+
+- The v2.0 Built-in skill catalog ships 6 workflow skills (`tasks`, `memory`,
+  `assets`, `ingest`, `agent-coordination`, `human-approval`) instead of the
+  original 21 fine-grained slugs. Each Built-in skill delegates to the
+  `cloud` SDK CLI (TypeScript) for execution. Rust SDK exposes the same
+  underlying API surface.
+- **Rust SDK CLI bin name unchanged** — `Cargo.toml` still declares
+  `[[bin]] name = "prismer"`; crates.io namespace has no collision with the
+  npm `@prismer/runtime` binary. Only the TypeScript SDK CLI bin was
+  renamed `prismer` → `cloud`.
+- See `docs/release200/05-skill-system-design.md` §A.5.4 D21.
+
+### Fixed — **`prismer --version` now reads from `Cargo.toml` at build time**
+
+- The Rust CLI previously hardcoded its version string at the source level,
+  which drifted whenever the suite version bumped without an explicit edit.
+  v2.0 wires the binary's `--version` output to `env!("CARGO_PKG_VERSION")`
+  so future `sdk/build/version.sh` runs are picked up automatically.
+
+### Added — **v1.8.2 wire alignment (reactions + message types)** (promoted from "Unreleased")
+
+- `types::message_type` and `types::artifact_type` modules with
+  `&'static str` constants for all 13 message types and 8 artifact sub-types.
+- `IMClient::react_message(conversation_id, message_id, emoji, remove)` for
+  the v1.8.2 reactions endpoint. Idempotent; response `data.reactions` is
+  `{emoji: [userId, ...]}`.
 
 ---
 

@@ -4,7 +4,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 export function registerCommunityPost(server: McpServer) {
   server.tool(
-    'community_post',
+    'prismer.community.post',
     'Create a new community post. Boards: showcase (battle reports, wins), genelab (Gene experiments, benchmarks), helpdesk (questions, troubleshooting), ideas (feature requests, brainstorms), changelog (release notes).',
     {
       boardId: z.enum(['showcase', 'genelab', 'helpdesk', 'ideas', 'changelog']).describe('Target board'),

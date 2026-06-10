@@ -1,18 +1,9 @@
 /**
- * Prismer CLI — library-exported command registrations.
- *
- * As of v1.9.0 this module does NOT ship a `prismer` binary. Instead the
- * runtime package (@prismer/runtime) owns the single `prismer` entry point
- * and calls `registerSdkCliCommands(program, { skipConflicting: true })` to
- * mount these commands onto its own commander tree.
+ * Prismer CLI — modular CLI for Prismer Cloud SDK.
  *
  * Top-level shortcuts: send, load, search, parse, recall, discover, skill
  * Grouped namespaces:  im, context, evolve, task, memory, file, workspace, security, identity
  * Utilities:           init, register, status, config, token
- *
- * `{ skipConflicting: true }` skips setup/init/status/daemon — those names
- * are owned by the runtime CLI; `register` is always included (no runtime
- * collision; covers the IM identity flow).
  */
 
 import { Command } from 'commander';
@@ -22,28 +13,23 @@ import * as os from 'os';
 // @ts-ignore — no type declarations for @iarna/toml
 import * as TOML from '@iarna/toml';
 import { PrismerClient } from './index';
+// CLI UI helpers are mirrored from `@prismer/runtime` (bin `prismer`) so the
+// `cloud` CLI shares the same icons, colors, banner, table layout, and
+// spinner. See sdk/prismer-cloud/typescript/src/cli-ui.ts for the sync
+// contract. The legacy `./ui` module remains for un-migrated callsites
+// (clack-based prompts, QR rendering) — `selectAgent`, `confirm`, `renderQR`
+// stay there because they have no runtime equivalent.
 import {
+  displayBanner,
   success,
-  error as uiError,
+  errorLine as uiError,
   warn as uiWarn,
   info as uiInfo,
   dim,
   withSpinner,
   table,
   keyValue,
-} from './ui';
-import { register as registerIM } from './commands/im';
-import { register as registerContext } from './commands/context';
-import { register as registerEvolve } from './commands/evolve';
-import { register as registerTask } from './commands/task';
-import { register as registerMemory } from './commands/memory';
-import { register as registerSkill } from './commands/skill';
-import { register as registerFiles } from './commands/files';
-import { register as registerWorkspace } from './commands/workspace';
-import { register as registerSecurity } from './commands/security';
-import { register as registerCommunity } from './commands/community';
-import { register as registerRemote } from './commands/remote';
-import { startDaemon, stopDaemon, daemonStatus, installDaemonService, uninstallDaemonService } from './daemon';
+} from './cli-ui';
 
 // Read version from package.json
 let cliVersion = '1.7.2';
@@ -57,7 +43,14 @@ try {
 // Config helpers
 // ============================================================================
 
-const CONFIG_DIR = path.join(os.homedir(), '.prismer');
+// PRISMER_HOME — parity with @prismer/runtime (`sdk/prismer-cloud/runtime/
+// src/config.ts:63`). The env var is the **prismer root** itself, NOT a fake
+// home with `.prismer` appended; that way `prismer setup` and `cloud setup`
+// write to the same file (`$PRISMER_HOME/config.toml` or
+// `$HOME/.prismer/config.toml` by default) and the two CLIs share auth state.
+const CONFIG_DIR = process.env.PRISMER_HOME
+  ? path.resolve(process.env.PRISMER_HOME)
+  : path.join(os.homedir(), '.prismer');
 const CONFIG_PATH = path.join(CONFIG_DIR, 'config.toml');
 
 interface PrismerCLIConfig {
@@ -84,7 +77,30 @@ function ensureConfigDir(): void {
 function readConfig(): PrismerCLIConfig {
   if (!fs.existsSync(CONFIG_PATH)) return {};
   const raw = fs.readFileSync(CONFIG_PATH, 'utf-8');
-  return TOML.parse(raw) as unknown as PrismerCLIConfig;
+  const parsed = TOML.parse(raw) as unknown as PrismerCLIConfig & {
+    api_key?: string;
+    cloud_api_base?: string;
+    base_url?: string;
+    environment?: string;
+  };
+  // Tolerate @prismer/runtime's flat-key schema (`prismer setup` writes
+  // `api_key = "..."` + `cloud_api_base = "..."` at the top level). Promote
+  // them into the SDK's `[default]` section so a single `prismer setup` is
+  // enough to authenticate both CLIs. SDK's own `cloud setup` continues to
+  // write `[default]` directly — coexists in the same TOML file.
+  const flatApiKey = parsed.api_key;
+  const flatBaseUrl = parsed.cloud_api_base ?? parsed.base_url;
+  const flatEnv = parsed.environment;
+  if (flatApiKey || flatBaseUrl || flatEnv) {
+    parsed.default = {
+      ...(parsed.default ?? {}),
+      // Explicit [default].api_key wins; flat is the fallback (runtime-written).
+      api_key: parsed.default?.api_key ?? flatApiKey,
+      base_url: parsed.default?.base_url ?? flatBaseUrl,
+      environment: parsed.default?.environment ?? flatEnv,
+    };
+  }
+  return parsed;
 }
 
 function writeConfig(config: PrismerCLIConfig): void {
@@ -109,42 +125,89 @@ function setNestedValue(obj: Record<string, any>, dotPath: string, value: string
 
 export function getIMClient(): PrismerClient {
   const cfg = readConfig();
-  const token = cfg?.auth?.im_token;
-  if (!token) { uiError('No IM token. Run "prismer setup --agent" or "prismer register <username>" first.'); process.exit(1); }
   const env = cfg?.default?.environment || 'production';
   const baseUrl = cfg?.default?.base_url || '';
-  return new PrismerClient({ apiKey: token, environment: env as any, ...(baseUrl ? { baseUrl } : {}) });
+  // 2026-05-29 — agent identity injection.
+  //
+  // The agent identity is established at adapter-service-spawn time. A
+  // runtime hosts N agents, each backed by its own per-agent service:
+  // hermes spawns `hermes -p <profile> gateway run` per agent (one
+  // process, one port); openclaw the same; any future adapter follows
+  // the same per-profile model. When the daemon spawns the service it
+  // injects PRISMER_AGENT_USERNAME / PRISMER_AGENT_IM_USER_ID into the
+  // service's env, and that env propagates to every tool the service
+  // launches — including the `cloud` CLI invocations the LLM emits.
+  //
+  // So at CLI startup we just read process.env. No cwd walking, no
+  // per-task marker file, no global daemon env mixing identities. If
+  // the var is absent we fall back to caller-key identity (legacy
+  // behavior, also correct for human users running `cloud` directly).
+  const agentUsername = process.env.PRISMER_AGENT_USERNAME;
+  const imAgentOpt = agentUsername ? { imAgent: agentUsername } : {};
+  // release202/09 §3.6 B — defense-in-depth workspace hint. The daemon injects
+  // PRISMER_WORKSPACE_ID into the agent service env alongside
+  // PRISMER_AGENT_USERNAME; sending it as X-IM-Workspace lets the cloud
+  // agent-proxy reach its workspace-scoped fallback when the owner
+  // userId↔numericId bridge can't resolve the agent. Absent → no header →
+  // unchanged behavior (same opt-in shape as imAgent).
+  const workspaceId = process.env.PRISMER_WORKSPACE_ID;
+  const imWorkspaceOpt = workspaceId ? { imWorkspace: workspaceId } : {};
+  // Prefer IM-JWT when present (issued by `cloud register` / `cloud setup --agent`).
+  // Fall back to API key — verified 2026-05-19 that the cloud accepts API-key
+  // bearer for `/api/im/*` routes (the regression run did a direct curl POST
+  // /api/im/tasks with `sk-prismer-live-…` and got back a real task cuid).
+  // Without this fallback the SDK CLI required dual-credential setup just to
+  // make a task, which contradicted both the SKILL.md flow and the cookbook.
+  const imToken = cfg?.auth?.im_token;
+  if (imToken) {
+    return new PrismerClient({
+      apiKey: imToken,
+      environment: env as any,
+      ...(baseUrl ? { baseUrl } : {}),
+      ...imAgentOpt,
+      ...imWorkspaceOpt,
+    });
+  }
+  const apiKey = cfg?.default?.api_key;
+  if (!apiKey) {
+    uiError('No credentials. Run "cloud setup" first (or "cloud setup --agent" / "cloud register <username>" for IM-JWT path).');
+    process.exit(1);
+  }
+  return new PrismerClient({
+    apiKey,
+    environment: env as any,
+    ...(baseUrl ? { baseUrl } : {}),
+    ...imAgentOpt,
+    ...imWorkspaceOpt,
+  });
 }
 
 export function getAPIClient(): PrismerClient {
   const cfg = readConfig();
   const apiKey = cfg?.default?.api_key;
-  if (!apiKey) { uiError('No API key. Run "prismer setup" to sign in and get your key.'); process.exit(1); }
+  if (!apiKey) { uiError('No API key. Run "cloud setup" to sign in and get your key.'); process.exit(1); }
   const env = cfg?.default?.environment || 'production';
   const baseUrl = cfg?.default?.base_url || '';
-  return new PrismerClient({ apiKey, environment: env as any, ...(baseUrl ? { baseUrl } : {}) });
+  // 2026-05-29 — same X-IM-Agent injection as getIMClient. Commands wired
+  // via getAPIClient (cloud task, cloud memory, cloud workspace, ...) hit
+  // /api/im/* too — middleware splits senderId by header, so when an
+  // agent shells out from its sandbox the action is properly authored by
+  // the agent rather than the API-key owner. Human users running `cloud`
+  // directly have no PRISMER_AGENT_USERNAME → no header → legacy behavior.
+  const agentUsername = process.env.PRISMER_AGENT_USERNAME;
+  const imAgentOpt = agentUsername ? { imAgent: agentUsername } : {};
+  // release202/09 §3.6 B — same optional X-IM-Workspace hint as getIMClient.
+  const workspaceId = process.env.PRISMER_WORKSPACE_ID;
+  const imWorkspaceOpt = workspaceId ? { imWorkspace: workspaceId } : {};
+  return new PrismerClient({ apiKey, environment: env as any, ...(baseUrl ? { baseUrl } : {}), ...imAgentOpt, ...imWorkspaceOpt });
 }
 
 // ============================================================================
-// CLI program — library mode
+// CLI program
 // ============================================================================
-//
-// Prior to v1.9.0 this file owned a top-level `const program = new Command()`
-// and ran `program.parse(process.argv)` at import time. Both are gone: the
-// runtime CLI owns program construction + parse.
-//
-// We keep `cliVersion` as an informational export so consumers can sanity-
-// check the mounted SDK version at runtime.
 
-export interface SdkCliOptions {
-  /**
-   * Skip commands that the runtime CLI already owns (setup, init, status,
-   * daemon). `register` is always mounted — runtime does not provide it.
-   */
-  skipConflicting?: boolean;
-}
-
-export { cliVersion };
+const program = new Command();
+program.name('cloud').description('Prismer Cloud SDK CLI').version(cliVersion);
 
 // ============================================================================
 // Utility commands: setup, init (alias), register, status, config, token
@@ -188,10 +251,12 @@ async function verifyAndSaveKey(config: PrismerCLIConfig, apiKey: string): Promi
   success('Saved to ~/.prismer/config.toml');
   uiInfo('You can now use: CLI commands, MCP tools, Claude Code plugin, and all SDKs.');
 
-  // v1.9.0: the legacy `npx @prismer/sdk daemon start` launchd/systemd service
-  // is retired — the runtime CLI (`prismer daemon start`) owns persistent sync.
-  // Users who want auto-start should run `prismer daemon start` (see v1.9.1
-  // follow-up for native service install wiring into the runtime bin).
+  // Auto-install daemon service so evolution sync runs persistently
+  try {
+    installDaemonService();
+  } catch {
+    dim('Daemon auto-start setup skipped. Run manually: cloud daemon install');
+  }
 }
 
 function openBrowser(url: string): void {
@@ -206,7 +271,7 @@ function openBrowser(url: string): void {
 }
 
 // ============================================================================
-// prismer setup — unified initialization (browser auto / agent auto-register / manual / key arg)
+// cloud setup — unified initialization (browser auto / agent auto-register / manual / key arg)
 // ============================================================================
 
 async function runSetup(opts: { manual?: boolean; agent?: boolean; force?: boolean }, apiKey?: string): Promise<void> {
@@ -219,12 +284,12 @@ async function runSetup(opts: { manual?: boolean; agent?: boolean; force?: boole
     const masked = config.default.api_key.slice(0, 12) + '...' + config.default.api_key.slice(-4);
     success(`Already configured: ${masked}`);
     console.log('');
-    dim('  To reconfigure, run: prismer setup --force');
-    dim('  To check status:     prismer status');
+    dim('  To reconfigure, run: cloud setup --force');
+    dim('  To check status:     cloud status');
     return;
   }
 
-  // ── Path 1: Direct key argument (e.g. prismer setup sk-prismer-xxx / prismer init sk-prismer-xxx) ──
+  // ── Path 1: Direct key argument (e.g. cloud setup sk-prismer-xxx / cloud init sk-prismer-xxx) ──
   if (apiKey) {
     await verifyAndSaveKey(config, apiKey);
     return;
@@ -234,7 +299,7 @@ async function runSetup(opts: { manual?: boolean; agent?: boolean; force?: boole
   if (opts.agent) {
     if (!opts.force && config.auth?.im_token) {
       success('Already registered as agent (IM token exists).');
-      dim('  For API key access, run: prismer setup');
+      dim('  For API key access, run: cloud setup');
       return;
     }
 
@@ -260,10 +325,10 @@ async function runSetup(opts: { manual?: boolean; agent?: boolean; force?: boole
         'User ID': config.auth.im_user_id || '',
       });
       console.log('');
-      uiInfo('For full API access, sign in: prismer setup');
+      uiInfo('For full API access, sign in: cloud setup');
     } catch (err: any) {
       uiError(`Agent registration failed: ${err.message}`);
-      dim('  Try signing in instead: prismer setup');
+      dim('  Try signing in instead: cloud setup');
       process.exit(1);
     }
     return;
@@ -350,8 +415,8 @@ async function runSetup(opts: { manual?: boolean; agent?: boolean; force?: boole
         uiError('Timed out waiting for authentication (5 min).');
         console.log('');
         dim('  Alternatives:');
-        dim('    prismer setup --manual    Paste key manually');
-        dim('    prismer setup --agent     Register as agent (free credits, no browser)');
+        dim('    cloud setup --manual    Paste key manually');
+        dim('    cloud setup --agent     Register as agent (free credits, no browser)');
         server.close();
         process.exit(1);
       }
@@ -359,40 +424,32 @@ async function runSetup(opts: { manual?: boolean; agent?: boolean; force?: boole
   });
 }
 
-export function registerSdkCliCommands(
-  program: Command,
-  opts: SdkCliOptions = {},
-): void {
-  const skipConflicting = opts.skipConflicting === true;
+// ── cloud setup ──
+program
+  .command('setup [api-key]')
+  .description('Set up Prismer — sign in via browser, register as agent, or provide your API key')
+  .option('--manual', 'Paste API key manually instead of browser auto-flow')
+  .option('--agent', 'Register as agent with free credits (no browser, for CI/scripts)')
+  .option('--force', 'Reconfigure even if already set up')
+  .action(async (apiKey: string | undefined, opts: { manual?: boolean; agent?: boolean; force?: boolean }) => {
+    await runSetup(opts, apiKey);
+  });
 
-  if (!skipConflicting) {
-    // ── prismer setup ──
-    program
-      .command('setup [api-key]')
-      .description('Set up Prismer — sign in via browser, register as agent, or provide your API key')
-      .option('--manual', 'Paste API key manually instead of browser auto-flow')
-      .option('--agent', 'Register as agent with free credits (no browser, for CI/scripts)')
-      .option('--force', 'Reconfigure even if already set up')
-      .action(async (apiKey: string | undefined, cmdOpts: { manual?: boolean; agent?: boolean; force?: boolean }) => {
-        await runSetup(cmdOpts, apiKey);
-      });
+// ── cloud init — backward-compatible alias for setup ──
+program
+  .command('init [api-key]')
+  .description('Alias for "cloud setup" (deprecated, use setup instead)')
+  .option('--manual', 'Paste API key manually')
+  .option('--agent', 'Register as agent with free credits')
+  .option('--force', 'Reconfigure even if already set up')
+  .action(async (apiKey: string | undefined, opts: { manual?: boolean; agent?: boolean; force?: boolean }) => {
+    uiWarn('"cloud init" is deprecated. Use "cloud setup" instead.');
+    console.log('');
+    await runSetup(opts, apiKey);
+  });
 
-    // ── prismer init — backward-compatible alias for setup ──
-    program
-      .command('init [api-key]')
-      .description('Alias for "prismer setup" (deprecated, use setup instead)')
-      .option('--manual', 'Paste API key manually')
-      .option('--agent', 'Register as agent with free credits')
-      .option('--force', 'Reconfigure even if already set up')
-      .action(async (apiKey: string | undefined, cmdOpts: { manual?: boolean; agent?: boolean; force?: boolean }) => {
-        uiWarn('"prismer init" is deprecated. Use "prismer setup" instead.');
-        console.log('');
-        await runSetup(cmdOpts, apiKey);
-      });
-  }
-
-  program
-    .command('register <username>')
+program
+  .command('register <username>')
   .description('Register an IM identity and store the token')
   .option('--type <type>', 'Identity type: agent or human', 'agent')
   .option('--display-name <name>', 'Display name')
@@ -403,7 +460,7 @@ export function registerSdkCliCommands(
   .action(async (username: string, opts: any) => {
     const config = readConfig();
     const apiKey = config.default?.api_key;
-    if (!apiKey) { uiError('No API key. Run "prismer setup" first.'); process.exit(1); }
+    if (!apiKey) { uiError('No API key. Run "cloud setup" first.'); process.exit(1); }
 
     const client = new PrismerClient({
       apiKey,
@@ -449,8 +506,7 @@ export function registerSdkCliCommands(
     }
   });
 
-if (!skipConflicting) {
-  program
+program
   .command('status')
   .description('Show current config and live info')
   .action(async () => {
@@ -518,93 +574,17 @@ if (!skipConflicting) {
       dim('  IM Token: (not registered)');
     }
   });
-}
 
 // --- config ---
 const configCmd = program.command('config').description('Manage config file');
 
-// Secret field names we always redact. `$KEYRING:...` values are already safe
-// references so we leave those intact — redacting them would lose information
-// the user needs to debug keychain issues.
-const SECRET_FIELD_PATTERN = /(api_key|_secret|_token|password)$/i;
-
-function isKeyringPlaceholder(value: string): boolean {
-  return value.startsWith('$KEYRING:');
-}
-
-function redactSecretValue(value: string): string {
-  if (isKeyringPlaceholder(value)) return value;
-  if (value.length <= 16) return '***';
-  return value.slice(0, 12) + '...' + value.slice(-4);
-}
-
-// Walk the parsed TOML tree and redact any field whose key matches
-// SECRET_FIELD_PATTERN. Non-string values pass through unchanged.
-function redactSecrets(node: any): any {
-  if (node === null || node === undefined) return node;
-  if (Array.isArray(node)) return node.map((n) => redactSecrets(n));
-  if (typeof node !== 'object') return node;
-  const out: Record<string, any> = {};
-  for (const [k, v] of Object.entries(node)) {
-    if (typeof v === 'string' && SECRET_FIELD_PATTERN.test(k)) {
-      out[k] = redactSecretValue(v);
-    } else if (v && typeof v === 'object') {
-      out[k] = redactSecrets(v);
-    } else {
-      out[k] = v;
-    }
+configCmd.command('show').description('Print config file').action(() => {
+  if (!fs.existsSync(CONFIG_PATH)) {
+    uiWarn('No config file. Run "cloud setup" to create one.');
+    return;
   }
-  return out;
-}
-
-configCmd
-  .command('show')
-  .description('Print config file (secrets redacted by default)')
-  .option('--show-secrets', 'Print secret values in full (API keys, tokens, passwords)')
-  .option('--json', 'JSON output')
-  .action((opts: { showSecrets?: boolean; json?: boolean }) => {
-    if (!fs.existsSync(CONFIG_PATH)) {
-      uiWarn('No config file. Run "prismer setup" to create one.');
-      return;
-    }
-    const raw = fs.readFileSync(CONFIG_PATH, 'utf-8');
-    if (opts.showSecrets) {
-      if (opts.json) {
-        try {
-          console.log(JSON.stringify(TOML.parse(raw), null, 2));
-        } catch {
-          console.log(raw);
-        }
-        return;
-      }
-      console.log(raw);
-      return;
-    }
-    let parsed: any;
-    try {
-      parsed = TOML.parse(raw);
-    } catch {
-      // Fall back to regex-based redaction on the raw text when TOML parse
-      // fails, so malformed configs still don't leak secrets.
-      const redactedRaw = raw.replace(
-        /^(\s*)(\w*(?:api_key|_secret|_token|password)\w*)\s*=\s*"([^"]*)"/gim,
-        (_m, indent: string, key: string, val: string) =>
-          `${indent}${key} = "${isKeyringPlaceholder(val) ? val : redactSecretValue(val)}"`,
-      );
-      console.log(redactedRaw);
-      return;
-    }
-    const redacted = redactSecrets(parsed);
-    if (opts.json) {
-      console.log(JSON.stringify(redacted, null, 2));
-      return;
-    }
-    try {
-      console.log(TOML.stringify(redacted));
-    } catch {
-      console.log(JSON.stringify(redacted, null, 2));
-    }
-  });
+  console.log(fs.readFileSync(CONFIG_PATH, 'utf-8'));
+});
 
 configCmd.command('set <key> <value>').description('Set a config value (e.g. default.base_url)').action((key: string, value: string) => {
   const config = readConfig();
@@ -639,56 +619,106 @@ tokenCmd.command('refresh').description('Refresh IM JWT token').option('--json',
 // Register grouped command modules
 // ============================================================================
 
-// v1.9.0 A.1: each SDK register* helper is isolated with try/catch so a single
-// module's commander-level issue (e.g. legacy space-separated subcommands that
-// collide on second registration) degrades to a noticed warning rather than
-// taking down the entire `prismer` CLI. Runtime-owned names (`task`, `memory`)
-// are skipped outright when skipConflicting=true.
-const registrars: Array<[string, () => void]> = [
-  ['im', () => registerIM(program, getIMClient, getAPIClient)],
-  ['context', () => registerContext(program, getIMClient, getAPIClient)],
-  ['evolve', () => registerEvolve(program, getIMClient, getAPIClient)],
-];
-if (!skipConflicting) {
-  registrars.push(['task', () => registerTask(program, getIMClient, getAPIClient)]);
-  registrars.push(['memory', () => registerMemory(program, getIMClient, getAPIClient)]);
-}
-registrars.push(
-  ['skill', () => registerSkill(program, getIMClient, getAPIClient)],
-  ['file', () => registerFiles(program, getIMClient, getAPIClient)],
-  ['workspace', () => registerWorkspace(program, getIMClient, getAPIClient)],
-  ['security', () => registerSecurity(program, getIMClient, getAPIClient)],
-  ['community', () => registerCommunity(program, getIMClient, getAPIClient)],
-  ['remote', () => registerRemote(program, getIMClient, getAPIClient)],
-);
-for (const [name, fn] of registrars) {
-  try {
-    fn();
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    process.stderr.write(`[prismer] warning: SDK '${name}' commands skipped (${msg})\n`);
-  }
-}
+import { register as registerIM } from './commands/im';
+import { register as registerContext } from './commands/context';
+import { register as registerEvolve } from './commands/evolve';
+import { register as registerTask } from './commands/task';
+import { register as registerMemory } from './commands/memory';
+import { register as registerSkill } from './commands/skill';
+import { register as registerSkillDraft } from './commands/skill-draft';
+import { register as registerCodeGrep } from './commands/code-grep';
+import { register as registerServiceIntrospect } from './commands/service-introspect';
+import { register as registerFiles } from './commands/files';
+import { register as registerWorkspace } from './commands/workspace';
+import { register as registerProject } from './commands/project';
+import { register as registerSecurity } from './commands/security';
+import { register as registerCommunity } from './commands/community';
+import { register as registerAsset } from './commands/asset';
+import { register as registerApproval } from './commands/approval';
+import { register as registerAgent } from './commands/agent';
+import { register as registerMetric, runEmit as runMetricEmit } from './commands/metric';
+import { startDaemon, stopDaemon, daemonStatus, installDaemonService, uninstallDaemonService } from './daemon';
+import { detectDeliverProxy, proxyDeliver } from './commands/deliver-proxy';
+
+registerIM(program, getIMClient, getAPIClient);
+registerContext(program, getIMClient, getAPIClient);
+registerEvolve(program, getIMClient, getAPIClient);
+registerTask(program, getIMClient, getAPIClient);
+registerMemory(program, getIMClient, getAPIClient);
+registerSkill(program, getIMClient, getAPIClient);
+// release201/07 skill-authoring engine: `cloud skill draft *` lives under the
+// `skill` command registered above; registerSkillDraft attaches subcommands.
+registerSkillDraft(program, getIMClient, getAPIClient);
+registerCodeGrep(program, getIMClient, getAPIClient);
+registerServiceIntrospect(program, getIMClient, getAPIClient);
+registerFiles(program, getIMClient, getAPIClient);
+registerWorkspace(program, getIMClient, getAPIClient);
+registerProject(program, getIMClient, getAPIClient);
+registerSecurity(program, getIMClient, getAPIClient);
+registerCommunity(program, getIMClient, getAPIClient);
+registerAsset(program, getIMClient, getAPIClient);
+registerApproval(program, getIMClient, getAPIClient);
+registerAgent(program, getIMClient, getAPIClient);
+registerMetric(program, getIMClient, getAPIClient);
 
 // ============================================================================
 // Top-level shortcuts (zero-nesting for high-frequency ops)
 // ============================================================================
 
-// prismer send <user-id> "message"
+// cloud send <user-id> "message"
 program
   .command('send')
   .description('Send a direct message (shortcut for: im send)')
-  .argument('<user-id>', 'Target user/agent ID')
+  .argument('<user-id-or-username>', 'Target user/agent IM user ID (or username with --by-username)')
   .argument('<message>', 'Message content')
   .option('-t, --type <type>', 'Message type: text, markdown, code, etc.', 'text')
   .option('--reply-to <id>', 'Reply to a message ID')
+  .option('--conversation-id <id>', 'Pin message to a specific conversation/session')
+  .option('--asset-id <id>', 'Attach a previously uploaded asset (treats type as file)')
+  .option('--by-username', 'Treat the first argument as a username; resolve to imUserId first')
   .option('--json', 'JSON output')
-  .action(async (userId: string, message: string, opts: any) => {
+  .action(async (target: string, message: string, opts: any) => {
     const client = getIMClient();
+    let userId = target;
+    if (opts.byUsername) {
+      // Resolve username → imUserId via /api/im/discover
+      const discoverRes = await client.im.contacts.discover();
+      if (!discoverRes.ok || !Array.isArray(discoverRes.data)) {
+        uiError(`Could not resolve username "${target}" — discover failed.`);
+        process.exit(1);
+      }
+      const needle = target.trim().toLowerCase().replace(/^@/, '');
+      const match = (discoverRes.data as any[]).find((u: any) => {
+        const vals = [u.username, u.displayName, u.userId].map((v) =>
+          typeof v === 'string' ? v.trim().toLowerCase() : '',
+        );
+        return vals.includes(needle);
+      });
+      if (!match?.userId) {
+        uiError(`Could not resolve username "${target}" to an IM user.`);
+        process.exit(1);
+      }
+      userId = match.userId;
+    }
+
     const sendOpts: Record<string, any> = {};
     if (opts.type && opts.type !== 'text') sendOpts.type = opts.type;
     if (opts.replyTo) sendOpts.parentId = opts.replyTo;
+    if (opts.assetId) {
+      // Default to file kind, allow override via --type
+      if (!opts.type || opts.type === 'text') sendOpts.type = 'file';
+      sendOpts.attachments = [{ kind: 'asset', assetId: opts.assetId, role: 'attachment' }];
+    }
+    if (opts.conversationId) {
+      sendOpts.metadata = { ...(sendOpts.metadata ?? {}), conversationId: opts.conversationId };
+    }
     const res = await withSpinner('Sending message', async () => {
+      // When --conversation-id is provided, route via the conversation message
+      // endpoint so the server pins to that conversation rather than the
+      // implicit direct one between sender + userId.
+      if (opts.conversationId) {
+        return client.im.messages.send(opts.conversationId, message, sendOpts);
+      }
       return client.im.direct.send(userId, message, sendOpts);
     });
     if (opts.json) { console.log(JSON.stringify(res, null, 2)); return; }
@@ -696,7 +726,129 @@ program
     success(`Message sent (conversation: ${res.data?.conversationId})`);
   });
 
-// prismer load <url...>
+// cloud deliver <path>  (release202/09 P2 — 动作 A: attach a file to THIS reply)
+//
+// Explicit file delivery: after writing a deliverable into the dispatch
+// artifacts dir, the agent runs `cloud deliver <abs-path>` to attach it to its
+// own reply. The in-container agent proxies to the daemon local-server
+// `POST /local/deliver` (mode:'attach'), which uploads with the daemon's
+// credential and records the assetId so dispatch-end flushPending rides it on
+// `reply.assetIds` (chat attachment + kanban card). Replaces the (now
+// gated-off) artifacts-watcher directory auto-scan.
+program
+  .command('deliver <path>')
+  .description('Attach a file you wrote to your current reply (in-container explicit delivery)')
+  // release202/09 P5#1 — hermes has no per-dispatch env; the agent copies the
+  // ids out of <execution_context> and passes them as flags so the daemon proxy
+  // activates. Spawn adapters (claude-code / codex) set the env and need no flags.
+  .option('--run-id <id>', 'dispatch run/task id (from <execution_context>; env fallback PRISMER_TASK_ID/RUN_ID)')
+  .option('--conversation-id <id>', 'conversation id (from <execution_context>; env fallback PRISMER_CONVERSATION_ID)')
+  .option('--daemon-port <port>', 'daemon local-server port (env fallback PRISMER_DAEMON_PORT, default 3210)')
+  .option('--json', 'JSON output')
+  .action(async (filePath: string, opts: { json?: boolean; runId?: string; conversationId?: string; daemonPort?: string }) => {
+    const proxy = detectDeliverProxy({
+      runId: opts.runId,
+      conversationId: opts.conversationId,
+      daemonPort: opts.daemonPort,
+    });
+    if (!proxy) {
+      uiError(
+        'cloud deliver only works inside a daemon dispatch (no PRISMER_TASK_ID/PRISMER_RUN_ID, and no --run-id flag). ' +
+          'On hermes, pass --run-id <id> (and --conversation-id <id>) copied from <execution_context>. ' +
+          'Outside a dispatch, use `cloud file send <conversationId> <path>`.',
+      );
+      process.exit(1);
+    }
+    const result = await proxyDeliver(proxy, filePath, 'attach');
+    if (!result.ok) {
+      uiError(`Delivery failed: ${result.error ?? `daemon returned ${result.status}`}`);
+      process.exit(1);
+    }
+    if (opts.json) { console.log(JSON.stringify(result, null, 2)); return; }
+    success(`Attached to your reply (assetId: ${result.assetId ?? '-'})`);
+  });
+
+// cloud attach <messageId> <path>  (release202/09 P5#3 — 动作 A2: attach a file
+// to an ALREADY-SENT message)
+//
+// Complements `cloud deliver` (A1, which rides the reply that doesn't exist
+// yet). Use case: the agent already replied — `cloud send` / `cloud file send`
+// returned a messageId — then it produced a file it wants on THAT message. The
+// in-container agent proxies to the daemon local-server `POST /local/deliver`
+// (mode:'message-attach'), which uploads with the daemon's credential and calls
+// the cloud attach route to append the asset to the existing message. The
+// conversationId is required (the attach route is conversation-scoped): it comes
+// from PRISMER_CONVERSATION_ID (spawn adapters) or `--conversation-id` copied
+// from <execution_context> (hermes).
+program
+  .command('attach <messageId> <path>')
+  .description("Attach a file to a message you ALREADY sent (by its messageId)")
+  // release202/09 P5#1 parity — hermes has no per-dispatch env; the agent copies
+  // the ids out of <execution_context> and passes them as flags so the daemon
+  // proxy activates. Spawn adapters (claude-code / codex) set the env and need
+  // no flags.
+  .option('--run-id <id>', 'dispatch run/task id (from <execution_context>; env fallback PRISMER_TASK_ID/RUN_ID)')
+  .option('--conversation-id <id>', 'conversation id of the target message (from <execution_context>; env fallback PRISMER_CONVERSATION_ID)')
+  .option('--daemon-port <port>', 'daemon local-server port (env fallback PRISMER_DAEMON_PORT, default 3210)')
+  .option('--json', 'JSON output')
+  .action(async (
+    messageId: string,
+    filePath: string,
+    opts: { json?: boolean; runId?: string; conversationId?: string; daemonPort?: string },
+  ) => {
+    const proxy = detectDeliverProxy({
+      runId: opts.runId,
+      conversationId: opts.conversationId,
+      daemonPort: opts.daemonPort,
+    });
+    if (!proxy) {
+      uiError(
+        'cloud attach only works inside a daemon dispatch (no PRISMER_TASK_ID/PRISMER_RUN_ID, and no --run-id flag). ' +
+          'On hermes, pass --run-id <id> and --conversation-id <id> copied from <execution_context>.',
+      );
+      process.exit(1);
+    }
+    const conversationId = (opts.conversationId || proxy.conversationId || '').trim();
+    if (!conversationId) {
+      uiError(
+        'cloud attach needs the conversation id of the target message. ' +
+          'Set PRISMER_CONVERSATION_ID or pass --conversation-id <id> (copy it from <execution_context>).',
+      );
+      process.exit(1);
+    }
+    const result = await proxyDeliver(proxy, filePath, 'message-attach', conversationId, messageId);
+    if (!result.ok) {
+      uiError(`Attach failed: ${result.error ?? `daemon returned ${result.status}`}`);
+      process.exit(1);
+    }
+    if (opts.json) { console.log(JSON.stringify(result, null, 2)); return; }
+    success(`Attached to message ${messageId} (assetId: ${result.assetId ?? '-'})`);
+  });
+
+// cloud emit <namespace.name>  (shortcut for: metric emit)
+//
+// release201/11 §6.2 — short form for SKILL.md authors. Same options as
+// `cloud metric emit`.
+program
+  .command('emit <namespace.name>')
+  .description('Emit a metric event (shortcut for: metric emit)')
+  .option('--value <value>', 'metric value (number or string)')
+  .option('--dim <k=v>', 'dimension (repeatable; workspaceId is required)', (val: string, prev: string[] = []) => {
+    prev.push(val);
+    return prev;
+  })
+  .option('--ts <iso>', 'business timestamp in ISO 8601 (defaults to now)')
+  .option('--json', 'output raw JSON response')
+  .action(async (fqName: string, opts: any) => {
+    try {
+      await runMetricEmit(fqName, opts, getIMClient);
+    } catch (err) {
+      uiError(`Error: ${(err as Error).message}`);
+      process.exit(1);
+    }
+  });
+
+// cloud load <url...>
 program
   .command('load')
   .description('Load URL(s) → compressed HQCC (shortcut for: context load)')
@@ -725,7 +877,7 @@ program
     }
   });
 
-// prismer search <query>
+// cloud search <query>
 program
   .command('search')
   .description('Search web content (shortcut for: context search)')
@@ -757,7 +909,7 @@ program
     }
   });
 
-// prismer parse <url>
+// cloud parse <url>
 program
   .command('parse')
   .description('Parse a document via OCR (shortcut for: parse run)')
@@ -778,7 +930,7 @@ program
         'Status': res.status || 'processing',
       });
       console.log('');
-      dim(`  Check: prismer parse-status ${res.taskId}`);
+      dim(`  Check: cloud parse-status ${res.taskId}`);
     } else if (res.document) {
       success('Parse complete');
       const content = res.document.markdown || res.document.text || JSON.stringify(res.document, null, 2);
@@ -786,7 +938,7 @@ program
     }
   });
 
-// prismer parse status / result (sub-commands under parse)
+// cloud parse status / result (sub-commands under parse)
 const parseCmd = program.commands.find(c => c.name() === 'parse');
 if (parseCmd) {
   // We need parse as both a top-level command AND a group. Commander doesn't support that,
@@ -824,53 +976,89 @@ program
     console.log(content);
   });
 
-// prismer recall <query>
+// cloud recall <query>
 program
   .command('recall')
   .description('Search across memory, cache, and evolution (shortcut for: memory recall)')
   .argument('<query>', 'Search query')
   .option('--scope <scope>', 'Scope: all, memory, cache, evolution', 'all')
+  .option('--layer <layer>', 'Alias for --scope (memory | cache | evolution | all)')
+  .option('--strategy <strategy>', 'Recall strategy: keyword | llm | hybrid (uses POST /recall when set)')
   .option('-n, --limit <n>', 'Max results', '10')
   .option('--json', 'JSON output')
   .action(async (query: string, opts: any) => {
     const client = getIMClient();
-    const params: Record<string, string> = { q: query };
-    if (opts.scope) params.scope = opts.scope;
-    if (opts.limit) params.limit = opts.limit;
-    // recall uses raw request since not all SDKs expose it as a method
+    // Normalize layer → scope (alias). Map `context` → `cache` for cookbook
+    // parity (the cloud endpoint exposes the cache layer under `scope=cache`).
+    let scope = opts.layer || opts.scope || 'all';
+    if (scope === 'context') scope = 'cache';
+    const validStrategies = ['keyword', 'llm', 'hybrid'];
+    if (opts.strategy && !validStrategies.includes(opts.strategy)) {
+      uiError(`Invalid --strategy "${opts.strategy}". Use one of: ${validStrategies.join(', ')}.`);
+      process.exit(1);
+    }
     const res = await withSpinner(`Recalling: ${query}`, async () => {
-      return (client.im as any).memory._r('GET', '/api/im/recall', undefined, params);
+      // When a strategy is specified, use POST /recall — it is the only route
+      // that honours `strategy` (GET /recall only filters by scope/limit).
+      if (opts.strategy) {
+        return client.im.request<{ ok: boolean; data?: unknown[]; error?: { message?: string } }>(
+          'POST',
+          '/api/im/recall',
+          {
+            query,
+            strategy: opts.strategy,
+            scope,
+            maxResults: opts.limit ? parseInt(opts.limit, 10) : undefined,
+          },
+        );
+      }
+      const params: Record<string, string> = { q: query, scope };
+      if (opts.limit) params.limit = String(opts.limit);
+      return client.im.request<{ ok: boolean; data?: unknown[]; error?: { message?: string } }>(
+        'GET',
+        '/api/im/recall',
+        undefined,
+        params,
+      );
     });
     if (opts.json) { console.log(JSON.stringify(res, null, 2)); return; }
     if (!res.ok) { uiError(`Recall failed: ${JSON.stringify(res.error)}`); process.exit(1); }
     const data = res.data || [];
     if (data.length === 0) { uiWarn(`No results for "${query}".`); return; }
     const rows = (data as any[]).map((item: any) => [
-      (item.source || '').toUpperCase(),
-      item.title || '?',
+      (item.source || item.memoryType || '').toUpperCase(),
+      item.title || item.path || '?',
       (item.score || 0).toFixed(2),
     ]);
     table(['Source', 'Title', 'Score'], rows);
     // Show snippets
     for (const item of data as any[]) {
-      if (item.snippet) {
-        dim(`  ${item.snippet.substring(0, 200)}`);
+      const snippet = item.snippet || item.content;
+      if (snippet) {
+        dim(`  ${String(snippet).substring(0, 200)}`);
       }
     }
   });
 
-// prismer discover
+// cloud discover
 program
   .command('discover')
   .description('Discover available agents (shortcut for: im discover)')
   .option('--type <type>', 'Filter by agent type')
   .option('--capability <cap>', 'Filter by capability')
+  .option('--online-only', 'Only return agents currently online')
   .option('--json', 'JSON output')
   .action(async (opts: any) => {
     const client = getIMClient();
     const discoverOpts: Record<string, string> = {};
     if (opts.type) discoverOpts.type = opts.type;
     if (opts.capability) discoverOpts.capability = opts.capability;
+    // GET /api/im/discover supports both `status=online` (contacts router) and
+    // `onlineOnly=true` (agents router). Send both for forward compatibility.
+    if (opts.onlineOnly) {
+      discoverOpts.status = 'online';
+      discoverOpts.onlineOnly = 'true';
+    }
     const res = await withSpinner('Discovering agents', async () => {
       return client.im.contacts.discover(discoverOpts);
     });
@@ -888,37 +1076,53 @@ program
   });
 
 // ============================================================================
-// Daemon command (runtime owns this namespace; SDK path retained for
-// back-compat when registerSdkCliCommands is called with skipConflicting=false)
+// Daemon command
 // ============================================================================
 
-if (!skipConflicting) {
-  program
-    .command('daemon <action>')
-    .description('Manage background sync daemon (start|stop|status|install|uninstall)')
-    .action(async (action: string) => {
-      switch (action) {
-        case 'start':
-          await startDaemon();
-          break;
-        case 'stop':
-          stopDaemon();
-          break;
-        case 'status':
-          daemonStatus();
-          break;
-        case 'install':
-          installDaemonService();
-          break;
-        case 'uninstall':
-          uninstallDaemonService();
-          break;
-        default:
-          uiError(`Unknown daemon action: ${action}. Use: start, stop, status, install, uninstall`);
-          process.exit(1);
-      }
-    });
+program
+  .command('daemon <action>')
+  .description('Manage background sync daemon (start|stop|status|install|uninstall)')
+  .action(async (action: string) => {
+    switch (action) {
+      case 'start':
+        await startDaemon();
+        break;
+      case 'stop':
+        stopDaemon();
+        break;
+      case 'status':
+        daemonStatus();
+        break;
+      case 'install':
+        installDaemonService();
+        break;
+      case 'uninstall':
+        uninstallDaemonService();
+        break;
+      default:
+        uiError(`Unknown daemon action: ${action}. Use: start, stop, status, install, uninstall`);
+        process.exit(1);
+    }
+  });
+
+// ============================================================================
+// Parse and run
+// ============================================================================
+
+// Mirror runtime's argv preprocessing — strip --json / --quiet / --no-color /
+// --color before commander sees them, and configure the shared UI singleton.
+// This gives the `cloud` CLI the same global-flag behaviour as `prismer`.
+import { applyCommonFlags, setUI, UI } from './cli-ui';
+
+const _head = process.argv.slice(0, 2);
+const _tail = process.argv.slice(2);
+const { mode: _mode, color: _color, restArgv: _restArgv } = applyCommonFlags(_tail);
+setUI(new UI({ mode: _mode, color: _color }));
+
+// Banner only in pretty mode — getUI() suppresses internally for json/quiet,
+// but skip the call in those modes anyway so we don't trigger asset I/O.
+if (_mode === 'pretty') {
+  displayBanner();
 }
 
-// End of registerSdkCliCommands
-}
+program.parse([..._head, ..._restArgv]);

@@ -220,7 +220,7 @@ async function fetchWithTimeout(
 async function runDaemonProcess(): Promise<void> {
   const cfg = loadConfig();
   if (!cfg) {
-    process.stderr.write('[prismer-daemon] No config found. Run "prismer setup" first.\n');
+    process.stderr.write('[cloud-daemon] No config found. Run "cloud setup" first.\n');
     process.exit(1);
   }
 
@@ -403,7 +403,7 @@ export async function startDaemon(): Promise<void> {
   // Check config before spawning
   const cfg = loadConfig();
   if (!cfg) {
-    console.error('No API key found. Run "prismer setup" first.');
+    console.error('No API key found. Run "cloud setup" first.');
     process.exit(1);
   }
 
@@ -633,7 +633,7 @@ export function installDaemonService(): void {
   } else if (platform === 'linux') {
     installSystemd();
   } else {
-    console.log(`Daemon auto-start not supported on ${platform}. Use: prismer daemon start`);
+    console.log(`Daemon auto-start not supported on ${platform}. Use: cloud daemon start`);
   }
 }
 

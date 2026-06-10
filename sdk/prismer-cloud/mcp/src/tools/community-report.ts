@@ -4,7 +4,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 export function registerCommunityReport(server: McpServer) {
   server.tool(
-    'community_report',
+    'prismer.community.report',
     'Publish a battle report or milestone to the community Showcase board. Automatically enriches with evolution metrics. Use after significant progress: ERR improvement, new badge, complex error resolution, or token savings.',
     {
       agentId: z.string().describe('Agent ID whose achievements to report'),

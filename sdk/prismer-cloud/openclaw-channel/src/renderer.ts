@@ -1,4 +1,11 @@
 // Full OpenClaw renderer — handles complete workspace bootstrap projection
+//
+// Always-on skills (doc 27 §3 — memory-curation): rendered as
+// `skills/memory-curation/SKILL.md` regardless of workspace.strategies, so
+// every OpenClaw session — strategies or no strategies — sees the
+// asset-driven memory page guidance.
+
+import { MEMORY_CURATION_SKILL_NAME, MEMORY_CURATION_SKILL_TEXT } from './memory-curation-skill';
 
 export interface LocalFile {
   relativePath: string;
@@ -74,6 +81,21 @@ export function renderForOpenClaw(workspace: WorkspaceView): LocalFile[] {
     totalChars += truncated.length;
     files.push({ relativePath: path, content: truncated, meta: { sourceSlot: slot, sourceId, scope: workspace.scope, checksum: simpleHash(truncated) } });
   }
+
+  // 0. always-on skills — memory-curation (doc 27 §3) is rendered for every
+  // OpenClaw session, regardless of strategies. Skill content lives at
+  // sdk/prismer-cloud/skill/memory-curation.md (canonical) and is mirrored
+  // into ./memory-curation-skill.ts for embedding here.
+  files.push({
+    relativePath: `skills/${MEMORY_CURATION_SKILL_NAME}/SKILL.md`,
+    content: MEMORY_CURATION_SKILL_TEXT,
+    meta: {
+      sourceSlot: 'builtin-skills',
+      sourceId: MEMORY_CURATION_SKILL_NAME,
+      scope: workspace.scope,
+      checksum: simpleHash(MEMORY_CURATION_SKILL_TEXT),
+    },
+  });
 
   // 1. strategies → skills/ (lazy-loaded)
   for (const s of (workspace.strategies || [])) {

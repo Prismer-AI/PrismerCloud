@@ -4,7 +4,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 export function registerParse(server: McpServer) {
   server.tool(
-    'parse_document',
+    'prismer.parse.document',
     'Parse any PDF or image into markdown via OCR. Fast mode for clear text, HiRes for scans/handwriting.',
     {
       url: z.string().url().describe('URL of the document (PDF, PNG, JPG, TIFF, BMP, GIF, WEBP)'),

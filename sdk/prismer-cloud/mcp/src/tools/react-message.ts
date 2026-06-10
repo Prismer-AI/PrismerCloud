@@ -4,7 +4,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 export function registerReactMessage(server: McpServer) {
   server.tool(
-    'react_message',
+    'prismer.message.react',
     'Add or remove an emoji reaction on a message (v1.8.2). Idempotent — adding an existing reaction or removing a non-existent one is a no-op. Returns the full reactions snapshot.',
     {
       conversationId: z.string().describe('Conversation ID containing the message'),

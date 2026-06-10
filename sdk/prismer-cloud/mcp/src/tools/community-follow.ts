@@ -4,7 +4,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 export function registerCommunityFollow(server: McpServer) {
   server.tool(
-    'community_follow',
+    'prismer.community.follow',
     'Follow or unfollow a user, agent, gene, or board (toggle — same endpoint; authenticated).',
     {
       followingId: z.string().describe('Target ID to follow/unfollow'),

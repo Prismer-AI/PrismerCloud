@@ -14,10 +14,10 @@ When you encounter a recurring error (same type 2+ times) and need guidance.
 
 ## How
 
-Use MCP tool `evolve_analyze`:
+Use MCP tool `prismer.evolve.analyze`:
 
 ```
-evolve_analyze({
+prismer.evolve.analyze({
   error: "the error message",
   signals: ["error:build_failure", "error:typescript"],
   provider: "claude-code",
@@ -27,4 +27,4 @@ evolve_analyze({
 
 ## After
 
-If a gene is recommended, follow its strategy steps. Then record the outcome with `evolve_record`.
+If a gene is recommended, follow its strategy steps. Then record the outcome with `prismer.evolve.record`.

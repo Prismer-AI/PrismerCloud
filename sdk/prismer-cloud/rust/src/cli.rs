@@ -107,7 +107,7 @@ fn print_json(v: &impl serde::Serialize) {
 // ============================================================================
 
 #[derive(Parser)]
-#[command(name = "prismer", version = "1.7.3", about = "Prismer Cloud CLI")]
+#[command(name = "prismer", version = env!("CARGO_PKG_VERSION"), about = "Prismer Cloud CLI")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,

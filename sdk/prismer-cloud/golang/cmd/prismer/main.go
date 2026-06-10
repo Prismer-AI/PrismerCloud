@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -17,7 +18,7 @@ import (
 // Config types
 // ============================================================================
 
-// Config represents CLI configuration stored in ~/.prismer/config.toml.
+// Config represents the CLI configuration stored in ~/.prismer/config.toml.
 type Config struct {
 	Default ConfigDefault `toml:"default"`
 	Auth    ConfigAuth    `toml:"auth"`
@@ -39,16 +40,10 @@ type ConfigAuth struct {
 }
 
 // ============================================================================
-// Global UI instance
-// ============================================================================
-
-var ui = NewUI()
-
-// ============================================================================
 // Config helpers
 // ============================================================================
 
-// configDir returns path to ~/.prismer, creating it if needed.
+// configDir returns the path to ~/.prismer, creating it if needed.
 func configDir() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -61,7 +56,7 @@ func configDir() (string, error) {
 	return dir, nil
 }
 
-// configPath returns full path to config file.
+// configPath returns the full path to the config file.
 func configPath() (string, error) {
 	dir, err := configDir()
 	if err != nil {
@@ -70,8 +65,8 @@ func configPath() (string, error) {
 	return filepath.Join(dir, "config.toml"), nil
 }
 
-// loadConfig reads and parses config file.
-// If file does not exist, it returns a zero-value Config.
+// loadConfig reads and parses the config file.
+// If the file does not exist, it returns a zero-value Config.
 func loadConfig() (*Config, error) {
 	path, err := configPath()
 	if err != nil {
@@ -91,7 +86,7 @@ func loadConfig() (*Config, error) {
 	return &cfg, nil
 }
 
-// saveConfig writes config struct back to disk as TOML.
+// saveConfig writes the config struct back to disk as TOML.
 func saveConfig(cfg *Config) error {
 	path, err := configPath()
 	if err != nil {
@@ -153,11 +148,10 @@ func setConfigValue(cfg *Config, key, value string) error {
 var rootCmd = &cobra.Command{
 	Use:   "prismer",
 	Short: "Prismer SDK CLI",
-	Long:  "Command-line interface for Prismer Cloud SDK.\nManage configuration, register IM agents, and check status.",
+	Long:  "Command-line interface for the Prismer Cloud SDK.\nManage configuration, register IM agents, and check status.",
 }
 
 func main() {
-	ui.Banner("Prismer Cloud SDK v1.9.0", false)
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
 	}
@@ -197,22 +191,20 @@ func init() {
 
 			result, err := client.IM().Direct.Send(ctx, userID, message, opts)
 			if err != nil {
-				ui.Error("Request failed", err.Error(), "Check your network connection")
-				return err
+				return fmt.Errorf("request failed: %w", err)
 			}
 			if !result.OK {
 				return imError(result)
 			}
 			if sendJSON {
-				ui.JSON(result.Data)
+				fmt.Println(string(result.Data))
 				return nil
 			}
 			var data prismer.IMMessageData
 			if err := result.Decode(&data); err != nil {
-				ui.Error("Failed to decode response", err.Error(), "")
-				return err
+				return fmt.Errorf("failed to decode response: %w", err)
 			}
-			ui.Success("Message sent", fmt.Sprintf("conversation: %s", data.ConversationID))
+			fmt.Printf("Message sent (conversation: %s)\n", data.ConversationID)
 			return nil
 		},
 	}
@@ -250,34 +242,32 @@ func init() {
 			}
 			result, err := client.Load(ctx, input, opts)
 			if err != nil {
-				ui.Error("Request failed", err.Error(), "Check your network connection")
-				return err
+				return fmt.Errorf("request failed: %w", err)
 			}
 			if !result.Success {
 				if result.Error != nil {
-					ui.Error("API error", result.Error.Message, "")
+					return fmt.Errorf("API error: %s: %s", result.Error.Code, result.Error.Message)
 				}
-				ui.Error("API returned an error", "", "")
-				return fmt.Errorf("load failed")
+				return fmt.Errorf("API returned an error (no details)")
 			}
 			if loadJSON {
-				ui.JSON(result)
+				data, _ := json.MarshalIndent(result, "", "  ")
+				fmt.Println(string(data))
 				return nil
 			}
 			results := result.Results
 			if len(results) == 0 && result.Result != nil {
 				results = []prismer.LoadResultItem{*result.Result}
 			}
-			ui.Header("Load Results")
-			for i, r := range results {
-				ui.OK(fmt.Sprintf("%d. %s", i+1, r.URL), boolStr(r.Cached, "cached", "loaded"))
+			for _, r := range results {
+				fmt.Printf("URL:    %s\n", r.URL)
+				fmt.Printf("Status: %v\n", boolStr(r.Cached, "cached", "loaded"))
 				if r.HQCC != "" {
 					content := r.HQCC
 					if len(content) > 2000 {
 						content = content[:2000]
 					}
-					ui.Blank()
-					ui.Line(fmt.Sprintf("--- HQCC ---\n%s", content))
+					fmt.Printf("\n--- HQCC ---\n%s\n\n", content)
 				}
 			}
 			return nil
@@ -307,37 +297,35 @@ func init() {
 			}
 			result, err := client.Search(ctx, args[0], opts)
 			if err != nil {
-				ui.Error("Request failed", err.Error(), "Check your network connection")
-				return err
+				return fmt.Errorf("request failed: %w", err)
 			}
 			if !result.Success {
 				if result.Error != nil {
-					ui.Error("API error", result.Error.Message, "")
+					return fmt.Errorf("API error: %s: %s", result.Error.Code, result.Error.Message)
 				}
-				ui.Error("Search failed", "", "")
 				return fmt.Errorf("search failed")
 			}
 			if searchJSON {
-				ui.JSON(result)
+				data, _ := json.MarshalIndent(result, "", "  ")
+				fmt.Println(string(data))
 				return nil
 			}
 			if len(result.Results) == 0 {
-				ui.Line("No results.")
+				fmt.Println("No results.")
 				return nil
 			}
-			ui.Header("Search Results")
 			for i, r := range result.Results {
 				score := ""
 				if r.Ranking != nil {
 					score = fmt.Sprintf("  score: %.3f", r.Ranking.Score)
 				}
-				ui.Line(fmt.Sprintf("%d. %s%s", i+1, r.URL, score))
+				fmt.Printf("%d. %s%s\n", i+1, r.URL, score)
 				if r.HQCC != "" {
 					snippet := r.HQCC
 					if len(snippet) > 200 {
 						snippet = snippet[:200]
 					}
-					ui.Secondary(snippet, 3)
+					fmt.Printf("   %s\n", snippet)
 				}
 			}
 			return nil
@@ -371,33 +359,32 @@ func init() {
 
 			result, err := imRawRequest(ctx, "GET", "/api/im/recall", nil, q)
 			if err != nil {
-				ui.Error("Request failed", err.Error(), "Check your network connection")
-				return err
+				return fmt.Errorf("request failed: %w", err)
 			}
 			if recallJSON {
-				ui.JSON(result)
+				b, _ := json.MarshalIndent(result, "", "  ")
+				fmt.Println(string(b))
 				return nil
 			}
 			// Extract data array from result
 			raw := result["data"]
 			items := asList(raw)
 			if len(items) == 0 {
-				ui.Line(fmt.Sprintf("No results for %q.", args[0]))
+				fmt.Printf("No results for %q.\n", args[0])
 				return nil
 			}
-			ui.Header("Recall Results")
 			for _, item := range items {
 				im := asMap(item)
 				source, _ := im["source"].(string)
 				title, _ := im["title"].(string)
 				score, _ := im["score"].(float64)
 				snippet, _ := im["snippet"].(string)
-				ui.OK(fmt.Sprintf("[%s] %s", strings.ToUpper(source), title), fmt.Sprintf("score: %.2f", score))
+				fmt.Printf("[%s] %s  (score: %.2f)\n", strings.ToUpper(source), title, score)
 				if snippet != "" {
 					if len(snippet) > 200 {
 						snippet = snippet[:200]
 					}
-					ui.Secondary(snippet, 4)
+					fmt.Printf("  %s\n", snippet)
 				}
 			}
 			return nil
@@ -431,50 +418,32 @@ func init() {
 			}
 			result, err := client.IM().Contacts.Discover(ctx, opts)
 			if err != nil {
-				ui.Error("Request failed", err.Error(), "Check your network connection")
-				return err
+				return fmt.Errorf("request failed: %w", err)
 			}
 			if !result.OK {
 				return imError(result)
 			}
 			if discoverJSON {
-				ui.JSON(result.Data)
+				fmt.Println(string(result.Data))
 				return nil
 			}
 			var agents []prismer.IMDiscoverAgent
 			if err := result.Decode(&agents); err != nil {
-				ui.Error("Failed to decode response", err.Error(), "")
-				return err
+				return fmt.Errorf("failed to decode response: %w", err)
 			}
 			if len(agents) == 0 {
-				ui.Line("No agents found.")
+				fmt.Println("No agents found.")
 				return nil
 			}
-
-			// Build table data
-			headers := []TableColumn{
-				{Header: "Username", Width: 20},
-				{Header: "Type", Width: 14},
-				{Header: "Status", Width: 10},
-				{Header: "Display Name", Width: 25},
-			}
-			rows := make([]TableRow, len(agents))
-			for i, a := range agents {
+			fmt.Printf("%-20s  %-14s  %-10s  %s\n", "Username", "Type", "Status", "Display Name")
+			for _, a := range agents {
 				caps := ""
 				if len(a.Capabilities) > 0 {
 					caps = " [" + strings.Join(a.Capabilities, ", ") + "]"
 				}
-				displayName := a.DisplayName + caps
-				rows[i] = TableRow{
-					Cells: []string{
-						a.Username,
-						a.AgentType,
-						a.Status,
-						displayName,
-					},
-				}
+				fmt.Printf("%-20s  %-14s  %-10s  %s%s\n",
+					a.Username, a.AgentType, a.Status, a.DisplayName, caps)
 			}
-			ui.Table(headers, rows)
 			return nil
 		},
 	}

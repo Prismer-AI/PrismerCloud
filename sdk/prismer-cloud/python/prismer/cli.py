@@ -3065,6 +3065,104 @@ def daemon_uninstall():
 
 
 # ============================================================================
+# hermes group — Hermes-agent integration helpers
+# ============================================================================
+
+@cli.group("hermes")
+def hermes():
+    """Hermes-agent integration: install the Prismer memory provider plugin."""
+    pass
+
+
+@hermes.command("install-memory-provider")
+@click.option("--uninstall", "do_uninstall", is_flag=True,
+              help="Remove the installed plugin directory instead of writing it.")
+@click.option("--dry-run", "dry_run", is_flag=True,
+              help="Print what would be installed without writing anything.")
+@click.option("--hermes-home", "hermes_home_override", default=None,
+              type=click.Path(file_okay=False, dir_okay=True),
+              help="Override $HERMES_HOME (default: env var or ~/.hermes).")
+def hermes_install_memory_provider(
+    do_uninstall: bool,
+    dry_run: bool,
+    hermes_home_override: Optional[str],
+):
+    """Install the Prismer memory provider into $HERMES_HOME/plugins/.
+
+    Writes a thin shim that imports PrismerDaemonMemoryProvider from the
+    installed prismer package, so Hermes' memory-plugin discovery picks
+    it up. Re-running is idempotent; --uninstall removes the directory;
+    --dry-run prints without writing.
+    """
+    from .cli_ui import error as _err, info as _info, success as _ok, warn as _warn
+    from . import _hermes_plugin_template as _tpl
+
+    if hermes_home_override:
+        hermes_home = Path(hermes_home_override).expanduser()
+    else:
+        hermes_home = _tpl.resolve_hermes_home()
+
+    plugin_directory = _tpl.plugin_dir(hermes_home)
+    init_file = _tpl.plugin_init_file(hermes_home)
+
+    if do_uninstall:
+        _info(f"HERMES_HOME resolved: {hermes_home}")
+        if dry_run:
+            _info(f"[dry-run] Would remove: {plugin_directory}/__init__.py")
+            _info(f"[dry-run] Would rmdir: {plugin_directory} (only if empty)")
+            return
+        result = _tpl.uninstall(hermes_home)
+        if not result.existed:
+            _warn(f"Nothing to remove: {plugin_directory} does not exist")
+            return
+        if result.fully_removed:
+            _ok(f"Removed {plugin_directory}")
+            return
+        # Partial removal: __init__.py is gone, but the directory has user
+        # files. Leave them alone, warn, exit 0 (uninstall achieved its goal
+        # of removing the shim).
+        _ok(f"Removed {plugin_directory}/__init__.py")
+        _warn(
+            f"Kept {plugin_directory} — user files remain: "
+            f"{', '.join(result.remaining_files)}"
+        )
+        return
+
+    if dry_run:
+        _info(f"HERMES_HOME resolved: {hermes_home}")
+        _info(f"[dry-run] Would create directory: {plugin_directory}")
+        _info(f"[dry-run] Would write file: {init_file}")
+        click.echo("")
+        click.echo("--- begin generated __init__.py ---")
+        click.echo(_tpl.render_template())
+        click.echo("--- end generated __init__.py ---")
+        return
+
+    try:
+        pdir, init_path = _tpl.install(hermes_home)
+    except OSError as exc:
+        _err(f"Failed to install Hermes memory provider: {exc}")
+        sys.exit(1)
+
+    _ok(f"HERMES_HOME resolved: {hermes_home}")
+    _ok(f"Created {pdir}")
+    _ok(f"Wrote {init_path}")
+    _ok(f"Provider name: {_tpl.PLUGIN_NAME}")
+    click.echo("")
+    click.echo("Next steps:")
+    click.echo("  1. Set environment variables:")
+    click.echo("       export PRISMER_DAEMON_URL=http://127.0.0.1:3210  (default)")
+    click.echo("       export PRISMER_WORKSPACE_ID=<your-workspace-id>")
+    click.echo("  2. Enable in Hermes config (~/.hermes/config.yaml):")
+    click.echo("       memory:")
+    click.echo(f"         provider: {_tpl.PLUGIN_NAME}")
+    click.echo("  3. Start the Prismer daemon if not running:")
+    click.echo("       prismer daemon start")
+    click.echo("  4. Verify Hermes sees it:")
+    click.echo("       hermes memory status")
+
+
+# ============================================================================
 # Entry point
 # ============================================================================
 

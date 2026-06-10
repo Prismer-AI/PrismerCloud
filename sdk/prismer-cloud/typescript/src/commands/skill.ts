@@ -2,6 +2,19 @@ import { Command } from 'commander';
 import { PrismerClient } from '../index';
 
 type ClientFactory = () => PrismerClient;
+type SkillLocalPlatform = 'claude-code' | 'openclaw' | 'opencode' | 'plugin';
+const SKILL_LOCAL_PLATFORMS = new Set<SkillLocalPlatform>(['claude-code', 'openclaw', 'opencode', 'plugin']);
+
+function parsePlatforms(raw: string): SkillLocalPlatform[] | undefined {
+  if (raw === 'all') return undefined;
+  const values = raw.split(',').map((item) => item.trim()).filter(Boolean);
+  for (const value of values) {
+    if (!SKILL_LOCAL_PLATFORMS.has(value as SkillLocalPlatform)) {
+      throw new Error(`Invalid platform "${value}". Expected claude-code, openclaw, opencode, plugin, or all.`);
+    }
+  }
+  return values as SkillLocalPlatform[];
+}
 
 function padEnd(str: string, len: number): string {
   if (str.length >= len) return str.slice(0, len);
@@ -89,12 +102,11 @@ export function register(parent: Command, getIMClient: ClientFactory, _getAPICli
         if (!opts.local) {
           res = await client.im.evolution.installSkill(slug);
         } else {
-          const platforms = opts.platform === 'all'
-            ? undefined
-            : [opts.platform] as string[];
+          const platforms = parsePlatforms(opts.platform);
           res = await client.im.evolution.installSkillLocal(slug, {
             platforms,
-            project: opts.project,
+            project: Boolean(opts.project),
+            projectRoot: opts.project,
           });
         }
 
@@ -144,7 +156,17 @@ export function register(parent: Command, getIMClient: ClientFactory, _getAPICli
           return;
         }
 
-        const records: unknown[] = Array.isArray(res) ? res : ((res as { skills?: unknown[] })?.skills ?? []);
+        // `_r` returns the full envelope `{ok, data, error}`; the installed list
+        // lives under `.data`. Fall back to raw-array / `.skills` for older
+        // shapes that some test fixtures still produce.
+        const envelope = res as { data?: unknown[]; skills?: unknown[] };
+        const records: unknown[] = Array.isArray(envelope.data)
+          ? envelope.data
+          : Array.isArray(res)
+            ? (res as unknown[])
+            : Array.isArray(envelope.skills)
+              ? envelope.skills
+              : [];
         if (records.length === 0) {
           process.stdout.write('No skills installed.\n');
           return;
@@ -262,9 +284,7 @@ export function register(parent: Command, getIMClient: ClientFactory, _getAPICli
     .action(async (opts: { platform: string; json: boolean }) => {
       const client = getIMClient();
       try {
-        const platforms = opts.platform === 'all'
-          ? undefined
-          : [opts.platform] as string[];
+        const platforms = parsePlatforms(opts.platform);
         const res = await client.im.evolution.syncSkillsLocal({ platforms });
 
         if (opts.json) {

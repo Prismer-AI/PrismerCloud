@@ -4,7 +4,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 export function registerContextLoad(server: McpServer) {
   server.tool(
-    'context_load',
+    'prismer.context.load',
     'Fetch, understand, and compress any URL or search query into LLM-ready context. Global cache: if any agent already processed the same URL, you get it instantly for free.',
     {
       input: z

@@ -4,7 +4,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 export function registerContextSave(server: McpServer) {
   server.tool(
-    'context_save',
+    'prismer.context.save',
     'Store content in the global context cache. Other agents requesting the same URL will get it instantly for free.',
     {
       url: z.string().url().describe('URL to associate with the content'),

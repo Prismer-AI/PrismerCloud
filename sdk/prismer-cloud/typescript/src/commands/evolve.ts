@@ -1,7 +1,13 @@
 import { Command } from 'commander';
 import { PrismerClient } from '../index';
+import type { GeneCategory } from '../types';
 
 type ClientFactory = () => PrismerClient;
+type EvolutionOutcome = 'success' | 'failed';
+type GeneSort = 'newest' | 'most_used' | 'highest_success';
+
+const GENE_CATEGORIES = new Set<GeneCategory>(['repair', 'optimize', 'innovate', 'diagnostic']);
+const GENE_SORTS = new Set<GeneSort>(['newest', 'most_used', 'highest_success']);
 
 /**
  * Parse signals from a CLI option value.
@@ -19,6 +25,24 @@ function parseSignals(raw: string | undefined): string[] | undefined {
     }
   }
   return trimmed.split(',').map((s) => s.trim()).filter(Boolean);
+}
+
+function parseOutcome(raw: string): EvolutionOutcome {
+  if (raw === 'success' || raw === 'failed') return raw;
+  if (raw === 'failure') return 'failed';
+  throw new Error(`Invalid outcome "${raw}". Expected success or failed.`);
+}
+
+function parseGeneCategory(raw: string | undefined): GeneCategory | undefined {
+  if (!raw) return undefined;
+  if (GENE_CATEGORIES.has(raw as GeneCategory)) return raw as GeneCategory;
+  throw new Error(`Invalid gene category "${raw}". Expected repair, optimize, innovate, or diagnostic.`);
+}
+
+function parseGeneSort(raw: string | undefined): GeneSort | undefined {
+  if (!raw) return undefined;
+  if (GENE_SORTS.has(raw as GeneSort)) return raw as GeneSort;
+  throw new Error(`Invalid sort "${raw}". Expected newest, most_used, or highest_success.`);
 }
 
 function handleError(err: unknown): never {
@@ -137,15 +161,16 @@ export function register(parent: Command, getIMClient: ClientFactory, _getAPICli
     }) => {
       const client = getIMClient();
       try {
-        const signals = parseSignals(opts.signals);
+        const signals = parseSignals(opts.signals) ?? [];
         const score = opts.score !== undefined ? parseFloat(opts.score) : undefined;
+        const outcome = parseOutcome(opts.outcome);
 
         const res = await client.im.evolution.record({
           gene_id: opts.gene,
           signals,
-          outcome: opts.outcome,
+          outcome,
           score,
-          summary: opts.summary,
+          summary: opts.summary ?? '',
           scope: opts.scope,
         });
 
@@ -182,7 +207,7 @@ export function register(parent: Command, getIMClient: ClientFactory, _getAPICli
       try {
         const res = await client.im.evolution.submitReport({
           rawContext: opts.error,
-          outcome: opts.status,
+          outcome: parseOutcome(opts.status),
           taskContext: opts.task,
         });
 
@@ -310,7 +335,7 @@ export function register(parent: Command, getIMClient: ClientFactory, _getAPICli
         const signals_match = parseSignals(opts.signals) ?? [];
 
         const res = await client.im.evolution.createGene({
-          category: opts.category,
+          category: parseGeneCategory(opts.category)!,
           signals_match,
           strategy: opts.strategy,
           title: opts.name,
@@ -609,9 +634,9 @@ export function register(parent: Command, getIMClient: ClientFactory, _getAPICli
         const limit = parseInt(opts.limit ?? '20', 10);
 
         const res = await client.im.evolution.browseGenes({
-          category: opts.category,
+          category: parseGeneCategory(opts.category),
           search: opts.search,
-          sort: opts.sort,
+          sort: parseGeneSort(opts.sort),
           limit,
         });
 

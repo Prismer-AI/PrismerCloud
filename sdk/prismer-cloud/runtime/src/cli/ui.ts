@@ -1,14 +1,19 @@
-// T12 — CLI UI primitives per §15 cli-design spec
+// CLI UI primitives — ported from pre-refactor `runtime/src/cli/ui.ts`.
+// Provides a 6-level output hierarchy (header / banner / primary / secondary /
+// tip / status indicators / error block), 3 modes (pretty / quiet / json),
+// table / spinner / progress / json helpers, and brand-voice guard.
+//
+// MUST sync with sdk/prismer-cloud/typescript/src/cli-ui.ts
+//
+// This file is the canonical TUI style surface. The SDK CLI (@prismer/sdk,
+// bin `cloud`) maintains a mirror at `src/cli-ui.ts` so users switching
+// between `prismer ...` (daemon ops) and `cloud ...` (agent/user ops) see
+// the same icons, colors, banner, table layout, spinner, and brand voice.
+// Any change here must be ported to the SDK mirror in the same commit.
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-
-// picocolors is used in bin/prismer.ts; imported here for consistency
-// but we apply ANSI codes directly to honour the per-instance colorEnabled
-// flag rather than relying on picocolors' global TTY/NO_COLOR detection.
-// (The import keeps the dependency resolved for downstream bundlers.)
-import _pc from 'picocolors';
-void _pc; // intentionally unused — we manage ANSI inline via this.ansi()
+import { fileURLToPath } from 'node:url';
 
 // ============================================================
 // Types
@@ -39,40 +44,77 @@ export interface LegacyTableOptions {
 }
 
 // ============================================================
-// Brand voice guard — re-export from shared module so SDK-side callers
-// can import it without dragging in the full UI class.
+// Brand voice guard
 // ============================================================
 
-export { assertBrandVoice } from '../shared/brand-voice.js';
+const FORBIDDEN_SUBSTRINGS = ['Sorry', 'Unfortunately', 'Oops'];
+const FORBIDDEN_WORDS = ['Please'];
+
+export function assertBrandVoice(text: string, label = 'text'): void {
+  if (!process.env['PRISMER_BRAND_VOICE_STRICT']) return;
+  for (const sub of FORBIDDEN_SUBSTRINGS) {
+    if (text.includes(sub)) {
+      throw new Error(`[Brand Voice] Forbidden substring "${sub}" in CLI ${label}: ${text}`);
+    }
+  }
+  for (const word of FORBIDDEN_WORDS) {
+    const re = new RegExp(`\\b${word}\\b`);
+    if (re.test(text)) {
+      throw new Error(`[Brand Voice] Forbidden word "${word}" in CLI ${label}: ${text}`);
+    }
+  }
+  const lines = text.split('\n');
+  for (const line of lines) {
+    const stripped = line.replace(/"[^"]*"/g, '').replace(/'[^']*'/g, '');
+    if (stripped.trimEnd().endsWith('!')) {
+      throw new Error(`[Brand Voice] Trailing "!" in CLI ${label}: ${line}`);
+    }
+  }
+}
 
 // ============================================================
-// Spinner frames
+// Spinner / banner constants
 // ============================================================
 
 const BRAILLE_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-const COMPACT_BANNER = [
-  '◇ PRISMER',
-  '  Runtime CLI',
-];
+const COMPACT_BANNER = ['◇ PRISMER', '  Runtime CLI'];
+
+// ============================================================
+// Icon asset resolution
+// ============================================================
+
+function thisDirname(): string {
+  // ESM-safe: derive __dirname from import.meta.url. For tsup CJS emits the
+  // built file shadows this with a synthesized __dirname, which still resolves.
+  try {
+    return path.dirname(fileURLToPath(import.meta.url));
+  } catch {
+    return process.cwd();
+  }
+}
 
 function findIconPath(size: 'big' | 'small' = 'big'): string | null {
   const name = size === 'big' ? 'icon' : 'smallicon';
+  const here = thisDirname();
   const candidates = [
-    path.resolve(__dirname, `../${name}`), // dist/bin/prismer.js -> dist/<name>
-    path.resolve(__dirname, `../../${name}`), // dist/index.js -> dist/<name>
-    path.resolve(__dirname, `../../../${name}`), // src/cli/ui.ts -> sdk/prismer-cloud/<name>
-    path.resolve(process.cwd(), `../${name}`),
+    // npm-installed: node_modules/@prismer/runtime/dist/cli.js → ../assets
+    path.resolve(here, '../assets', name),
+    // alternate dist layout (sub-bundle): dist/bin/cli.js → ../../assets
+    path.resolve(here, '../../assets', name),
+    // source/typecheck: src/cli/ui.ts → ../../assets
+    path.resolve(here, '../../assets', name),
+    // dev mode: cwd happens to be runtime root
+    path.resolve(process.cwd(), 'assets', name),
+    path.resolve(process.cwd(), 'sdk/prismer-cloud/runtime/assets', name),
   ];
-
   for (const candidate of candidates) {
-    if (fs.existsSync(candidate)) return candidate;
+    try {
+      if (fs.existsSync(candidate)) return candidate;
+    } catch {
+      /* ignore */
+    }
   }
   return null;
-}
-
-// Back-compat alias — kept so existing callers / tests don't break.
-function findBrandIconPath(): string | null {
-  return findIconPath('big');
 }
 
 // ============================================================
@@ -100,23 +142,36 @@ export class UI {
   }
 
   // ---- Internal color helpers ----
-  // We apply ANSI codes directly rather than through picocolors' global
-  // TTY/NO_COLOR detection, so that injected streams (e.g. test collectors)
-  // are honoured correctly.
 
   private ansi(open: number, close: number, text: string): string {
     if (!this.colorEnabled) return text;
-    return `\u001b[${open}m${text}\u001b[${close}m`;
+    return `[${open}m${text}[${close}m`;
   }
 
-  private green(t: string): string { return this.ansi(32, 39, t); }
-  private red(t: string): string { return this.ansi(31, 39, t); }
-  private yellow(t: string): string { return this.ansi(33, 39, t); }
-  private cyan(t: string): string { return this.ansi(36, 39, t); }
-  private dim(t: string): string { return this.ansi(2, 22, t); }
-  private bold(t: string): string { return this.ansi(1, 22, t); }
-  private gray(t: string): string { return this.ansi(90, 39, t); }
-  private brandMark(): string { return this.cyan('◇'); }
+  private green(t: string): string {
+    return this.ansi(32, 39, t);
+  }
+  private red(t: string): string {
+    return this.ansi(31, 39, t);
+  }
+  private yellow(t: string): string {
+    return this.ansi(33, 39, t);
+  }
+  private cyan(t: string): string {
+    return this.ansi(36, 39, t);
+  }
+  private dim(t: string): string {
+    return this.ansi(2, 22, t);
+  }
+  private bold(t: string): string {
+    return this.ansi(1, 22, t);
+  }
+  private gray(t: string): string {
+    return this.ansi(90, 39, t);
+  }
+  private brandMark(): string {
+    return this.cyan('◇');
+  }
 
   private colorBrandLine(line: string): string {
     let out = '';
@@ -150,13 +205,7 @@ export class UI {
     this.write(prefix + this.bold(text) + '\n');
   }
 
-  // Small-icon header — used by day-to-day commands (`prismer agent list`,
-  // `prismer status`, etc). Renders the 5-line product icon in dim cyan then a
-  // subtitle line. Falls back silently to a single `◇ Prismer | <subtitle>`
-  // line when the asset cannot be resolved so non-dev installs still read.
   smallHeader(subtitle?: string): void {
-    // `--quiet` and `--json` both suppress decorative preamble. Per-command
-    // result output still prints in quiet mode; only banners/headers go away.
     if (this.mode === 'json' || this.mode === 'quiet') return;
     const iconPath = findIconPath('small');
     if (iconPath !== null) {
@@ -178,36 +227,39 @@ export class UI {
   }
 
   banner(subtitle?: string, opts?: { full?: boolean }): void {
-    // Decorative intro banner — suppress in both json and quiet modes so
-    // `prismer --quiet status` doesn't print "◇ PRISMER / Runtime CLI" before
-    // the actual output.
     if (this.mode === 'json' || this.mode === 'quiet') return;
 
-    const envColumns = process.env['COLUMNS'] !== undefined
-      ? parseInt(process.env['COLUMNS'], 10)
-      : NaN;
-    const width = (this.stream as NodeJS.WriteStream).columns ??
+    const envColumns =
+      process.env['COLUMNS'] !== undefined ? parseInt(process.env['COLUMNS'], 10) : NaN;
+    const width =
+      (this.stream as NodeJS.WriteStream).columns ??
       process.stdout.columns ??
       (Number.isFinite(envColumns) ? envColumns : 80);
     const iconPath = findIconPath('big');
     const shouldUseFull = opts?.full === true || width >= 120;
 
     if (shouldUseFull && iconPath !== null) {
-      const raw = fs.readFileSync(iconPath, 'utf-8');
-      const lines = raw.split('\n');
-      for (const line of lines) {
-        const brandedLine = line.replace('Prismer Cloud SDK', 'Prismer Runtime CLI');
-        const stripped = brandedLine.trimEnd();
-        if (stripped.length === 0) {
-          this.write('\n');
-          continue;
+      try {
+        const raw = fs.readFileSync(iconPath, 'utf-8');
+        const lines = raw.split('\n');
+        for (const line of lines) {
+          const brandedLine = line.replace('Prismer Cloud SDK', 'Prismer Runtime CLI');
+          const stripped = brandedLine.trimEnd();
+          if (stripped.length === 0) {
+            this.write('\n');
+            continue;
+          }
+          const clipped =
+            stripped.length >= width ? stripped.slice(0, Math.max(width - 1, 1)) : stripped;
+          this.write(this.colorBrandLine(clipped) + '\n');
         }
-        const clipped = stripped.length >= width ? stripped.slice(0, Math.max(width - 1, 1)) : stripped;
-        this.write(this.colorBrandLine(clipped) + '\n');
+      } catch {
+        this.write(this.cyan(COMPACT_BANNER[0] ?? '◇ PRISMER') + '\n');
+        this.write(this.dim(COMPACT_BANNER[1] ?? '  Runtime CLI') + '\n');
       }
     } else {
-      this.write(this.cyan(COMPACT_BANNER[0]) + '\n');
-      this.write(this.dim(COMPACT_BANNER[1]) + '\n');
+      this.write(this.cyan(COMPACT_BANNER[0] ?? '◇ PRISMER') + '\n');
+      this.write(this.dim(COMPACT_BANNER[1] ?? '  Runtime CLI') + '\n');
     }
 
     if (subtitle !== undefined && subtitle.length > 0) {
@@ -297,9 +349,6 @@ export class UI {
 
   // ---- Level 6: Error block ----
 
-  // JSON mode callers MUST emit error output via ui.json({ ok: false, ... });
-  // this method is pretty-mode only. Keeping it silent in JSON mode prevents
-  // stderr pollution for machine callers who chose --json for parseable stdout.
   error(what: string, cause?: string, fix?: string): void {
     if (this.mode === 'json') return;
     this.writeErr(this.red('✗') + ' ' + what + '\n');
@@ -320,24 +369,19 @@ export class UI {
     const rows = Array.isArray(rowsOrOpts) ? rowsOrOpts : rowsOrOpts.rows;
     const opts = Array.isArray(rowsOrOpts)
       ? maybeOpts
-      : {
-          columns: rowsOrOpts.columns,
-          maxWidth: rowsOrOpts.maxWidth,
-        };
+      : { columns: rowsOrOpts.columns, maxWidth: rowsOrOpts.maxWidth };
 
-    if (!opts) {
-      throw new Error('table() requires columns');
-    }
+    if (!opts) throw new Error('table() requires columns');
 
     const maxWidth = opts.maxWidth ?? (process.stdout.columns || 80);
     const cols = opts.columns;
 
-    // Compute column widths
     const widths: number[] = cols.map((col) => col.length);
     for (const row of rows) {
       cols.forEach((col, i) => {
         const val = row[col] ?? '';
-        if (val.length > widths[i]) widths[i] = val.length;
+        const w = widths[i] ?? 0;
+        if (val.length > w) widths[i] = val.length;
       });
     }
 
@@ -347,6 +391,7 @@ export class UI {
       // List mode
       for (let i = 0; i < rows.length; i++) {
         const row = rows[i];
+        if (!row) continue;
         for (const col of cols) {
           const val = row[col] ?? '';
           this.write('  ' + this.bold(col + ':') + ' ' + val + '\n');
@@ -356,13 +401,11 @@ export class UI {
       return;
     }
 
-    // Table mode — header row
-    const header = cols.map((col, i) => col.toUpperCase().padEnd(widths[i])).join('  ');
+    const header = cols.map((col, i) => col.toUpperCase().padEnd(widths[i] ?? col.length)).join('  ');
     this.write('  ' + this.dim(header) + '\n');
 
-    // Data rows
     for (const row of rows) {
-      const line = cols.map((col, i) => (row[col] ?? '').padEnd(widths[i])).join('  ');
+      const line = cols.map((col, i) => (row[col] ?? '').padEnd(widths[i] ?? col.length)).join('  ');
       this.write('  ' + line + '\n');
     }
   }
@@ -372,15 +415,18 @@ export class UI {
   spinner(text: string): { update(t: string): void; stop(final?: string): void } {
     if (this.mode === 'quiet' || this.mode === 'json') {
       return {
-        update(): void { /* no-op */ },
-        stop(): void { /* no-op */ },
+        update(): void {
+          /* no-op */
+        },
+        stop(): void {
+          /* no-op */
+        },
       };
     }
 
     const isTTY = (this.stream as NodeJS.WriteStream).isTTY === true;
 
     if (!isTTY || !this.colorEnabled) {
-      // Non-TTY: single start line, single stop line
       this.write('  ' + this.yellow('⟳') + ' ' + text + '\n');
       return {
         update: (t: string) => {
@@ -392,7 +438,6 @@ export class UI {
       };
     }
 
-    // Animated braille spinner
     let current = text;
     let frameIdx = 0;
     let stopped = false;
@@ -402,9 +447,8 @@ export class UI {
     const greenFn = this.green.bind(this);
 
     function renderFrame(): void {
-      const frame = BRAILLE_FRAMES[frameIdx % BRAILLE_FRAMES.length];
+      const frame = BRAILLE_FRAMES[frameIdx % BRAILLE_FRAMES.length] ?? '⠋';
       const line = '  ' + colorFn(frame) + ' ' + current;
-      // Move cursor to start of line and overwrite
       write('\r' + line);
       frameIdx++;
     }
@@ -421,22 +465,14 @@ export class UI {
         if (stopped) return;
         stopped = true;
         clearInterval(timer);
-        // Clear current line
         write('\r\x1b[2K');
         if (final) write('  ' + greenFn('✓') + ' ' + final + '\n');
       },
     };
   }
 
-  // ---- Progress bar (§15.4 long-running ops) ----
-  //
-  // Usage:
-  //   const bar = ui.progress('Downloading pack', total);
-  //   bar.update(1.3 * 1024 * 1024, '1.3MB/2.1MB');
-  //   bar.stop('Downloaded and verified');
-  //
-  // Non-TTY / quiet / json / no-color → degrades to a single-line summary and
-  // a final line on stop().  Uses `▓`/`░` (aligns with banner characters).
+  // ---- Progress bar ----
+
   progress(
     text: string,
     total: number,
@@ -507,8 +543,6 @@ export class UI {
     this.write(JSON.stringify(payload, null, indent) + '\n');
   }
 
-  // ---- Result convenience ----
-
   result<T>(pretty: () => void, jsonPayload: T): void {
     if (this.mode === 'pretty') {
       pretty();
@@ -525,9 +559,7 @@ export class UI {
 let _ui: UI | null = null;
 
 export function getUI(): UI {
-  if (!_ui) {
-    _ui = new UI();
-  }
+  if (!_ui) _ui = new UI();
   return _ui;
 }
 
@@ -540,7 +572,7 @@ export function __resetUIForTests(): void {
 }
 
 // ============================================================
-// applyCommonFlags
+// applyCommonFlags — strips --json/--quiet/--no-color/--color from argv
 // ============================================================
 
 export function applyCommonFlags(argv: string[]): {
@@ -549,7 +581,6 @@ export function applyCommonFlags(argv: string[]): {
   restArgv: string[];
 } {
   let mode: OutputMode = 'pretty';
-  // Default color based on TTY + NO_COLOR — but flags can override
   const isTTY = process.stdout.isTTY === true;
   const noColorEnv = Boolean(process.env['NO_COLOR']);
   let color = isTTY && !noColorEnv;
@@ -565,14 +596,12 @@ export function applyCommonFlags(argv: string[]): {
         color = true;
         break;
       case '--json':
-        mode = 'json';
-        break;
       case '--pretty-json':
-        // Kept as a flag — callers use it to set pretty:true on json() calls
-        // We keep mode as 'json' but signal via the returned mode only; callers
-        // can detect by checking whether 'pretty-json' was stripped.
-        // For simplicity, treat it as json mode (caller sets pretty on construction).
         mode = 'json';
+        // Push --json back so commander parses it per-command too — every
+        // subcommand declares `.option('--json', ...)`, so leaving it in argv
+        // makes opts.json truthy in action handlers (used to gate JSON output).
+        if (arg === '--json') rest.push(arg);
         break;
       case '--quiet':
         mode = 'quiet';

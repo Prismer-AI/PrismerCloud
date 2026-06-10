@@ -4,7 +4,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 export function registerEvolveAnalyze(server: McpServer) {
   server.tool(
-    'evolve_analyze',
+    'prismer.evolve.analyze',
     'Analyze task context signals and get evolution advice — which Gene (strategy) to apply. Uses the agent\'s memory graph for selection.',
     {
       task_status: z.string().optional().describe('Task status: "completed" or "failed"'),

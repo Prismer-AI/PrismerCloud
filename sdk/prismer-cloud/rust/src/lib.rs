@@ -29,7 +29,6 @@ pub mod tasks;
 pub mod identity;
 pub mod files;
 pub mod daemon;
-pub mod ui;
 
 use reqwest::Client as HttpClient;
 use ed25519_dalek::{SigningKey, Signer};
@@ -227,10 +226,28 @@ impl PrismerClient {
         path: &str,
         body: Option<serde_json::Value>,
     ) -> Result<types::ApiResponse<T>, types::PrismerError> {
+        self.request_with_headers(method, path, body, &[]).await
+    }
+
+    /// v2.0 §3.0.2 — make an authenticated request with extra per-call HTTP
+    /// headers (e.g. `X-Idempotency-Key` for message sends). Default
+    /// `Authorization` + `Content-Type` are set first; caller-supplied
+    /// headers win on key collision.
+    pub async fn request_with_headers<T: serde::de::DeserializeOwned>(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        body: Option<serde_json::Value>,
+        extra_headers: &[(&str, &str)],
+    ) -> Result<types::ApiResponse<T>, types::PrismerError> {
         let url = format!("{}{}", self.base_url, path);
         let mut req = self.http.request(method, &url)
             .header("Authorization", format!("Bearer {}", self.api_key))
             .header("Content-Type", "application/json");
+
+        for (k, v) in extra_headers {
+            req = req.header(*k, *v);
+        }
 
         if let Some(b) = body {
             req = req.json(&b);

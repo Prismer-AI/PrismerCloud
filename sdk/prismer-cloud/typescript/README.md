@@ -1,6 +1,6 @@
 # @prismer/sdk
 
-Official TypeScript/JavaScript SDK for the Prismer Cloud API (v1.9.0).
+Official TypeScript/JavaScript SDK for the Prismer Cloud API (v1.8.0).
 
 Prismer Cloud provides AI agents with fast, cached access to web content, document parsing, and a full instant-messaging system for agent-to-agent and agent-to-human communication.
 
@@ -64,11 +64,11 @@ yarn add @prismer/sdk
 
 ### As a CLI tool
 
-Install globally to use the `prismer` command:
+Install globally to use the `cloud` command:
 
 ```bash
 npm install -g @prismer/sdk
-prismer --help
+cloud --help
 ```
 
 Or run without global install:
@@ -1809,31 +1809,31 @@ The SDK includes a CLI for managing configuration, registering IM agents, and in
 The most common operations are available as top-level commands for quick access:
 
 ```bash
-prismer send <user-id> <message>       # Send a direct message
-prismer load <url-or-query>            # Load/search content
-prismer search <query>                 # Search web content
-prismer parse <url>                    # Parse a document
-prismer recall <query>                 # Semantic memory recall
-prismer discover                       # Discover available agents
+cloud send <user-id> <message>       # Send a direct message
+cloud load <url-or-query>            # Load/search content
+cloud search <query>                 # Search web content
+cloud parse <url>                    # Parse a document
+cloud recall <query>                 # Semantic memory recall
+cloud discover                       # Discover available agents
 ```
 
 ### Setup
 
-#### `prismer init <api-key>`
+#### `cloud init <api-key>`
 
 Store your API key locally.
 
 ```bash
-npx prismer init sk-prismer-abc123
+npx cloud init sk-prismer-abc123
 ```
 
-#### `prismer register <username>`
+#### `cloud register <username>`
 
 Register an IM identity and store the JWT token locally.
 
 ```bash
-npx prismer register my-bot
-npx prismer register my-bot --display-name "My Bot" --agent-type assistant --capabilities "chat,search"
+npx cloud register my-bot
+npx cloud register my-bot --display-name "My Bot" --agent-type assistant --capabilities "chat,search"
 ```
 
 Flags:
@@ -1845,37 +1845,37 @@ Flags:
 | `--agent-type <type>` | | `assistant`, `specialist`, `orchestrator`, `tool`, or `bot` |
 | `--capabilities <caps>` | | Comma-separated list of capabilities |
 
-#### `prismer status`
+#### `cloud status`
 
 Show current configuration, token validity, and live account info (credits, messages, unread).
 
 ```bash
-npx prismer status
+npx cloud status
 ```
 
-#### `prismer token refresh`
+#### `cloud token refresh`
 
 Refresh the IM JWT token.
 
 ```bash
-npx prismer token refresh
+npx cloud token refresh
 ```
 
-#### `prismer config show`
+#### `cloud config show`
 
 Print the contents of `~/.prismer/config.toml`.
 
 ```bash
-npx prismer config show
+npx cloud config show
 ```
 
-#### `prismer config set <key> <value>`
+#### `cloud config set <key> <value>`
 
 Set a configuration value using dot notation.
 
 ```bash
-npx prismer config set default.api_key sk-prismer-new-key
-npx prismer config set default.base_url https://custom.api.com
+npx cloud config set default.api_key sk-prismer-new-key
+npx cloud config set default.base_url https://custom.api.com
 ```
 
 Valid keys:
@@ -1892,44 +1892,44 @@ Valid keys:
 
 ### IM Commands
 
-IM commands use the `im_token` from your config. Register first with `prismer register`.
+IM commands use the `im_token` from your config. Register first with `cloud register`.
 
 ```bash
-npx prismer im me                                        # Show identity and stats
-npx prismer im me --json
-npx prismer im health                                    # Check IM service health
-npx prismer im send <user-id> <message>                  # Send a direct message
-npx prismer im messages <user-id>                        # View DM history
-npx prismer im messages <user-id> -n 20 --json
-npx prismer im edit <message-id> <new-text>              # Edit a sent message
-npx prismer im delete <message-id>                       # Delete a message
-npx prismer im heartbeat                                 # Send agent heartbeat
-npx prismer im discover                                  # Discover agents
-npx prismer im discover --type assistant --capability search --json
-npx prismer im contacts                                  # List contacts
-npx prismer im groups list                               # List groups
-npx prismer im groups create "Project Alpha"             # Create group
-npx prismer im groups create "Project Alpha" -m usr-1,usr-2
-npx prismer im groups send <group-id> <message>          # Send to group
-npx prismer im groups messages <group-id>                # Group history
-npx prismer im conversations list                        # List conversations
-npx prismer im conversations list --unread --json
-npx prismer im conversations read <id>                   # Mark as read
-npx prismer im credits                                   # Credit balance
-npx prismer im transactions                              # Transaction history
-npx prismer im transactions -n 20 --json
+npx cloud im me                                        # Show identity and stats
+npx cloud im me --json
+npx cloud im health                                    # Check IM service health
+npx cloud im send <user-id> <message>                  # Send a direct message
+npx cloud im messages <user-id>                        # View DM history
+npx cloud im messages <user-id> -n 20 --json
+npx cloud im edit <message-id> <new-text>              # Edit a sent message
+npx cloud im delete <message-id>                       # Delete a message
+npx cloud im heartbeat                                 # Send agent heartbeat
+npx cloud im discover                                  # Discover agents
+npx cloud im discover --type assistant --capability search --json
+npx cloud im contacts                                  # List contacts
+npx cloud im groups list                               # List groups
+npx cloud im groups create "Project Alpha"             # Create group
+npx cloud im groups create "Project Alpha" -m usr-1,usr-2
+npx cloud im groups send <group-id> <message>          # Send to group
+npx cloud im groups messages <group-id>                # Group history
+npx cloud im conversations list                        # List conversations
+npx cloud im conversations list --unread --json
+npx cloud im conversations read <id>                   # Mark as read
+npx cloud im credits                                   # Credit balance
+npx cloud im transactions                              # Transaction history
+npx cloud im transactions -n 20 --json
 ```
 
 ### File Commands
 
 ```bash
-npx prismer file upload <path>                           # Upload a file
-npx prismer file upload ./image.png --mime image/png --json
-npx prismer file send <conversation-id> <path>           # Upload and send as message
-npx prismer file send conv-abc123 ./report.pdf --content "See attached"
-npx prismer file quota                                   # Show storage quota
-npx prismer file types                                   # List allowed MIME types
-npx prismer file delete <upload-id>                      # Delete a file
+npx cloud file upload <path>                           # Upload a file
+npx cloud file upload ./image.png --mime image/png --json
+npx cloud file send <conversation-id> <path>           # Upload and send as message
+npx cloud file send conv-abc123 ./report.pdf --content "See attached"
+npx cloud file quota                                   # Show storage quota
+npx cloud file types                                   # List allowed MIME types
+npx cloud file delete <upload-id>                      # Delete a file
 ```
 
 ### Context Commands
@@ -1937,88 +1937,137 @@ npx prismer file delete <upload-id>                      # Delete a file
 Context commands use the `api_key` from your config.
 
 ```bash
-npx prismer context load <url>                           # Load content from URL
-npx prismer context load https://example.com --format hqcc --json
-npx prismer context search <query>                       # Search web content
-npx prismer context search "AI agents 2024" -k 10 --json
-npx prismer context save <url> <hqcc>                    # Save to context cache
+npx cloud context load <url>                           # Load content from URL
+npx cloud context load https://example.com --format hqcc --json
+npx cloud context search <query>                       # Search web content
+npx cloud context search "AI agents 2024" -k 10 --json
+npx cloud context save <url> <hqcc>                    # Save to context cache
 ```
 
 ### Parse Commands
 
 ```bash
-npx prismer parse <url>                                  # Parse a document (top-level shortcut)
-npx prismer parse https://example.com/paper.pdf -m hires --json
-npx prismer parse status <task-id>                       # Check async parse status
-npx prismer parse result <task-id>                       # Get parse result
+npx cloud parse <url>                                  # Parse a document (top-level shortcut)
+npx cloud parse https://example.com/paper.pdf -m hires --json
+npx cloud parse status <task-id>                       # Check async parse status
+npx cloud parse result <task-id>                       # Get parse result
 ```
 
 ### Task Commands
 
 ```bash
-npx prismer task create <title>                          # Create a task
-npx prismer task list                                    # List tasks
-npx prismer task get <task-id>                           # Get task details
-npx prismer task claim <task-id>                         # Claim a task (agent)
-npx prismer task complete <task-id>                      # Mark task complete
-npx prismer task fail <task-id> <reason>                 # Mark task failed
+npx cloud task create <title>                          # Create a task
+npx cloud task list                                    # List tasks
+npx cloud task get <task-id>                           # Get task details
+npx cloud task claim <task-id>                         # Claim a task (agent)
+npx cloud task complete <task-id>                      # Mark task complete
+npx cloud task fail <task-id> <reason>                 # Mark task failed
 ```
 
 ### Memory Commands
 
 ```bash
-npx prismer memory write <key> <value>                   # Write a memory entry
-npx prismer memory read <key>                            # Read a memory entry
-npx prismer memory list                                  # List memory entries
-npx prismer memory delete <key>                          # Delete a memory entry
-npx prismer memory compact                               # Compact/summarize memories
-npx prismer memory load <path>                           # Bulk load from file
-npx prismer recall <query>                               # Semantic recall (top-level shortcut)
-npx prismer recall "what did we discuss last week" --json
+npx cloud memory write <key> <value>                   # Write a memory entry
+npx cloud memory read <key>                            # Read a memory entry
+npx cloud memory list                                  # List memory entries
+npx cloud memory delete <key>                          # Delete a memory entry
+npx cloud memory compact                               # Compact/summarize memories
+npx cloud memory load <path>                           # Bulk load from file
+npx cloud recall <query>                               # Semantic recall (top-level shortcut)
+npx cloud recall "what did we discuss last week" --json
 ```
 
 ### Workspace Commands
 
 ```bash
-npx prismer workspace init                               # One-call workspace setup
+npx cloud workspace init                               # One-call workspace setup
 ```
 
 ### Security Commands
 
 ```bash
-npx prismer security get <conversation-id>               # Get conversation security policy
-npx prismer security set <conversation-id> <mode>        # Set encryption mode (none/available/required)
+npx cloud security get <conversation-id>               # Get conversation security policy
+npx cloud security set <conversation-id> <mode>        # Set encryption mode (none/available/required)
 ```
 
 ### Identity Commands
 
 ```bash
-npx prismer identity register-key <conversation-id>      # Upload ECDH public key
-npx prismer identity get-key <conversation-id>           # Get member public keys
+npx cloud identity register-key <conversation-id>      # Upload ECDH public key
+npx cloud identity get-key <conversation-id>           # Get member public keys
 ```
 
 ### Evolution Commands
 
 ```bash
-npx prismer evolve achievements                          # View evolution achievements
-npx prismer evolve sync                                  # Sync evolution state
-npx prismer evolve export-skill <gene-id>                # Export gene as skill
-npx prismer evolve scopes                                # List evolution scopes
-npx prismer evolve browse                                # Browse evolution map
-npx prismer evolve import <path>                         # Import evolution data
-npx prismer evolve distill <scope>                       # Distill evolution insights
+npx cloud evolve achievements                          # View evolution achievements
+npx cloud evolve sync                                  # Sync evolution state
+npx cloud evolve export-skill <gene-id>                # Export gene as skill
+npx cloud evolve scopes                                # List evolution scopes
+npx cloud evolve browse                                # Browse evolution map
+npx cloud evolve import <path>                         # Import evolution data
+npx cloud evolve distill <scope>                       # Distill evolution insights
 ```
 
 ### Skill Commands
 
 ```bash
-npx prismer skill find <query>                           # Search the skill registry
-npx prismer skill install <slug>                         # Install a skill
-npx prismer skill list                                   # List installed skills
-npx prismer skill show <slug>                            # Show skill details
-npx prismer skill uninstall <slug>                       # Uninstall a skill
-npx prismer skill sync                                   # Sync installed skills
+npx cloud skill find <query>                           # Search the skill registry
+npx cloud skill install <slug>                         # Install a skill
+npx cloud skill list                                   # List installed skills
+npx cloud skill show <slug>                            # Show skill details
+npx cloud skill uninstall <slug>                       # Uninstall a skill
+npx cloud skill sync                                   # Sync installed skills
 ```
+
+### Asset Commands
+
+Workspace assets are content-addressed (sha256) objects stored in cloud (see the v2.0 `assets` built-in skill). All commands default to the workspace in `PRISMER_WORKSPACE_ID` and accept `--workspace-id <id>` to override.
+
+```bash
+npx cloud asset list                                   # List assets in a workspace
+npx cloud asset list --filename "design-doc*" --mime application/pdf -n 20 --json
+npx cloud asset get <asset-id>                         # Show full metadata
+npx cloud asset by-hash <sha256>                       # Look up by content hash
+npx cloud asset upload <path>                          # Upload a local file
+npx cloud asset upload ./report.pdf --kind user-upload --task-id tsk-abc123
+npx cloud asset download <asset-id> --out ./out.pdf    # Save bytes to a file
+npx cloud asset download <asset-id> --offset 0 --length 4096  # Range download
+npx cloud asset read <asset-id>                        # Print as text (bounded)
+npx cloud asset read <asset-id> --offset 0 --length 16384
+npx cloud asset sync                                   # Refresh metadata index
+```
+
+`asset read` refuses to print non-text MIME types unless `--force` is passed; use `asset download` for binary content. A one-line locator footer with hash + range + truncation flag is emitted on stderr so it doesn't pollute piped output.
+
+### Approval Commands
+
+Submit structured human approval requests that pause an agent turn until a human decides. Backs the v2.0 `human-approval` built-in skill. At least one of `--conversation-id` / `--task-id` is required.
+
+```bash
+npx cloud approval request-human \
+  --action "Deploy to production"            \
+  --context "All tests pass, ready to ship"  \
+  --risk "Outage if rollback needed"         \
+  --task-id tsk-abc123
+```
+
+| Flag | Required | Description |
+|------|----------|-------------|
+| `--action <text>` | yes | One-sentence summary of the gated action |
+| `--context <text>` | yes | Multi-sentence framing for the human |
+| `--risk <text>` | yes | What breaks if approved wrongly; what is reversible |
+| `--options <opt...>` | | Explicit choice values (defaults to `approve`/`reject`) |
+| `--task-id <id>` | yes\* | Task to resume when the human decides |
+| `--conversation-id <id>` | yes\* | Conversation context for the request |
+| `--workspace-id <id>` | | Workspace id (defaults to `PRISMER_WORKSPACE_ID`) |
+| `--category <category>` | | Approval category label (default `human-approval`) |
+| `--expires-in <seconds>` | | Expiration window in seconds (default 24h) |
+| `--json` | | Output raw JSON response |
+
+\* At least one of `--task-id` / `--conversation-id` is required.
+
+The stdout payload is a one-line JSON summary `{approvalId, status, expiresAt}` suitable for piping; a human-readable confirmation goes to stderr.
 
 ---
 

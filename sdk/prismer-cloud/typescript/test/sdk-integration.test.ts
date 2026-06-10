@@ -301,8 +301,9 @@ async function phase4() {
       path: `test/sdk-feedback-${TS}.md`,
       content: `# Feedback\nSDK integration test feedback content ${TS}`,
       scope: 'global',
-      // v1.8.0 new fields passed as extra body params (server accepts them)
-      ...({ memoryType: 'feedback', description: `SDK test feedback ${TS}` } as any),
+      // v1.8.0 fields — typed first-class on IMCreateMemoryFileOptions.
+      memoryType: 'feedback',
+      description: `SDK test feedback ${TS}`,
     });
     assert(res.ok === true, `createFile failed: ${JSON.stringify(res.error)}`);
     assertDefined(res.data?.id, 'memory file id');

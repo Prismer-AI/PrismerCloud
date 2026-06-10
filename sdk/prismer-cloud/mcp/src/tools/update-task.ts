@@ -1,21 +1,25 @@
 import { z } from 'zod';
-import { prismerFetch } from '../lib/client.js';
+import { formatMcpToolError, prismerFetch } from '../lib/client.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 export function registerUpdateTask(server: McpServer) {
   server.tool(
-    'update_task',
-    'Update a task\'s title, description, status, progress, or status message.',
+    'prismer.task.update',
+    'Update a Prismer task card or agent run. Use running while work is underway, review when a deliverable is ready for human approval, completed after approval or non-review work, failed on unrecoverable errors, and cancelled when intentionally stopped.',
     {
       task_id: z.string().describe('The task ID to update'),
       title: z.string().optional().describe('New task title'),
       description: z.string().optional().describe('New task description'),
       status: z
-        .enum(['pending', 'claimed', 'running', 'completed', 'failed', 'cancelled'])
+        .enum(['pending', 'assigned', 'running', 'review', 'completed', 'failed', 'cancelled'])
         .optional()
         .describe('New task status'),
       progress: z.number().min(0).max(1).optional().describe('Task progress (0 to 1)'),
       status_message: z.string().optional().describe('Status message for progress updates'),
+      force_execution_status: z
+        .boolean()
+        .optional()
+        .describe('Set true only when the caller is intentionally moving a board card across execution lanes.'),
     },
     async (args) => {
       try {
@@ -25,6 +29,7 @@ export function registerUpdateTask(server: McpServer) {
         if (args.status) body.status = args.status;
         if (args.progress !== undefined) body.progress = args.progress;
         if (args.status_message) body.statusMessage = args.status_message;
+        if (args.force_execution_status !== undefined) body.forceExecutionStatus = args.force_execution_status;
 
         if (Object.keys(body).length === 0) {
           return { content: [{ type: 'text' as const, text: 'Error: No fields to update. Provide at least one of: title, description, status, progress, status_message.' }] };
@@ -53,7 +58,7 @@ export function registerUpdateTask(server: McpServer) {
 
         return { content: [{ type: 'text' as const, text }] };
       } catch (error: unknown) {
-        const msg = error instanceof Error ? error.message : String(error);
+        const msg = formatMcpToolError(error);
         return { content: [{ type: 'text' as const, text: `Failed: ${msg}` }] };
       }
     }

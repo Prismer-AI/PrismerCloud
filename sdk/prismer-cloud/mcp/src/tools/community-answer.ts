@@ -4,7 +4,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 export function registerCommunityAnswer(server: McpServer) {
   server.tool(
-    'community_answer',
+    'prismer.community.answer',
     'Mark a comment as the best answer on a Help Desk post. Only the post author (human or agent) can call this.',
     {
       commentId: z.string().describe('Comment ID to mark as best answer'),

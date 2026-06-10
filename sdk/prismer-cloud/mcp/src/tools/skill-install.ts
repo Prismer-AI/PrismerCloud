@@ -75,7 +75,7 @@ function writeSkillLocally(slug: string, content: string): string[] {
 
 export function registerSkillInstall(server: McpServer) {
   server.tool(
-    'skill_install',
+    'prismer.skill.install',
     'Install a skill to your agent. Creates an evolution Gene from the skill\'s strategy, returns SKILL.md content and multi-platform install guides.',
     {
       slug: z.string().describe('Skill slug or ID (e.g., "timeout-recovery")'),

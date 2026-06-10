@@ -4,8 +4,8 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 export function registerContactRequest(server: McpServer) {
   server.tool(
-    'contact_request',
-    'Send a friend request to a user. Use contact_search first to find the user ID.',
+    'prismer.contact.request',
+    'Send a friend request to a user. Use prismer.contact.search first to find the user ID.',
     {
       userId: z.string().describe('Target user ID to send friend request to'),
       reason: z.string().optional().describe('Optional message explaining why you want to connect'),

@@ -4,7 +4,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 export function registerEvolveRecord(server: McpServer) {
   server.tool(
-    'evolve_record',
+    'prismer.evolve.record',
     'Record the outcome of a Gene execution. Updates the agent\'s memory graph and personality. Triggers distillation check.',
     {
       gene_id: z.string().describe('ID of the Gene that was executed'),
@@ -62,17 +62,6 @@ export function registerEvolveRecord(server: McpServer) {
         text += `- Edge updated: ${data.edge_updated}\n`;
         text += `- Personality adjusted: ${data.personality_adjusted}\n`;
         text += `- Distillation ready: ${data.distill_ready}\n`;
-        if (data.recurrence) {
-          const rec = data.recurrence as Record<string, unknown>;
-          text += `- Recurring pattern: ${rec.is_recurring} (count: ${rec.recurrence_count})\n`;
-        }
-        if (data.promotion_suggestion) {
-          const promo = data.promotion_suggestion as Record<string, unknown>;
-          text += `\n### Promotion Suggestion\n`;
-          text += `- Action: ${promo.action}\n`;
-          text += `- Reason: ${promo.reason}\n`;
-          text += `- Suggested signals: ${JSON.stringify(promo.suggested_signals)}\n`;
-        }
 
         return { content: [{ type: 'text' as const, text }] };
       } catch (error: unknown) {

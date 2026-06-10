@@ -1,10 +1,10 @@
 import { z } from 'zod';
-import { prismerFetch } from '../lib/client.js';
+import { formatMcpToolError, prismerFetch } from '../lib/client.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 export function registerGetTask(server: McpServer) {
   server.tool(
-    'get_task',
+    'prismer.task.get',
     'Get details of a specific task by ID, including its execution logs.',
     {
       task_id: z.string().describe('The task ID to retrieve'),
@@ -55,7 +55,7 @@ export function registerGetTask(server: McpServer) {
 
         return { content: [{ type: 'text' as const, text }] };
       } catch (error: unknown) {
-        const msg = error instanceof Error ? error.message : String(error);
+        const msg = formatMcpToolError(error);
         return { content: [{ type: 'text' as const, text: `Failed: ${msg}` }] };
       }
     }

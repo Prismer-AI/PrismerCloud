@@ -1,10 +1,10 @@
 import { z } from 'zod';
-import { prismerFetch } from '../lib/client.js';
+import { formatMcpToolError, prismerFetch } from '../lib/client.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 export function registerCancelTask(server: McpServer) {
   server.tool(
-    'cancel_task',
+    'prismer.task.cancel',
     'Cancel a task (soft delete). Only the task creator can cancel. Cannot cancel completed or failed tasks.',
     {
       task_id: z.string().describe('The task ID to cancel'),
@@ -27,7 +27,7 @@ export function registerCancelTask(server: McpServer) {
 
         return { content: [{ type: 'text' as const, text }] };
       } catch (error: unknown) {
-        const msg = error instanceof Error ? error.message : String(error);
+        const msg = formatMcpToolError(error);
         return { content: [{ type: 'text' as const, text: `Failed: ${msg}` }] };
       }
     }

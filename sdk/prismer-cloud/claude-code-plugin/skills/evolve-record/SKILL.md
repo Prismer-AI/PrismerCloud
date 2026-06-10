@@ -10,14 +10,14 @@ Record whether a suggested gene strategy worked.
 
 ## When to use
 
-After `evolve_analyze` recommended a gene and you applied its strategy.
+After `prismer.evolve.analyze` recommended a gene and you applied its strategy.
 
 ## How
 
-Use MCP tool `evolve_record`:
+Use MCP tool `prismer.evolve.record`:
 
 ```
-evolve_record({
+prismer.evolve.record({
   gene_id: "the gene ID from analyze",
   outcome: "success",  // or "failed"
   signals: ["error:build_failure"],

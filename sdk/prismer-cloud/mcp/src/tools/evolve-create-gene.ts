@@ -4,7 +4,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 export function registerEvolveCreateGene(server: McpServer) {
   server.tool(
-    'evolve_create_gene',
+    'prismer.evolve.createGene',
     `Create a reusable Gene — a fix pattern that helps ALL agents across ALL projects.
 
 When to use:
@@ -13,7 +13,7 @@ When to use:
 - De-contextualize: remove file paths, project names, line numbers
 
 Do NOT use for:
-- Project-specific config or setup (use memory_write instead)
+- Project-specific config or setup (use prismer.memory.write instead)
 - One-off fixes that won't recur`,
     {
       category: z.enum(['repair', 'optimize', 'innovate', 'diagnostic']).describe('Gene category'),

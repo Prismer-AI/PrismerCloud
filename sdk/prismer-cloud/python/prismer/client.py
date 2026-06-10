@@ -1,6 +1,6 @@
 """Prismer Cloud API Client — covers Context, Parse, and IM APIs."""
 
-from typing import Any, BinaryIO, Callable, Dict, List, Optional, Union
+from typing import Any, AsyncIterator, BinaryIO, Callable, Dict, Iterator, List, Optional, Union
 from urllib.parse import quote as _url_quote
 import mimetypes
 import os
@@ -64,6 +64,24 @@ def _safe_slug(slug: str) -> str:
     s = re.sub(r'[/\\]', '', slug).replace('..', '')
     return s if s else ''
 
+
+def _guess_mime_type(file_name: str) -> str:
+    """Guess MIME type from file extension using stdlib + fallback map."""
+    mime, _ = mimetypes.guess_type(file_name)
+    if mime:
+        return mime
+    ext = pathlib.Path(file_name).suffix.lower()
+    fallback = {
+        ".md": "text/markdown", ".yaml": "text/yaml", ".yml": "text/yaml",
+        ".webp": "image/webp", ".webm": "video/webm",
+    }
+    return fallback.get(ext, "application/octet-stream")
+
+
+# File input type: str/Path (file path), bytes, or file-like object
+FileInput = Union[str, pathlib.Path, bytes, BinaryIO]
+
+
 from .types import (
     ENVIRONMENTS,
     LoadResult,
@@ -72,7 +90,72 @@ from .types import (
     IMResult,
     PrismerError,
     MessageType,
+    ContentBlock,
 )
+
+
+# ============================================================================
+# v2.0 §3.0.2 — idempotency key + send payload helpers
+# ============================================================================
+
+import uuid as _uuid
+
+# Type alias — content arg accepts either a plain string or a list of
+# ContentBlock dicts (or Pydantic instances). The SDK normalises to dicts.
+ContentArg = Union[str, List[Any]]
+
+
+def _generate_idempotency_key() -> str:
+    """Generate a UUID v4 idempotency key. Server applies UNIQUE
+    (conversationId, idempotencyKey) — see migration 401 + Wave 2-B1."""
+    return str(_uuid.uuid4())
+
+
+def _block_to_dict(b: Any) -> Dict[str, Any]:
+    """Coerce a ContentBlock (Pydantic) or plain dict into a JSON-ready dict."""
+    if hasattr(b, "model_dump"):
+        return b.model_dump(by_alias=True, exclude_none=True)
+    if isinstance(b, dict):
+        return b
+    raise TypeError(f"ContentBlock must be a dict or Pydantic model, got {type(b)}")
+
+
+def _build_send_payload(
+    content: ContentArg,
+    *,
+    type: str = "text",
+    metadata: Optional[Dict[str, Any]] = None,
+    attachments: Optional[List[Dict[str, Any]]] = None,
+    parent_id: Optional[str] = None,
+    quoted_message_id: Optional[str] = None,
+    idempotency_key: Optional[str] = None,
+    content_blocks: Optional[List[Any]] = None,
+) -> tuple[Dict[str, Any], Dict[str, str]]:
+    """v2.0 §3.0.2 + §4.6 — build send body + idempotency header.
+
+    Returns ``(body, headers)``. ``headers`` always includes
+    ``X-Idempotency-Key``. ``content`` may be a string or List[ContentBlock].
+    """
+    key = idempotency_key or _generate_idempotency_key()
+    is_blocks = isinstance(content, list)
+    body: Dict[str, Any] = {
+        "content": "" if is_blocks else content,
+        "type": type,
+        "idempotencyKey": key,
+    }
+    if metadata is not None:
+        body["metadata"] = metadata
+    if attachments is not None:
+        body["attachments"] = attachments
+    if parent_id:
+        body["parentId"] = parent_id
+    if quoted_message_id:
+        body["quotedMessageId"] = quoted_message_id
+    if is_blocks:
+        body["contentBlocks"] = [_block_to_dict(b) for b in content]  # type: ignore[arg-type]
+    elif content_blocks is not None:
+        body["contentBlocks"] = [_block_to_dict(b) for b in content_blocks]
+    return body, {"X-Idempotency-Key": key}
 
 
 # ============================================================================
@@ -80,18 +163,63 @@ from .types import (
 # ============================================================================
 
 class AccountClient:
-    """Account management: register, identity, token refresh."""
+    """Account management: register, identity, token refresh, profile update, account deletion."""
 
     def __init__(self, request_fn):
         self._request = request_fn
 
     def register(self, **kwargs) -> IMResult:
-        """Register an agent or human identity."""
+        """Register an agent or human identity.
+
+        v1.9.x: optional ``workspaceId`` keyword to bind agent to a specific workspace.
+        Auto-creates a default Personal workspace for humans on first registration.
+        """
         return self._request("POST", "/api/im/register", json=kwargs)
 
     def me(self) -> IMResult:
         """Get own identity, stats, bindings, credits."""
         return self._request("GET", "/api/im/me")
+
+    def update_profile(
+        self,
+        *,
+        display_name: Optional[str] = None,
+        avatar_url: Optional[str] = None,
+        bio: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        **extras: Any,
+    ) -> IMResult:
+        """Update own profile (PATCH /api/im/me).
+
+        Common fields: ``display_name``, ``avatar_url``, ``bio``, ``metadata``.
+        Additional fields are forwarded as-is (camelCase preserved).
+        """
+        payload: Dict[str, Any] = {}
+        if display_name is not None:
+            payload["displayName"] = display_name
+        if avatar_url is not None:
+            payload["avatarUrl"] = avatar_url
+        if bio is not None:
+            payload["bio"] = bio
+        if metadata is not None:
+            payload["metadata"] = metadata
+        for k, v in extras.items():
+            if v is not None:
+                payload[k] = v
+        return self._request("PATCH", "/api/im/me", json=payload)
+
+    def list_my_agents(self) -> IMResult:
+        """List agents owned by current human user (v1.9.x; Wave-7 mobile profile card)."""
+        return self._request("GET", "/api/im/me/agents")
+
+    def delete_me(self) -> IMResult:
+        """Delete own account (v1.9.x).
+
+        Soft-deletes IMUser (banned=true), cascades to owned conversations + open
+        tasks, revokes pc_api_keys, blacklists request token. Returns
+        ``{ok, data: {message, deletedAt, cascade}}``.
+        """
+        return self._request("DELETE", "/api/im/me")
 
     def refresh_token(self, user_id: Optional[str] = None) -> IMResult:
         """Refresh JWT token."""
@@ -108,20 +236,32 @@ class DirectClient:
         self._request = request_fn
 
     def send(
-        self, user_id: str, content: str, *, type: MessageType = "text",
+        self, user_id: str, content: ContentArg, *, type: MessageType = "text",
         metadata: Optional[Dict[str, Any]] = None,
         parent_id: Optional[str] = None,
         quoted_message_id: Optional[str] = None,
+        idempotency_key: Optional[str] = None,
+        content_blocks: Optional[List[Any]] = None,
     ) -> IMResult:
-        """Send a direct message to a user."""
-        payload: Dict[str, Any] = {"content": content, "type": type}
-        if metadata:
-            payload["metadata"] = metadata
-        if parent_id:
-            payload["parentId"] = parent_id
-        if quoted_message_id:
-            payload["quotedMessageId"] = quoted_message_id
-        return self._request("POST", f"/api/im/direct/{user_id}/messages", json=payload)
+        """Send a direct message to a user.
+
+        v2.0 §4.6 — ``content`` may be a ``List[ContentBlock]`` for multimodal.
+        v2.0 §3.0.2 Gap A-④ — when ``idempotency_key`` is omitted, the SDK
+        generates a UUID per call and sends it as ``X-Idempotency-Key``.
+        """
+        body, headers = _build_send_payload(
+            content,
+            type=type,
+            metadata=metadata,
+            parent_id=parent_id,
+            quoted_message_id=quoted_message_id,
+            idempotency_key=idempotency_key,
+            content_blocks=content_blocks,
+        )
+        return self._request(
+            "POST", f"/api/im/direct/{user_id}/messages",
+            json=body, headers=headers,
+        )
 
     def get_messages(
         self, user_id: str, *, limit: Optional[int] = None, offset: Optional[int] = None,
@@ -159,20 +299,31 @@ class GroupsClient:
         return self._request("GET", f"/api/im/groups/{group_id}")
 
     def send(
-        self, group_id: str, content: str, *, type: MessageType = "text",
+        self, group_id: str, content: ContentArg, *, type: MessageType = "text",
         metadata: Optional[Dict[str, Any]] = None,
         parent_id: Optional[str] = None,
         quoted_message_id: Optional[str] = None,
+        idempotency_key: Optional[str] = None,
+        content_blocks: Optional[List[Any]] = None,
     ) -> IMResult:
-        """Send a message to a group."""
-        payload: Dict[str, Any] = {"content": content, "type": type}
-        if metadata:
-            payload["metadata"] = metadata
-        if parent_id:
-            payload["parentId"] = parent_id
-        if quoted_message_id:
-            payload["quotedMessageId"] = quoted_message_id
-        return self._request("POST", f"/api/im/groups/{group_id}/messages", json=payload)
+        """Send a message to a group.
+
+        v2.0 §4.6 — ``content`` may be a ``List[ContentBlock]`` for multimodal.
+        v2.0 §3.0.2 Gap A-④ — auto-generates ``X-Idempotency-Key`` per call.
+        """
+        body, headers = _build_send_payload(
+            content,
+            type=type,
+            metadata=metadata,
+            parent_id=parent_id,
+            quoted_message_id=quoted_message_id,
+            idempotency_key=idempotency_key,
+            content_blocks=content_blocks,
+        )
+        return self._request(
+            "POST", f"/api/im/groups/{group_id}/messages",
+            json=body, headers=headers,
+        )
 
     def get_messages(
         self, group_id: str, *, limit: Optional[int] = None, offset: Optional[int] = None,
@@ -195,7 +346,7 @@ class GroupsClient:
 
 
 class ConversationsClient:
-    """Conversation management."""
+    """Conversation management (full v1.8.0 lifecycle)."""
 
     def __init__(self, request_fn):
         self._request = request_fn
@@ -210,16 +361,107 @@ class ConversationsClient:
         return self._request("GET", "/api/im/conversations", params=params)
 
     def get(self, conversation_id: str) -> IMResult:
-        """Get conversation details."""
+        """Get conversation details (includes participants + displayTitle)."""
         return self._request("GET", f"/api/im/conversations/{conversation_id}")
 
-    def create_direct(self, user_id: str) -> IMResult:
-        """Create a direct conversation."""
-        return self._request("POST", "/api/im/conversations/direct", json={"userId": user_id})
+    def create_direct(
+        self,
+        user_id: str,
+        *,
+        workspace_id: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> IMResult:
+        """Create a 1:1 direct conversation (v1.9.x: optional workspaceId)."""
+        payload: Dict[str, Any] = {"otherUserId": user_id, "userId": user_id}
+        if workspace_id:
+            payload["workspaceId"] = workspace_id
+        if metadata is not None:
+            payload["metadata"] = metadata
+        return self._request("POST", "/api/im/conversations/direct", json=payload)
+
+    def create_group(
+        self,
+        title: str,
+        member_ids: List[str],
+        *,
+        description: Optional[str] = None,
+        workspace_id: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> IMResult:
+        """Create a group conversation."""
+        payload: Dict[str, Any] = {"title": title, "memberIds": member_ids}
+        if description is not None:
+            payload["description"] = description
+        if workspace_id:
+            payload["workspaceId"] = workspace_id
+        if metadata is not None:
+            payload["metadata"] = metadata
+        return self._request("POST", "/api/im/conversations/group", json=payload)
+
+    def update(
+        self,
+        conversation_id: str,
+        *,
+        title: Optional[str] = None,
+        description: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> IMResult:
+        """Update conversation properties (title/description/metadata)."""
+        payload: Dict[str, Any] = {}
+        if title is not None:
+            payload["title"] = title
+        if description is not None:
+            payload["description"] = description
+        if metadata is not None:
+            payload["metadata"] = metadata
+        return self._request("PATCH", f"/api/im/conversations/{conversation_id}", json=payload)
 
     def mark_as_read(self, conversation_id: str) -> IMResult:
         """Mark a conversation as read."""
         return self._request("POST", f"/api/im/conversations/{conversation_id}/read")
+
+    def archive(self, conversation_id: str) -> IMResult:
+        """Archive a conversation."""
+        return self._request("POST", f"/api/im/conversations/{conversation_id}/archive")
+
+    def unarchive(self, conversation_id: str) -> IMResult:
+        """Unarchive a conversation."""
+        return self._request("POST", f"/api/im/conversations/{conversation_id}/unarchive")
+
+    def pin(self, conversation_id: str, pinned: bool = True) -> IMResult:
+        """Toggle pin on a conversation."""
+        return self._request(
+            "PATCH",
+            f"/api/im/conversations/{conversation_id}/pin",
+            json={"pinned": pinned},
+        )
+
+    def mute(self, conversation_id: str, muted: bool = True) -> IMResult:
+        """Toggle mute on a conversation."""
+        return self._request(
+            "PATCH",
+            f"/api/im/conversations/{conversation_id}/mute",
+            json={"muted": muted},
+        )
+
+    def delete(self, conversation_id: str) -> IMResult:
+        """Soft-delete (leave) a conversation."""
+        return self._request("DELETE", f"/api/im/conversations/{conversation_id}")
+
+    def add_participant(self, conversation_id: str, user_id: str) -> IMResult:
+        """Add a participant to a conversation."""
+        return self._request(
+            "POST",
+            f"/api/im/conversations/{conversation_id}/participants",
+            json={"userId": user_id},
+        )
+
+    def remove_participant(self, conversation_id: str, user_id: str) -> IMResult:
+        """Remove a participant from a conversation."""
+        return self._request(
+            "DELETE",
+            f"/api/im/conversations/{conversation_id}/participants/{user_id}",
+        )
 
 
 class MessagesClient:
@@ -229,20 +471,34 @@ class MessagesClient:
         self._request = request_fn
 
     def send(
-        self, conversation_id: str, content: str, *, type: MessageType = "text",
+        self, conversation_id: str, content: ContentArg, *, type: MessageType = "text",
         metadata: Optional[Dict[str, Any]] = None,
         parent_id: Optional[str] = None,
         quoted_message_id: Optional[str] = None,
+        idempotency_key: Optional[str] = None,
+        content_blocks: Optional[List[Any]] = None,
     ) -> IMResult:
-        """Send a message to a conversation."""
-        payload: Dict[str, Any] = {"content": content, "type": type}
-        if metadata:
-            payload["metadata"] = metadata
-        if parent_id:
-            payload["parentId"] = parent_id
-        if quoted_message_id:
-            payload["quotedMessageId"] = quoted_message_id
-        return self._request("POST", f"/api/im/messages/{conversation_id}", json=payload)
+        """Send a message to a conversation.
+
+        v2.0 §4.6 — ``content`` may be a ``List[ContentBlock]`` for multimodal.
+        v2.0 §3.0.2 Gap A-④ — when ``idempotency_key`` is omitted, the SDK
+        generates a UUID v4 per call and stamps it into the
+        ``X-Idempotency-Key`` HTTP header. Pass the same key across retries
+        to trigger server-side dedup (UNIQUE conversationId, idempotencyKey).
+        """
+        body, headers = _build_send_payload(
+            content,
+            type=type,
+            metadata=metadata,
+            parent_id=parent_id,
+            quoted_message_id=quoted_message_id,
+            idempotency_key=idempotency_key,
+            content_blocks=content_blocks,
+        )
+        return self._request(
+            "POST", f"/api/im/messages/{conversation_id}",
+            json=body, headers=headers,
+        )
 
     def get_history(
         self, conversation_id: str, *, limit: Optional[int] = None, offset: Optional[int] = None,
@@ -268,6 +524,18 @@ class MessagesClient:
         """Delete a message."""
         return self._request("DELETE", f"/api/im/messages/{conversation_id}/{message_id}")
 
+    def mark_delivered(self, conversation_id: str, message_ids: List[str]) -> IMResult:
+        """Acknowledge delivery for one or more messages (v1.8.x receipts).
+
+        Server (POST /api/im/messages/delivered, src/im/api/messages.ts)
+        requires both ``conversationId`` and a non-empty ``messageIds`` list.
+        """
+        return self._request(
+            "POST",
+            "/api/im/messages/delivered",
+            json={"conversationId": conversation_id, "messageIds": message_ids},
+        )
+
     def react(
         self, conversation_id: str, message_id: str, emoji: str, *, remove: bool = False,
     ) -> IMResult:
@@ -287,10 +555,12 @@ class MessagesClient:
 
 
 class ContactsClient:
-    """Contacts and agent discovery."""
+    """Contacts, friend requests, blocking, presence (v1.8.0 lifecycle)."""
 
     def __init__(self, request_fn):
         self._request = request_fn
+
+    # ─── Discovery + profile lookup ─────────────────────────────────────
 
     def list(self) -> IMResult:
         """List contacts (users you've communicated with)."""
@@ -304,6 +574,132 @@ class ContactsClient:
         if capability:
             params["capability"] = capability
         return self._request("GET", "/api/im/discover", params=params)
+
+    def search_agents(
+        self,
+        *,
+        query: Optional[str] = None,
+        capability: Optional[str] = None,
+        agent_type: Optional[str] = None,
+        limit: Optional[int] = None,
+    ) -> IMResult:
+        """Search agents (alternate parameter shape on /api/im/discover)."""
+        params: Dict[str, Any] = {}
+        if query:
+            params["q"] = query
+        if capability:
+            params["capability"] = capability
+        if agent_type:
+            params["agentType"] = agent_type
+        if limit is not None:
+            params["limit"] = limit
+        return self._request("GET", "/api/im/discover", params=params)
+
+    def get_profile(self, user_id: str) -> IMResult:
+        """Look up a user's profile by id."""
+        return self._request("GET", f"/api/im/users/{user_id}")
+
+    def get_by_username(self, username: str) -> IMResult:
+        """Look up a user by username (v1.9.x; auth-gated to prevent enumeration)."""
+        return self._request("GET", f"/api/im/users/by-username/{username}")
+
+    # ─── Friend requests ───────────────────────────────────────────────
+
+    def request(
+        self,
+        target_user_id: str,
+        *,
+        reason: Optional[str] = None,
+        source: Optional[str] = None,
+        message: Optional[str] = None,
+    ) -> IMResult:
+        """Send a friend request to another user.
+
+        Server (POST /api/im/contacts/request, src/im/api/friend.ts) expects
+        ``{userId, reason?, source?}`` per its Zod schema. ``reason`` and
+        ``source`` are optional free-form strings forwarded to the contact
+        service. ``message`` is accepted as a backwards-compatible alias for
+        ``reason`` (older callers used ``message=...``).
+        """
+        payload: Dict[str, Any] = {"userId": target_user_id}
+        effective_reason = reason if reason is not None else message
+        if effective_reason:
+            payload["reason"] = effective_reason
+        if source:
+            payload["source"] = source
+        return self._request("POST", "/api/im/contacts/request", json=payload)
+
+    def list_pending_in(self) -> IMResult:
+        """List incoming pending friend requests."""
+        return self._request("GET", "/api/im/contacts/requests/received")
+
+    def list_received(self) -> IMResult:
+        """Alias for list_pending_in()."""
+        return self.list_pending_in()
+
+    def list_pending_out(self) -> IMResult:
+        """List outgoing pending friend requests."""
+        return self._request("GET", "/api/im/contacts/requests/sent")
+
+    def list_sent(self) -> IMResult:
+        """Alias for list_pending_out()."""
+        return self.list_pending_out()
+
+    def accept(self, request_id: str) -> IMResult:
+        """Accept a received friend request."""
+        return self._request("POST", f"/api/im/contacts/requests/{request_id}/accept")
+
+    def reject(self, request_id: str) -> IMResult:
+        """Reject a received friend request."""
+        return self._request("POST", f"/api/im/contacts/requests/{request_id}/reject")
+
+    def cancel(self, request_id: str) -> IMResult:
+        """Cancel a sent friend request (server alias of reject for sender side)."""
+        return self._request("POST", f"/api/im/contacts/requests/{request_id}/reject")
+
+    # ─── Friends list ──────────────────────────────────────────────────
+
+    def friends(self) -> IMResult:
+        """List confirmed friends."""
+        return self._request("GET", "/api/im/contacts/friends")
+
+    def remove(self, user_id: str) -> IMResult:
+        """Unfriend a user."""
+        return self._request("DELETE", f"/api/im/contacts/{user_id}/remove")
+
+    def unfriend(self, user_id: str) -> IMResult:
+        """Alias for remove()."""
+        return self.remove(user_id)
+
+    def set_remark(self, user_id: str, remark: str) -> IMResult:
+        """Set a private remark/nickname for a contact."""
+        return self._request(
+            "PATCH",
+            f"/api/im/contacts/{user_id}/remark",
+            json={"remark": remark},
+        )
+
+    # ─── Block / unblock ───────────────────────────────────────────────
+
+    def block(self, user_id: str) -> IMResult:
+        """Block a user."""
+        return self._request("POST", f"/api/im/contacts/{user_id}/block")
+
+    def unblock(self, user_id: str) -> IMResult:
+        """Unblock a user."""
+        return self._request("DELETE", f"/api/im/contacts/{user_id}/block")
+
+    def list_blocked(self) -> IMResult:
+        """List blocked users."""
+        return self._request("GET", "/api/im/contacts/blocked")
+
+    # ─── Presence ──────────────────────────────────────────────────────
+
+    def get_presence(self, user_ids: List[str]) -> IMResult:
+        """Get presence status for a batch of users (max 100 per call)."""
+        return self._request(
+            "POST", "/api/im/presence/batch", json={"userIds": user_ids}
+        )
 
 
 class BindingsClient:
@@ -386,23 +782,395 @@ class WorkspaceClient:
             params["q"] = query
         return self._request("GET", "/api/im/workspace/mentions/autocomplete", params=params)
 
+    def get_view(
+        self,
+        scope: Optional[str] = None,
+        slots: Optional[List[str]] = None,
+        include_content: bool = False,
+    ) -> IMResult:
+        """Get workspace superset view with slot filtering.
 
-class TasksClient:
-    """Task management: create, list, claim, complete, fail, approve, reject, cancel."""
+        v1.9.3: lifted to WorkspaceClient (was previously on EvolutionClient).
+        """
+        params: Dict[str, Any] = {}
+        if scope:
+            params["scope"] = scope
+        if slots:
+            params["slots"] = ",".join(slots)
+        if include_content:
+            params["includeContent"] = "true"
+        return self._request("GET", "/api/im/workspace/view", params=params)
+
+
+# ============================================================================
+# v1.9.3 — IM Workspaces (plural) resource
+# ============================================================================
+
+class WorkspacesClient:
+    """v1.9.3 IM Workspaces (mounted at /api/im/workspaces).
+
+    Distinct from the legacy ``/api/im/workspace/*`` endpoints exposed by
+    :class:`WorkspaceClient`. Each user typically has one default workspace
+    until 1:N is rolled out.
+    """
 
     def __init__(self, request_fn):
         self._request = request_fn
 
-    def create(self, title: str, **kwargs) -> IMResult:
-        """Create a new task."""
-        payload = {"title": title, **kwargs}
+    def list(self) -> IMResult:
+        """List caller's workspaces."""
+        return self._request("GET", "/api/im/workspaces")
+
+    def create(
+        self,
+        name: str,
+        slug: str,
+        *,
+        is_default: Optional[bool] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> IMResult:
+        """Create a workspace. Slug must match ``^[a-z0-9][a-z0-9-]{0,63}$``."""
+        payload: Dict[str, Any] = {"name": name, "slug": slug}
+        if is_default is not None:
+            payload["isDefault"] = is_default
+        if metadata is not None:
+            payload["metadata"] = metadata
+        return self._request("POST", "/api/im/workspaces", json=payload)
+
+    def get(self, workspace_id: str) -> IMResult:
+        """Get a single workspace (caller must own it)."""
+        return self._request("GET", f"/api/im/workspaces/{workspace_id}")
+
+    def update(
+        self,
+        workspace_id: str,
+        *,
+        name: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> IMResult:
+        """Update a workspace's name and/or metadata. Slug + isDefault are immutable."""
+        payload: Dict[str, Any] = {}
+        if name is not None:
+            payload["name"] = name
+        if metadata is not None:
+            payload["metadata"] = metadata
+        return self._request("PATCH", f"/api/im/workspaces/{workspace_id}", json=payload)
+
+    def archive(self, workspace_id: str) -> IMResult:
+        """Archive (soft-delete) a workspace.
+
+        Note: server returns 405 for DELETE in 1.9.x; this method is provided as a
+        forward-compatible name for when archive becomes available.
+        """
+        return self._request("DELETE", f"/api/im/workspaces/{workspace_id}")
+
+    def sync(self, since: Optional[str] = None) -> IMResult:
+        """Daemon delta sync: ``GET /api/im/workspaces/sync?since=<ISO>``."""
+        params: Dict[str, Any] = {}
+        if since:
+            params["since"] = since
+        return self._request("GET", "/api/im/workspaces/sync", params=params or None)
+
+
+# ============================================================================
+# v1.9.3 — IM Workspace Files
+# ============================================================================
+
+class WorkspaceFilesClient:
+    """v1.9.3 IM Workspace Files (mounted at /api/im/workspaces/:wsId/files).
+
+    A workspace file is a binding of a relative path to an asset id. Versions
+    are auto-managed; deleting soft-deletes the active binding.
+    """
+
+    def __init__(self, request_fn):
+        self._request = request_fn
+
+    def list(self, workspace_id: str, *, path: Optional[str] = None) -> IMResult:
+        """List active file tree, or a single file by ``path``."""
+        params: Dict[str, Any] = {}
+        if path:
+            params["path"] = path
+        return self._request(
+            "GET",
+            f"/api/im/workspaces/{workspace_id}/files",
+            params=params or None,
+        )
+
+    def bind(self, workspace_id: str, path: str, asset_id: str) -> IMResult:
+        """Bind a relative path to an asset id (POST). Idempotent if path+asset matches."""
+        return self._request(
+            "POST",
+            f"/api/im/workspaces/{workspace_id}/files",
+            json={"path": path, "assetId": asset_id},
+        )
+
+    def delete(self, workspace_id: str, path: str) -> IMResult:
+        """Soft-delete the active binding at ``path``."""
+        return self._request(
+            "DELETE",
+            f"/api/im/workspaces/{workspace_id}/files",
+            params={"path": path},
+        )
+
+    def sync(self, workspace_id: str, since: Optional[str] = None) -> IMResult:
+        """Daemon delta sync."""
+        params: Dict[str, Any] = {}
+        if since:
+            params["since"] = since
+        return self._request(
+            "GET",
+            f"/api/im/workspaces/{workspace_id}/files/sync",
+            params=params or None,
+        )
+
+    def history(self, workspace_id: str, file_id: str) -> IMResult:
+        """Walk the version chain of a file."""
+        return self._request(
+            "GET",
+            f"/api/im/workspaces/{workspace_id}/files/{file_id}/history",
+        )
+
+
+# ============================================================================
+# v1.9.3 — IM Assets
+# ============================================================================
+
+class AssetsClient:
+    """v1.9.3 IM Assets (content-addressed immutable blobs).
+
+    Mounted at /api/im/assets. Storage backend selectable at runtime
+    (filesystem | S3). Multipart upload supported via :meth:`upload`.
+    """
+
+    def __init__(self, request_fn, base_url: str, get_auth_headers: Callable):
+        self._request = request_fn
+        self._base_url = base_url
+        self._get_auth_headers = get_auth_headers
+
+    def list(
+        self,
+        *,
+        workspace_id: Optional[str] = None,
+        task_id: Optional[str] = None,
+        kind: Optional[str] = None,
+        limit: Optional[int] = None,
+    ) -> IMResult:
+        """List assets (limit 1–200, default 50)."""
+        params: Dict[str, Any] = {}
+        if workspace_id:
+            params["workspaceId"] = workspace_id
+        if task_id:
+            params["taskId"] = task_id
+        if kind:
+            params["kind"] = kind
+        if limit is not None:
+            params["limit"] = limit
+        return self._request("GET", "/api/im/assets", params=params or None)
+
+    def upload(
+        self,
+        file: "FileInput",
+        *,
+        workspace_id: str,
+        kind: Optional[str] = None,
+        source_agent_im_user_id: Optional[str] = None,
+        source_task_id: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        file_name: Optional[str] = None,
+        mime_type: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Upload an asset via multipart POST /api/im/assets.
+
+        100 MB hard cap; >50 MB returns 413 with ``USE_PRESIGNED``. Dedupe by
+        (workspace, sha256). Returns the parsed JSON envelope from the server.
+        """
+        import json as _json
+
+        data, name = FilesClient._resolve_input(file, file_name)
+        mt = mime_type or _guess_mime_type(name)
+        url = f"{self._base_url}/api/im/assets"
+        files_param = {"file": (name, data, mt)}
+        form: Dict[str, Any] = {"workspaceId": workspace_id}
+        if kind:
+            form["kind"] = kind
+        if source_agent_im_user_id:
+            form["sourceAgentImUserId"] = source_agent_im_user_id
+        if source_task_id:
+            form["sourceTaskId"] = source_task_id
+        if metadata is not None:
+            form["metadata"] = _json.dumps(metadata)
+        headers = self._get_auth_headers()
+        # multipart: no Content-Type override — httpx sets it automatically
+        resp = httpx.post(url, data=form, files=files_param, headers=headers, timeout=120)
+        try:
+            return resp.json()
+        except Exception:
+            return {
+                "ok": False,
+                "error": {"code": f"HTTP_{resp.status_code}", "message": resp.text[:200]},
+            }
+
+    def by_hash(self, content_hash: str, workspace_id: str) -> IMResult:
+        """Look up an asset by content hash within a workspace."""
+        return self._request(
+            "GET",
+            f"/api/im/assets/by-hash/{content_hash}",
+            params={"wsId": workspace_id},
+        )
+
+    def detail(self, asset_id: str) -> IMResult:
+        """Get JSON detail + freshly-signed S3 URL + photoRefs reverse-lookup."""
+        return self._request("GET", f"/api/im/assets/{asset_id}/detail")
+
+    def head(self, asset_id: str) -> IMResult:
+        """HEAD metadata only (size, mime, hash, kind in headers)."""
+        return self._request("HEAD", f"/api/im/assets/{asset_id}")
+
+    def download_url(self, asset_id: str) -> str:
+        """Return the asset bytes URL (caller fetches manually).
+
+        Server: filesystem stream OR S3 302 to 5-min presigned URL.
+        """
+        return f"{self._base_url}/api/im/assets/{asset_id}"
+
+    def delete(self, asset_id: str) -> IMResult:
+        """Soft-delete an asset (S3 object retained); idempotent."""
+        return self._request("DELETE", f"/api/im/assets/{asset_id}")
+
+
+# ============================================================================
+# v1.9.3 — Workspace Runtime Installations (App Router)
+# ============================================================================
+
+class RuntimeInstallationsClient:
+    """v1.9.3 Workspace Runtime Installations (long-running daemon hosts).
+
+    Mounted at /api/workspace/runtime-installations (App Router, NOT /api/im).
+    """
+
+    def __init__(self, request_fn):
+        self._request = request_fn
+
+    def list(self, workspace_id: str, *, limit: Optional[int] = None) -> IMResult:
+        """List runtime installations for a workspace (taskId IS NULL)."""
+        params: Dict[str, Any] = {"workspaceId": workspace_id}
+        if limit is not None:
+            params["limit"] = limit
+        return self._request(
+            "GET", "/api/workspace/runtime-installations", params=params,
+        )
+
+    def create(
+        self,
+        workspace_id: str,
+        *,
+        name: Optional[str] = None,
+        image: Optional[str] = None,
+        cpu_request: Optional[str] = None,
+        cpu_limit: Optional[str] = None,
+        memory_request: Optional[str] = None,
+        memory_limit: Optional[str] = None,
+    ) -> IMResult:
+        """Create a runtime installation (mints durable runtime API key, RPCs sandbox controller)."""
+        payload: Dict[str, Any] = {"workspaceId": workspace_id}
+        if name is not None:
+            payload["name"] = name
+        if image is not None:
+            payload["image"] = image
+        if cpu_request is not None:
+            payload["cpuRequest"] = cpu_request
+        if cpu_limit is not None:
+            payload["cpuLimit"] = cpu_limit
+        if memory_request is not None:
+            payload["memoryRequest"] = memory_request
+        if memory_limit is not None:
+            payload["memoryLimit"] = memory_limit
+        return self._request(
+            "POST", "/api/workspace/runtime-installations", json=payload,
+        )
+
+    def install_agent(
+        self,
+        installation_id: str,
+        *,
+        agent_im_user_id: str,
+        profile_id: Optional[str] = None,
+        adapter_name: Optional[str] = None,
+        profile_name: Optional[str] = None,
+        config: Optional[Dict[str, Any]] = None,
+    ) -> IMResult:
+        """Install an agent onto a runtime daemon."""
+        payload: Dict[str, Any] = {"agentImUserId": agent_im_user_id}
+        if profile_id is not None:
+            payload["profileId"] = profile_id
+        if adapter_name is not None:
+            payload["adapterName"] = adapter_name
+        if profile_name is not None:
+            payload["profileName"] = profile_name
+        if config is not None:
+            payload["config"] = config
+        return self._request(
+            "POST",
+            f"/api/workspace/runtime-installations/{installation_id}/agents",
+            json=payload,
+        )
+
+
+class TasksClient:
+    """Task management: create, list, claim, complete, fail, approve, reject, cancel.
+
+    v1.8.2 + v1.9.3: enriched DTO fields (ownerName / assigneeName / kind / runtimeRoute);
+    SSE event stream via :meth:`events`.
+    """
+
+    def __init__(self, request_fn, base_url: Optional[str] = None, get_auth_headers: Optional[Callable] = None):
+        self._request = request_fn
+        self._base_url = base_url
+        self._get_auth_headers = get_auth_headers
+
+    def create(
+        self,
+        title: str,
+        *,
+        workspace_id: Optional[str] = None,
+        conversation_id: Optional[str] = None,
+        runtime_route: Optional[str] = None,
+        kind: Optional[str] = None,
+        **kwargs: Any,
+    ) -> IMResult:
+        """Create a new task.
+
+        v1.9.x: ``workspace_id`` defaults to caller's default workspace when omitted.
+        ``runtime_route`` ∈ {``agent``, ``sandbox``, ``shell``} (default ``agent``).
+        ``kind`` is a semantic classifier (e.g. ``code``, ``research``).
+        """
+        payload: Dict[str, Any] = {"title": title}
+        if workspace_id:
+            payload["workspaceId"] = workspace_id
+        if conversation_id:
+            payload["conversationId"] = conversation_id
+        if runtime_route:
+            payload["runtimeRoute"] = runtime_route
+        if kind:
+            payload["kind"] = kind
+        payload.update(kwargs)
         return self._request("POST", "/api/im/tasks", json=payload)
 
     def list(
-        self, *, status=None, capability=None, assignee_id=None, creator_id=None,
-        schedule_type=None, conversation_id=None, limit=None, cursor=None,
+        self,
+        *,
+        status=None,
+        capability=None,
+        assignee_id=None,
+        creator_id=None,
+        schedule_type=None,
+        conversation_id=None,
+        workspace_id: Optional[str] = None,
+        limit=None,
+        cursor=None,
     ) -> IMResult:
-        """List tasks with optional filters."""
+        """List tasks with optional filters. v1.9.x adds ``workspace_id`` filter."""
         params: Dict[str, Any] = {}
         if status:
             params["status"] = status
@@ -416,18 +1184,35 @@ class TasksClient:
             params["scheduleType"] = schedule_type
         if conversation_id:
             params["conversationId"] = conversation_id
+        if workspace_id:
+            params["workspaceId"] = workspace_id
         if limit is not None:
             params["limit"] = limit
         if cursor:
             params["cursor"] = cursor
         return self._request("GET", "/api/im/tasks", params=params)
 
+    def marketplace(self, *, capability: Optional[str] = None, limit: Optional[int] = None) -> IMResult:
+        """Browse pending unassigned tasks (enriched response)."""
+        params: Dict[str, Any] = {}
+        if capability:
+            params["capability"] = capability
+        if limit is not None:
+            params["limit"] = limit
+        return self._request("GET", "/api/im/tasks/marketplace", params=params or None)
+
     def get(self, task_id: str) -> IMResult:
-        """Get task details with logs."""
+        """Get task details with logs (enriched DTO)."""
         return self._request("GET", f"/api/im/tasks/{task_id}")
 
-    def update(self, task_id: str, **kwargs) -> IMResult:
-        """Update a task (creator only)."""
+    def update(self, task_id: str, **kwargs: Any) -> IMResult:
+        """Update a task.
+
+        Creator may set: ``title``, ``description``, ``assigneeId``,
+        ``status='cancelled'``, ``metadata``. Assignee may set: ``progress``
+        (0.0–1.0), ``statusMessage``, ``status`` ∈ {running, review, completed,
+        failed}. New ``forceExecutionStatus`` flag for assignee status overrides.
+        """
         payload = {k: v for k, v in kwargs.items() if v is not None}
         return self._request("PATCH", f"/api/im/tasks/{task_id}", json=payload)
 
@@ -436,7 +1221,7 @@ class TasksClient:
         return self._request("POST", f"/api/im/tasks/{task_id}/claim")
 
     def progress(self, task_id: str, *, message=None, metadata=None) -> IMResult:
-        """Report task progress."""
+        """Report task progress. DEPRECATED — server returns Sunset 2026-07-01. Use update()."""
         payload: Dict[str, Any] = {}
         if message:
             payload["message"] = message
@@ -463,17 +1248,115 @@ class TasksClient:
         return self._request("POST", f"/api/im/tasks/{task_id}/fail", json=payload)
 
     def approve(self, task_id: str) -> IMResult:
-        """Approve a completed task (creator only)."""
+        """Approve a completed task (creator only). Idempotent."""
         return self._request("POST", f"/api/im/tasks/{task_id}/approve")
 
     def reject(self, task_id: str, reason: str) -> IMResult:
-        """Reject a completed task (creator only)."""
+        """Reject a task in review (creator only)."""
         payload: Dict[str, Any] = {"reason": reason}
         return self._request("POST", f"/api/im/tasks/{task_id}/reject", json=payload)
 
     def cancel(self, task_id: str) -> IMResult:
-        """Cancel a task (soft delete)."""
+        """Cancel a task (soft delete). Idempotent for cancelled; 409 for completed/failed."""
         return self._request("DELETE", f"/api/im/tasks/{task_id}")
+
+    def reward(self, task_id: str, *, amount: Optional[float] = None, **kwargs: Any) -> IMResult:
+        """Issue a credit reward for a completed task."""
+        payload: Dict[str, Any] = {}
+        if amount is not None:
+            payload["amount"] = amount
+        payload.update(kwargs)
+        return self._request("POST", f"/api/im/tasks/{task_id}/reward", json=payload or None)
+
+    def subtasks(self, task_id: str) -> IMResult:
+        """List subtasks of a task (enriched)."""
+        return self._request("GET", f"/api/im/tasks/{task_id}/subtasks")
+
+    def summary(self, task_id: str) -> IMResult:
+        """Subtask progress summary."""
+        return self._request("GET", f"/api/im/tasks/{task_id}/summary")
+
+    def events(
+        self,
+        *,
+        token: Optional[str] = None,
+        last_event_id: Optional[str] = None,
+        timeout: Optional[float] = None,
+    ) -> "Iterator[Dict[str, Any]]":
+        """Open an SSE stream of task events (v1.8.2).
+
+        Yields decoded events with shape ``{"id": ..., "event": ..., "data": {...}}``.
+        Event names: ``task.created``, ``task.assigned``, ``task.progress``,
+        ``task.completed``, ``task.failed``, ``task.cancelled``, ``task.updated``,
+        plus ``connected`` (initial flush). Stops when the stream is closed by
+        the server. Caller is responsible for reconnect on disconnect.
+
+        Auth: an API key or IM JWT is required via ``?token=``. If not given,
+        the SDK extracts the bearer token from auth headers (if available).
+        """
+        import json as _json
+
+        if not self._base_url:
+            raise RuntimeError(
+                "TasksClient.events() requires base_url + auth headers; "
+                "use it via client.im.tasks (which wires them automatically)."
+            )
+
+        params: Dict[str, str] = {}
+        if token:
+            params["token"] = token
+        else:
+            # Try to extract bearer token from auth headers as a convenience.
+            if self._get_auth_headers:
+                auth_hdr = self._get_auth_headers().get("Authorization", "")
+                if auth_hdr.lower().startswith("bearer "):
+                    params["token"] = auth_hdr[7:]
+        if not params.get("token"):
+            raise RuntimeError(
+                "tasks.events() requires a token; pass ``token=`` explicitly "
+                "or initialize the client with an API key."
+            )
+
+        url = f"{self._base_url}/api/im/tasks/events"
+        headers = {"Accept": "text/event-stream"}
+        if last_event_id:
+            headers["Last-Event-ID"] = last_event_id
+
+        with httpx.Client(timeout=timeout) as client:
+            with client.stream("GET", url, params=params, headers=headers) as response:
+                if response.status_code != 200:
+                    raise RuntimeError(
+                        f"tasks.events stream failed: HTTP {response.status_code}"
+                    )
+
+                event_id: Optional[str] = None
+                event_name: str = "message"
+                data_buf: List[str] = []
+
+                for line in response.iter_lines():
+                    if line == "":
+                        if data_buf:
+                            try:
+                                data_obj = _json.loads("\n".join(data_buf))
+                            except Exception:
+                                data_obj = {"raw": "\n".join(data_buf)}
+                            yield {
+                                "id": event_id,
+                                "event": event_name,
+                                "data": data_obj,
+                            }
+                        event_id = None
+                        event_name = "message"
+                        data_buf = []
+                        continue
+                    if line.startswith(":"):
+                        continue
+                    if line.startswith("id:"):
+                        event_id = line[3:].lstrip()
+                    elif line.startswith("event:"):
+                        event_name = line[6:].lstrip()
+                    elif line.startswith("data:"):
+                        data_buf.append(line[5:].lstrip())
 
 
 class MemoryClient:
@@ -545,6 +1428,28 @@ class MemoryClient:
     def get_knowledge_links(self) -> IMResult:
         """Get memory-gene knowledge links for the authenticated user's memory files (v1.8.0)."""
         return self._request("GET", "/api/im/memory/links")
+
+    def digest(
+        self,
+        *,
+        scope: Optional[str] = None,
+        max_lines: Optional[int] = None,
+        max_bytes: Optional[int] = None,
+    ) -> IMResult:
+        """CC-style always-load Markdown digest of all memory files (v1.9.x).
+
+        Clamps: ``max_lines`` 10–1000 (default 200), ``max_bytes`` 500–30000
+        (default 6000). Returns ``{ digest, totalLines, totalBytes,
+        filesSummarized, filesTotal, truncated, generatedAt }``.
+        """
+        params: Dict[str, Any] = {}
+        if scope:
+            params["scope"] = scope
+        if max_lines is not None:
+            params["maxLines"] = max_lines
+        if max_bytes is not None:
+            params["maxBytes"] = max_bytes
+        return self._request("GET", "/api/im/memory/digest", params=params or None)
 
 
 class KnowledgeLinkClient:
@@ -866,8 +1771,31 @@ class EvolutionClient:
             payload["scope"] = scope
         return self._request("POST", f"/api/im/skills/{_url_quote(slug_or_id, safe='')}/install", json=payload if payload else None)
 
+    def create_skill(self, slug: str, name: str, content: str, **kwargs: Any) -> IMResult:
+        """Create a new skill (POST /api/im/skills).
+
+        Required fields: ``slug``, ``name``, ``content``. Common optional fields:
+        ``description``, ``category``, ``tags``, ``visibility``, ``geneId``.
+        """
+        payload: Dict[str, Any] = {"slug": slug, "name": name, "content": content}
+        for k, v in kwargs.items():
+            if v is not None:
+                payload[k] = v
+        return self._request("POST", "/api/im/skills", json=payload)
+
+    def star_skill(self, skill_id: str, starred: bool = True) -> IMResult:
+        """Toggle a star on a skill (POST /api/im/skills/:id/star)."""
+        return self._request(
+            "POST",
+            f"/api/im/skills/{_url_quote(skill_id, safe='')}/star",
+            json={"starred": starred},
+        )
+
     def get_workspace(self, scope: Optional[str] = None, slots: Optional[List[str]] = None, include_content: bool = False) -> IMResult:
-        """Get workspace superset view with slot filtering."""
+        """DEPRECATED — use ``client.im.workspace.get_view()`` instead.
+
+        Kept for backwards compatibility (v1.9.3 audit moved this to WorkspaceClient).
+        """
         params: Dict[str, Any] = {}
         if scope:
             params["scope"] = scope
@@ -1343,23 +2271,6 @@ class SecurityClient:
         return self._request("DELETE", f"/api/im/conversations/{conversation_id}/keys/{key_user_id}")
 
 
-def _guess_mime_type(file_name: str) -> str:
-    """Guess MIME type from file extension using stdlib + fallback map."""
-    mime, _ = mimetypes.guess_type(file_name)
-    if mime:
-        return mime
-    ext = pathlib.Path(file_name).suffix.lower()
-    fallback = {
-        ".md": "text/markdown", ".yaml": "text/yaml", ".yml": "text/yaml",
-        ".webp": "image/webp", ".webm": "video/webm",
-    }
-    return fallback.get(ext, "application/octet-stream")
-
-
-# File input type: str/Path (file path), bytes, or file-like object
-FileInput = Union[str, pathlib.Path, bytes, BinaryIO]
-
-
 class FilesClient:
     """File upload management (presign → upload → confirm)."""
 
@@ -1603,8 +2514,13 @@ class IMClient:
         self.bindings = BindingsClient(request_fn)
         self.credits = CreditsClient(request_fn)
         self.workspace = WorkspaceClient(request_fn)
+        # v1.9.3: plural workspaces resource (distinct from legacy `workspace` singular)
+        self.workspaces = WorkspacesClient(request_fn)
+        self.workspace_files = WorkspaceFilesClient(request_fn)
+        self.assets = AssetsClient(request_fn, base_url, get_auth_headers)
+        self.runtime_installations = RuntimeInstallationsClient(request_fn)
         self.files = FilesClient(request_fn, base_url, get_auth_headers)
-        self.tasks = TasksClient(request_fn)
+        self.tasks = TasksClient(request_fn, base_url, get_auth_headers)
         self.memory = MemoryClient(request_fn)
         self.knowledge = KnowledgeLinkClient(request_fn)
         self.identity = IdentityClient(request_fn)
@@ -1632,6 +2548,38 @@ class AsyncAccountClient:
     async def me(self) -> IMResult:
         return await self._request("GET", "/api/im/me")
 
+    async def update_profile(
+        self,
+        *,
+        display_name: Optional[str] = None,
+        avatar_url: Optional[str] = None,
+        bio: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        **extras: Any,
+    ) -> IMResult:
+        """Update own profile (PATCH /api/im/me). See sync counterpart."""
+        payload: Dict[str, Any] = {}
+        if display_name is not None:
+            payload["displayName"] = display_name
+        if avatar_url is not None:
+            payload["avatarUrl"] = avatar_url
+        if bio is not None:
+            payload["bio"] = bio
+        if metadata is not None:
+            payload["metadata"] = metadata
+        for k, v in extras.items():
+            if v is not None:
+                payload[k] = v
+        return await self._request("PATCH", "/api/im/me", json=payload)
+
+    async def list_my_agents(self) -> IMResult:
+        """List agents owned by current human user (v1.9.x)."""
+        return await self._request("GET", "/api/im/me/agents")
+
+    async def delete_me(self) -> IMResult:
+        """Delete own account (v1.9.x). See sync counterpart."""
+        return await self._request("DELETE", "/api/im/me")
+
     async def refresh_token(self, user_id: Optional[str] = None) -> IMResult:
         payload = {}
         if user_id:
@@ -1644,16 +2592,27 @@ class AsyncDirectClient:
         self._request = request_fn
 
     async def send(
-        self, user_id: str, content: str, *, type: MessageType = "text",
+        self, user_id: str, content: ContentArg, *, type: MessageType = "text",
         metadata: Optional[Dict[str, Any]] = None,
         parent_id: Optional[str] = None,
+        quoted_message_id: Optional[str] = None,
+        idempotency_key: Optional[str] = None,
+        content_blocks: Optional[List[Any]] = None,
     ) -> IMResult:
-        payload: Dict[str, Any] = {"content": content, "type": type}
-        if metadata:
-            payload["metadata"] = metadata
-        if parent_id:
-            payload["parentId"] = parent_id
-        return await self._request("POST", f"/api/im/direct/{user_id}/messages", json=payload)
+        """v2.0 §3.0.2 Gap A-④ + §4.6 — see sync DirectClient.send."""
+        body, headers = _build_send_payload(
+            content,
+            type=type,
+            metadata=metadata,
+            parent_id=parent_id,
+            quoted_message_id=quoted_message_id,
+            idempotency_key=idempotency_key,
+            content_blocks=content_blocks,
+        )
+        return await self._request(
+            "POST", f"/api/im/direct/{user_id}/messages",
+            json=body, headers=headers,
+        )
 
     async def get_messages(
         self, user_id: str, *, limit: Optional[int] = None, offset: Optional[int] = None,
@@ -1685,16 +2644,27 @@ class AsyncGroupsClient:
         return await self._request("GET", f"/api/im/groups/{group_id}")
 
     async def send(
-        self, group_id: str, content: str, *, type: MessageType = "text",
+        self, group_id: str, content: ContentArg, *, type: MessageType = "text",
         metadata: Optional[Dict[str, Any]] = None,
         parent_id: Optional[str] = None,
+        quoted_message_id: Optional[str] = None,
+        idempotency_key: Optional[str] = None,
+        content_blocks: Optional[List[Any]] = None,
     ) -> IMResult:
-        payload: Dict[str, Any] = {"content": content, "type": type}
-        if metadata:
-            payload["metadata"] = metadata
-        if parent_id:
-            payload["parentId"] = parent_id
-        return await self._request("POST", f"/api/im/groups/{group_id}/messages", json=payload)
+        """v2.0 §3.0.2 Gap A-④ + §4.6 — see sync GroupsClient.send."""
+        body, headers = _build_send_payload(
+            content,
+            type=type,
+            metadata=metadata,
+            parent_id=parent_id,
+            quoted_message_id=quoted_message_id,
+            idempotency_key=idempotency_key,
+            content_blocks=content_blocks,
+        )
+        return await self._request(
+            "POST", f"/api/im/groups/{group_id}/messages",
+            json=body, headers=headers,
+        )
 
     async def get_messages(
         self, group_id: str, *, limit: Optional[int] = None, offset: Optional[int] = None,
@@ -1716,6 +2686,8 @@ class AsyncGroupsClient:
 
 
 class AsyncConversationsClient:
+    """Async conversation management (full v1.8.0 lifecycle)."""
+
     def __init__(self, request_fn):
         self._request = request_fn
 
@@ -1730,13 +2702,93 @@ class AsyncConversationsClient:
     async def get(self, conversation_id: str) -> IMResult:
         return await self._request("GET", f"/api/im/conversations/{conversation_id}")
 
-    async def create_direct(self, user_id: str) -> IMResult:
-        return await self._request(
-            "POST", "/api/im/conversations/direct", json={"userId": user_id}
-        )
+    async def create_direct(
+        self,
+        user_id: str,
+        *,
+        workspace_id: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> IMResult:
+        payload: Dict[str, Any] = {"otherUserId": user_id, "userId": user_id}
+        if workspace_id:
+            payload["workspaceId"] = workspace_id
+        if metadata is not None:
+            payload["metadata"] = metadata
+        return await self._request("POST", "/api/im/conversations/direct", json=payload)
+
+    async def create_group(
+        self,
+        title: str,
+        member_ids: List[str],
+        *,
+        description: Optional[str] = None,
+        workspace_id: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> IMResult:
+        payload: Dict[str, Any] = {"title": title, "memberIds": member_ids}
+        if description is not None:
+            payload["description"] = description
+        if workspace_id:
+            payload["workspaceId"] = workspace_id
+        if metadata is not None:
+            payload["metadata"] = metadata
+        return await self._request("POST", "/api/im/conversations/group", json=payload)
+
+    async def update(
+        self,
+        conversation_id: str,
+        *,
+        title: Optional[str] = None,
+        description: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> IMResult:
+        payload: Dict[str, Any] = {}
+        if title is not None:
+            payload["title"] = title
+        if description is not None:
+            payload["description"] = description
+        if metadata is not None:
+            payload["metadata"] = metadata
+        return await self._request("PATCH", f"/api/im/conversations/{conversation_id}", json=payload)
 
     async def mark_as_read(self, conversation_id: str) -> IMResult:
         return await self._request("POST", f"/api/im/conversations/{conversation_id}/read")
+
+    async def archive(self, conversation_id: str) -> IMResult:
+        return await self._request("POST", f"/api/im/conversations/{conversation_id}/archive")
+
+    async def unarchive(self, conversation_id: str) -> IMResult:
+        return await self._request("POST", f"/api/im/conversations/{conversation_id}/unarchive")
+
+    async def pin(self, conversation_id: str, pinned: bool = True) -> IMResult:
+        return await self._request(
+            "PATCH",
+            f"/api/im/conversations/{conversation_id}/pin",
+            json={"pinned": pinned},
+        )
+
+    async def mute(self, conversation_id: str, muted: bool = True) -> IMResult:
+        return await self._request(
+            "PATCH",
+            f"/api/im/conversations/{conversation_id}/mute",
+            json={"muted": muted},
+        )
+
+    async def delete(self, conversation_id: str) -> IMResult:
+        return await self._request("DELETE", f"/api/im/conversations/{conversation_id}")
+
+    async def add_participant(self, conversation_id: str, user_id: str) -> IMResult:
+        return await self._request(
+            "POST",
+            f"/api/im/conversations/{conversation_id}/participants",
+            json={"userId": user_id},
+        )
+
+    async def remove_participant(self, conversation_id: str, user_id: str) -> IMResult:
+        return await self._request(
+            "DELETE",
+            f"/api/im/conversations/{conversation_id}/participants/{user_id}",
+        )
 
 
 class AsyncMessagesClient:
@@ -1744,16 +2796,27 @@ class AsyncMessagesClient:
         self._request = request_fn
 
     async def send(
-        self, conversation_id: str, content: str, *, type: MessageType = "text",
+        self, conversation_id: str, content: ContentArg, *, type: MessageType = "text",
         metadata: Optional[Dict[str, Any]] = None,
         parent_id: Optional[str] = None,
+        quoted_message_id: Optional[str] = None,
+        idempotency_key: Optional[str] = None,
+        content_blocks: Optional[List[Any]] = None,
     ) -> IMResult:
-        payload: Dict[str, Any] = {"content": content, "type": type}
-        if metadata:
-            payload["metadata"] = metadata
-        if parent_id:
-            payload["parentId"] = parent_id
-        return await self._request("POST", f"/api/im/messages/{conversation_id}", json=payload)
+        """v2.0 §3.0.2 Gap A-④ + §4.6 — see sync MessagesClient.send."""
+        body, headers = _build_send_payload(
+            content,
+            type=type,
+            metadata=metadata,
+            parent_id=parent_id,
+            quoted_message_id=quoted_message_id,
+            idempotency_key=idempotency_key,
+            content_blocks=content_blocks,
+        )
+        return await self._request(
+            "POST", f"/api/im/messages/{conversation_id}",
+            json=body, headers=headers,
+        )
 
     async def get_history(
         self, conversation_id: str, *, limit: Optional[int] = None, offset: Optional[int] = None,
@@ -1776,6 +2839,18 @@ class AsyncMessagesClient:
     async def delete(self, conversation_id: str, message_id: str) -> IMResult:
         return await self._request("DELETE", f"/api/im/messages/{conversation_id}/{message_id}")
 
+    async def mark_delivered(self, conversation_id: str, message_ids: List[str]) -> IMResult:
+        """Acknowledge delivery for one or more messages.
+
+        Server requires both ``conversationId`` and ``messageIds``. See
+        ``MessagesClient.mark_delivered`` for details.
+        """
+        return await self._request(
+            "POST",
+            "/api/im/messages/delivered",
+            json={"conversationId": conversation_id, "messageIds": message_ids},
+        )
+
     async def react(
         self, conversation_id: str, message_id: str, emoji: str, *, remove: bool = False,
     ) -> IMResult:
@@ -1791,6 +2866,8 @@ class AsyncMessagesClient:
 
 
 class AsyncContactsClient:
+    """Async contacts, friend requests, blocking, presence (v1.8.0 lifecycle)."""
+
     def __init__(self, request_fn):
         self._request = request_fn
 
@@ -1806,6 +2883,101 @@ class AsyncContactsClient:
         if capability:
             params["capability"] = capability
         return await self._request("GET", "/api/im/discover", params=params)
+
+    async def search_agents(
+        self,
+        *,
+        query: Optional[str] = None,
+        capability: Optional[str] = None,
+        agent_type: Optional[str] = None,
+        limit: Optional[int] = None,
+    ) -> IMResult:
+        params: Dict[str, Any] = {}
+        if query:
+            params["q"] = query
+        if capability:
+            params["capability"] = capability
+        if agent_type:
+            params["agentType"] = agent_type
+        if limit is not None:
+            params["limit"] = limit
+        return await self._request("GET", "/api/im/discover", params=params)
+
+    async def get_profile(self, user_id: str) -> IMResult:
+        return await self._request("GET", f"/api/im/users/{user_id}")
+
+    async def get_by_username(self, username: str) -> IMResult:
+        return await self._request("GET", f"/api/im/users/by-username/{username}")
+
+    async def request(
+        self,
+        target_user_id: str,
+        *,
+        reason: Optional[str] = None,
+        source: Optional[str] = None,
+        message: Optional[str] = None,
+    ) -> IMResult:
+        """Send a friend request. See ``ContactsClient.request`` for the
+        body shape — server expects ``{userId, reason?, source?}``.
+        """
+        payload: Dict[str, Any] = {"userId": target_user_id}
+        effective_reason = reason if reason is not None else message
+        if effective_reason:
+            payload["reason"] = effective_reason
+        if source:
+            payload["source"] = source
+        return await self._request("POST", "/api/im/contacts/request", json=payload)
+
+    async def list_pending_in(self) -> IMResult:
+        return await self._request("GET", "/api/im/contacts/requests/received")
+
+    async def list_received(self) -> IMResult:
+        return await self.list_pending_in()
+
+    async def list_pending_out(self) -> IMResult:
+        return await self._request("GET", "/api/im/contacts/requests/sent")
+
+    async def list_sent(self) -> IMResult:
+        return await self.list_pending_out()
+
+    async def accept(self, request_id: str) -> IMResult:
+        return await self._request("POST", f"/api/im/contacts/requests/{request_id}/accept")
+
+    async def reject(self, request_id: str) -> IMResult:
+        return await self._request("POST", f"/api/im/contacts/requests/{request_id}/reject")
+
+    async def cancel(self, request_id: str) -> IMResult:
+        return await self._request("POST", f"/api/im/contacts/requests/{request_id}/reject")
+
+    async def friends(self) -> IMResult:
+        return await self._request("GET", "/api/im/contacts/friends")
+
+    async def remove(self, user_id: str) -> IMResult:
+        return await self._request("DELETE", f"/api/im/contacts/{user_id}/remove")
+
+    async def unfriend(self, user_id: str) -> IMResult:
+        return await self.remove(user_id)
+
+    async def set_remark(self, user_id: str, remark: str) -> IMResult:
+        return await self._request(
+            "PATCH",
+            f"/api/im/contacts/{user_id}/remark",
+            json={"remark": remark},
+        )
+
+    async def block(self, user_id: str) -> IMResult:
+        return await self._request("POST", f"/api/im/contacts/{user_id}/block")
+
+    async def unblock(self, user_id: str) -> IMResult:
+        return await self._request("DELETE", f"/api/im/contacts/{user_id}/block")
+
+    async def list_blocked(self) -> IMResult:
+        return await self._request("GET", "/api/im/contacts/blocked")
+
+    async def get_presence(self, user_ids: List[str]) -> IMResult:
+        return await self._request(
+            "POST", "/api/im/presence/batch", json={"userIds": user_ids}
+        )
 
 
 class AsyncBindingsClient:
@@ -1873,23 +3045,322 @@ class AsyncWorkspaceClient:
             params["q"] = query
         return await self._request("GET", "/api/im/workspace/mentions/autocomplete", params=params)
 
+    async def get_view(
+        self,
+        scope: Optional[str] = None,
+        slots: Optional[List[str]] = None,
+        include_content: bool = False,
+    ) -> IMResult:
+        """Get workspace superset view with slot filtering. v1.9.3: lifted to WorkspaceClient."""
+        params: Dict[str, Any] = {}
+        if scope:
+            params["scope"] = scope
+        if slots:
+            params["slots"] = ",".join(slots)
+        if include_content:
+            params["includeContent"] = "true"
+        return await self._request("GET", "/api/im/workspace/view", params=params)
 
-class AsyncTasksClient:
-    """Async task management: create, list, claim, complete, fail, approve, reject, cancel."""
+
+# ============================================================================
+# v1.9.3 — IM Workspaces / Workspace-Files / Assets / Runtime (async)
+# ============================================================================
+
+class AsyncWorkspacesClient:
+    """Async v1.9.3 IM Workspaces resource."""
 
     def __init__(self, request_fn):
         self._request = request_fn
 
-    async def create(self, title: str, **kwargs) -> IMResult:
-        """Create a new task."""
-        payload = {"title": title, **kwargs}
+    async def list(self) -> IMResult:
+        return await self._request("GET", "/api/im/workspaces")
+
+    async def create(
+        self,
+        name: str,
+        slug: str,
+        *,
+        is_default: Optional[bool] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> IMResult:
+        payload: Dict[str, Any] = {"name": name, "slug": slug}
+        if is_default is not None:
+            payload["isDefault"] = is_default
+        if metadata is not None:
+            payload["metadata"] = metadata
+        return await self._request("POST", "/api/im/workspaces", json=payload)
+
+    async def get(self, workspace_id: str) -> IMResult:
+        return await self._request("GET", f"/api/im/workspaces/{workspace_id}")
+
+    async def update(
+        self,
+        workspace_id: str,
+        *,
+        name: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> IMResult:
+        payload: Dict[str, Any] = {}
+        if name is not None:
+            payload["name"] = name
+        if metadata is not None:
+            payload["metadata"] = metadata
+        return await self._request("PATCH", f"/api/im/workspaces/{workspace_id}", json=payload)
+
+    async def archive(self, workspace_id: str) -> IMResult:
+        return await self._request("DELETE", f"/api/im/workspaces/{workspace_id}")
+
+    async def sync(self, since: Optional[str] = None) -> IMResult:
+        params: Dict[str, Any] = {}
+        if since:
+            params["since"] = since
+        return await self._request("GET", "/api/im/workspaces/sync", params=params or None)
+
+
+class AsyncWorkspaceFilesClient:
+    """Async v1.9.3 IM Workspace Files resource."""
+
+    def __init__(self, request_fn):
+        self._request = request_fn
+
+    async def list(self, workspace_id: str, *, path: Optional[str] = None) -> IMResult:
+        params: Dict[str, Any] = {}
+        if path:
+            params["path"] = path
+        return await self._request(
+            "GET",
+            f"/api/im/workspaces/{workspace_id}/files",
+            params=params or None,
+        )
+
+    async def bind(self, workspace_id: str, path: str, asset_id: str) -> IMResult:
+        return await self._request(
+            "POST",
+            f"/api/im/workspaces/{workspace_id}/files",
+            json={"path": path, "assetId": asset_id},
+        )
+
+    async def delete(self, workspace_id: str, path: str) -> IMResult:
+        return await self._request(
+            "DELETE",
+            f"/api/im/workspaces/{workspace_id}/files",
+            params={"path": path},
+        )
+
+    async def sync(self, workspace_id: str, since: Optional[str] = None) -> IMResult:
+        params: Dict[str, Any] = {}
+        if since:
+            params["since"] = since
+        return await self._request(
+            "GET",
+            f"/api/im/workspaces/{workspace_id}/files/sync",
+            params=params or None,
+        )
+
+    async def history(self, workspace_id: str, file_id: str) -> IMResult:
+        return await self._request(
+            "GET",
+            f"/api/im/workspaces/{workspace_id}/files/{file_id}/history",
+        )
+
+
+class AsyncAssetsClient:
+    """Async v1.9.3 IM Assets (content-addressed immutable blobs)."""
+
+    def __init__(self, request_fn, base_url: str, get_auth_headers: Callable):
+        self._request = request_fn
+        self._base_url = base_url
+        self._get_auth_headers = get_auth_headers
+
+    async def list(
+        self,
+        *,
+        workspace_id: Optional[str] = None,
+        task_id: Optional[str] = None,
+        kind: Optional[str] = None,
+        limit: Optional[int] = None,
+    ) -> IMResult:
+        params: Dict[str, Any] = {}
+        if workspace_id:
+            params["workspaceId"] = workspace_id
+        if task_id:
+            params["taskId"] = task_id
+        if kind:
+            params["kind"] = kind
+        if limit is not None:
+            params["limit"] = limit
+        return await self._request("GET", "/api/im/assets", params=params or None)
+
+    async def upload(
+        self,
+        file: "FileInput",
+        *,
+        workspace_id: str,
+        kind: Optional[str] = None,
+        source_agent_im_user_id: Optional[str] = None,
+        source_task_id: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        file_name: Optional[str] = None,
+        mime_type: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Multipart POST /api/im/assets. See sync counterpart."""
+        import json as _json
+
+        data, name = FilesClient._resolve_input(file, file_name)
+        mt = mime_type or _guess_mime_type(name)
+        url = f"{self._base_url}/api/im/assets"
+        files_param = {"file": (name, data, mt)}
+        form: Dict[str, Any] = {"workspaceId": workspace_id}
+        if kind:
+            form["kind"] = kind
+        if source_agent_im_user_id:
+            form["sourceAgentImUserId"] = source_agent_im_user_id
+        if source_task_id:
+            form["sourceTaskId"] = source_task_id
+        if metadata is not None:
+            form["metadata"] = _json.dumps(metadata)
+        headers = self._get_auth_headers()
+        async with httpx.AsyncClient(timeout=120) as client:
+            resp = await client.post(url, data=form, files=files_param, headers=headers)
+        try:
+            return resp.json()
+        except Exception:
+            return {
+                "ok": False,
+                "error": {"code": f"HTTP_{resp.status_code}", "message": resp.text[:200]},
+            }
+
+    async def by_hash(self, content_hash: str, workspace_id: str) -> IMResult:
+        return await self._request(
+            "GET",
+            f"/api/im/assets/by-hash/{content_hash}",
+            params={"wsId": workspace_id},
+        )
+
+    async def detail(self, asset_id: str) -> IMResult:
+        return await self._request("GET", f"/api/im/assets/{asset_id}/detail")
+
+    async def head(self, asset_id: str) -> IMResult:
+        return await self._request("HEAD", f"/api/im/assets/{asset_id}")
+
+    def download_url(self, asset_id: str) -> str:
+        return f"{self._base_url}/api/im/assets/{asset_id}"
+
+    async def delete(self, asset_id: str) -> IMResult:
+        return await self._request("DELETE", f"/api/im/assets/{asset_id}")
+
+
+class AsyncRuntimeInstallationsClient:
+    """Async v1.9.3 Workspace Runtime Installations."""
+
+    def __init__(self, request_fn):
+        self._request = request_fn
+
+    async def list(self, workspace_id: str, *, limit: Optional[int] = None) -> IMResult:
+        params: Dict[str, Any] = {"workspaceId": workspace_id}
+        if limit is not None:
+            params["limit"] = limit
+        return await self._request(
+            "GET", "/api/workspace/runtime-installations", params=params,
+        )
+
+    async def create(
+        self,
+        workspace_id: str,
+        *,
+        name: Optional[str] = None,
+        image: Optional[str] = None,
+        cpu_request: Optional[str] = None,
+        cpu_limit: Optional[str] = None,
+        memory_request: Optional[str] = None,
+        memory_limit: Optional[str] = None,
+    ) -> IMResult:
+        payload: Dict[str, Any] = {"workspaceId": workspace_id}
+        if name is not None:
+            payload["name"] = name
+        if image is not None:
+            payload["image"] = image
+        if cpu_request is not None:
+            payload["cpuRequest"] = cpu_request
+        if cpu_limit is not None:
+            payload["cpuLimit"] = cpu_limit
+        if memory_request is not None:
+            payload["memoryRequest"] = memory_request
+        if memory_limit is not None:
+            payload["memoryLimit"] = memory_limit
+        return await self._request(
+            "POST", "/api/workspace/runtime-installations", json=payload,
+        )
+
+    async def install_agent(
+        self,
+        installation_id: str,
+        *,
+        agent_im_user_id: str,
+        profile_id: Optional[str] = None,
+        adapter_name: Optional[str] = None,
+        profile_name: Optional[str] = None,
+        config: Optional[Dict[str, Any]] = None,
+    ) -> IMResult:
+        payload: Dict[str, Any] = {"agentImUserId": agent_im_user_id}
+        if profile_id is not None:
+            payload["profileId"] = profile_id
+        if adapter_name is not None:
+            payload["adapterName"] = adapter_name
+        if profile_name is not None:
+            payload["profileName"] = profile_name
+        if config is not None:
+            payload["config"] = config
+        return await self._request(
+            "POST",
+            f"/api/workspace/runtime-installations/{installation_id}/agents",
+            json=payload,
+        )
+
+
+class AsyncTasksClient:
+    """Async task management (v1.8.2 + v1.9.3 enriched)."""
+
+    def __init__(self, request_fn, base_url: Optional[str] = None, get_auth_headers: Optional[Callable] = None):
+        self._request = request_fn
+        self._base_url = base_url
+        self._get_auth_headers = get_auth_headers
+
+    async def create(
+        self,
+        title: str,
+        *,
+        workspace_id: Optional[str] = None,
+        conversation_id: Optional[str] = None,
+        runtime_route: Optional[str] = None,
+        kind: Optional[str] = None,
+        **kwargs: Any,
+    ) -> IMResult:
+        payload: Dict[str, Any] = {"title": title}
+        if workspace_id:
+            payload["workspaceId"] = workspace_id
+        if conversation_id:
+            payload["conversationId"] = conversation_id
+        if runtime_route:
+            payload["runtimeRoute"] = runtime_route
+        if kind:
+            payload["kind"] = kind
+        payload.update(kwargs)
         return await self._request("POST", "/api/im/tasks", json=payload)
 
     async def list(
-        self, *, status=None, capability=None, assignee_id=None, creator_id=None,
-        schedule_type=None, conversation_id=None, limit=None, cursor=None,
+        self,
+        *,
+        status=None,
+        capability=None,
+        assignee_id=None,
+        creator_id=None,
+        schedule_type=None,
+        conversation_id=None,
+        workspace_id: Optional[str] = None,
+        limit=None,
+        cursor=None,
     ) -> IMResult:
-        """List tasks with optional filters."""
         params: Dict[str, Any] = {}
         if status:
             params["status"] = status
@@ -1903,26 +3374,36 @@ class AsyncTasksClient:
             params["scheduleType"] = schedule_type
         if conversation_id:
             params["conversationId"] = conversation_id
+        if workspace_id:
+            params["workspaceId"] = workspace_id
         if limit is not None:
             params["limit"] = limit
         if cursor:
             params["cursor"] = cursor
         return await self._request("GET", "/api/im/tasks", params=params)
 
+    async def marketplace(
+        self, *, capability: Optional[str] = None, limit: Optional[int] = None,
+    ) -> IMResult:
+        params: Dict[str, Any] = {}
+        if capability:
+            params["capability"] = capability
+        if limit is not None:
+            params["limit"] = limit
+        return await self._request("GET", "/api/im/tasks/marketplace", params=params or None)
+
     async def get(self, task_id: str) -> IMResult:
-        """Get task details with logs."""
         return await self._request("GET", f"/api/im/tasks/{task_id}")
 
-    async def update(self, task_id: str, **kwargs) -> IMResult:
-        """Update a task (creator only)."""
-        return await self._request("PATCH", f"/api/im/tasks/{task_id}", json=kwargs)
+    async def update(self, task_id: str, **kwargs: Any) -> IMResult:
+        payload = {k: v for k, v in kwargs.items() if v is not None}
+        return await self._request("PATCH", f"/api/im/tasks/{task_id}", json=payload)
 
     async def claim(self, task_id: str) -> IMResult:
-        """Claim a pending task."""
         return await self._request("POST", f"/api/im/tasks/{task_id}/claim")
 
     async def progress(self, task_id: str, *, message=None, metadata=None) -> IMResult:
-        """Report task progress."""
+        """DEPRECATED — use update() instead. Server returns Sunset 2026-07-01."""
         payload: Dict[str, Any] = {}
         if message:
             payload["message"] = message
@@ -1931,7 +3412,6 @@ class AsyncTasksClient:
         return await self._request("POST", f"/api/im/tasks/{task_id}/progress", json=payload)
 
     async def complete(self, task_id: str, *, result=None, result_uri=None, cost=None) -> IMResult:
-        """Mark task as completed."""
         payload: Dict[str, Any] = {}
         if result is not None:
             payload["result"] = result
@@ -1942,24 +3422,108 @@ class AsyncTasksClient:
         return await self._request("POST", f"/api/im/tasks/{task_id}/complete", json=payload)
 
     async def fail(self, task_id: str, error: str, *, metadata=None) -> IMResult:
-        """Mark task as failed."""
         payload: Dict[str, Any] = {"error": error}
         if metadata:
             payload["metadata"] = metadata
         return await self._request("POST", f"/api/im/tasks/{task_id}/fail", json=payload)
 
     async def approve(self, task_id: str) -> IMResult:
-        """Approve a completed task (creator only)."""
         return await self._request("POST", f"/api/im/tasks/{task_id}/approve")
 
     async def reject(self, task_id: str, reason: str) -> IMResult:
-        """Reject a completed task (creator only)."""
         payload: Dict[str, Any] = {"reason": reason}
         return await self._request("POST", f"/api/im/tasks/{task_id}/reject", json=payload)
 
     async def cancel(self, task_id: str) -> IMResult:
-        """Cancel a task (soft delete)."""
         return await self._request("DELETE", f"/api/im/tasks/{task_id}")
+
+    async def reward(self, task_id: str, *, amount: Optional[float] = None, **kwargs: Any) -> IMResult:
+        payload: Dict[str, Any] = {}
+        if amount is not None:
+            payload["amount"] = amount
+        payload.update(kwargs)
+        return await self._request("POST", f"/api/im/tasks/{task_id}/reward", json=payload or None)
+
+    async def subtasks(self, task_id: str) -> IMResult:
+        return await self._request("GET", f"/api/im/tasks/{task_id}/subtasks")
+
+    async def summary(self, task_id: str) -> IMResult:
+        return await self._request("GET", f"/api/im/tasks/{task_id}/summary")
+
+    async def events(
+        self,
+        *,
+        token: Optional[str] = None,
+        last_event_id: Optional[str] = None,
+        timeout: Optional[float] = None,
+    ) -> AsyncIterator[Dict[str, Any]]:
+        """Async iterator over the SSE task events stream (v1.8.2).
+
+        Yields events with shape ``{"id": ..., "event": ..., "data": {...}}``.
+        Caller is responsible for reconnect on disconnect.
+        """
+        import json as _json
+
+        if not self._base_url:
+            raise RuntimeError(
+                "tasks.events() requires base_url + auth headers; "
+                "use it via client.im.tasks (which wires them automatically)."
+            )
+
+        params: Dict[str, str] = {}
+        if token:
+            params["token"] = token
+        else:
+            if self._get_auth_headers:
+                auth_hdr = self._get_auth_headers().get("Authorization", "")
+                if auth_hdr.lower().startswith("bearer "):
+                    params["token"] = auth_hdr[7:]
+        if not params.get("token"):
+            raise RuntimeError(
+                "tasks.events() requires a token; pass ``token=`` explicitly "
+                "or initialize the client with an API key."
+            )
+
+        url = f"{self._base_url}/api/im/tasks/events"
+        headers = {"Accept": "text/event-stream"}
+        if last_event_id:
+            headers["Last-Event-ID"] = last_event_id
+
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            async with client.stream("GET", url, params=params, headers=headers) as response:
+                if response.status_code != 200:
+                    raise RuntimeError(
+                        f"tasks.events stream failed: HTTP {response.status_code}"
+                    )
+
+                event_id: Optional[str] = None
+                event_name: str = "message"
+                data_buf: List[str] = []
+
+                async for line in response.aiter_lines():
+                    if line == "":
+                        if data_buf:
+                            try:
+                                data_obj = _json.loads("\n".join(data_buf))
+                            except Exception:
+                                data_obj = {"raw": "\n".join(data_buf)}
+                            yield {
+                                "id": event_id,
+                                "event": event_name,
+                                "data": data_obj,
+                            }
+                        event_id = None
+                        event_name = "message"
+                        data_buf = []
+                        continue
+                    if line.startswith(":"):
+                        continue
+                    if line.startswith("id:"):
+                        event_id = line[3:].lstrip()
+                    elif line.startswith("event:"):
+                        event_name = line[6:].lstrip()
+                    elif line.startswith("data:"):
+                        data_buf.append(line[5:].lstrip())
 
 
 class AsyncMemoryClient:
@@ -2031,6 +3595,23 @@ class AsyncMemoryClient:
     async def get_knowledge_links(self) -> IMResult:
         """Get memory-gene knowledge links for the authenticated user's memory files (v1.8.0)."""
         return await self._request("GET", "/api/im/memory/links")
+
+    async def digest(
+        self,
+        *,
+        scope: Optional[str] = None,
+        max_lines: Optional[int] = None,
+        max_bytes: Optional[int] = None,
+    ) -> IMResult:
+        """CC-style always-load Markdown digest of all memory files (v1.9.x)."""
+        params: Dict[str, Any] = {}
+        if scope:
+            params["scope"] = scope
+        if max_lines is not None:
+            params["maxLines"] = max_lines
+        if max_bytes is not None:
+            params["maxBytes"] = max_bytes
+        return await self._request("GET", "/api/im/memory/digest", params=params or None)
 
 
 class AsyncKnowledgeLinkClient:
@@ -2353,8 +3934,24 @@ class AsyncEvolutionClient:
             payload["scope"] = scope
         return await self._request("POST", f"/api/im/skills/{_url_quote(slug_or_id, safe='')}/install", json=payload if payload else None)
 
+    async def create_skill(self, slug: str, name: str, content: str, **kwargs: Any) -> IMResult:
+        """Create a new skill. See sync counterpart."""
+        payload: Dict[str, Any] = {"slug": slug, "name": name, "content": content}
+        for k, v in kwargs.items():
+            if v is not None:
+                payload[k] = v
+        return await self._request("POST", "/api/im/skills", json=payload)
+
+    async def star_skill(self, skill_id: str, starred: bool = True) -> IMResult:
+        """Toggle a star on a skill."""
+        return await self._request(
+            "POST",
+            f"/api/im/skills/{_url_quote(skill_id, safe='')}/star",
+            json={"starred": starred},
+        )
+
     async def get_workspace(self, scope: Optional[str] = None, slots: Optional[List[str]] = None, include_content: bool = False) -> IMResult:
-        """Get workspace superset view with slot filtering."""
+        """DEPRECATED — use ``client.im.workspace.get_view()`` instead."""
         params: Dict[str, Any] = {}
         if scope:
             params["scope"] = scope
@@ -3017,8 +4614,13 @@ class AsyncIMClient:
         self.bindings = AsyncBindingsClient(request_fn)
         self.credits = AsyncCreditsClient(request_fn)
         self.workspace = AsyncWorkspaceClient(request_fn)
+        # v1.9.3: plural workspaces resource
+        self.workspaces = AsyncWorkspacesClient(request_fn)
+        self.workspace_files = AsyncWorkspaceFilesClient(request_fn)
+        self.assets = AsyncAssetsClient(request_fn, base_url, get_auth_headers)
+        self.runtime_installations = AsyncRuntimeInstallationsClient(request_fn)
         self.files = AsyncFilesClient(request_fn, base_url, get_auth_headers)
-        self.tasks = AsyncTasksClient(request_fn)
+        self.tasks = AsyncTasksClient(request_fn, base_url, get_auth_headers)
         self.memory = AsyncMemoryClient(request_fn)
         self.knowledge = AsyncKnowledgeLinkClient(request_fn)
         self.identity = AsyncIdentityClient(request_fn)
@@ -3155,9 +4757,12 @@ class PrismerClient:
         *,
         json: Optional[Any] = None,
         params: Optional[Dict[str, Any]] = None,
+        headers: Optional[Dict[str, str]] = None,
     ):
         try:
-            response = self._client.request(method, path, json=json, params=params)
+            response = self._client.request(
+                method, path, json=json, params=params, headers=headers,
+            )
             data = response.json()
             if not response.is_success:
                 err = data.get("error", {"code": "HTTP_ERROR", "message": f"HTTP {response.status_code}"})
@@ -3282,6 +4887,19 @@ class PrismerClient:
         """Get result of a completed async parse task."""
         data = self._request("GET", f"/api/parse/result/{task_id}")
         return ParseResult(**data)
+
+    # --------------------------------------------------------------------------
+    # Models / LLM proxy
+    # --------------------------------------------------------------------------
+
+    def list_models(self) -> Dict[str, Any]:
+        """List available LLM models (OpenAI-format response).
+
+        Tries upstream NewAPI first; falls back to a hardcoded whitelist
+        (claude-opus-4-7, claude-sonnet-4-6, claude-haiku-4-5, gpt-4o,
+        gpt-4o-mini, deepseek-chat). Returns the raw JSON envelope.
+        """
+        return self._request("GET", "/api/v1/models")
 
     # --------------------------------------------------------------------------
     # Convenience
@@ -3496,9 +5114,12 @@ class AsyncPrismerClient:
         *,
         json: Optional[Any] = None,
         params: Optional[Dict[str, Any]] = None,
+        headers: Optional[Dict[str, str]] = None,
     ):
         try:
-            response = await self._client.request(method, path, json=json, params=params)
+            response = await self._client.request(
+                method, path, json=json, params=params, headers=headers,
+            )
             data = response.json()
             if not response.is_success:
                 err = data.get("error", {"code": "HTTP_ERROR", "message": f"HTTP {response.status_code}"})
@@ -3608,6 +5229,12 @@ class AsyncPrismerClient:
     async def parse_result(self, task_id: str) -> ParseResult:
         data = await self._request("GET", f"/api/parse/result/{task_id}")
         return ParseResult(**data)
+
+    # --- Models ---
+
+    async def list_models(self) -> Dict[str, Any]:
+        """List available LLM models (OpenAI-format response). See sync counterpart."""
+        return await self._request("GET", "/api/v1/models")
 
     # --- Convenience ---
 

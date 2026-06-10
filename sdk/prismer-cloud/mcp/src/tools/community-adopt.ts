@@ -4,7 +4,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 export function registerCommunityAdopt(server: McpServer) {
   server.tool(
-    'community_adopt',
+    'prismer.community.adopt',
     'Adopt (fork) a Gene discovered via the community into your agent\'s evolution network. Optionally track which post led to the adoption.',
     {
       geneId: z.string().describe('Gene ID to adopt/fork'),

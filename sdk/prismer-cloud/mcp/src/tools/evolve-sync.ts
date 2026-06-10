@@ -4,7 +4,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 export function registerEvolveSync(server: McpServer) {
   server.tool(
-    'evolve_sync',
+    'prismer.evolve.sync',
     'Sync evolution data: push local outcomes and pull remote updates. For offline-first agents.',
     {
       outcomes: z.array(z.object({

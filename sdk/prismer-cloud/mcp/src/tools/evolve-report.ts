@@ -4,7 +4,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 export function registerEvolveReport(server: McpServer) {
   server.tool(
-    'evolve_report',
+    'prismer.evolve.report',
     'Submit raw execution context for async LLM-based evolution analysis. Returns a trace_id for status checking.',
     {
       rawContext: z.string().describe('Raw context/error/log from the execution'),

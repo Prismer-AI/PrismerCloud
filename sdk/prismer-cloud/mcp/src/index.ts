@@ -1,10 +1,14 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { pathToFileURL } from 'url';
 import { registerContextLoad } from './tools/context-load.js';
 import { registerContextSave } from './tools/context-save.js';
 import { registerParse } from './tools/parse.js';
 import { registerDiscover } from './tools/discover.js';
 import { registerSendMessage } from './tools/send-message.js';
+import { registerImListAgents } from './tools/im-list-agents.js';
+import { registerImSendToAgent } from './tools/im-send-to-agent.js';
+import { registerSendFile } from './tools/send-file.js';
 import { registerEditMessage } from './tools/edit-message.js';
 import { registerDeleteMessage } from './tools/delete-message.js';
 import { registerReactMessage } from './tools/react-message.js';
@@ -32,6 +36,7 @@ import { registerCompleteTask } from './tools/complete-task.js';
 import { registerApproveTask } from './tools/approve-task.js';
 import { registerRejectTask } from './tools/reject-task.js';
 import { registerCancelTask } from './tools/cancel-task.js';
+import { registerRequestHumanApproval } from './tools/request-human-approval.js';
 import { registerSkillInstall } from './tools/skill-install.js';
 import { registerSkillUninstall } from './tools/skill-uninstall.js';
 import { registerSkillInstalled } from './tools/skill-installed.js';
@@ -55,7 +60,10 @@ import { registerCommunityFollow } from './tools/community-follow.js';
 import { registerCommunityProfileMcp } from './tools/community-profile-mcp.js';
 import { registerContactSearch } from './tools/contact-search.js';
 import { registerContactRequest } from './tools/contact-request.js';
-import { getApiKey } from './lib/client.js';
+import { registerAssetSearch } from './tools/asset-search.js';
+import { registerAssetDescribe } from './tools/asset-describe.js';
+import { registerAssetRead } from './tools/asset-read.js';
+import { getApiKey, getMcpAllowlist, isToolAllowed } from './lib/client.js';
 
 // Handle --setup flag before starting MCP server
 if (process.argv.includes('--setup')) {
@@ -92,81 +100,88 @@ if (process.argv.includes('--setup')) {
 
 const server = new McpServer({
   name: 'prismer',
-  version: '1.9.0',
-  instructions: `Prismer provides cross-agent evolution learning and a community knowledge forum. Key workflows:
-
-**Evolution (learn from errors):**
-1. When you encounter an error or need a strategy: call evolve_analyze with the error signals
-2. If a gene is recommended: follow the strategy steps
-3. After the task completes: call evolve_record with the outcome (success/failed) and score (0-1)
-4. If you discover a new reusable pattern: call evolve_create_gene to share it
-
-**Community (share and discuss):**
-- Browse and search community posts with community_browse / community_search
-- Create posts to share insights, ask questions, or report results with community_post
-- Comment, vote, and bookmark with community_comment / community_vote / community_bookmark
-- Mark best answers with community_answer; adopt genes from posts with community_adopt
-- Edit/delete with community_edit / community_delete; notifications with community_notifications
-- Follow and profiles: community_follow, community_profile
-
-The evolution analyze → apply → record cycle enables the network to learn, and the community forum enables agents and humans to share knowledge.`,
+  version: '2.0.8',
 });
 
-registerContextLoad(server);
-registerContextSave(server);
-registerParse(server);
-registerDiscover(server);
-registerSendMessage(server);
-registerEditMessage(server);
-registerDeleteMessage(server);
-registerReactMessage(server);
-registerEvolveAnalyze(server);
-registerEvolveRecord(server);
-registerEvolveCreateGene(server);
-registerEvolveDistill(server);
-registerEvolveBrowse(server);
-registerEvolveImport(server);
-registerEvolveReport(server);
-registerEvolveAchievements(server);
-registerEvolveSync(server);
-registerEvolveExportSkill(server);
-registerEvolvePublish(server);
-registerEvolveDelete(server);
-registerMemoryWrite(server);
-registerMemoryRead(server);
-registerRecall(server);
-registerCreateTask(server);
-registerListTasks(server);
-registerGetTask(server);
-registerUpdateTask(server);
-registerCompleteTask(server);
-registerApproveTask(server);
-registerRejectTask(server);
-registerCancelTask(server);
-registerSkillInstall(server);
-registerSkillUninstall(server);
-registerSkillInstalled(server);
-registerSkillContent(server);
-registerSkillSearch(server);
-registerSkillSync(server);
-registerSessionChecklist(server);
-registerCommunityPost(server);
-registerCommunityBrowse(server);
-registerCommunitySearch(server);
-registerCommunityDetail(server);
-registerCommunityComment(server);
-registerCommunityVote(server);
-registerCommunityAnswer(server);
-registerCommunityAdopt(server);
-registerCommunityBookmark(server);
-registerCommunityReport(server);
-registerCommunityEdit(server);
-registerCommunityDelete(server);
-registerCommunityNotifications(server);
-registerCommunityFollow(server);
-registerCommunityProfileMcp(server);
-registerContactSearch(server);
-registerContactRequest(server);
+export type ToolRegistration = { name: string; register: (server: McpServer) => void };
+
+export const toolRegistrations: ToolRegistration[] = [
+  { name: 'prismer.context.load', register: registerContextLoad },
+  { name: 'prismer.context.save', register: registerContextSave },
+  { name: 'prismer.parse.document', register: registerParse },
+  { name: 'prismer.agent.discover', register: registerDiscover },
+  { name: 'prismer.message.send', register: registerSendMessage },
+  { name: 'prismer.conversation.listAgents', register: registerImListAgents },
+  { name: 'prismer.agent.send', register: registerImSendToAgent },
+  { name: 'prismer.message.sendFile', register: registerSendFile },
+  { name: 'prismer.message.edit', register: registerEditMessage },
+  { name: 'prismer.message.delete', register: registerDeleteMessage },
+  { name: 'prismer.message.react', register: registerReactMessage },
+  { name: 'prismer.evolve.analyze', register: registerEvolveAnalyze },
+  { name: 'prismer.evolve.record', register: registerEvolveRecord },
+  { name: 'prismer.evolve.createGene', register: registerEvolveCreateGene },
+  { name: 'prismer.evolve.distill', register: registerEvolveDistill },
+  { name: 'prismer.evolve.browse', register: registerEvolveBrowse },
+  { name: 'prismer.evolve.import', register: registerEvolveImport },
+  { name: 'prismer.evolve.report', register: registerEvolveReport },
+  { name: 'prismer.evolve.achievements', register: registerEvolveAchievements },
+  { name: 'prismer.evolve.sync', register: registerEvolveSync },
+  { name: 'prismer.evolve.exportSkill', register: registerEvolveExportSkill },
+  { name: 'prismer.evolve.publish', register: registerEvolvePublish },
+  { name: 'prismer.evolve.delete', register: registerEvolveDelete },
+  { name: 'prismer.memory.write', register: registerMemoryWrite },
+  { name: 'prismer.memory.read', register: registerMemoryRead },
+  { name: 'prismer.memory.recall', register: registerRecall },
+  { name: 'prismer.asset.search', register: registerAssetSearch },
+  { name: 'prismer.asset.describe', register: registerAssetDescribe },
+  { name: 'prismer.asset.read', register: registerAssetRead },
+  { name: 'prismer.task.create', register: registerCreateTask },
+  { name: 'prismer.task.list', register: registerListTasks },
+  { name: 'prismer.task.get', register: registerGetTask },
+  { name: 'prismer.task.update', register: registerUpdateTask },
+  { name: 'prismer.task.complete', register: registerCompleteTask },
+  { name: 'prismer.task.approve', register: registerApproveTask },
+  { name: 'prismer.task.reject', register: registerRejectTask },
+  { name: 'prismer.task.cancel', register: registerCancelTask },
+  { name: 'prismer.approval.request_human_approval', register: registerRequestHumanApproval },
+  { name: 'prismer.skill.install', register: registerSkillInstall },
+  { name: 'prismer.skill.uninstall', register: registerSkillUninstall },
+  { name: 'prismer.skill.installed', register: registerSkillInstalled },
+  { name: 'prismer.skill.content', register: registerSkillContent },
+  { name: 'prismer.skill.search', register: registerSkillSearch },
+  { name: 'prismer.skill.sync', register: registerSkillSync },
+  { name: 'skill_sync', register: (mcpServer) => registerSkillSync(mcpServer, 'skill_sync') },
+  { name: 'prismer.session.checklist', register: registerSessionChecklist },
+  { name: 'prismer.community.post', register: registerCommunityPost },
+  { name: 'prismer.community.browse', register: registerCommunityBrowse },
+  { name: 'prismer.community.search', register: registerCommunitySearch },
+  { name: 'prismer.community.detail', register: registerCommunityDetail },
+  { name: 'prismer.community.comment', register: registerCommunityComment },
+  { name: 'prismer.community.vote', register: registerCommunityVote },
+  { name: 'prismer.community.answer', register: registerCommunityAnswer },
+  { name: 'prismer.community.adopt', register: registerCommunityAdopt },
+  { name: 'prismer.community.bookmark', register: registerCommunityBookmark },
+  { name: 'prismer.community.report', register: registerCommunityReport },
+  { name: 'prismer.community.edit', register: registerCommunityEdit },
+  { name: 'prismer.community.delete', register: registerCommunityDelete },
+  { name: 'prismer.community.notifications', register: registerCommunityNotifications },
+  { name: 'prismer.community.follow', register: registerCommunityFollow },
+  { name: 'prismer.community.profile', register: registerCommunityProfileMcp },
+  { name: 'prismer.contact.search', register: registerContactSearch },
+  { name: 'prismer.contact.request', register: registerContactRequest },
+];
+
+export function selectAllowedToolRegistrations(registrations: ToolRegistration[], rules = getMcpAllowlist()): ToolRegistration[] {
+  return registrations.filter((entry) => isToolAllowed(entry.name, rules));
+}
+
+const allowlist = getMcpAllowlist();
+const allowedToolRegistrations = selectAllowedToolRegistrations(toolRegistrations, allowlist);
+let registeredTools = 0;
+for (const entry of allowedToolRegistrations) {
+  entry.register(server);
+  registeredTools++;
+}
 
 async function main() {
   if (!getApiKey()) {
@@ -178,10 +193,18 @@ async function main() {
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error('[Prismer MCP] Server running on stdio');
+  const mode = allowlist.length === 0 ? 'all tools' : `${registeredTools}/${toolRegistrations.length} allowlisted tools`;
+  console.error(`[Prismer MCP] Server running on stdio (${mode})`);
 }
 
-main().catch((error) => {
-  console.error('[Prismer MCP] Fatal error:', error);
-  process.exit(1);
-});
+function isEntrypoint(): boolean {
+  const entry = process.argv[1];
+  return !!entry && import.meta.url === pathToFileURL(entry).href;
+}
+
+if (isEntrypoint()) {
+  main().catch((error) => {
+    console.error('[Prismer MCP] Fatal error:', error);
+    process.exit(1);
+  });
+}

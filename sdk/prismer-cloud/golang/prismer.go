@@ -23,6 +23,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -38,6 +39,97 @@ import (
 	"strings"
 	"time"
 )
+
+// ────────────────────────────────────────────────────────────────────────────
+// v2.0 §3.0.2 — per-request option (extra HTTP headers)
+// ────────────────────────────────────────────────────────────────────────────
+
+// requestOptions captures per-call request tuning (currently just extra
+// HTTP headers — see WithHeader). Future per-call knobs (timeout override,
+// retry policy, etc.) live here too.
+type requestOptions struct {
+	headers map[string]string
+}
+
+// requestOption is a variadic functional option for doRequest / do.
+type requestOption func(*requestOptions)
+
+// WithHeader returns a requestOption that adds an extra HTTP header.
+func WithHeader(key, value string) requestOption {
+	return func(o *requestOptions) {
+		if o.headers == nil {
+			o.headers = map[string]string{}
+		}
+		o.headers[key] = value
+	}
+}
+
+// generateIdempotencyKey returns a UUID v4. Server applies UNIQUE
+// (conversationId, idempotencyKey) so retries with the same key are deduped.
+// Falls back to crypto/rand to produce RFC 4122 v4 hex (no external dep).
+func generateIdempotencyKey() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		// Crypto/rand is not expected to fail in practice; use time fallback.
+		t := time.Now().UnixNano()
+		return fmt.Sprintf("%08x-%04x-4%03x-8%03x-%012x", uint32(t), uint16(t>>32), uint16(t>>16), uint16(t&0xfff), t)
+	}
+	// RFC 4122 v4
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
+		b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+}
+
+// buildSendPayload assembles the JSON body + idempotency key for a message
+// send. content may be a string (legacy single-text) — caller may also
+// place a ContentBlock[] on opts.ContentBlocks. Returns (body, key) where
+// key is also stamped into body["idempotencyKey"] for offline-path
+// fallback.
+func buildSendPayload(content string, opts *IMSendOptions) (map[string]interface{}, string) {
+	payload := map[string]interface{}{
+		"content": content,
+		"type":    "text",
+	}
+	var key string
+	if opts != nil {
+		if opts.Type != "" {
+			payload["type"] = opts.Type
+		}
+		if opts.Metadata != nil {
+			payload["metadata"] = opts.Metadata
+		}
+		if opts.ParentID != "" {
+			payload["parentId"] = opts.ParentID
+		}
+		if opts.QuotedMessageID != "" {
+			payload["quotedMessageId"] = opts.QuotedMessageID
+		}
+		if len(opts.ContentBlocks) > 0 {
+			payload["contentBlocks"] = opts.ContentBlocks
+		}
+		key = opts.IdempotencyKey
+	}
+	if key == "" {
+		key = generateIdempotencyKey()
+	}
+	payload["idempotencyKey"] = key
+	return payload, key
+}
+
+// buildSendPayloadBlocks is the ContentBlock[]-content variant. Returns
+// (body, key); body.content is left as empty string (placeholder during
+// the §4.6 6-sprint double-write window — SOT lives in contentBlocks).
+func buildSendPayloadBlocks(blocks []ContentBlock, opts *IMSendOptions) (map[string]interface{}, string) {
+	merged := &IMSendOptions{}
+	if opts != nil {
+		*merged = *opts
+	}
+	if len(merged.ContentBlocks) == 0 {
+		merged.ContentBlocks = blocks
+	}
+	return buildSendPayload("", merged)
+}
 
 // ============================================================================
 // Environment
@@ -238,7 +330,12 @@ func (c *Client) IM() *IMClient {
 // Internal request helper
 // ============================================================================
 
-func (c *Client) doRequest(ctx context.Context, method, path string, body interface{}, query map[string]string) ([]byte, error) {
+func (c *Client) doRequest(ctx context.Context, method, path string, body interface{}, query map[string]string, opts ...requestOption) ([]byte, error) {
+	ro := &requestOptions{}
+	for _, opt := range opts {
+		opt(ro)
+	}
+
 	u := c.baseURL + path
 	if len(query) > 0 {
 		params := url.Values{}
@@ -270,6 +367,11 @@ func (c *Client) doRequest(ctx context.Context, method, path string, body interf
 	}
 	if c.imAgent != "" {
 		req.Header.Set("X-IM-Agent", c.imAgent)
+	}
+	// v2.0 §3.0.2 — per-call extra headers (e.g. X-Idempotency-Key). Caller
+	// wins over the defaults set above on key collision.
+	for k, v := range ro.headers {
+		req.Header.Set(k, v)
 	}
 
 	resp, err := c.httpClient.Do(req)
@@ -634,7 +736,7 @@ func newIMClient(c *Client) *IMClient {
 	return im
 }
 
-func (im *IMClient) do(ctx context.Context, method, path string, body interface{}, query map[string]string) (*IMResult, error) {
+func (im *IMClient) do(ctx context.Context, method, path string, body interface{}, query map[string]string, opts ...requestOption) (*IMResult, error) {
 	// v1.8.0 S7: Auto-sign message POST requests
 	if method == "POST" && strings.Contains(path, "/messages") && im.client.identityPrivKey != nil {
 		if m, ok := body.(map[string]interface{}); ok {
@@ -658,7 +760,7 @@ func (im *IMClient) do(ctx context.Context, method, path string, body interface{
 		}
 	}
 
-	data, err := im.client.doRequest(ctx, method, path, body, query)
+	data, err := im.client.doRequest(ctx, method, path, body, query, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -687,23 +789,15 @@ func paginationQuery(opts *IMPaginationOptions) map[string]string {
 	return q
 }
 
+// sendPayload (legacy v1.x) is superseded by buildSendPayload — kept as a
+// thin shim so external packages compiling against the old name still work.
+// Returns the body only (no idempotency key); callers must use the new
+// Send / SendBlocks paths for v2.0 §3.0.2 dedup.
+//
+// Deprecated: use buildSendPayload (returns body + key).
 func sendPayload(content string, opts *IMSendOptions) map[string]interface{} {
-	payload := map[string]interface{}{"content": content, "type": "text"}
-	if opts != nil {
-		if opts.Type != "" {
-			payload["type"] = opts.Type
-		}
-		if opts.Metadata != nil {
-			payload["metadata"] = opts.Metadata
-		}
-		if opts.ParentID != "" {
-			payload["parentId"] = opts.ParentID
-		}
-		if opts.QuotedMessageID != "" {
-			payload["quotedMessageId"] = opts.QuotedMessageID
-		}
-	}
-	return payload
+	body, _ := buildSendPayload(content, opts)
+	return body
 }
 
 // ============================================================================
@@ -728,8 +822,23 @@ func (a *AccountClient) RefreshToken(ctx context.Context) (*IMResult, error) {
 // DirectClient handles direct messaging.
 type DirectClient struct{ im *IMClient }
 
+// Send a direct message to a user.
+//
+// v2.0 §3.0.2 Gap A-④ — when opts.IdempotencyKey is empty, the SDK
+// auto-generates a UUID v4 and stamps it into the X-Idempotency-Key
+// HTTP header (also mirrored in body.idempotencyKey for offline path).
+// v2.0 §4.6 — set opts.ContentBlocks for multimodal sends; the SDK sends
+// them as `contentBlocks` alongside the legacy `content` field.
 func (d *DirectClient) Send(ctx context.Context, userID, content string, opts *IMSendOptions) (*IMResult, error) {
-	return d.im.do(ctx, "POST", "/api/im/direct/"+userID+"/messages", sendPayload(content, opts), nil)
+	body, key := buildSendPayload(content, opts)
+	return d.im.do(ctx, "POST", "/api/im/direct/"+userID+"/messages", body, nil, WithHeader("X-Idempotency-Key", key))
+}
+
+// SendBlocks sends a multimodal message — v2.0 §4.6 ContentBlock path.
+// Same idempotency semantics as Send.
+func (d *DirectClient) SendBlocks(ctx context.Context, userID string, blocks []ContentBlock, opts *IMSendOptions) (*IMResult, error) {
+	body, key := buildSendPayloadBlocks(blocks, opts)
+	return d.im.do(ctx, "POST", "/api/im/direct/"+userID+"/messages", body, nil, WithHeader("X-Idempotency-Key", key))
 }
 
 func (d *DirectClient) GetMessages(ctx context.Context, userID string, opts *IMPaginationOptions) (*IMResult, error) {
@@ -751,8 +860,16 @@ func (g *GroupsClient) Get(ctx context.Context, groupID string) (*IMResult, erro
 	return g.im.do(ctx, "GET", "/api/im/groups/"+groupID, nil, nil)
 }
 
+// Send a message to a group — see DirectClient.Send for §3.0.2 / §4.6.
 func (g *GroupsClient) Send(ctx context.Context, groupID, content string, opts *IMSendOptions) (*IMResult, error) {
-	return g.im.do(ctx, "POST", "/api/im/groups/"+groupID+"/messages", sendPayload(content, opts), nil)
+	body, key := buildSendPayload(content, opts)
+	return g.im.do(ctx, "POST", "/api/im/groups/"+groupID+"/messages", body, nil, WithHeader("X-Idempotency-Key", key))
+}
+
+// SendBlocks — multimodal group message (v2.0 §4.6).
+func (g *GroupsClient) SendBlocks(ctx context.Context, groupID string, blocks []ContentBlock, opts *IMSendOptions) (*IMResult, error) {
+	body, key := buildSendPayloadBlocks(blocks, opts)
+	return g.im.do(ctx, "POST", "/api/im/groups/"+groupID+"/messages", body, nil, WithHeader("X-Idempotency-Key", key))
 }
 
 func (g *GroupsClient) GetMessages(ctx context.Context, groupID string, opts *IMPaginationOptions) (*IMResult, error) {
@@ -799,8 +916,26 @@ func (cv *ConversationsClient) MarkAsRead(ctx context.Context, conversationID st
 // MessagesClient handles low-level message operations.
 type MessagesClient struct{ im *IMClient }
 
+// Send a message to a conversation.
+//
+// v2.0 §3.0.2 Gap A-④ — when opts.IdempotencyKey is empty, the SDK
+// auto-generates a UUID v4 per call and stamps it into the
+// X-Idempotency-Key HTTP header. Server applies UNIQUE
+// (conversationId, idempotencyKey) — pass the same key across retries to
+// trigger server-side dedup. The key is also mirrored into the JSON body
+// so offline / queued sends survive a retry.
+// v2.0 §4.6 — set opts.ContentBlocks for multimodal sends, or use
+// SendBlocks below for a ContentBlock-first call signature.
 func (m *MessagesClient) Send(ctx context.Context, conversationID, content string, opts *IMSendOptions) (*IMResult, error) {
-	return m.im.do(ctx, "POST", "/api/im/messages/"+conversationID, sendPayload(content, opts), nil)
+	body, key := buildSendPayload(content, opts)
+	return m.im.do(ctx, "POST", "/api/im/messages/"+conversationID, body, nil, WithHeader("X-Idempotency-Key", key))
+}
+
+// SendBlocks sends a multimodal message — v2.0 §4.6 ContentBlock path.
+// Same idempotency semantics as Send.
+func (m *MessagesClient) SendBlocks(ctx context.Context, conversationID string, blocks []ContentBlock, opts *IMSendOptions) (*IMResult, error) {
+	body, key := buildSendPayloadBlocks(blocks, opts)
+	return m.im.do(ctx, "POST", "/api/im/messages/"+conversationID, body, nil, WithHeader("X-Idempotency-Key", key))
 }
 
 func (m *MessagesClient) GetHistory(ctx context.Context, conversationID string, opts *IMPaginationOptions) (*IMResult, error) {
@@ -1025,7 +1160,10 @@ func (f *FilesClient) SendFile(ctx context.Context, conversationID string, data 
 		payload["parentId"] = opts.ParentID
 	}
 
-	msgResult, err := f.im.do(ctx, "POST", "/api/im/messages/"+conversationID, payload, nil)
+	// v2.0 §3.0.2 — auto-stamp idempotency key for the SendFile path too.
+	key := generateIdempotencyKey()
+	payload["idempotencyKey"] = key
+	msgResult, err := f.im.do(ctx, "POST", "/api/im/messages/"+conversationID, payload, nil, WithHeader("X-Idempotency-Key", key))
 	if err != nil {
 		return nil, err
 	}

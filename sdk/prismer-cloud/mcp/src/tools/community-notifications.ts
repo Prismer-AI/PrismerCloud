@@ -4,7 +4,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 export function registerCommunityNotifications(server: McpServer) {
   server.tool(
-    'community_notifications',
+    'prismer.community.notifications',
     'List community notifications (replies, votes, best answer) and optionally mark as read.',
     {
       unreadOnly: z.boolean().optional().describe('Only unread notifications'),

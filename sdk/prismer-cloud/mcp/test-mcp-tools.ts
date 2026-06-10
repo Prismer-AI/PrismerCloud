@@ -108,7 +108,7 @@ async function runTest(
 
 // ─── Group 1: Context API ───
 async function testContextLoad() {
-  await runTest('Context Load (single URL)', 'context_load', async () => {
+  await runTest('Context Load (single URL)', 'prismer.context.load', async () => {
     const res = (await apiFetch('/api/context/load', {
       method: 'POST',
       body: { input: 'https://example.com' },
@@ -117,7 +117,7 @@ async function testContextLoad() {
     return { ok, detail: ok ? `cached=${!!(res as any).result?.cached}` : JSON.stringify(res.error || res).slice(0, 200) };
   });
 
-  await runTest('Context Load (search query)', 'context_load', async () => {
+  await runTest('Context Load (search query)', 'prismer.context.load', async () => {
     const res = (await apiFetch('/api/context/load', {
       method: 'POST',
       body: { input: 'what is prismer cloud', return: { topK: 2 } },
@@ -129,7 +129,7 @@ async function testContextLoad() {
 }
 
 async function testContextSave() {
-  await runTest('Context Save', 'context_save', async () => {
+  await runTest('Context Save', 'prismer.context.save', async () => {
     const res = (await apiFetch('/api/context/save', {
       method: 'POST',
       body: {
@@ -145,7 +145,7 @@ async function testContextSave() {
 }
 
 async function testContextLoadRawFormat() {
-  await runTest('Context Load (format=raw)', 'context_load', async () => {
+  await runTest('Context Load (format=raw)', 'prismer.context.load', async () => {
     const res = (await apiFetch('/api/context/load', {
       method: 'POST',
       body: { input: 'https://example.com', format: 'raw' },
@@ -156,7 +156,7 @@ async function testContextLoadRawFormat() {
 }
 
 async function testContextLoadError() {
-  await runTest('Context Load (missing input — error)', 'context_load', async () => {
+  await runTest('Context Load (missing input — error)', 'prismer.context.load', async () => {
     const res = (await apiFetch('/api/context/load', {
       method: 'POST',
       body: {},
@@ -168,7 +168,7 @@ async function testContextLoadError() {
 }
 
 async function testContextSaveError() {
-  await runTest('Context Save (missing body — error)', 'context_save', async () => {
+  await runTest('Context Save (missing body — error)', 'prismer.context.save', async () => {
     const res = (await apiFetch('/api/context/save', {
       method: 'POST',
       body: {},
@@ -180,7 +180,7 @@ async function testContextSaveError() {
 
 // ─── Group 2: Parse API ───
 async function testParse() {
-  await runTest('Parse Document', 'parse_document', async () => {
+  await runTest('Parse Document', 'prismer.parse.document', async () => {
     const res = (await apiFetch('/api/parse', {
       method: 'POST',
       body: { url: 'https://arxiv.org/pdf/2301.00234v1', mode: 'fast' },
@@ -192,7 +192,7 @@ async function testParse() {
 }
 
 async function testParseError() {
-  await runTest('Parse Document (missing url — error)', 'parse_document', async () => {
+  await runTest('Parse Document (missing url — error)', 'prismer.parse.document', async () => {
     const res = (await apiFetch('/api/parse', {
       method: 'POST',
       body: {},
@@ -204,7 +204,7 @@ async function testParseError() {
 
 // ─── Group 3: IM - Discover ───
 async function testDiscover() {
-  await runTest('Discover Agents', 'discover_agents', async () => {
+  await runTest('Discover Agents', 'prismer.agent.discover', async () => {
     const res = (await apiFetch('/api/im/agents')) as Record<string, unknown>;
     const ok = res.ok === true;
     const agents = (res.data || []) as Record<string, unknown>[];
@@ -217,7 +217,7 @@ async function testDiscover() {
 
 // ─── Group 4: IM - Messaging ───
 async function testSendMessage() {
-  await runTest('Send Message', 'send_message', async () => {
+  await runTest('Send Message', 'prismer.message.send', async () => {
     if (!discoveredAgentId) {
       return { ok: false, detail: 'SKIP: no agent discovered' };
     }
@@ -235,7 +235,7 @@ async function testSendMessage() {
 }
 
 async function testEditMessage() {
-  await runTest('Edit Message', 'edit_message', async () => {
+  await runTest('Edit Message', 'prismer.message.edit', async () => {
     if (!createdConversationId || !createdMessageId) {
       return { ok: false, detail: 'SKIP: no message to edit' };
     }
@@ -249,7 +249,7 @@ async function testEditMessage() {
 }
 
 async function testDeleteMessage() {
-  await runTest('Delete Message', 'delete_message', async () => {
+  await runTest('Delete Message', 'prismer.message.delete', async () => {
     if (!createdConversationId || !createdMessageId) {
       return { ok: false, detail: 'SKIP: no message to delete' };
     }
@@ -262,7 +262,7 @@ async function testDeleteMessage() {
 }
 
 async function testSendMessageError() {
-  await runTest('Send Message (invalid recipient — error)', 'send_message', async () => {
+  await runTest('Send Message (invalid recipient — error)', 'prismer.message.send', async () => {
     const res = (await apiFetch('/api/im/direct/nonexistent-user-id-999/messages', {
       method: 'POST',
       body: { content: 'test', type: 'text' },
@@ -274,7 +274,7 @@ async function testSendMessageError() {
 
 // ─── Group 5: Evolution ───
 async function testEvolveAnalyze() {
-  await runTest('Evolve Analyze', 'evolve_analyze', async () => {
+  await runTest('Evolve Analyze', 'prismer.evolve.analyze', async () => {
     const res = (await apiFetch('/api/im/evolution/analyze', {
       method: 'POST',
       body: {
@@ -290,7 +290,7 @@ async function testEvolveAnalyze() {
 }
 
 async function testEvolveCreateGene() {
-  await runTest('Evolve Create Gene', 'evolve_create_gene', async () => {
+  await runTest('Evolve Create Gene', 'prismer.evolve.createGene', async () => {
     const res = (await apiFetch('/api/im/evolution/genes', {
       method: 'POST',
       body: {
@@ -308,7 +308,7 @@ async function testEvolveCreateGene() {
 }
 
 async function testEvolveRecord() {
-  await runTest('Evolve Record', 'evolve_record', async () => {
+  await runTest('Evolve Record', 'prismer.evolve.record', async () => {
     if (!createdGeneId) {
       return { ok: false, detail: 'SKIP: no gene to record against' };
     }
@@ -329,7 +329,7 @@ async function testEvolveRecord() {
 }
 
 async function testEvolveDistill() {
-  await runTest('Evolve Distill (dry_run)', 'evolve_distill', async () => {
+  await runTest('Evolve Distill (dry_run)', 'prismer.evolve.distill', async () => {
     const res = (await apiFetch('/api/im/evolution/distill?dry_run=true', {
       method: 'POST',
       body: {},
@@ -341,7 +341,7 @@ async function testEvolveDistill() {
 }
 
 async function testEvolveBrowse() {
-  await runTest('Evolve Browse', 'evolve_browse', async () => {
+  await runTest('Evolve Browse', 'prismer.evolve.browse', async () => {
     const res = (await apiFetch('/api/im/evolution/public/genes', {
       query: { limit: '3' },
     })) as Record<string, unknown>;
@@ -352,7 +352,7 @@ async function testEvolveBrowse() {
 }
 
 async function testEvolveReport() {
-  await runTest('Evolve Report', 'evolve_report', async () => {
+  await runTest('Evolve Report', 'prismer.evolve.report', async () => {
     const res = (await apiFetch('/api/im/evolution/report', {
       method: 'POST',
       body: {
@@ -368,7 +368,7 @@ async function testEvolveReport() {
 }
 
 async function testEvolveAchievements() {
-  await runTest('Evolve Achievements', 'evolve_achievements', async () => {
+  await runTest('Evolve Achievements', 'prismer.evolve.achievements', async () => {
     const res = (await apiFetch('/api/im/evolution/achievements')) as Record<string, unknown>;
     const ok = res.ok === true;
     const achievements = (res.data || []) as Record<string, unknown>[];
@@ -377,7 +377,7 @@ async function testEvolveAchievements() {
 }
 
 async function testEvolveSync() {
-  await runTest('Evolve Sync', 'evolve_sync', async () => {
+  await runTest('Evolve Sync', 'prismer.evolve.sync', async () => {
     const res = (await apiFetch('/api/im/evolution/sync', {
       method: 'POST',
       body: { pull: { since: 0 } },
@@ -391,7 +391,7 @@ async function testEvolveSync() {
 }
 
 async function testEvolveExportSkill() {
-  await runTest('Evolve Export Skill', 'evolve_export_skill', async () => {
+  await runTest('Evolve Export Skill', 'prismer.evolve.exportSkill', async () => {
     if (!createdGeneId) {
       return { ok: false, detail: 'SKIP: no gene to export' };
     }
@@ -407,7 +407,7 @@ async function testEvolveExportSkill() {
 }
 
 async function testEvolveImport() {
-  await runTest('Evolve Import (browse+import)', 'evolve_import', async () => {
+  await runTest('Evolve Import (browse+import)', 'prismer.evolve.import', async () => {
     // First browse to find a public gene
     const browseRes = (await apiFetch('/api/im/evolution/public/genes', {
       query: { limit: '1' },
@@ -427,7 +427,7 @@ async function testEvolveImport() {
 }
 
 async function testEvolvePublish() {
-  await runTest('Evolve Publish', 'evolve_publish', async () => {
+  await runTest('Evolve Publish', 'prismer.evolve.publish', async () => {
     if (!createdGeneId) {
       return { ok: false, detail: 'SKIP: no gene to publish' };
     }
@@ -443,7 +443,7 @@ async function testEvolvePublish() {
 }
 
 async function testEvolveDelete() {
-  await runTest('Evolve Delete', 'evolve_delete', async () => {
+  await runTest('Evolve Delete', 'prismer.evolve.delete', async () => {
     if (!createdGeneId) {
       return { ok: false, detail: 'SKIP: no gene to delete' };
     }
@@ -456,8 +456,8 @@ async function testEvolveDelete() {
 }
 
 async function testSkillSync() {
-  await runTest('Skill Sync', 'skill_sync', async () => {
-    // skill_sync relies on /api/im/skills/installed — just verify the API call succeeds
+  await runTest('Skill Sync', 'prismer.skill.sync', async () => {
+    // prismer.skill.sync relies on /api/im/skills/installed — just verify the API call succeeds
     const res = (await apiFetch('/api/im/skills/installed')) as Record<string, unknown>;
     const ok = res.ok === true;
     const skills = (res.data || []) as Record<string, unknown>[];
@@ -467,7 +467,7 @@ async function testSkillSync() {
 
 // ─── Evolution error & variant tests ───
 async function testEvolveBrowseWithCategory() {
-  await runTest('Evolve Browse (category=diagnostic)', 'evolve_browse', async () => {
+  await runTest('Evolve Browse (category=diagnostic)', 'prismer.evolve.browse', async () => {
     const res = (await apiFetch('/api/im/evolution/public/genes', {
       query: { limit: '3', category: 'diagnostic' },
     })) as Record<string, unknown>;
@@ -478,7 +478,7 @@ async function testEvolveBrowseWithCategory() {
 }
 
 async function testEvolveBrowseWithSearch() {
-  await runTest('Evolve Browse (search=test)', 'evolve_browse', async () => {
+  await runTest('Evolve Browse (search=test)', 'prismer.evolve.browse', async () => {
     const res = (await apiFetch('/api/im/evolution/public/genes', {
       query: { limit: '3', search: 'test' },
     })) as Record<string, unknown>;
@@ -489,7 +489,7 @@ async function testEvolveBrowseWithSearch() {
 }
 
 async function testEvolveRecordFailed() {
-  await runTest('Evolve Record (outcome=failed)', 'evolve_record', async () => {
+  await runTest('Evolve Record (outcome=failed)', 'prismer.evolve.record', async () => {
     // Create a throwaway gene for failed record test
     const createRes = (await apiFetch('/api/im/evolution/genes', {
       method: 'POST',
@@ -524,7 +524,7 @@ async function testEvolveRecordFailed() {
 }
 
 async function testEvolveSyncWithPush() {
-  await runTest('Evolve Sync (push with outcomes)', 'evolve_sync', async () => {
+  await runTest('Evolve Sync (push with outcomes)', 'prismer.evolve.sync', async () => {
     const res = (await apiFetch('/api/im/evolution/sync', {
       method: 'POST',
       body: {
@@ -545,7 +545,7 @@ async function testEvolveSyncWithPush() {
 }
 
 async function testEvolveCreateGeneError() {
-  await runTest('Evolve Create Gene (missing fields — error)', 'evolve_create_gene', async () => {
+  await runTest('Evolve Create Gene (missing fields — error)', 'prismer.evolve.createGene', async () => {
     const res = (await apiFetch('/api/im/evolution/genes', {
       method: 'POST',
       body: {},
@@ -556,7 +556,7 @@ async function testEvolveCreateGeneError() {
 }
 
 async function testEvolveDeleteError() {
-  await runTest('Evolve Delete (nonexistent — error)', 'evolve_delete', async () => {
+  await runTest('Evolve Delete (nonexistent — error)', 'prismer.evolve.delete', async () => {
     const res = (await apiFetch('/api/im/evolution/genes/nonexistent-gene-id-999', {
       method: 'DELETE',
     })) as Record<string, unknown>;
@@ -567,7 +567,7 @@ async function testEvolveDeleteError() {
 
 // ─── Group 6: Memory ───
 async function testMemoryWrite() {
-  await runTest('Memory Write', 'memory_write', async () => {
+  await runTest('Memory Write', 'prismer.memory.write', async () => {
     const res = (await apiFetch('/api/im/memory/files', {
       method: 'POST',
       body: {
@@ -583,7 +583,7 @@ async function testMemoryWrite() {
 }
 
 async function testMemoryRead() {
-  await runTest('Memory Read', 'memory_read', async () => {
+  await runTest('Memory Read', 'prismer.memory.read', async () => {
     const res = (await apiFetch('/api/im/memory/load', {
       query: { scope: 'global', path: 'mcp-test.md' },
     })) as Record<string, unknown>;
@@ -595,8 +595,8 @@ async function testMemoryRead() {
 }
 
 async function testRecall() {
-  await runTest('Recall', 'recall', async () => {
-    const res = (await apiFetch('/api/im/recall', {
+  await runTest('Recall', 'prismer.memory.prismer.memory.recall', async () => {
+    const res = (await apiFetch('/api/im/prismer.memory.recall', {
       query: { q: 'test', scope: 'all', limit: '5' },
     })) as Record<string, unknown>;
     const ok = res.ok === true;
@@ -606,7 +606,7 @@ async function testRecall() {
 }
 
 async function testMemoryReadError() {
-  await runTest('Memory Read (nonexistent path — error)', 'memory_read', async () => {
+  await runTest('Memory Read (nonexistent path — error)', 'prismer.memory.read', async () => {
     const res = (await apiFetch('/api/im/memory/load', {
       query: { scope: 'global', path: 'does-not-exist-' + Date.now() + '.md' },
     })) as Record<string, unknown>;
@@ -620,7 +620,7 @@ async function testMemoryReadError() {
 
 // ─── Group 7: Tasks ───
 async function testCreateTask() {
-  await runTest('Create Task', 'create_task', async () => {
+  await runTest('Create Task', 'prismer.task.create', async () => {
     const res = (await apiFetch('/api/im/tasks', {
       method: 'POST',
       body: {
@@ -637,7 +637,7 @@ async function testCreateTask() {
 }
 
 async function testCreateTaskError() {
-  await runTest('Create Task (missing title — error)', 'create_task', async () => {
+  await runTest('Create Task (missing title — error)', 'prismer.task.create', async () => {
     const res = (await apiFetch('/api/im/tasks', {
       method: 'POST',
       body: {},
@@ -649,11 +649,11 @@ async function testCreateTaskError() {
 
 // ─── Group 8: Skills ───
 async function testSkillSearch() {
-  await runTest('Skill Search', 'skill_search', async () => {
+  await runTest('Skill Search', 'prismer.skill.search', async () => {
     const res = (await apiFetch('/api/im/skills/search', {
       query: { limit: '5' },
     })) as Record<string, unknown>;
-    // skill_search accepts both res.ok and res.data
+    // prismer.skill.search accepts both res.ok and res.data
     const ok = res.ok === true || Array.isArray(res.data);
     const skills = (res.data || []) as Record<string, unknown>[];
     return { ok, detail: ok ? `skills=${skills.length}` : JSON.stringify(res.error || res).slice(0, 200) };
@@ -661,7 +661,7 @@ async function testSkillSearch() {
 }
 
 async function testSkillInstalled() {
-  await runTest('Skill Installed', 'skill_installed', async () => {
+  await runTest('Skill Installed', 'prismer.skill.installed', async () => {
     const res = (await apiFetch('/api/im/skills/installed')) as Record<string, unknown>;
     const ok = res.ok === true;
     const skills = (res.data || []) as Record<string, unknown>[];
@@ -670,7 +670,7 @@ async function testSkillInstalled() {
 }
 
 async function testSkillContent() {
-  await runTest('Skill Content', 'skill_content', async () => {
+  await runTest('Skill Content', 'prismer.skill.content', async () => {
     // First search for a skill
     const searchRes = (await apiFetch('/api/im/skills/search', {
       query: { limit: '1' },
@@ -687,7 +687,7 @@ async function testSkillContent() {
   });
 }
 
-// skill_install and skill_uninstall are tested together
+// prismer.skill.install and prismer.skill.uninstall are tested together
 async function testSkillInstallUninstall() {
   // Find a skill to install
   const searchRes = (await apiFetch('/api/im/skills/search', {
@@ -696,14 +696,14 @@ async function testSkillInstallUninstall() {
   const skills = ((searchRes.data || []) as Record<string, unknown>[]);
 
   if (skills.length === 0) {
-    await runTest('Skill Install', 'skill_install', async () => ({ ok: true, detail: 'SKIP: no skills' }));
-    await runTest('Skill Uninstall', 'skill_uninstall', async () => ({ ok: true, detail: 'SKIP: no skills' }));
+    await runTest('Skill Install', 'prismer.skill.install', async () => ({ ok: true, detail: 'SKIP: no skills' }));
+    await runTest('Skill Uninstall', 'prismer.skill.uninstall', async () => ({ ok: true, detail: 'SKIP: no skills' }));
     return;
   }
 
   const slug = skills[0].slug as string;
 
-  await runTest('Skill Install', 'skill_install', async () => {
+  await runTest('Skill Install', 'prismer.skill.install', async () => {
     const res = (await apiFetch(`/api/im/skills/${encodeURIComponent(slug)}/install`, {
       method: 'POST',
     })) as Record<string, unknown>;
@@ -711,7 +711,7 @@ async function testSkillInstallUninstall() {
     return { ok, detail: ok ? `installed=${slug}` : JSON.stringify(res.error || res).slice(0, 200) };
   });
 
-  await runTest('Skill Uninstall', 'skill_uninstall', async () => {
+  await runTest('Skill Uninstall', 'prismer.skill.uninstall', async () => {
     const res = (await apiFetch(`/api/im/skills/${encodeURIComponent(slug)}/install`, {
       method: 'DELETE',
     })) as Record<string, unknown>;
@@ -721,7 +721,7 @@ async function testSkillInstallUninstall() {
 }
 
 async function testSkillContentError() {
-  await runTest('Skill Content (nonexistent slug — error)', 'skill_content', async () => {
+  await runTest('Skill Content (nonexistent slug — error)', 'prismer.skill.content', async () => {
     const res = (await apiFetch('/api/im/skills/nonexistent-skill-slug-999/content')) as Record<string, unknown>;
     const ok = res.ok === false || !!(res as any).error;
     return { ok, detail: ok ? 'correctly rejected nonexistent skill' : 'expected error but got success' };
@@ -730,7 +730,7 @@ async function testSkillContentError() {
 
 // ─── Group 9: Community ───
 async function testCommunityPost() {
-  await runTest('Community Post (create)', 'community_post', async () => {
+  await runTest('Community Post (create)', 'prismer.community.post', async () => {
     const res = (await apiFetch('/api/im/community/posts', {
       method: 'POST',
       body: {
@@ -751,7 +751,7 @@ async function testCommunityPost() {
 }
 
 async function testCommunityBrowse() {
-  await runTest('Community Browse', 'community_browse', async () => {
+  await runTest('Community Browse', 'prismer.community.browse', async () => {
     const res = (await apiFetch('/api/im/community/posts', {
       query: { limit: '5' },
     })) as Record<string, unknown>;
@@ -763,7 +763,7 @@ async function testCommunityBrowse() {
 }
 
 async function testCommunitySearch() {
-  await runTest('Community Search', 'community_search', async () => {
+  await runTest('Community Search', 'prismer.community.search', async () => {
     const res = (await apiFetch('/api/im/community/search', {
       query: { q: 'test', limit: '5' },
     })) as Record<string, unknown>;
@@ -775,7 +775,7 @@ async function testCommunitySearch() {
 }
 
 async function testCommunityDetail() {
-  await runTest('Community Detail', 'community_detail', async () => {
+  await runTest('Community Detail', 'prismer.community.detail', async () => {
     if (!createdCommunityPostId) {
       return { ok: false, detail: 'SKIP: no community post created' };
     }
@@ -787,7 +787,7 @@ async function testCommunityDetail() {
 }
 
 async function testCommunityComment() {
-  await runTest('Community Comment', 'community_comment', async () => {
+  await runTest('Community Comment', 'prismer.community.comment', async () => {
     if (!createdCommunityPostId) {
       return { ok: false, detail: 'SKIP: no community post to comment on' };
     }
@@ -809,7 +809,7 @@ async function testCommunityComment() {
 }
 
 async function testCommunityVote() {
-  await runTest('Community Vote (upvote post)', 'community_vote', async () => {
+  await runTest('Community Vote (upvote post)', 'prismer.community.vote', async () => {
     if (!createdCommunityPostId) {
       return { ok: false, detail: 'SKIP: no community post to vote on' };
     }
@@ -828,7 +828,7 @@ async function testCommunityVote() {
 }
 
 async function testCommunityAnswer() {
-  await runTest('Community Answer (mark best — may 400)', 'community_answer', async () => {
+  await runTest('Community Answer (mark best — may 400)', 'prismer.community.answer', async () => {
     if (!createdCommentId) {
       return { ok: false, detail: 'SKIP: no comment to mark as best answer' };
     }
@@ -843,7 +843,7 @@ async function testCommunityAnswer() {
 }
 
 async function testCommunityAdopt() {
-  await runTest('Community Adopt (may 400 — no gene)', 'community_adopt', async () => {
+  await runTest('Community Adopt (may 400 — no gene)', 'prismer.community.adopt', async () => {
     // Attempt adopt with a fake gene ID — expect 400/404
     const res = (await apiFetch('/api/im/evolution/adopt', {
       method: 'POST',
@@ -856,7 +856,7 @@ async function testCommunityAdopt() {
 }
 
 async function testCommunityBookmark() {
-  await runTest('Community Bookmark', 'community_bookmark', async () => {
+  await runTest('Community Bookmark', 'prismer.community.bookmark', async () => {
     if (!createdCommunityPostId) {
       return { ok: false, detail: 'SKIP: no community post to bookmark' };
     }
@@ -871,7 +871,7 @@ async function testCommunityBookmark() {
 }
 
 async function testCommunityReport() {
-  await runTest('Community Report (battle report)', 'community_report', async () => {
+  await runTest('Community Report (battle report)', 'prismer.community.report', async () => {
     const res = (await apiFetch('/api/im/community/posts', {
       method: 'POST',
       body: {
@@ -894,7 +894,7 @@ async function testCommunityReport() {
 }
 
 async function testCommunityEdit() {
-  await runTest('Community Edit (post title)', 'community_edit', async () => {
+  await runTest('Community Edit (post title)', 'prismer.community.edit', async () => {
     if (!createdCommunityPostId) {
       return { ok: false, detail: 'SKIP: no community post to edit' };
     }
@@ -911,7 +911,7 @@ async function testCommunityEdit() {
 }
 
 async function testCommunityNotifications() {
-  await runTest('Community Notifications', 'community_notifications', async () => {
+  await runTest('Community Notifications', 'prismer.community.notifications', async () => {
     const res = (await apiFetch('/api/im/community/notifications', {
       query: { limit: '10' },
     })) as Record<string, unknown>;
@@ -923,7 +923,7 @@ async function testCommunityNotifications() {
 }
 
 async function testCommunityFollow() {
-  await runTest('Community Follow (follow board)', 'community_follow', async () => {
+  await runTest('Community Follow (follow board)', 'prismer.community.follow', async () => {
     const res = (await apiFetch('/api/im/community/follow', {
       method: 'POST',
       body: { followingId: 'genelab', followingType: 'board' },
@@ -935,7 +935,7 @@ async function testCommunityFollow() {
 }
 
 async function testCommunityProfile() {
-  await runTest('Community Profile', 'community_profile', async () => {
+  await runTest('Community Profile', 'prismer.community.profile', async () => {
     // Use discoveredAgentId if available, otherwise use a placeholder
     const userId = discoveredAgentId || 'self';
     const res = (await apiFetch(`/api/im/community/profile/${encodeURIComponent(userId)}`)) as Record<string, unknown>;
@@ -947,7 +947,7 @@ async function testCommunityProfile() {
 }
 
 async function testCommunityDelete() {
-  await runTest('Community Delete (cleanup)', 'community_delete', async () => {
+  await runTest('Community Delete (cleanup)', 'prismer.community.delete', async () => {
     if (!createdCommunityPostId) {
       return { ok: false, detail: 'SKIP: no community post to delete' };
     }
@@ -961,7 +961,7 @@ async function testCommunityDelete() {
 
 // ─── Group 10: Contact ───
 async function testContactSearch() {
-  await runTest('Contact Search', 'contact_search', async () => {
+  await runTest('Contact Search', 'prismer.contact.search', async () => {
     const res = (await apiFetch('/api/im/discover', {
       query: { q: 'test', limit: '5' },
     })) as Record<string, unknown>;
@@ -972,7 +972,7 @@ async function testContactSearch() {
 }
 
 async function testContactRequest() {
-  await runTest('Contact Request (may 400 — self/duplicate)', 'contact_request', async () => {
+  await runTest('Contact Request (may 400 — self/duplicate)', 'prismer.contact.request', async () => {
     // Use discoveredAgentId or a placeholder — may fail for self-request or duplicate
     const targetId = discoveredAgentId || 'nonexistent-user-for-contact-test';
     const res = (await apiFetch('/api/im/contacts/request', {
@@ -990,17 +990,17 @@ async function testContactRequest() {
 }
 
 // ─── Group 11: Session Checklist ───
-// session_checklist is an in-process MCP tool (no HTTP API).
+// prismer.session.checklist is an in-process MCP tool (no HTTP API).
 // We test the equivalent logic by calling the same actions the tool handles.
 // Since the MCP server is not running in this test process, we simulate
 // a round-trip test verifying the test infra can handle it gracefully.
 async function testSessionChecklist() {
-  await runTest('Session Checklist (in-process — smoke test)', 'session_checklist', async () => {
-    // session_checklist is process-local, no API endpoint.
+  await runTest('Session Checklist (in-process — smoke test)', 'prismer.session.checklist', async () => {
+    // prismer.session.checklist is process-local, no API endpoint.
     // We verify the test can at least reference the tool and document
     // that it's intentionally untestable via HTTP integration tests.
     // Return a pass to indicate coverage acknowledgment.
-    return { ok: true, detail: 'session_checklist is in-process only (no HTTP endpoint); MCP tool verified via source inspection' };
+    return { ok: true, detail: 'prismer.session.checklist is in-process only (no HTTP endpoint); MCP tool verified via source inspection' };
   });
 }
 

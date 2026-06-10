@@ -40,8 +40,8 @@ export function register(parent: Command, _getIMClient: ClientFactory, getAPICli
         }
 
         for (const item of results) {
-          process.stdout.write(`\n--- ${item.url ?? item.input ?? 'result'} ---\n`);
-          const hqcc: string = item.hqcc ?? item.content ?? '';
+          process.stdout.write(`\n--- ${item.url ?? 'result'} ---\n`);
+          const hqcc: string = item.hqcc ?? item.raw ?? '';
           if (hqcc) {
             const truncated = hqcc.length > 2000 ? hqcc.slice(0, 2000) + '... [truncated]' : hqcc;
             process.stdout.write(truncated + '\n');
@@ -87,8 +87,8 @@ export function register(parent: Command, _getIMClient: ClientFactory, getAPICli
 
         process.stdout.write(`Search results for: "${query}"\n\n`);
         results.forEach((item, i) => {
-          process.stdout.write(`[${i + 1}] ${item.url ?? item.input ?? 'result'}\n`);
-          const hqcc: string = item.hqcc ?? item.content ?? '';
+          process.stdout.write(`[${i + 1}] ${item.url ?? 'result'}\n`);
+          const hqcc: string = item.hqcc ?? item.raw ?? '';
           if (hqcc) {
             const truncated = hqcc.length > 2000 ? hqcc.slice(0, 2000) + '... [truncated]' : hqcc;
             process.stdout.write(truncated + '\n');

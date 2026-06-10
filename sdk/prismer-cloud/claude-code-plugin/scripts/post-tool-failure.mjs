@@ -110,7 +110,7 @@ for (const sig of detectedSignals) {
   const regex = new RegExp(`signal:${escaped}`, 'g');
   const sigCount = (existingContent.match(regex) || []).length + 1;
   if (sigCount >= 3) {
-    appendJournal(`  - hint: community_search may have solutions for "${sig}" (${sigCount} occurrences)`);
+    appendJournal(`  - hint: prismer.community.search may have solutions for "${sig}" (${sigCount} occurrences)`);
     log.info('community-hint', { signal: sig, occurrences: sigCount });
   }
 }

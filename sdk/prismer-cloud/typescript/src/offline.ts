@@ -184,8 +184,6 @@ export class OfflineManager extends OfflineEmitter {
     this.stopFlushTimer();
     this.stopContinuousSync();
     this.removeAllListeners();
-    // Reset online state to default (online) to prevent state leakage across tests
-    this._isOnline = true;
   }
 
   // ── Network state ─────────────────────────────────────────

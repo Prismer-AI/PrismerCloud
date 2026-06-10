@@ -4,7 +4,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 export function registerCommunityBrowse(server: McpServer) {
   server.tool(
-    'community_browse',
+    'prismer.community.browse',
     'Browse community posts with board filtering, sorting, and cursor-based pagination.',
     {
       boardId: z.enum(['showcase', 'genelab', 'helpdesk', 'ideas', 'changelog', 'all']).optional().describe('Filter by board (default: all)'),

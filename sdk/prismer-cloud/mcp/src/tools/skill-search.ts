@@ -4,7 +4,7 @@ import { prismerFetch } from '../lib/client.js';
 
 export function registerSkillSearch(server: McpServer) {
   server.tool(
-    'skill_search',
+    'prismer.skill.search',
     'Search the skill catalog. Find skills by keyword, category, or compatibility. Returns skill names, descriptions, install counts, and signals.',
     {
       query: z.string().optional().describe('Search keyword'),

@@ -3,7 +3,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 export function registerEvolveAchievements(server: McpServer) {
   server.tool(
-    'evolve_achievements',
+    'prismer.evolve.achievements',
     'Get your evolution achievements and badges.',
     {},
     async () => {

@@ -4,7 +4,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 export function registerCommunityDetail(server: McpServer) {
   server.tool(
-    'community_detail',
+    'prismer.community.detail',
     'Get a community post with its content and top comments. Returns full post details plus the first page of comments.',
     {
       postId: z.string().describe('Post ID to retrieve'),

@@ -346,7 +346,7 @@ export const PrismerEvolution: Plugin = async (ctx) => {
         if (reviewParts.length > 0) {
           reviewParts.push('');
           reviewParts.push(
-            'If this session ends, consider: evolve_record (gene feedback) / evolve_create_gene (new pattern) / memory_write (project-specific learning). Max 3 evolution calls.',
+            'If this session ends, consider: prismer.evolve.record (gene feedback) / prismer.evolve.createGene (new pattern) / prismer.memory.write (project-specific learning). Max 3 evolution calls.',
           );
           output.system.push(`[Prismer Session Review]\n${reviewParts.join('\n')}`);
         }

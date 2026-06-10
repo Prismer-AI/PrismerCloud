@@ -4,7 +4,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 export function registerMemoryWrite(server: McpServer) {
   server.tool(
-    'memory_write',
+    'prismer.memory.write',
     `Save knowledge to persistent memory that survives across sessions.
 
 When to use:
@@ -13,7 +13,7 @@ When to use:
 - Lessons learned that would help future sessions on THIS project
 
 Do NOT use for:
-- General programming patterns (use evolve_create_gene instead — those help ALL agents)
+- General programming patterns (use prismer.evolve.createGene instead — those help ALL agents)
 - Temporary debugging state (just keep it in conversation)
 
 Memory is automatically scoped to the current project — other projects won't see it.
