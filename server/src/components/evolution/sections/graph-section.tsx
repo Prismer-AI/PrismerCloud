@@ -8,6 +8,7 @@
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { useI18n } from '@/contexts/i18n-context';
 import type { EvolutionMapData, DetailTarget, EvolutionStory } from '../types/evolution-map.types';
 import { MapCanvas } from '../map-canvas';
 import { MapDetailPanel } from '../map-detail-panel';
@@ -24,12 +25,6 @@ interface Props {
   fullscreenContainerRef?: React.RefObject<HTMLDivElement | null>;
 }
 
-const ZOOM_LEVEL_LABELS: Record<number, string> = {
-  1: 'Focus',
-  2: 'Cluster',
-  3: 'Full Map',
-};
-
 const SPRING_EASING = 'cubic-bezier(0.175, 0.885, 0.32, 1.275)';
 
 export function GraphSection({
@@ -40,6 +35,7 @@ export function GraphSection({
   externalFocusSeq,
   fullscreenContainerRef,
 }: Props) {
+  const { t } = useI18n();
   const [detailTarget, setDetailTarget] = useState<DetailTarget>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [zoomLevel, setZoomLevel] = useState<number>(1);
@@ -352,7 +348,7 @@ export function GraphSection({
             <input
               ref={searchInputRef}
               type="text"
-              placeholder="Search genes, signals, skills..."
+              placeholder={t('evolution.map.searchPlaceholder')}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className={`flex-1 bg-transparent outline-none text-sm ${
@@ -379,7 +375,7 @@ export function GraphSection({
           <div className="max-h-[50vh] overflow-y-auto">
             {searchQuery.length === 0 ? (
               <div className={`px-4 py-8 text-center text-sm ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>
-                Type to search {data.genes.length} genes and {data.signals.length} signals
+                {t('evolution.map.searchHelp', { genes: data.genes.length, signals: data.signals.length })}
               </div>
             ) : (
               <>
@@ -414,7 +410,7 @@ export function GraphSection({
                           isDark ? 'text-zinc-600' : 'text-zinc-400'
                         }`}
                       >
-                        Genes
+                        {t('evolution.map.searchGenes')}
                       </div>
                       {geneResults.map((g) => (
                         <button
@@ -443,7 +439,9 @@ export function GraphSection({
                             {g.title}
                           </span>
                           <span className={`text-xs tabular-nums ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>
-                            {g.totalExecutions > 0 ? `${Math.round(g.successRate * 100)}%` : 'new'}
+                            {g.totalExecutions > 0
+                              ? `${Math.round(g.successRate * 100)}%`
+                              : t('evolution.map.newResult')}
                           </span>
                           <span className={`text-[10px] ${isDark ? 'text-zinc-600' : 'text-zinc-400'}`}>
                             {g.category}
@@ -472,7 +470,7 @@ export function GraphSection({
                           isDark ? 'text-zinc-600' : 'text-zinc-400'
                         }`}
                       >
-                        Signals
+                        {t('evolution.map.searchSignals')}
                       </div>
                       {signalResults.map((s) => (
                         <button
@@ -495,7 +493,7 @@ export function GraphSection({
                             {s.key}
                           </span>
                           <span className={`text-xs tabular-nums ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>
-                            {s.frequency} hits
+                            {t('evolution.map.hits', { count: s.frequency })}
                           </span>
                         </button>
                       ))}
@@ -511,7 +509,7 @@ export function GraphSection({
                         isDark ? 'text-zinc-600' : 'text-zinc-400'
                       }`}
                     >
-                      Skills
+                      {t('evolution.map.searchSkills')}
                     </div>
                     {skillResults.map((sk) => (
                       <a
@@ -542,7 +540,7 @@ export function GraphSection({
                   data.signals.filter((s) => s.key.toLowerCase().includes(searchQuery.toLowerCase())).length === 0 &&
                   skillResults.length === 0 && (
                     <div className={`px-4 py-8 text-center text-sm ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>
-                      No results for &ldquo;{searchQuery}&rdquo;
+                      {t('evolution.map.noResultsFor', { query: searchQuery })}
                     </div>
                   )}
               </>
@@ -568,7 +566,7 @@ export function GraphSection({
         style={{ transitionTimingFunction: SPRING_EASING }}
       >
         <Search size={14} />
-        <span className="text-xs">Search</span>
+        <span className="text-xs">{t('evolution.map.search')}</span>
         <kbd
           className={`ml-1 px-1.5 py-0.5 rounded text-[10px] font-mono ${
             isDark ? 'bg-zinc-800 text-zinc-500' : 'bg-zinc-200 text-zinc-400'
@@ -591,7 +589,7 @@ export function GraphSection({
               ? 'text-zinc-400 hover:text-white hover:bg-white/[0.08]'
               : 'text-zinc-500 hover:text-zinc-900 hover:bg-black/[0.06]'
           }`}
-          title="Zoom In"
+          title={t('evolution.map.zoomIn')}
         >
           <ZoomIn size={15} />
         </button>
@@ -601,7 +599,7 @@ export function GraphSection({
             key={level}
             onClick={() => onZoomToLevel(level)}
             className="w-8 h-8 flex items-center justify-center group relative"
-            title={ZOOM_LEVEL_LABELS[level]}
+            title={t(`evolution.map.zoomLevels.${level}` as `evolution.${string}`)}
           >
             <span
               className="block w-2 h-2 rounded-full transition-all duration-500"
@@ -620,7 +618,7 @@ export function GraphSection({
                     : 'bg-white text-zinc-600 border border-black/[0.08] shadow-sm'
                 }`}
             >
-              {ZOOM_LEVEL_LABELS[level]}
+              {t(`evolution.map.zoomLevels.${level}` as `evolution.${string}`)}
             </span>
           </button>
         ))}
@@ -632,7 +630,7 @@ export function GraphSection({
               ? 'text-zinc-400 hover:text-white hover:bg-white/[0.08]'
               : 'text-zinc-500 hover:text-zinc-900 hover:bg-black/[0.06]'
           }`}
-          title="Zoom Out"
+          title={t('evolution.map.zoomOut')}
         >
           <ZoomOut size={15} />
         </button>
@@ -647,7 +645,7 @@ export function GraphSection({
             : 'bg-black/[0.04] border-black/[0.08] text-zinc-500 hover:text-zinc-900 hover:bg-black/[0.08]'
         }`}
         style={{ transitionTimingFunction: SPRING_EASING }}
-        title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+        title={isFullscreen ? t('evolution.map.exitFullscreen') : t('evolution.map.fullscreen')}
       >
         {isFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
       </button>
