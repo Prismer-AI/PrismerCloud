@@ -165,11 +165,16 @@ async function testCRUD() {
   });
 
   await test('GET /tasks?view=board — excludes legacy chat agent_run rows', async () => {
+    const conv = await api('POST', '/api/conversations/direct', { otherUserId: agentId });
+    assert(conv.status === 201 || conv.status === 200, `Expected conversation create 2xx, got ${conv.status}`);
+    const conversationId = conv.data?.id ?? conv.data?.data?.id;
+    assert(conversationId, 'Missing conversation id');
+
     const runTask = await api('POST', '/api/tasks', {
       title: 'Legacy chat run should not be a board card',
       capability: 'chat',
       assigneeId: agentId,
-      conversationId: 'conv-test-legacy',
+      conversationId,
       metadata: { kind: 'agent_run', triggerKind: 'mention', triggerMessageId: 'msg-test-legacy' },
     });
     assert(runTask.status === 201, `Expected legacy run task create 201, got ${runTask.status}`);
