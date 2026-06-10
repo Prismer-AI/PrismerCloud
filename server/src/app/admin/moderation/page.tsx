@@ -910,7 +910,7 @@ export default function ModerationPage() {
   const [tab, setTab] = useState<Tab>('reports');
 
   return (
-    <div className="min-h-screen p-6 space-y-6">
+    <div className="max-w-7xl mx-auto px-6 py-8 space-y-6">
       {/* Header */}
       <div className="flex items-center gap-3">
         <div className="p-2.5 rounded-xl backdrop-blur-xl bg-white/60 dark:bg-zinc-800/60 border border-white/20 dark:border-white/10 shadow">
