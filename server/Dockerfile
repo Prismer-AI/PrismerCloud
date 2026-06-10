@@ -64,6 +64,15 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 
+# PDF asset derivatives run server-side via LOCAL binaries (src/im/services/
+# asset-preview-derivatives.service.ts): poppler-utils → `pdftoppm` (first-page
+# thumbnail), mupdf-tools → `mutool` (fallback), qpdf → `linearizePdfForPreview`.
+# These were never installed in the Alpine image, so on the pods the PDF
+# first-page preview was silently SKIPPED (renderer_unavailable) → no inline
+# thumbnail + a (wrongly-shown) "Delivery failed" pill. Works locally only
+# because the dev Mac has them. Install so PDF preview/linearize work on prod.
+RUN apk add --no-cache poppler-utils mupdf-tools qpdf
+
 # 创建非 root 用户
 RUN addgroup --system --gid 1001 nodejs
 RUN adduser --system --uid 1001 nextjs
@@ -105,6 +114,16 @@ COPY --from=builder --chown=nextjs:nodejs /app/docs/openapi.yaml ./docs/openapi.
 
 # Seed gene data — read at runtime by EvolutionService via process.cwd()/src/im/data/
 COPY --from=builder --chown=nextjs:nodejs /app/src/im/data ./src/im/data
+
+# Built-in skill resource pool — read at runtime by BuiltInSkillService via
+# process.cwd()/sdk/prismer-cloud/built-in-skills/ (multi-file manifest source
+# of truth: SKILL.md + scripts/* + references/* + assets/* per slug). Without
+# this COPY, upsertBuiltInSkills silently writes 0 rows on cloud cold boot
+# because readdir hits ENOENT. (Standalone Next.js trace does NOT pick up
+# fs.readdir paths, so the dir would otherwise be missing from the runner.)
+COPY --from=builder --chown=nextjs:nodejs /app/sdk/prismer-cloud/built-in-skills ./sdk/prismer-cloud/built-in-skills
+
+USER nextjs
 
 EXPOSE 3000
 
