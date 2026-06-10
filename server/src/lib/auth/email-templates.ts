@@ -36,6 +36,133 @@ export function renderEmailTemplate(code: string, purpose: CodePurpose): Rendere
   };
 }
 
+// ─── Workspace invite (release201/16 Phase 9) ────────────────────────────────
+// Not a verification-code email: this is a transactional invite with a
+// call-to-action link to the /invite/:token landing page. Same Prismer brand,
+// purple gradient (matches signup), but the focal point is the button instead
+// of a code.
+
+export function renderWorkspaceInviteEmail(params: {
+  workspaceName: string;
+  inviterDisplayName: string;
+  role: 'admin' | 'member';
+  expiresAt: string; // ISO
+  acceptUrl: string;
+}): RenderedEmail {
+  const { workspaceName, inviterDisplayName, role, expiresAt, acceptUrl } = params;
+  const expiryLabel = formatExpiry(expiresAt);
+  return {
+    subject: `Prismer - You're invited to join "${workspaceName}"`,
+    text: inviteText({ workspaceName, inviterDisplayName, role, expiryLabel, acceptUrl }),
+    html: inviteHtml({ workspaceName, inviterDisplayName, role, expiryLabel, acceptUrl }),
+  };
+}
+
+function formatExpiry(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toUTCString();
+}
+
+function inviteText(p: {
+  workspaceName: string;
+  inviterDisplayName: string;
+  role: string;
+  expiryLabel: string;
+  acceptUrl: string;
+}): string {
+  return `Prismer — Workspace Invitation
+
+${p.inviterDisplayName} has invited you to join the workspace "${p.workspaceName}" as ${p.role}.
+
+Accept the invitation:
+${p.acceptUrl}
+
+This invitation expires on ${p.expiryLabel}.
+
+If you weren't expecting this invitation, you can safely ignore this email.
+
+— Prismer
+`;
+}
+
+function inviteHtml(p: {
+  workspaceName: string;
+  inviterDisplayName: string;
+  role: string;
+  expiryLabel: string;
+  acceptUrl: string;
+}): string {
+  return `<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Workspace Invitation</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+    </style>
+</head>
+<body style="font-family: 'Inter', Arial, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 0; background-color: #f4f6f8;">
+    <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff;">
+        <!-- Header with Logo -->
+        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 40px 20px; text-align: center;">
+            <div style="display: inline-block; background: #ffffff; padding: 15px 25px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.1);">
+                <h1 style="margin: 0; color: #667eea; font-size: 32px; font-weight: 700; letter-spacing: -1px;">
+                    <span style="background: linear-gradient(135deg, #667eea, #764ba2); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;">Prismer</span>
+                </h1>
+            </div>
+        </div>
+
+        <!-- Content -->
+        <div style="padding: 40px 30px;">
+            <div style="text-align: center; margin-bottom: 30px;">
+                <h2 style="color: #1a202c; margin: 0 0 10px 0; font-size: 28px; font-weight: 600;">You're invited</h2>
+                <p style="color: #718096; font-size: 16px; margin: 0;">Join a workspace on Prismer</p>
+            </div>
+
+            <div style="background: linear-gradient(135deg, #f7fafc 0%, #edf2f7 100%); padding: 30px; border-radius: 16px; margin: 30px 0; border: 1px solid #e2e8f0;">
+                <p style="color: #2d3748; font-size: 16px; margin-bottom: 20px;">Hello!</p>
+                <p style="color: #2d3748; font-size: 16px; margin-bottom: 25px;"><strong style="color: #667eea;">${escapeHtml(p.inviterDisplayName)}</strong> has invited you to join the workspace <strong>"${escapeHtml(p.workspaceName)}"</strong> as <strong>${escapeHtml(p.role)}</strong>.</p>
+
+                <div style="text-align: center; margin: 35px 0;">
+                    <a href="${escapeAttr(p.acceptUrl)}" style="display: inline-block; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: #ffffff; text-decoration: none; font-size: 16px; font-weight: 600; padding: 16px 40px; border-radius: 12px; box-shadow: 0 8px 25px rgba(102, 126, 234, 0.3);">Accept Invitation</a>
+                </div>
+
+                <div style="background: #fff3cd; border: 1px solid #ffeaa7; border-radius: 8px; padding: 15px; margin: 25px 0;">
+                    <p style="color: #000000; font-size: 14px; margin: 0;">
+                        ⏱️ This invitation expires on <strong>${escapeHtml(p.expiryLabel)}</strong>.
+                    </p>
+                </div>
+
+                <p style="color: #718096; font-size: 14px; margin: 20px 0 0 0;">If the button doesn't work, copy and paste this link into your browser:<br><a href="${escapeAttr(p.acceptUrl)}" style="color: #667eea; word-break: break-all;">${escapeHtml(p.acceptUrl)}</a></p>
+
+                <p style="color: #718096; font-size: 14px; margin: 20px 0 0 0;">If you weren't expecting this invitation, you can safely ignore this email.</p>
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <div style="background: #f7fafc; padding: 30px; text-align: center; border-top: 1px solid #e2e8f0;">
+            <p style="color: #a0aec0; font-size: 12px; margin: 0 0 5px 0;">This email was sent automatically by the system. Please do not reply.</p>
+            <p style="color: #a0aec0; font-size: 12px; margin: 0;">© 2024 <strong style="color: #667eea;">Prismer</strong>. All rights reserved.</p>
+        </div>
+    </div>
+</body>
+</html>`;
+}
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function escapeAttr(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+}
+
 // ─── plain-text fallbacks (not in Go; added for spam filters + a11y)
 
 function signupText(code: string): string {
