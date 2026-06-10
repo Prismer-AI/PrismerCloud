@@ -14,9 +14,14 @@ import { logger } from '@/lib/logger';
 import { createApiKey } from '@/lib/db-api-keys';
 import { hasK8sConfig } from '@/lib/sandbox-config';
 import { K8sSandboxError, k8sSandbox, podNameForAgent } from '@/lib/k8s-sandbox';
+import { getDaemonImage } from '@/lib/sandbox/image-pin';
+import { buildWorkspaceRuntimeEnv } from '@/lib/sandbox/pod-spec';
+import { randomUUID } from 'node:crypto';
 import { getK8sNamespace } from '@/lib/k8s-client';
 import { emitterForRow, recordProvisioningStep } from '@/lib/provisioning-progress';
 import { emitRuntimeDegradedNotification } from '@/lib/notification-emitter';
+import { loadRuntimeDaemonPresence } from '@/lib/runtime-presence';
+import { getForgottenDaemonIds } from '@/lib/runtime-binding-metadata';
 import { authorizeWorkspace } from '../../sandboxes/_helpers';
 
 export const dynamic = 'force-dynamic';
@@ -43,6 +48,15 @@ const CreateBody = z.object({
   template: z.string().trim().min(1).max(80).optional(),
   /** W11 — only meaningful when `kind='k8s'`; non-zero count requests GPU. */
   gpu: z.coerce.number().int().min(0).max(8).optional().default(0),
+  /**
+   * v2.0.8 doc 20 Gap A (M448) — opt-in project scope. Omitting (or null)
+   * persists as workspace-level. When provided, must reference an `active`
+   * `IMProject` in the same workspace; otherwise 422 with
+   * `PROJECT_WORKSPACE_MISMATCH` / `PROJECT_NOT_ACTIVE`. Daemon dispatch
+   * routing is unchanged (per-agent — 09 §9.9); projectId only narrows UI
+   * scope filters.
+   */
+  projectId: z.string().trim().min(1).max(30).optional(),
 });
 
 const ListQuery = z.object({
@@ -58,6 +72,13 @@ const ListQuery = z.object({
     .union([z.literal('true'), z.literal('false')])
     .optional()
     .transform((v) => v === 'true'),
+  /**
+   * v2.0.8 doc 20 Gap A (M448) — project scope filter (sigils mirror 09 §4.2):
+   *   - omitted | 'all'  → no project filter (default; backward-compat)
+   *   - '__unscoped'     → projectId IS NULL only (workspace-level rows)
+   *   - any other string → exact projectId match
+   */
+  projectId: z.string().trim().min(1).max(64).optional(),
 });
 
 /** W5 — heartbeat freshness window. Mirrors `ONLINE_WINDOW_MS` in runtime-manager.tsx. */
@@ -66,6 +87,8 @@ const HEARTBEAT_FRESH_MS = 90_000;
 type ContainerRow = {
   id: string;
   workspaceId: string;
+  /** M448 — optional project scope. NULL on legacy rows / workspace-level installs. */
+  projectId?: string | null;
   tenantId: string;
   agentImUserId: string | null;
   taskId: string | null;
@@ -98,12 +121,29 @@ type ContainerRow = {
   updatedAt: Date;
 };
 
+/**
+ * Per-device agent ceiling for a freshly-provisioned K8S device. Previously the
+ * create blocks below DID NOT set `maxAgents`, so the row inherited the
+ * `im_containers.maxAgents` COLUMN DEFAULT — which is 3 on any DB where migration
+ * 340 (the 3→10 bump) hasn't applied (e.g. test). That is the hard
+ * "Device … already hosts 3 agent(s); maximum is 3" wall users hit even in Pro
+ * mode. Set it EXPLICITLY + Nacos-tunable (`K8S_AGENT_MAX_AGENTS`) so the ceiling
+ * no longer depends on a stale schema default and ops can raise it alongside a
+ * larger pod spec. Follow-up: tie the ceiling to the pod's cpu/mem spec + surface
+ * a "scale up the container" reminder instead of a flat number.
+ */
+function maxAgentsForNewDevice(): number {
+  const raw = Number(process.env.K8S_AGENT_MAX_AGENTS);
+  return Number.isInteger(raw) && raw > 0 ? raw : 10;
+}
+
 export async function GET(req: NextRequest): Promise<Response> {
   const url = new URL(req.url);
   const parsed = ListQuery.safeParse({
     workspaceId: url.searchParams.get('workspaceId') ?? '',
     limit: url.searchParams.get('limit') ?? undefined,
     includeStopped: url.searchParams.get('includeStopped') ?? undefined,
+    projectId: url.searchParams.get('projectId') ?? undefined,
   });
   if (!parsed.success) {
     return NextResponse.json({ ok: false, error: 'invalid_query', details: parsed.error.flatten() }, { status: 400 });
@@ -112,10 +152,21 @@ export async function GET(req: NextRequest): Promise<Response> {
   const auth = await authorizeWorkspace(req, parsed.data.workspaceId);
   if (!auth.ok) return auth.response;
 
+  // M448 — project scope filter. Default (omitted / 'all') keeps the legacy
+  // behavior of returning every workspace runtime regardless of projectId.
+  const projectFilter = parsed.data.projectId;
+  const projectWhere =
+    !projectFilter || projectFilter === 'all'
+      ? {}
+      : projectFilter === '__unscoped'
+        ? { projectId: null as string | null }
+        : { projectId: projectFilter };
+
   const rows = (await prisma.iMContainer.findMany({
     where: {
       workspaceId: parsed.data.workspaceId,
       taskId: null,
+      ...projectWhere,
     },
     orderBy: { createdAt: 'desc' },
     take: parsed.data.limit,
@@ -146,11 +197,40 @@ export async function GET(req: NextRequest): Promise<Response> {
     }
   }
 
-  if (!parsed.data.includeStopped) {
-    dtos = dtos.filter((dto) => dto.containerStatus !== 'stopped' && dto.containerStatus !== 'failing');
-  }
+  // Deleted devices are "forgotten" rows, not merely stopped rows. They must
+  // stay hidden even when callers request includeStopped=true so Workspace can
+  // still show manually stopped devices without resurrecting deleted cards.
+  const ws = (await prisma.iMWorkspace.findUnique({
+    where: { id: parsed.data.workspaceId },
+    select: { metadata: true },
+  })) as { metadata: string | null } | null;
+  const forgottenSet = new Set(getForgottenDaemonIds(ws?.metadata ?? null));
+  const rowsById = new Map(rows.map((r) => [r.id, r] as const));
+  dtos = dtos.filter((dto) => {
+    const row = rowsById.get(dto.id);
+    if (row && isForgottenRuntimeInstallation(row, forgottenSet)) return false;
+    if (!parsed.data.includeStopped && isTerminalRuntimeInstallation(dto)) return false;
+    return true;
+  });
 
   return NextResponse.json({ ok: true, data: dtos });
+}
+
+function runtimeInstallationForgetKeys(row: ContainerRow): string[] {
+  const keys = [`container-row:${row.id}`];
+  if (row.agentImUserId) {
+    keys.push(row.agentImUserId.startsWith('container:') ? row.agentImUserId : `container:${row.agentImUserId}`);
+  }
+  return keys;
+}
+
+function isForgottenRuntimeInstallation(row: ContainerRow, forgottenSet: Set<string>): boolean {
+  if (forgottenSet.size === 0) return false;
+  return runtimeInstallationForgetKeys(row).some((key) => forgottenSet.has(key));
+}
+
+function isTerminalRuntimeInstallation(dto: ReturnType<typeof toRuntimeInstallationDTO>): boolean {
+  return dto.containerStatus === 'failing' || dto.status === 'errored' || dto.status === 'failed';
 }
 
 interface ReadinessProbe {
@@ -230,46 +310,16 @@ function pickFreshest(...ages: (number | null)[]): number | null {
  * is unavailable — the agent-card fallback still reports hosted-agent status.
  */
 async function loadRedisPresence(workspaceId: string, rows: ContainerRow[]): Promise<Map<string, number>> {
-  const out = new Map<string, number>();
-  try {
-    // eslint-disable-next-line boundaries/dependencies -- self-host needs app→im for redis presence
-    const { getIMServices } = await import('@/im/bootstrap');
-    const im = getIMServices();
-    if (!im) return out;
-    const r = im.redis;
-    if (!r || r.status !== 'ready') return out;
-
-    // Collect unique daemonIds from rows (DB column or derived).
-    const daemonIds = new Set<string>();
-    for (const row of rows) {
-      if (row.daemonId) daemonIds.add(row.daemonId);
-      daemonIds.add(installationDaemonId(row));
-    }
-
-    // Pipeline: TTL check for each key. TTL > 0 means the key exists and
-    // has remaining lifetime — daemon sent host.declare recently.
-    const pipeline = r.pipeline();
-    for (const did of daemonIds) {
-      pipeline.ttl(`runtime:device:${workspaceId}:${did}`);
-    }
-    const results: (Error | number)[] = (await pipeline.exec())?.map(([err, res]) =>
-      err ? -2 : (res as number),
-    ) ?? [];
-
-    let idx = 0;
-    for (const did of daemonIds) {
-      const ttl = results[idx++];
-      if (typeof ttl === 'number' && ttl > 0) {
-        out.set(did, 0); // age ≈ 0 — redis key is live
-      }
-    }
-  } catch {
-    // Redis unavailable — degrade gracefully.
+  const daemonIds = new Set<string>();
+  for (const row of rows) {
+    if (row.daemonId) daemonIds.add(row.daemonId);
+    daemonIds.add(installationDaemonId(row));
   }
-  return out;
+  return loadRuntimeDaemonPresence(workspaceId, daemonIds);
 }
 
 function installationDaemonId(row: ContainerRow): string {
+  if (row.daemonId) return row.daemonId;
   const id = row.agentImUserId ?? row.podName;
   return id.startsWith('container:') ? id : `container:${id}`;
 }
@@ -309,6 +359,13 @@ export async function POST(req: NextRequest): Promise<Response> {
   const body = parsed.data;
   const workspaceOwnerImUserId = auth.data.workspace.ownerImUserId;
 
+  // M448 — validate optional project binding before any side effect (API key
+  // mint / pod provision). Cheap lookup; aligns with 09 §5 service invariant.
+  if (body.projectId) {
+    const projectErr = await validateProjectScope(body.workspaceId, body.projectId);
+    if (projectErr) return projectErr;
+  }
+
   const cloudUserId = await resolveCloudUserId(auth.user.id, auth.user.numericId);
   if (!cloudUserId) {
     return NextResponse.json(
@@ -324,14 +381,20 @@ export async function POST(req: NextRequest): Promise<Response> {
   }
 
   const runtimeInstanceId = makeRuntimeInstanceId();
-  const daemonId = `container:${runtimeInstanceId}`;
+  // F8 (2026-05-19) — daemonId is now minted route-side as a real UUID and
+  // threaded through both `PRISMER_DAEMON_ID` env (via the canonical helper)
+  // AND `provisionContainer({ daemonId })`, so the scopedEnv merge inside
+  // provisionContainer is byte-idempotent. Pre-F8 this was
+  // `\`container:${runtimeInstanceId}\`` which was always overwritten by
+  // provisionContainer's randomUUID() — dead value with confusing logs.
+  const daemonId = randomUUID();
   const cloudBaseUrl = resolveCloudBaseUrl(req);
-  const image =
-    body.image ??
-    process.env.RUNTIME_DAEMON_IMAGE ??
-    process.env.CONTAINER_IMAGE ??
-    process.env.SANDBOX_DEFAULT_IMAGE ??
-    'dockerhub.services/prismer/library/sandbox:daemon-v1.0';
+  // T8 §08 §5.2 — image resolution priority:
+  //   request body > RUNTIME_DAEMON_IMAGE env (legacy) > getDaemonImage()
+  //   (which honors CONTAINER_IMAGE env then image-pin.yaml canonical).
+  // Removes the dead `daemon-v1.0` hardcoded fallback that pre-T8 left
+  // workspace UI device-create failing with ImagePullBackOff in local dev.
+  const image = body.image ?? process.env.RUNTIME_DAEMON_IMAGE ?? getDaemonImage();
 
   let issuedKey: Awaited<ReturnType<typeof createApiKey>>;
   try {
@@ -367,17 +430,27 @@ export async function POST(req: NextRequest): Promise<Response> {
   // persist a synthetic provisioning row so the wizard's caller can render
   // the [K8s] Provisioning… badge — the actual EKS reconcile loop is a
   // follow-up; this is the "row + UX" scope-down explicitly allowed by W11.
-  const k8sBootstrapEnv: Record<string, string> = {
-    PRISMER_API_KEY: issuedKey.key,
-    PRISMER_DAEMON_ID: daemonId,
-    PRISMER_BASE_URL: cloudBaseUrl,
-    PRISMER_WORKSPACE_ID: body.workspaceId,
-    PRISMER_RUNTIME_MODE: 'container',
-    PRISMER_RUNTIME_KIND: requestedKind === 'k8s' ? 'workspace-k8s-pod' : 'workspace-daemon',
-    PRISMER_RUNTIME_INSTANCE_ID: runtimeInstanceId,
-    ...(requestedKind === 'k8s' && body.template ? { PRISMER_K8S_TEMPLATE: body.template } : {}),
-    ...(requestedKind === 'k8s' && body.gpu > 0 ? { PRISMER_GPU_REQUEST: String(body.gpu) } : {}),
-  };
+  // F8 (2026-05-19) — single source of truth for the workspace-runtime
+  // profile env (pre-F8 this was a 25-line inline literal that drifted from
+  // both `provisionContainer`'s scopedEnv and `manifest-diff-gen.ts`).
+  // Sandbox-scoped daemon shell exec defaults on for k8s pods: pod-level
+  // isolation + workspace-bound API key are the real security boundaries
+  // (NOT shell-disabled inside an already-sandboxed pod); also satisfies
+  // workspace UI's "Shell task" terminal which sends `ls`/`cat` via
+  // `runtimeRoute='shell'`.
+  const k8sBootstrapEnv = buildWorkspaceRuntimeEnv({
+    apiKey: issuedKey.key,
+    daemonId,
+    cloudApiBase: cloudBaseUrl,
+    workspaceId: body.workspaceId,
+    tenantId: workspaceOwnerImUserId,
+    runtimeInstanceId,
+    runtimeKind: requestedKind === 'k8s' ? 'workspace-k8s-pod' : 'workspace-daemon',
+    k8sTemplate: requestedKind === 'k8s' ? body.template : undefined,
+    gpuRequest: requestedKind === 'k8s' ? body.gpu : undefined,
+    shellEnabled: true,
+    dispatchDaemonSecret: process.env.DISPATCH_DAEMON_SECRET,
+  });
 
   // §26 B4 — runtime lands via in-process `k8sSandbox.provisionContainer`
   // (the legacy HTTP controller path was removed). We still honour the
@@ -392,6 +465,8 @@ export async function POST(req: NextRequest): Promise<Response> {
     const pendingRow = (await prisma.iMContainer.create({
       data: {
         workspaceId: body.workspaceId,
+        // M448 — opt-in project scope; NULL = workspace-level (default).
+        projectId: body.projectId ?? null,
         tenantId: workspaceOwnerImUserId,
         agentImUserId: runtimeInstanceId,
         taskId: null,
@@ -401,6 +476,15 @@ export async function POST(req: NextRequest): Promise<Response> {
         imageTag: image.split(':').pop() ?? 'latest',
         status: 'provisioning',
         runtimeKind: 'k8s',
+        // Explicit ceiling — don't inherit the stale DB default (3) on test.
+        maxAgents: maxAgentsForNewDevice(),
+        // 2026-05-20 — populate daemonId AT CREATE TIME. Pre-fix the column
+        // was only stamped after provisionContainer returned (line ~549), so
+        // host.declare arriving in the race window saw `daemonId IS NULL` on
+        // the K8s row and fell through to create a duplicate `daemon:<short>`
+        // local docker row sharing the same UUID. The route already mints
+        // daemonId via randomUUID() above; persisting it here closes the race.
+        daemonId,
         cpuRequest: body.cpuRequest,
         cpuLimit: body.cpuLimit,
         memoryRequest: body.memoryRequest,
@@ -450,6 +534,8 @@ export async function POST(req: NextRequest): Promise<Response> {
     const row = (await prisma.iMContainer.create({
       data: {
         workspaceId: body.workspaceId,
+        // M448 — opt-in project scope; NULL = workspace-level (default).
+        projectId: body.projectId ?? null,
         tenantId: workspaceOwnerImUserId,
         agentImUserId: runtimeInstanceId,
         taskId: null,
@@ -459,6 +545,20 @@ export async function POST(req: NextRequest): Promise<Response> {
         imageTag: image.split(':').pop() ?? 'latest',
         status: 'provisioning',
         runtimeKind: requestedKind,
+        // Explicit ceiling — don't inherit the stale DB default (3) on test.
+        maxAgents: maxAgentsForNewDevice(),
+        // 2026-05-20 — populate daemonId AT CREATE TIME (race fix). Without
+        // this, the K8s row has daemonId=NULL during the entire pod-boot
+        // window (~30-90s). The pod's daemon process boots, WS-connects, and
+        // emits `agent.host.declare` with daemonId=<UUID injected via env>.
+        // handler.ts host.declare looks up the K8s row by daemonId — but the
+        // row's column is still NULL → no match → fallthrough creates a
+        // legacy `deviceType=local` row with the same UUID → the UI now shows
+        // TWO device cards for one daemon. The downstream update at the end
+        // of provisionContainer still runs (idempotent: ctlResp.container
+        // .daemonId === the UUID we mint here), so the lifecycle is unchanged
+        // except the race window now closes immediately.
+        daemonId,
         cpuRequest: body.cpuRequest,
         cpuLimit: body.cpuLimit,
         memoryRequest: body.memoryRequest,
@@ -475,6 +575,10 @@ export async function POST(req: NextRequest): Promise<Response> {
       tenantId: workspaceOwnerImUserId,
       controllerAgentId: runtimeInstanceId,
       agentImUserId: runtimeInstanceId,
+      // F8 — pass the route-minted daemonId through so provisionContainer's
+      // scopedEnv merge sees the same UUID and the resulting env is
+      // byte-identical to what buildWorkspaceRuntimeEnv emitted.
+      daemonId,
       image,
       cpuRequest: body.cpuRequest,
       cpuLimit: body.cpuLimit,
@@ -488,14 +592,27 @@ export async function POST(req: NextRequest): Promise<Response> {
     try {
       ctlResp = await k8sSandbox.provisionContainer(createArgs);
     } catch (provisionErr) {
-      await prisma.iMContainer
-        .update({
-          where: { id: row.id },
-          data: { status: 'errored', provisioningStep: null },
-        })
-        .catch(() => {
-          /* best-effort */
-        });
+      // 2026-05-24 — low-friction cleanup. Pre-fix this just stamped
+      // status='errored' + stoppedAt, leaving the row + pod for the user to
+      // manually clean (Devices panel showed permanent "daemon offline"
+      // cards; orphan K8s pods sat Pending consuming scheduling slots
+      // forever). Per the directive: "如果遇到资源不够的问题应该如实回报
+      // 停止创建。然后把已经走完的流程的数据也删除掉" — hard-delete the
+      // K8s pod + im_containers row so the workspace stays clean and the
+      // wizard's failure step displays the K8s diagnostic (now carried in
+      // the thrown error message thanks to k8s-sandbox.ts #16 enhancements).
+      try {
+        await k8sSandbox.removeContainer(podName, true);
+      } catch {
+        /* best-effort — pod may never have been submitted (createContainer
+         * threw before the K8s API accepted the spec), or was already deleted
+         * by an out-of-band sweep. removeContainer's isMissingPod check
+         * already swallows 404s; this catch covers any other transient
+         * delete-time errors so cleanup proceeds. */
+      }
+      await prisma.iMContainer.delete({ where: { id: row.id } }).catch(() => {
+        /* best-effort — concurrent delete / row already gone */
+      });
       throw provisionErr;
     }
 
@@ -506,6 +623,13 @@ export async function POST(req: NextRequest): Promise<Response> {
         gatewayUrl: ctlResp.container.gatewayUrl ?? null,
         startedAt: new Date(),
         provisioningStep: null,
+        // S4 §08 §5.4 D-7 close — persist the cloud-minted daemonId returned by
+        // provisionContainer (it was injected into the pod via PRISMER_DAEMON_ID
+        // env, and the daemon echoes it back on /healthz). Mirrors the
+        // equivalent SET in `/api/sandboxes/route.ts`. Without this, /healthz
+        // mismatch detection (warn-only per T11) and subsequent ack/dispatch
+        // routes can't correlate daemon traffic to the container row.
+        daemonId: ctlResp.container.daemonId,
       },
     })) as ContainerRow;
 
@@ -576,6 +700,60 @@ function makeRuntimeInstanceId(): string {
   return `rt-${time}-${rand}`.slice(0, 24);
 }
 
+/**
+ * M448 (doc 20 Gap A) — validate that a project id given by the caller
+ * actually belongs to the same workspace AND is in `active` status.
+ * Returns null on success, or a ready-to-return 422 NextResponse otherwise.
+ *
+ * Style mirrors 09 §5 service invariant (project.service.ts) but kept inline
+ * here to avoid a route → service round-trip for a single FK-style check.
+ * No FK is declared on `im_containers.project_id` (see M448 + 09 §3.3) —
+ * route layer is the integrity boundary.
+ */
+async function validateProjectScope(workspaceId: string, projectId: string): Promise<Response | null> {
+  const project = (await prisma.iMProject.findUnique({
+    where: { id: projectId },
+    select: { id: true, workspaceId: true, status: true },
+  })) as { id: string; workspaceId: string; status: string } | null;
+  if (!project) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: {
+          code: 'PROJECT_NOT_FOUND',
+          message: `Project '${projectId}' does not exist.`,
+        },
+      },
+      { status: 422 },
+    );
+  }
+  if (project.workspaceId !== workspaceId) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: {
+          code: 'PROJECT_WORKSPACE_MISMATCH',
+          message: `Project '${projectId}' belongs to a different workspace.`,
+        },
+      },
+      { status: 422 },
+    );
+  }
+  if (project.status !== 'active') {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: {
+          code: 'PROJECT_NOT_ACTIVE',
+          message: `Project '${projectId}' is not active (status='${project.status}').`,
+        },
+      },
+      { status: 422 },
+    );
+  }
+  return null;
+}
+
 function runtimeKeyLabel(input: {
   workspaceId: string;
   runtimeInstanceId: string;
@@ -588,7 +766,7 @@ function runtimeKeyLabel(input: {
 
 function toRuntimeInstallationDTO(row: ContainerRow, readiness?: ReadinessProbe) {
   const runtimeInstanceId = row.agentImUserId ?? row.podName;
-  const daemonId = runtimeInstanceId.startsWith('container:') ? runtimeInstanceId : `container:${runtimeInstanceId}`;
+  const daemonId = installationDaemonId(row);
   const createdAtMs = row.createdAt.getTime();
   const startedAtMs = row.startedAt?.getTime() ?? null;
   const phase = phaseFromStatus(row.status);
@@ -608,6 +786,9 @@ function toRuntimeInstallationDTO(row: ContainerRow, readiness?: ReadinessProbe)
   return {
     id: row.id,
     workspaceId: row.workspaceId,
+    // M448 (doc 20 Gap A) — project scope. `null` = workspace-level (default
+    // for legacy rows pre-migration and explicit "Workspace-level" picks).
+    projectId: row.projectId ?? null,
     runtimeInstanceId,
     daemonId,
     podName: row.podName,
