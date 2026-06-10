@@ -211,3 +211,97 @@ export function extractAnthropicUsage(parsed: unknown): LLMUsage | null {
     total_tokens: u.input_tokens + u.output_tokens,
   };
 }
+
+// ============================================================================
+// Image generation pricing (USD per image)
+// ============================================================================
+
+/**
+ * Per-image USD prices for OpenAI-compatible image generation models.
+ * Defaults reflect OpenAI Images API public pricing as of 2026-04.
+ * NewAPI may override these via NEWAPI grouping — these are sell-side fallbacks
+ * used when the upstream response omits usage info.
+ *
+ * standard / hd are size + quality combined. We pick a flat "best effort"
+ * price per (model, size); the price excludes margin (added in
+ * `calculateImageCredits`).
+ */
+const DEFAULT_IMAGE_PRICING: Record<string, Record<string, number>> = {
+  'gpt-image-1': {
+    '1024x1024': 0.04,
+    '1024x1536': 0.06,
+    '1536x1024': 0.06,
+    '1024x1792': 0.08,
+    '1792x1024': 0.08,
+  },
+  'dall-e-3': {
+    '1024x1024': 0.04,
+    '1024x1792': 0.08,
+    '1792x1024': 0.08,
+  },
+  'dall-e-2': {
+    '256x256': 0.016,
+    '512x512': 0.018,
+    '1024x1024': 0.02,
+  },
+};
+
+const DEFAULT_IMAGE_FALLBACK_USD = 0.04;
+
+export interface ImageUsage {
+  /** Number of images generated (defaults to 1 if absent). */
+  n: number;
+  /** Pixel size string, e.g. "1024x1024". */
+  size: string;
+  /** Optional pre-computed cost from upstream (USD). Takes precedence over table lookup. */
+  upstreamCostUsd?: number;
+}
+
+export interface ImageCostBreakdown {
+  model: string;
+  n: number;
+  size: string;
+  upstreamCostUsd: number;
+  marginRate: number;
+  sellPriceUsd: number;
+  credits: number;
+}
+
+/**
+ * Look up per-image price for a model + size combo. Falls back to default
+ * when neither model nor size is in the table.
+ */
+export function getImagePricePerUnit(model: string, size: string): number {
+  const table = DEFAULT_IMAGE_PRICING[model];
+  if (table && table[size] !== undefined) return table[size];
+  // Prefix match on model name
+  for (const [key, sizes] of Object.entries(DEFAULT_IMAGE_PRICING)) {
+    if (model.startsWith(key) && sizes[size] !== undefined) return sizes[size];
+  }
+  return DEFAULT_IMAGE_FALLBACK_USD;
+}
+
+/**
+ * Calculate credits to charge for an image-gen call.
+ * Mirrors `calculateLLMCredits` semantics: cost-plus model with margin.
+ */
+export function calculateImageCredits(model: string, usage: ImageUsage): ImageCostBreakdown {
+  const marginRate = getMarginRate();
+  const n = Math.max(1, usage.n | 0);
+  const perUnitUsd = usage.upstreamCostUsd !== undefined && usage.upstreamCostUsd > 0
+    ? usage.upstreamCostUsd / n
+    : getImagePricePerUnit(model, usage.size);
+  const upstreamCostUsd = perUnitUsd * n;
+  const sellPriceUsd = upstreamCostUsd * (1 + marginRate);
+  const credits = Math.round((sellPriceUsd / CREDIT_VALUE_USD) * 10000) / 10000;
+
+  return {
+    model,
+    n,
+    size: usage.size,
+    upstreamCostUsd: Math.round(upstreamCostUsd * 1_000_000) / 1_000_000,
+    marginRate,
+    sellPriceUsd: Math.round(sellPriceUsd * 1_000_000) / 1_000_000,
+    credits: Math.max(0, credits),
+  };
+}
