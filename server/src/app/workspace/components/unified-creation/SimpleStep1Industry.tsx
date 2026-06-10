@@ -21,6 +21,9 @@ import { radius, s, springSnap, springSoft } from '../../lib/design';
 import { INDUSTRIES, SIZES } from '../../lib/templates/catalog';
 import { renderTemplate } from '../../lib/templates/render';
 import type { IndustryKey, SizeKey } from '../../lib/templates/types';
+import { ModelPicker } from '../model-picker';
+import type { ProxyProvider } from '../proxy-provider-select';
+import { AdvancedProxyAccordion } from './pro/AdvancedProxyAccordion';
 
 const REDUCED: Transition = { duration: 0.12, ease: 'easeOut' };
 const HOVER_CAPTION_DELAY_MS = 800;
@@ -42,8 +45,29 @@ const INDUSTRY_ICONS: Record<IndustryKey, LucideIcon> = {
 
 export interface SimpleStep1IndustryProps {
   isDark: boolean;
+  initialOrganizationName?: string;
+  /**
+   * The workspace's existing organization name (workspace ↔ organization is
+   * 1:1 by design). When set, the "组织名称" section renders as a read-only
+   * badge and the user can't retype it — they're operating inside an
+   * existing org. Renaming the org belongs in a workspace-settings flow,
+   * not the device-creation modal.
+   */
+  lockedOrganizationName?: string | null;
   initialIndustry?: IndustryKey;
   initialSize?: SizeKey;
+  model: string;
+  /**
+   * 2026-05-30 — per-agent LLM proxy provider for every Hermes profile this
+   * Simple-mode run mints. Wired to `AdvancedProxyAccordion` underneath the
+   * ModelPicker so the choice lives next to its sibling control. Owned by
+   * the shell (UnifiedCreationModal) like the model field so it survives
+   * Step 0 → 1 navigation.
+   */
+  proxyProvider: ProxyProvider;
+  onOrganizationNameChange: (name: string) => void;
+  onModelChange: (model: string) => void;
+  onProxyProviderChange: (value: ProxyProvider) => void;
   onSelectionChange: (industry: IndustryKey | null, size: SizeKey | null) => void;
 }
 
@@ -56,8 +80,15 @@ function moveSelection<T extends string>(keys: readonly T[], current: T | null, 
 
 export function SimpleStep1Industry({
   isDark,
+  initialOrganizationName,
+  lockedOrganizationName,
   initialIndustry,
   initialSize,
+  model,
+  proxyProvider,
+  onOrganizationNameChange,
+  onModelChange,
+  onProxyProviderChange,
   onSelectionChange,
 }: SimpleStep1IndustryProps) {
   const theme = isDark ? 'dark' : 'light';
@@ -67,6 +98,25 @@ export function SimpleStep1Industry({
 
   const [industry, setIndustry] = useState<IndustryKey | null>(initialIndustry ?? null);
   const [size, setSize] = useState<SizeKey | null>(initialSize ?? null);
+  // When `lockedOrganizationName` is provided, it always wins — the user
+  // can't edit, and any stale `initialOrganizationName` (from a previous
+  // session draft) is overwritten.
+  const isLocked = typeof lockedOrganizationName === 'string' && lockedOrganizationName.trim().length > 0;
+  const [organizationName, setOrganizationName] = useState(
+    isLocked ? (lockedOrganizationName as string).trim() : (initialOrganizationName ?? ''),
+  );
+
+  useEffect(() => {
+    if (isLocked) {
+      setOrganizationName((lockedOrganizationName as string).trim());
+      return;
+    }
+    setOrganizationName(initialOrganizationName ?? '');
+  }, [initialOrganizationName, isLocked, lockedOrganizationName]);
+
+  useEffect(() => {
+    onOrganizationNameChange(organizationName);
+  }, [organizationName, onOrganizationNameChange]);
 
   // Notify parent on actual change — guard against echo loops if parent
   // feeds props back through the initial* slots.
@@ -152,6 +202,82 @@ export function SimpleStep1Industry({
 
   return (
     <div className="flex flex-col gap-7" data-testid="simple-step1-industry">
+      <section aria-labelledby="step1-organization-label">
+        <label id="step1-organization-label" htmlFor="simple-step1-organization-name" className={headingClass}>
+          组织名称
+        </label>
+        {isLocked ? (
+          // Workspace ↔ organization is 1:1 — when the workspace already
+          // owns a name, surface it as a locked badge instead of a writable
+          // input. Renaming belongs in workspace settings, not here.
+          <div
+            data-testid="simple-step1-organization-locked"
+            className={`flex h-11 items-center gap-2 rounded-xl border px-3 ${
+              isDark ? 'border-white/[0.06] bg-zinc-900/40 text-zinc-200' : 'border-zinc-200 bg-zinc-50 text-zinc-800'
+            }`}
+          >
+            <span
+              className={`inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-xs font-bold ${
+                isDark ? 'bg-violet-500/20 text-violet-200' : 'bg-violet-100 text-violet-700'
+              }`}
+              aria-hidden
+            >
+              {organizationName.slice(0, 1).toUpperCase()}
+            </span>
+            <span className="min-w-0 flex-1 truncate text-sm font-semibold">{organizationName}</span>
+            <span className={`shrink-0 text-[11px] ${isDark ? 'text-zinc-500' : 'text-zinc-500'}`}>当前工作区</span>
+          </div>
+        ) : (
+          <input
+            id="simple-step1-organization-name"
+            data-testid="simple-step1-organization-name"
+            value={organizationName}
+            onChange={(e) => setOrganizationName(e.target.value)}
+            placeholder="例如: Prism Labs"
+            maxLength={64}
+            className={`h-11 w-full rounded-xl border px-3 text-sm outline-none transition-colors ${
+              isDark
+                ? 'border-white/[0.08] bg-zinc-900/70 text-zinc-100 placeholder:text-zinc-600 focus:border-violet-400/60'
+                : 'border-zinc-200 bg-white text-zinc-900 placeholder:text-zinc-400 focus:border-violet-400'
+            }`}
+          />
+        )}
+      </section>
+
+      <section aria-labelledby="step1-model-label">
+        <label id="step1-model-label" className={headingClass}>
+          默认模型
+        </label>
+        <ModelPicker
+          value={model}
+          onChange={onModelChange}
+          allowCustom
+          proxyProvider={proxyProvider}
+          className={
+            isDark ? 'border-white/[0.08] bg-zinc-900/70 text-zinc-100' : 'border-zinc-200 bg-white text-zinc-900'
+          }
+        />
+        {/*
+         * 2026-05-30 — Simple wizard 的 proxyProvider 入口。直接复用 Pro 模式
+         * 那边一模一样的 AdvancedProxyAccordion，下半段是 ProxyProviderSelect
+         * (radix RadioGroup + design.ts tokens)。默认 collapsed，95% 走
+         * `newapi` 不打扰；badge 上始终能看到当前值。
+         *
+         * 补 8d914c41 漏点：上一轮只接了 NewAgentDialog (Simple) 和 Pro 的
+         * ProTileAgent / ProTileProfile；UnifiedCreationModal 的 Simple wizard
+         * 是 workspace 首次 bootstrap 用户最常碰的入口，没接等于 99% 用户碰
+         * 不到。
+         */}
+        <div className="mt-3">
+          <AdvancedProxyAccordion
+            isDark={isDark}
+            proxyProvider={proxyProvider}
+            onProxyProviderChange={onProxyProviderChange}
+            testIdPrefix="simple-step1"
+          />
+        </div>
+      </section>
+
       <section aria-labelledby="step1-industry-label">
         <h2 id="step1-industry-label" className={headingClass}>
           你的团队来自哪个行业?
