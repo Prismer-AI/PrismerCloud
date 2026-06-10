@@ -32,6 +32,10 @@ export interface SkillInfo {
   status: string;
   geneId: string | null;
   signals?: string;
+  // §A.7 Phase 1 — exposed on list DTOs so UI can render "needs sync" /
+  // "manifest revision" badges without an N+1 detail fetch. Nullable +
+  // optional since legacy rows (pre-migration 400) have not been backfilled.
+  contentManifestRevision?: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -40,6 +44,20 @@ export interface SkillDetail extends SkillInfo {
   content: string;
   sourceId: string;
   metadata: Record<string, unknown>;
+  // §A.7 Phase 1 — multi-file manifest. `contentManifest` is the raw JSON
+  // string (files[]); `contentManifestRevision` is the merkle root. Daemon
+  // reads these via /skills/installed; UI / inspector clients read via
+  // /skills/:slug detail. Nullable while dual-write (legacy `content`-only
+  // rows still exist, see migration 400 backfill).
+  contentManifest: string | null;
+  contentManifestRevision: string | null;
+  // release201/19 D7 — surface lifecycle so cross-workspace import callers
+  // and the marketplace inspector can re-assert `lifecycleStage='published'`
+  // without a separate /lifecycle probe. doc 08 §0.2.5 expects published
+  // skills to expose stage on read.
+  lifecycleStage: string;
+  publishScope: string;
+  publishedAt: string | null;
 }
 
 export interface SkillImportItem {
@@ -74,6 +92,16 @@ export interface SkillStats {
   total_installs: number;
 }
 
+export interface InstallSkillOptions {
+  workspaceId?: string;
+  config?: Record<string, unknown>;
+  version?: string;
+}
+
+export class SkillPermissionError extends Error {
+  statusCode = 403;
+}
+
 // ─── Service ────────────────────────────────────────────────
 
 export class SkillService {
@@ -96,6 +124,10 @@ export class SkillService {
       return this._fulltextSearch(opts);
     }
 
+    // release201/07: draft skills (skill-authoring output) must never appear
+    // in marketplace search. We additionally constrain to status=active here
+    // (matches pre-201 behaviour) so deprecated/pending_review/draft all stay
+    // hidden from public browse.
     const where: Record<string, unknown> = { status: 'active', qualityScore: { gte: 0.005 } };
 
     if (opts.category) where.category = opts.category;
@@ -169,6 +201,9 @@ export class SkillService {
           status: true,
           geneId: true,
           signals: true,
+          // §A.7 Phase 1 — expose manifest revision on list DTOs so the UI
+          // can flag rows that need sync without a per-row detail fetch.
+          contentManifestRevision: true,
           createdAt: true,
           updatedAt: true,
         },
@@ -535,8 +570,39 @@ export class SkillService {
     signals?: string[];
     ownerAgentId?: string;
     forkedFrom?: string;
+    // v2.1 §A.7 — multi-file manifest. Either:
+    //   (a) caller supplies pre-built manifest + revision (multipart upload path), or
+    //   (b) caller supplies only `content` → we auto-wrap into single-file manifest
+    contentManifest?: unknown; // array of {path,sha256,size,content?,url?,inline}
+    contentManifestRevision?: string;
+    license?: string;
+    compatibility?: string[] | string;
   }): Promise<SkillDetail> {
     const slug = this.toSlug(input.name, 'community');
+
+    // v2.1: derive manifest from `content` when caller didn't supply one
+    // (dual-write path for v2.0 clients). When the caller provides a
+    // manifest directly (e.g. multipart create), trust it but never trust a
+    // caller-supplied `source`, `publishedAt`, `sourceCommit` — these are
+    // server-controlled per §A.7 spec.
+    let contentManifestStr: string | undefined;
+    let manifestRevision: string | undefined;
+    if (Array.isArray(input.contentManifest)) {
+      contentManifestStr = JSON.stringify(input.contentManifest);
+      manifestRevision = input.contentManifestRevision;
+    } else if (input.content) {
+      const { buildSingleFileManifest } = await import('../skills/manifest');
+      const m = buildSingleFileManifest(input.content);
+      contentManifestStr = JSON.stringify(m.files);
+      manifestRevision = m.revision;
+    }
+
+    const compatibility = Array.isArray(input.compatibility)
+      ? input.compatibility
+      : typeof input.compatibility === 'string'
+        ? [input.compatibility]
+        : undefined;
+
     const skill = await prisma.iMSkill.create({
       data: {
         slug,
@@ -545,10 +611,14 @@ export class SkillService {
         category: input.category,
         tags: JSON.stringify(input.tags || []),
         author: input.author,
-        source: 'community',
+        source: 'community', // server-controlled — caller's `source` is ignored
         sourceUrl: input.sourceUrl || '',
         sourceId: `community:${slug}`,
         content: input.content || '',
+        ...(contentManifestStr ? { contentManifest: contentManifestStr } : {}),
+        ...(manifestRevision ? { contentManifestRevision: manifestRevision } : {}),
+        ...(input.license ? { license: input.license } : {}),
+        ...(compatibility ? { compatibility: JSON.stringify(compatibility) } : {}),
         signals: input.signals?.length ? JSON.stringify(input.signals.map((s) => ({ type: s }))) : '[]',
         ownerAgentId: input.ownerAgentId || null,
         ...(input.forkedFrom ? { forkedFrom: input.forkedFrom } : {}),
@@ -615,19 +685,51 @@ export class SkillService {
       content: string;
       status: string;
       geneId: string;
+      // v2.1 §A.7 — manifest updates honoured; protected fields (source,
+      // publishedAt, sourceCommit, ownerAgentId) are NOT in the type so a
+      // caller cannot rebind ownership/origin via PATCH.
+      contentManifest: unknown;
+      contentManifestRevision: string;
+      license: string;
+      compatibility: string[] | string;
     }>,
+    actorAgentId?: string,
   ): Promise<SkillDetail | null> {
     const existing = await prisma.iMSkill.findUnique({ where: { id } });
     if (!existing) return null;
+    if (actorAgentId && existing.ownerAgentId !== actorAgentId) {
+      throw new SkillPermissionError('Only the skill owner can update this skill');
+    }
 
     const updateData: Record<string, unknown> = {};
     if (data.name !== undefined) updateData.name = data.name;
     if (data.description !== undefined) updateData.description = data.description;
     if (data.category !== undefined) updateData.category = data.category;
     if (data.tags !== undefined) updateData.tags = JSON.stringify(data.tags);
-    if (data.content !== undefined) updateData.content = data.content;
     if (data.status !== undefined) updateData.status = data.status;
     if (data.geneId !== undefined) updateData.geneId = data.geneId;
+    if (data.license !== undefined) updateData.license = data.license;
+    if (data.compatibility !== undefined) {
+      const c = Array.isArray(data.compatibility) ? data.compatibility : [data.compatibility];
+      updateData.compatibility = JSON.stringify(c);
+    }
+
+    // v2.1: when caller passes a manifest directly, trust it. Else when caller
+    // passes only `content`, auto-derive a single-file manifest so the wire
+    // shape stays consistent. When neither is touched, leave both columns alone.
+    if (Array.isArray(data.contentManifest)) {
+      updateData.contentManifest = JSON.stringify(data.contentManifest);
+      if (data.contentManifestRevision) {
+        updateData.contentManifestRevision = data.contentManifestRevision;
+      }
+      if (data.content !== undefined) updateData.content = data.content;
+    } else if (data.content !== undefined) {
+      updateData.content = data.content;
+      const { buildSingleFileManifest } = await import('../skills/manifest');
+      const m = buildSingleFileManifest(data.content);
+      updateData.contentManifest = JSON.stringify(m.files);
+      updateData.contentManifestRevision = m.revision;
+    }
 
     const updated = await prisma.iMSkill.update({
       where: { id },
@@ -639,9 +741,12 @@ export class SkillService {
   /**
    * Delete a skill (soft: set status to deprecated).
    */
-  async deprecate(id: string): Promise<boolean> {
+  async deprecate(id: string, actorAgentId?: string): Promise<boolean> {
     const existing = await prisma.iMSkill.findUnique({ where: { id } });
     if (!existing) return false;
+    if (actorAgentId && existing.ownerAgentId !== actorAgentId) {
+      throw new SkillPermissionError('Only the skill owner can delete this skill');
+    }
     await prisma.iMSkill.update({
       where: { id },
       data: { status: 'deprecated' },
@@ -661,6 +766,7 @@ export class SkillService {
     agentId: string,
     skillIdOrSlug: string,
     scope: string = 'global',
+    options: InstallSkillOptions = {},
   ): Promise<{
     agentSkill: any;
     gene: any | null;
@@ -672,6 +778,17 @@ export class SkillService {
       where: { OR: [{ id: skillIdOrSlug }, { slug: skillIdOrSlug }] },
     });
     if (!skill) throw new Error('Skill not found');
+
+    // release201/07: never install a draft. Draft skills are authoring engine
+    // output and must go through 08 lifecycle eval → publish before they're
+    // installable. Cloud layer surface error so SDK/CLI/UI can render it.
+    if (skill.status === 'draft') {
+      const err = new SkillPermissionError(
+        `cannot install skill in status=draft (slug=${skill.slug}); drafts must be promoted via release201/08 lifecycle first`,
+      );
+      err.statusCode = 403;
+      throw err;
+    }
 
     // 2. Check if already installed and active
     const existing = await prisma.iMAgentSkill.findUnique({
@@ -734,8 +851,23 @@ export class SkillService {
     // 6. Create/update agent-skill record
     const agentSkill = await prisma.iMAgentSkill.upsert({
       where: { agentId_skillId: { agentId, skillId: skill.id } },
-      create: { agentId, skillId: skill.id, geneId: gene?.id, version: skill.version, status: 'active' },
-      update: { geneId: gene?.id, version: skill.version, status: 'active', updatedAt: new Date() },
+      create: {
+        agentId,
+        skillId: skill.id,
+        geneId: gene?.id,
+        version: options.version || skill.version,
+        config: JSON.stringify(options.config || {}),
+        status: 'active',
+        workspaceId: options.workspaceId || null,
+      },
+      update: {
+        geneId: gene?.id,
+        version: options.version || skill.version,
+        config: JSON.stringify(options.config || {}),
+        status: 'active',
+        workspaceId: options.workspaceId || existing?.workspaceId || null,
+        updatedAt: new Date(),
+      },
     });
 
     // 7. Increment install count only on first install (not re-activation)
@@ -754,7 +886,7 @@ export class SkillService {
   /**
    * Uninstall a skill for an agent. Marks the agent-skill record as 'uninstalled'.
    */
-  async uninstallSkill(agentId: string, skillIdOrSlug: string, scope: string = 'global'): Promise<boolean> {
+  async uninstallSkill(agentId: string, skillIdOrSlug: string, _scope: string = 'global'): Promise<boolean> {
     const skill = await prisma.iMSkill.findFirst({
       where: { OR: [{ id: skillIdOrSlug }, { slug: skillIdOrSlug }] },
     });
@@ -791,10 +923,22 @@ export class SkillService {
 
   /**
    * Get all installed (active) skills for an agent, with skill and gene details.
+   *
+   * v2.1 §A.7 wire shape (D7): each entry's `skill` object includes
+   *   • `content`                  (legacy single-file, dual-write window)
+   *   • `contentManifest`          (JSON string of files[])
+   *   • `contentManifestRevision`  (merkle root)
+   * Old daemons (v2.0.x) that only read `skill.content` keep working
+   * transparently — they ignore the new fields. New daemons prefer
+   * `contentManifest` and fall back to `content` when it's null (catalog
+   * skills that haven't been backfilled, e.g. ClawHub rows).
+   *
+   * `expectedRevision` is included at the top level so the UI can show
+   * "Installed on daemon ✓" vs "syncing" without re-computing the merkle.
    */
-  async getInstalledSkills(agentId: string, scope?: string): Promise<any[]> {
+  async getInstalledSkills(agentId: string, workspaceId?: string): Promise<any[]> {
     const where: any = { agentId, status: 'active' };
-    if (scope) where.scope = scope;
+    if (workspaceId) where.workspaceId = workspaceId;
     const records = await prisma.iMAgentSkill.findMany({
       where,
       orderBy: { installedAt: 'desc' },
@@ -802,7 +946,8 @@ export class SkillService {
 
     if (records.length === 0) return [];
 
-    // Batch fetch skills and genes
+    // Batch fetch skills and genes — no `select` clause so contentManifest
+    // and contentManifestRevision are part of the response by default.
     const skillIds = records.map((r: any) => r.skillId);
     const skills = await prisma.iMSkill.findMany({ where: { id: { in: skillIds } } });
     const skillMap = new Map(skills.map((s: any) => [s.id, s]));
@@ -811,11 +956,34 @@ export class SkillService {
     const genes = geneIds.length > 0 ? await prisma.iMGene.findMany({ where: { id: { in: geneIds } } }) : [];
     const geneMap = new Map(genes.map((g: any) => [g.id, g]));
 
-    return records.map((r: any) => ({
-      agentSkill: r,
-      skill: skillMap.get(r.skillId) || null,
-      gene: r.geneId ? geneMap.get(r.geneId) || null : null,
-    }));
+    return records.map((r: any) => {
+      const skill = skillMap.get(r.skillId) || null;
+      // For legacy rows without contentManifestRevision, compute the SAME
+      // merkle the daemon will compute when it wraps `content` as a single-file
+      // manifest (see sdk/prismer-cloud/runtime/src/daemon/skill-sync.ts
+      // computeMerkle): files=[{path:"SKILL.md", sha256: sha256(content)}],
+      // lines = "SKILL.md:<sha256(content)>" (no trailing \n for single file),
+      // merkle = sha256(lines). Without this match, ack would never converge.
+      let expectedRevision: string | null = null;
+      if (skill) {
+        const stored = (skill as any).contentManifestRevision as string | null | undefined;
+        if (stored) {
+          expectedRevision = stored;
+        } else {
+          const crypto = require('crypto');
+          const content = ((skill as any).content as string | null) || '';
+          const contentSha = crypto.createHash('sha256').update(content, 'utf8').digest('hex');
+          const merkleInput = `SKILL.md:${contentSha}`;
+          expectedRevision = crypto.createHash('sha256').update(merkleInput).digest('hex');
+        }
+      }
+      return {
+        agentSkill: r,
+        skill,
+        gene: r.geneId ? geneMap.get(r.geneId) || null : null,
+        expectedRevision,
+      };
+    });
   }
 
   /**
@@ -827,16 +995,42 @@ export class SkillService {
     });
     if (!skill) return null;
 
-    let files: Array<{ path: string; size: number }>;
-    if (skill.fileCount > 1) {
+    // §A.7 Phase 1 — contentManifest is the authoritative source for files[].
+    // Fall back to metadata.files (legacy rows that still carry the array
+    // there) and finally synthesize a single-file manifest from `content`.
+    let files: Array<{ path: string; size: number; sha256?: string }> | null = null;
+    const manifestRaw = (skill as any).contentManifest as string | null | undefined;
+    if (manifestRaw) {
       try {
-        const meta = JSON.parse(skill.metadata || '{}');
-        files = meta.files || [{ path: 'SKILL.md', size: skill.content.length }];
+        const parsed = JSON.parse(manifestRaw);
+        const arr = Array.isArray(parsed)
+          ? parsed
+          : parsed && typeof parsed === 'object' && Array.isArray(parsed.files)
+            ? parsed.files
+            : null;
+        if (Array.isArray(arr) && arr.length > 0) {
+          files = arr.map((f: any) => ({
+            path: String(f?.path ?? ''),
+            size: typeof f?.size === 'number' ? f.size : 0,
+            ...(typeof f?.sha256 === 'string' ? { sha256: f.sha256 } : {}),
+          }));
+        }
       } catch {
+        // fall through to metadata / single-file fallback
+      }
+    }
+
+    if (!files) {
+      if (skill.fileCount > 1) {
+        try {
+          const meta = JSON.parse(skill.metadata || '{}');
+          files = meta.files || [{ path: 'SKILL.md', size: skill.content.length }];
+        } catch {
+          files = [{ path: 'SKILL.md', size: skill.content.length }];
+        }
+      } else {
         files = [{ path: 'SKILL.md', size: skill.content.length }];
       }
-    } else {
-      files = [{ path: 'SKILL.md', size: skill.content.length }];
     }
 
     return {
@@ -976,6 +1170,14 @@ export class SkillService {
     status: string;
     geneId: string | null;
     metadata: string;
+    contentManifest?: string | null;
+    contentManifestRevision?: string | null;
+    // release201/19 D7 — lifecycle fields are present on every row
+    // (schema default 'published'/'private'), but some legacy code paths
+    // (raw SQL imports, mock fixtures) may omit them, so accept missing.
+    lifecycleStage?: string | null;
+    publishScope?: string | null;
+    publishedAt?: Date | null;
     createdAt: Date;
     updatedAt: Date;
   }): SkillDetail {
@@ -996,6 +1198,11 @@ export class SkillService {
       status: record.status,
       geneId: record.geneId,
       metadata: JSON.parse(record.metadata || '{}'),
+      contentManifest: record.contentManifest ?? null,
+      contentManifestRevision: record.contentManifestRevision ?? null,
+      lifecycleStage: record.lifecycleStage ?? 'published',
+      publishScope: record.publishScope ?? 'private',
+      publishedAt: record.publishedAt ? record.publishedAt.toISOString() : null,
       createdAt: record.createdAt,
       updatedAt: record.updatedAt,
     };
