@@ -565,6 +565,75 @@ export async function registerWithPassword(
   return toAuthResponse(user, 'email');
 }
 
+/**
+ * Magic-link invite claim (passwordless). Finds-or-creates a human account
+ * for an email that the caller has ALREADY resolved SERVER-SIDE from a valid,
+ * pending, non-expired email-link workspace invite token (the token was
+ * emailed to this address, so possessing it proves mailbox access). Returns
+ * the same AuthResponse shape as login/register plus the internal imUserId so
+ * the route can accept() the invite.
+ *
+ * SECURITY INVARIANTS (enforced by the caller + here):
+ *   - `email` MUST be the inviteeEmail resolved SERVER-SIDE from the token,
+ *     never a client-supplied value. The route is responsible for that
+ *     resolution; this function trusts its `email` argument is token-derived.
+ *   - Passwordless account creation is gated entirely behind that token
+ *     resolution. There is NO code path that creates a passwordless human
+ *     account without a token-derived email.
+ *   - emailVerified is set true because the token IS the proof of ownership.
+ *   - The created row has NO password hash (passwordHash left null) — mirrors
+ *     the OAuth account-creation path, which is already passwordless. The
+ *     account can later set a password via the reset-password flow (which
+ *     re-proves ownership with an email code).
+ *   - If the email already has an account we REUSE it (this is find-or-create,
+ *     like OAuth): the invite owner explicitly addressed this mailbox, and the
+ *     mintSessionToken/issueToken below is identical to a normal login token,
+ *     so no privilege is gained beyond a normal sign-in to that account.
+ *
+ * Does NOT validate any code. Callers MUST only reach this after a successful
+ * server-side token resolution; otherwise use registerWithPassword.
+ */
+export async function findOrCreateInvitedUser(
+  email: string,
+): Promise<AuthResponse & { imUserId: string }> {
+  const norm = normalizeEmail(email);
+  if (!norm) {
+    throw new LocalAuthError(400, 400, 'Email is required');
+  }
+
+  let user = (await (prisma as any).iMUser.findFirst({
+    where: { email: norm, role: 'human' },
+  })) as AuthUserRecord | null;
+
+  if (user) {
+    if (!isUserActive(user)) {
+      // A banned/suspended account must not be re-animated through an invite.
+      throw new LocalAuthError(403, 403, 'Account is inactive');
+    }
+    user = await updateLastLoginAt(user.id);
+  } else {
+    // Passwordless create — mirror the OAuth provisioning path: same username
+    // generation + displayName + emailVerified + role + metadata as
+    // registerWithPassword, but NO passwordHash (column is nullable).
+    const username = norm.split('@')[0] + '_' + Math.random().toString(36).slice(2, 7);
+    user = (await (prisma as any).iMUser.create({
+      data: {
+        email: norm,
+        username,
+        displayName: norm.split('@')[0],
+        emailVerified: true,
+        role: 'human',
+        metadata: JSON.stringify({ lastLoginAt: new Date().toISOString() }),
+      },
+    })) as AuthUserRecord;
+  }
+
+  // Lazy numericId allocation for any legacy row that lacked it (mirrors OAuth).
+  user = await ensureNumericId(user);
+
+  return { ...toAuthResponse(user, 'email'), imUserId: user.id };
+}
+
 export async function resetPasswordWithCode(
   email: string,
   code: string,
@@ -630,6 +699,31 @@ export async function loginWithGoogleAccessToken(accessToken: string): Promise<A
     user = (await (prisma as any).iMUser.findFirst({
       where: { email, role: 'human' },
     })) as AuthUserRecord | null;
+  }
+
+  // v2.0 D1 (方案 A) — banned user must not be resurrected via OAuth re-login.
+  // The DELETE /me cascade soft-deletes (banned=true). The previous behavior
+  // here updated the banned row and returned a JWT that auth middleware then
+  // rejected with "Account is inactive". Apple "account deletion" semantics
+  // require the user to come back with a NEW identity, not a re-animated one.
+  //
+  // Strategy: when we match a banned row, anonymize its unique identifiers
+  // (email → tombstone, googleId → NULL) so they're freed for a fresh row,
+  // then fall through to the create-new branch.
+  if (user && user.banned) {
+    await (prisma as any).iMUser.update({
+      where: { id: user.id },
+      data: {
+        email: `${user.id}@deleted.local`,
+        googleId: null,
+        metadata: JSON.stringify({
+          ...parseMetadataSafe(user.metadata, user.id),
+          identityReleasedAt: new Date().toISOString(),
+          identityReleasedReason: 'google-oauth-re-login-after-deletion',
+        }),
+      },
+    });
+    user = null;
   }
 
   if (!user) {
@@ -751,6 +845,24 @@ export async function loginWithGithubCode(code: string): Promise<AuthResponse> {
     })) as AuthUserRecord | null;
   }
 
+  // v2.0 D1 — see Google branch for rationale. Release banned row's
+  // unique identifiers so re-login creates a fresh imUserId.
+  if (user && user.banned) {
+    await (prisma as any).iMUser.update({
+      where: { id: user.id },
+      data: {
+        email: `${user.id}@deleted.local`,
+        githubId: null,
+        metadata: JSON.stringify({
+          ...parseMetadataSafe(user.metadata, user.id),
+          identityReleasedAt: new Date().toISOString(),
+          identityReleasedReason: 'github-oauth-re-login-after-deletion',
+        }),
+      },
+    });
+    user = null;
+  }
+
   if (!user) {
     const username = githubUser.login + '_' + Math.random().toString(36).slice(2, 6);
     user = (await (prisma as any).iMUser.create({
@@ -841,6 +953,23 @@ export async function loginWithAppleIdentityToken(
     user = (await (prisma as any).iMUser.findFirst({
       where: { email, role: 'human' },
     })) as AuthUserRecord | null;
+  }
+
+  // v2.0 D1 — see Google branch for rationale.
+  if (user && user.banned) {
+    await (prisma as any).iMUser.update({
+      where: { id: user.id },
+      data: {
+        email: rawEmail ? `${user.id}@deleted.local` : user.email,
+        appleId: null,
+        metadata: JSON.stringify({
+          ...parseMetadataSafe(user.metadata, user.id),
+          identityReleasedAt: new Date().toISOString(),
+          identityReleasedReason: 'apple-oauth-re-login-after-deletion',
+        }),
+      },
+    });
+    user = null;
   }
 
   if (!user) {
@@ -958,6 +1087,34 @@ export async function getUserProfileFromToken(token: string): Promise<AuthRespon
 
 export async function refreshAuthToken(token: string): Promise<AuthResponse | null> {
   return getUserProfileFromToken(token);
+}
+
+// ─── Public API: mint a session token for a known IMUser ──────
+
+/**
+ * Mint a fresh session JWT (7-day TTL) for an existing human IMUser, by id.
+ *
+ * Used by the login-QR (F2) flow: a web-authenticated user grants their
+ * own session to a scanning mobile device after an explicit second
+ * confirmation. The minted token is for `imUserId` (the offer creator) —
+ * identical shape to a normal email/OAuth login token, so the mobile client
+ * bootstraps through the exact same IM ws/sse handshake.
+ *
+ * Returns null if the user doesn't exist, isn't active, or isn't a human.
+ */
+export async function mintSessionToken(
+  imUserId: string,
+): Promise<{ token: string; expiresIn: number; imUserId: string; numericId: number } | null> {
+  const user = (await (prisma as any).iMUser.findFirst({
+    where: { id: imUserId, role: 'human' },
+  })) as AuthUserRecord | null;
+  if (!user || !isUserActive(user)) return null;
+  return {
+    token: issueToken(user, 'email'),
+    expiresIn: TOKEN_TTL_SECONDS,
+    imUserId: user.id,
+    numericId: asNumber(user.numericId),
+  };
 }
 
 // ─── Public API: logout (token blacklist) ────────────────────
