@@ -96,12 +96,40 @@ export async function deleteAccountCascade(opts: {
   mergedMetadata.deletedAt = deletedAtIso;
   mergedMetadata.deletionSource = 'self-service';
 
+  // v2.0 D1 (方案 A) — proactive identity release. Apple "account deletion"
+  // semantics + the OAuth re-login path require that the deleted user's
+  // email / googleId / githubId / appleId no longer occupy the UNIQUE
+  // indexes. Otherwise the user can re-login via OAuth and find their
+  // banned row (auth middleware then 401s with "Account is inactive" and
+  // they're stuck). Anonymize the unique identifiers at deletion time;
+  // the original email is preserved in metadata for audit.
+  const releasedEmail = `${imUserId}@deleted.local`;
+  // Capture the soon-to-be-released identifiers for audit (best-effort).
+  const releasedIdentity = await (prisma as any).iMUser.findUnique({
+    where: { id: imUserId },
+    select: { email: true, googleId: true, githubId: true, appleId: true },
+  });
+  if (releasedIdentity) {
+    mergedMetadata.releasedIdentity = {
+      email: releasedIdentity.email,
+      googleId: releasedIdentity.googleId,
+      githubId: releasedIdentity.githubId,
+      appleId: releasedIdentity.appleId,
+      releasedAt: deletedAtIso,
+    };
+  }
+
   await (prisma as any).iMUser.update({
     where: { id: imUserId },
     data: {
       banned: true,
       bannedAt: now,
       banReason: mergedMetadata.banReason ?? 'Account deletion requested by owner',
+      // Release UNIQUE-indexed identifiers so re-login creates a fresh row.
+      email: releasedEmail,
+      googleId: null,
+      githubId: null,
+      appleId: null,
       metadata: JSON.stringify(mergedMetadata),
     },
   });
