@@ -8,6 +8,7 @@
  */
 
 import { useState, useEffect, useRef } from 'react';
+import { useI18n } from '@/contexts/i18n-context';
 import { getIMClientToken } from '@/lib/im-token';
 import type { EvolutionMapData, EvolutionStory } from './types/evolution-map.types';
 import { GraphSection } from './sections/graph-section';
@@ -36,15 +37,17 @@ const FEED_ICONS: Record<string, { color: string }> = {
   milestone: { color: 'text-cyan-400' },
   import: { color: 'text-blue-400' },
 };
-function timeAgo(ts: string): string {
+type EvolutionT = ReturnType<typeof useI18n>['t'];
+
+function localizedTimeAgo(ts: string, t: EvolutionT): string {
   const diff = Date.now() - new Date(ts).getTime();
   const m = Math.floor(diff / 60000);
-  if (m < 1) return 'just now';
-  if (m < 60) return `${m}m ago`;
+  if (m < 1) return t('evolution.common.justNow');
+  if (m < 60) return t('evolution.common.minutesAgo', { count: m });
   const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h ago`;
+  if (h < 24) return t('evolution.common.hoursAgo', { count: h });
   const d = Math.floor(h / 24);
-  if (d < 30) return `${d}d ago`;
+  if (d < 30) return t('evolution.common.daysAgo', { count: d });
   return new Date(ts).toLocaleDateString();
 }
 import { MOCK_MAP_DATA, MOCK_STORIES } from './canvas/mock-data';
@@ -75,6 +78,7 @@ interface Props {
 }
 
 export function EvolutionMap({ isDark }: Props) {
+  const { t } = useI18n();
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -217,7 +221,7 @@ export function EvolutionMap({ isDark }: Props) {
       <div className="h-[calc(100vh-120px)] flex items-center justify-center">
         <div className={`flex items-center gap-3 ${isDark ? 'text-zinc-400' : 'text-zinc-500'}`}>
           <Loader2 size={20} className="animate-spin" />
-          <span className="text-sm">Loading Evolution Map...</span>
+          <span className="text-sm">{t('evolution.map.loading')}</span>
         </div>
       </div>
     );
@@ -229,7 +233,7 @@ export function EvolutionMap({ isDark }: Props) {
         <div className={`text-center ${isDark ? 'text-zinc-400' : 'text-zinc-500'}`}>
           <p className="text-sm">{error}</p>
           <button onClick={() => window.location.reload()} className="mt-2 text-xs text-violet-400 hover:underline">
-            Retry
+            {t('evolution.map.retry')}
           </button>
         </div>
       </div>
@@ -350,7 +354,7 @@ export function EvolutionMap({ isDark }: Props) {
                       : 'text-zinc-400 hover:text-zinc-600'
                 }`}
             >
-              <Dna size={12} /> Top Genes
+              <Dna size={12} /> {t('evolution.map.topGenes')}
             </button>
             <button
               onClick={() => setSidebarTab('activity')}
@@ -365,7 +369,7 @@ export function EvolutionMap({ isDark }: Props) {
                       : 'text-zinc-400 hover:text-zinc-600'
                 }`}
             >
-              <Activity size={12} /> Activity
+              <Activity size={12} /> {t('evolution.map.activity')}
               {feed.length > 0 && (
                 <span className="relative flex h-1.5 w-1.5">
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
@@ -429,7 +433,7 @@ export function EvolutionMap({ isDark }: Props) {
                           </div>
                         ) : (
                           <span className={`text-[9px] ${isDark ? 'text-zinc-600' : 'text-zinc-400'}`}>
-                            awaiting data
+                            {t('evolution.map.awaitingData')}
                           </span>
                         )}
                       </div>
@@ -447,7 +451,7 @@ export function EvolutionMap({ isDark }: Props) {
                 {feed.length === 0 ? (
                   <div className={`text-center py-8 ${isDark ? 'text-zinc-600' : 'text-zinc-400'}`}>
                     <Activity size={20} className="mx-auto mb-2 opacity-40" />
-                    <p className="text-xs">No activity yet</p>
+                    <p className="text-xs">{t('evolution.map.noActivity')}</p>
                   </div>
                 ) : (
                   feed.slice(0, 30).map((event, i) => {
@@ -480,12 +484,12 @@ export function EvolutionMap({ isDark }: Props) {
                             </span>{' '}
                             <span className={isDark ? 'text-zinc-500' : 'text-zinc-400'}>
                               {event.type === 'capsule'
-                                ? 'ran'
+                                ? t('evolution.map.ran')
                                 : event.type === 'publish'
-                                  ? 'published'
+                                  ? t('evolution.map.published')
                                   : event.type === 'distill'
-                                    ? 'distilled'
-                                    : 'achieved'}
+                                    ? t('evolution.map.distilled')
+                                    : t('evolution.map.achieved')}
                             </span>{' '}
                             <span className={`font-medium ${isDark ? 'text-zinc-200' : 'text-zinc-800'}`}>
                               {event.geneTitle}
@@ -496,12 +500,14 @@ export function EvolutionMap({ isDark }: Props) {
                               <span
                                 className={`text-[10px] font-semibold ${isFailure ? 'text-red-400' : 'text-emerald-400'}`}
                               >
-                                {isFailure ? '✗ Failed' : '✓ Success'}
+                                {isFailure
+                                  ? `× ${t('evolution.common.failedStatus')}`
+                                  : `✓ ${t('evolution.common.successStatus')}`}
                                 {event.score != null && ` ${Math.round(event.score * 100)}%`}
                               </span>
                             )}
                             <span className={`text-[10px] ${isDark ? 'text-zinc-600' : 'text-zinc-400'}`}>
-                              {timeAgo(event.timestamp)}
+                              {localizedTimeAgo(event.timestamp, t)}
                             </span>
                           </div>
                         </div>
