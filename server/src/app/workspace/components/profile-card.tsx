@@ -1,27 +1,44 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { AnimatePresence, LayoutGroup, motion, type PanInfo } from 'framer-motion';
-import {
-  Bot,
-  Check,
-  Copy,
-  Grid3X3,
-  LayoutList,
-  Layers,
-  MessageCircle,
-  MoreVertical,
-  Pencil,
-  ShieldOff,
-  User,
-  UserMinus,
-} from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Check, Copy, MessageCircle, MoreVertical, Pencil, ShieldOff, User, UserMinus } from 'lucide-react';
 
 import { Badge } from '@/components/ui/badge';
+import { useI18n } from '@/contexts/i18n-context';
 import { cn } from '@/lib/utils';
-import { avatarGradient, avatarInitials, radius, springSoft } from '../lib/design';
+import { avatarGradient, avatarInitials, radius } from '../lib/design';
+import { CardShelf, type CardLayoutMode } from './card-shelf';
+import { getAgentRoleIcon } from '../lib/agent-role-icon';
+import type { AgentLiveStatus, AgentStatusKind } from '../lib/agent-status';
+import { AgentStatusPopover } from './agent-status-popover';
 
-export type ProfileLayoutMode = 'list' | 'stack' | 'grid';
+// Re-exported under the legacy name so existing call sites that import
+// `ProfileLayoutMode` keep working unchanged.
+export type ProfileLayoutMode = CardLayoutMode;
+
+/**
+ * Task 3 — avatar ring tint keyed by live status. Drives the visual signal
+ * for "is this agent doing work right now" on the contacts card.
+ */
+const LIVE_RING_CLASSES: Record<AgentStatusKind, { dark: string; light: string }> = {
+  working: {
+    dark: 'ring-2 ring-emerald-400/60 shadow-emerald-500/30',
+    light: 'ring-2 ring-emerald-400/70 shadow-emerald-500/30',
+  },
+  waiting: {
+    dark: 'ring-2 ring-amber-400/60 shadow-amber-500/30',
+    light: 'ring-2 ring-amber-400/70 shadow-amber-500/30',
+  },
+  stuck: {
+    dark: 'ring-2 ring-rose-400/60 shadow-rose-500/30',
+    light: 'ring-2 ring-rose-400/70 shadow-rose-500/30',
+  },
+  idle: { dark: '', light: '' },
+  offline: {
+    dark: 'ring-1 ring-zinc-500/40 opacity-80',
+    light: 'ring-1 ring-zinc-400/50 opacity-80',
+  },
+};
 
 export interface ProfileCardRecord {
   id: string;
@@ -35,6 +52,13 @@ export interface ProfileCardRecord {
   description?: string;
   badges?: string[];
   selected?: boolean;
+  /**
+   * Task 3 — agent role slug (`agentType`). Drives the role-specific
+   * KindIcon (Crown / Wrench / Megaphone / …) instead of the generic Bot.
+   */
+  agentRoleSlug?: string | null;
+  /** Task 3 — agent live status. Drives the avatar ring tint. */
+  liveStatus?: AgentLiveStatus | null;
   onPrimaryAction?: () => void;
   primaryActionLabel?: string;
   onChat?: () => void;
@@ -51,6 +75,13 @@ export interface ProfileCardShelfProps {
   profiles: ProfileCardRecord[];
   selectedIds?: Set<string>;
   onToggleSelected?: (id: string) => void;
+  /**
+   * Pass `layout` for controlled mode — the caller renders the toggle UI
+   * elsewhere (e.g. inside a SurfaceHeader actions row) and feeds the
+   * current mode down. Omit to let ProfileCardShelf manage state and
+   * render its own inline toggle.
+   */
+  layout?: ProfileLayoutMode;
   defaultLayout?: ProfileLayoutMode;
   availableLayouts?: ProfileLayoutMode[];
   onLayoutChange?: (layout: ProfileLayoutMode) => void;
@@ -58,180 +89,48 @@ export interface ProfileCardShelfProps {
   className?: string;
 }
 
-const layoutIcons = {
-  list: LayoutList,
-  stack: Layers,
-  grid: Grid3X3,
-} as const;
-
-const layoutModes: ProfileLayoutMode[] = ['list', 'stack', 'grid'];
-const SWIPE_THRESHOLD = 50;
-
 export function ProfileCardShelf({
   isDark,
   profiles,
   selectedIds,
   onToggleSelected,
+  layout,
   defaultLayout = 'list',
-  availableLayouts = layoutModes,
+  availableLayouts,
   onLayoutChange,
   onProfileClick,
   className,
 }: ProfileCardShelfProps) {
-  const [layout, setLayout] = useState<ProfileLayoutMode>(defaultLayout);
-  const [activeIndex, setActiveIndex] = useState(0);
-  const [dragging, setDragging] = useState(false);
-  const modes = useMemo(() => {
-    const filtered = layoutModes.filter((mode) => availableLayouts.includes(mode));
-    return filtered.length > 0 ? filtered : layoutModes;
-  }, [availableLayouts]);
-  const activeLayout = modes.includes(layout) ? layout : modes[0];
-
-  useEffect(() => {
-    onLayoutChange?.(activeLayout);
-  }, [activeLayout, onLayoutChange]);
-
-  const activeProfiles = useMemo(() => {
-    if (activeLayout !== 'stack' || profiles.length <= 1) return profiles;
-    const ordered: ProfileCardRecord[] = [];
-    for (let i = 0; i < profiles.length; i++) {
-      const index = (activeIndex + i) % profiles.length;
-      ordered.push({ ...profiles[index] });
-    }
-    return ordered;
-  }, [activeIndex, activeLayout, profiles]);
-
-  const handleDragEnd = useCallback(
-    (_event: MouseEvent | TouchEvent | PointerEvent, info: PanInfo) => {
-      const { offset, velocity } = info;
-      const swipe = Math.abs(offset.x) * velocity.x;
-      if (offset.x < -SWIPE_THRESHOLD || swipe < -1000) {
-        setActiveIndex((prev) => (prev + 1) % profiles.length);
-      } else if (offset.x > SWIPE_THRESHOLD || swipe > 1000) {
-        setActiveIndex((prev) => (prev - 1 + profiles.length) % profiles.length);
-      }
-      setDragging(false);
-    },
-    [profiles.length],
-  );
-
-  if (!profiles.length) return null;
-
-  const containerStyles: Record<ProfileLayoutMode, string> = {
-    list: 'flex flex-col gap-3',
-    grid: 'grid gap-3 sm:grid-cols-2 xl:grid-cols-3',
-    stack: 'relative mx-auto h-[420px] w-full max-w-[760px]',
-  };
-
   return (
-    <div className={cn('space-y-4', className)}>
-      <div
-        className={`flex w-fit items-center gap-1 rounded-xl border p-1 ${
-          isDark ? 'border-white/[0.06] bg-zinc-950/70' : 'border-zinc-200 bg-zinc-100'
-        }`}
-      >
-        {modes.map((mode) => {
-          const Icon = layoutIcons[mode];
-          return (
-            <button
-              key={mode}
-              type="button"
-              onClick={() => setLayout(mode)}
-              className={cn(
-                'inline-flex h-8 items-center gap-2 rounded-lg px-3 text-xs font-semibold transition-colors',
-                activeLayout === mode
-                  ? isDark
-                    ? 'bg-white/[0.08] text-zinc-100'
-                    : 'bg-white text-zinc-950 shadow-sm'
-                  : isDark
-                    ? 'text-zinc-400 hover:text-zinc-100'
-                    : 'text-zinc-600 hover:text-zinc-950',
-              )}
-              aria-label={`Switch to ${mode} layout`}
-            >
-              <Icon className="h-4 w-4" />
-              <span className="capitalize">{mode}</span>
-            </button>
-          );
-        })}
-      </div>
-
-      <LayoutGroup>
-        <motion.div layout className={containerStyles[activeLayout]}>
-          <AnimatePresence mode="popLayout">
-            {activeProfiles.map((profile, index) => {
-              const isSelected = selectedIds?.has(profile.id) ?? false;
-              const isStack = activeLayout === 'stack';
-              const stackDepth = isStack ? index : 0;
-              const isTopCard = isStack && stackDepth === 0;
-              const offset = isStack ? stackDepth * 10 : 0;
-              const rotate = isStack ? (stackDepth - 1) * 2 : 0;
-              return (
-                <motion.div
-                  key={profile.id}
-                  layoutId={profile.id}
-                  initial={{ opacity: 0, scale: 0.95, y: 8 }}
-                  animate={{
-                    opacity: 1,
-                    scale: isTopCard && dragging ? 1.02 : isStack && stackDepth > 0 ? 0.98 - stackDepth * 0.02 : 1,
-                    x: 0,
-                    y: isStack ? offset : 0,
-                    rotate,
-                    zIndex: isStack ? profiles.length - stackDepth : 1,
-                  }}
-                  exit={{ opacity: 0, scale: 0.95, y: -8 }}
-                  transition={springSoft}
-                  drag={isTopCard ? 'x' : false}
-                  dragConstraints={{ left: 0, right: 0 }}
-                  dragElastic={0.7}
-                  onDragStart={() => setDragging(true)}
-                  onDragEnd={handleDragEnd}
-                  whileDrag={isTopCard ? { scale: 1.02, cursor: 'grabbing' } : undefined}
-                  onClick={() => {
-                    if (dragging) return;
-                    const open = profile.onPrimaryAction ?? (() => onProfileClick?.(profile));
-                    open();
-                  }}
-                  className={cn(
-                    isStack ? 'absolute inset-x-0 mx-auto w-full max-w-[720px] px-1' : 'w-full',
-                    isSelected && 'ring-2 ring-violet-400/60',
-                  )}
-                >
-                  <ProfileCard
-                    isDark={isDark}
-                    profile={profile}
-                    layout={activeLayout}
-                    selected={isSelected}
-                    onToggleSelected={onToggleSelected ? () => onToggleSelected(profile.id) : undefined}
-                    onPrimaryAction={() => {
-                      const open = profile.onPrimaryAction ?? (() => onProfileClick?.(profile));
-                      open();
-                    }}
-                  />
-                </motion.div>
-              );
-            })}
-          </AnimatePresence>
-        </motion.div>
-      </LayoutGroup>
-
-      {activeLayout === 'stack' && profiles.length > 1 ? (
-        <div className="flex justify-center gap-1.5">
-          {profiles.map((_, index) => (
-            <button
-              key={index}
-              type="button"
-              onClick={() => setActiveIndex(index)}
-              className={cn(
-                'h-1.5 rounded-full transition-all',
-                index === activeIndex ? 'w-4 bg-violet-500' : isDark ? 'w-1.5 bg-zinc-600' : 'w-1.5 bg-zinc-300',
-              )}
-              aria-label={`Go to profile ${index + 1}`}
-            />
-          ))}
-        </div>
-      ) : null}
-    </div>
+    <CardShelf<ProfileCardRecord>
+      isDark={isDark}
+      data={profiles}
+      getId={(profile) => profile.id}
+      selectedIds={selectedIds}
+      onToggleSelected={onToggleSelected}
+      onItemClick={(profile) => {
+        const open = profile.onPrimaryAction ?? (() => onProfileClick?.(profile));
+        open();
+      }}
+      layout={layout}
+      defaultLayout={defaultLayout}
+      availableLayouts={availableLayouts}
+      onLayoutChange={onLayoutChange}
+      className={className}
+      renderCard={({ item: profile, layout, selected, onToggleSelected: toggle, onPrimaryAction }) => (
+        <ProfileCard
+          isDark={isDark}
+          profile={profile}
+          layout={layout}
+          selected={selected}
+          onToggleSelected={toggle}
+          onPrimaryAction={() => {
+            const open = profile.onPrimaryAction ?? onPrimaryAction;
+            open();
+          }}
+        />
+      )}
+    />
   );
 }
 
@@ -250,6 +149,7 @@ export function ProfileCard({
   onToggleSelected?: () => void;
   onPrimaryAction?: () => void;
 }) {
+  const { t } = useI18n();
   const [menuOpen, setMenuOpen] = useState(false);
   const [editingRemark, setEditingRemark] = useState(false);
   const [remarkDraft, setRemarkDraft] = useState(profile.remark ?? '');
@@ -277,7 +177,7 @@ export function ProfileCard({
   const avatarSeed = profile.avatarSeed ?? profile.id;
   const avatar = avatarGradient(avatarSeed);
   const initials = avatarInitials(profile.name || profile.handle || '?');
-  const kindLabel = profile.kind === 'agent' ? 'Agent' : 'Human';
+  const kindLabel = profile.kind === 'agent' ? t('workspace.profile.agent') : t('workspace.profile.human');
   const statusTone = profile.statusTone ?? (profile.kind === 'agent' ? 'violet' : 'cyan');
   const statusToneClass =
     statusTone === 'emerald'
@@ -304,7 +204,14 @@ export function ProfileCard({
 
   const badges = [kindLabel, ...(profile.badges ?? []).slice(0, 3)];
   const visibleTags = badges.filter(Boolean);
-  const KindIcon = profile.kind === 'agent' ? Bot : User;
+  // Task 3 — agents render with their role-specific icon (Crown / Wrench /
+  // Megaphone / …) instead of the generic Bot. Humans keep the User icon.
+  const KindIcon = profile.kind === 'agent' ? getAgentRoleIcon(profile.agentRoleSlug ?? null) : User;
+  // Live-status ring (working/waiting/stuck/offline) overrides the legacy
+  // statusTone borders when an AgentLiveStatus is present.
+  const liveRingClass = profile.liveStatus
+    ? LIVE_RING_CLASSES[profile.liveStatus.kind][isDark ? 'dark' : 'light']
+    : null;
   const showMenu =
     Boolean(
       profile.onChat ||
@@ -315,8 +222,47 @@ export function ProfileCard({
       profile.onBlock,
     ) && !editingRemark;
 
+  const avatarButton = (
+    <button
+      type="button"
+      onClick={(event) => {
+        event.stopPropagation();
+        onPrimaryAction?.();
+      }}
+      className={cn(
+        'relative flex shrink-0 items-center justify-center rounded-2xl border shadow-sm transition-transform hover:scale-[1.02]',
+        layout === 'grid' ? 'h-14 w-14' : 'h-12 w-12',
+        // Live status ring (working/waiting/stuck/offline) trumps the
+        // legacy statusTone tint when present so the contacts row
+        // matches the kanban / chat avatars.
+        liveRingClass ?? statusToneClass,
+        profile.liveStatus?.kind === 'working' || profile.liveStatus?.kind === 'waiting' ? 'animate-pulse' : '',
+      )}
+      style={{
+        background: `linear-gradient(135deg, ${avatar.from}, ${avatar.to})`,
+      }}
+    >
+      <span className={cn('font-bold text-white', layout === 'grid' ? 'text-base' : 'text-sm')}>{initials}</span>
+      <span
+        className={cn(
+          'absolute -bottom-1 -right-1 flex h-5 w-5 items-center justify-center rounded-full border shadow-sm',
+          profile.kind === 'agent'
+            ? isDark
+              ? 'border-zinc-950 bg-violet-500 text-white'
+              : 'border-white bg-violet-600 text-white'
+            : isDark
+              ? 'border-zinc-950 bg-cyan-500 text-white'
+              : 'border-white bg-cyan-600 text-white',
+        )}
+      >
+        <KindIcon className="h-3 w-3" />
+      </span>
+    </button>
+  );
+
   return (
     <article
+      data-contact-agent-id={profile.kind === 'agent' ? profile.id : undefined}
       className={cn(
         'relative overflow-visible border bg-white/90 p-4 shadow-[0_16px_50px_-32px_rgba(15,23,42,0.35)] transition-all sm:p-5',
         radius.card,
@@ -335,7 +281,8 @@ export function ProfileCard({
               event.stopPropagation();
               onToggleSelected?.();
             }}
-            title={selected ? 'Deselect profile' : 'Select profile'}
+            title={selected ? t('workspace.profile.deselectProfile') : t('workspace.profile.selectProfile')}
+            aria-label={selected ? t('workspace.profile.deselectProfile') : t('workspace.profile.selectProfile')}
             aria-pressed={selected}
             className={cn(
               'inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border transition-colors',
@@ -365,6 +312,7 @@ export function ProfileCard({
                 <ProfileMenuButton
                   isDark={isDark}
                   profileId={profile.id}
+                  label={t('workspace.profile.actions')}
                   onClick={() => setMenuOpen((value) => !value)}
                 />
               ) : null}
@@ -372,37 +320,18 @@ export function ProfileCard({
           ) : null}
         </div>
 
-        <button
-          type="button"
-          onClick={(event) => {
-            event.stopPropagation();
-            onPrimaryAction?.();
-          }}
-          className={cn(
-            'relative flex shrink-0 items-center justify-center rounded-2xl border shadow-sm transition-transform hover:scale-[1.02]',
-            layout === 'grid' ? 'h-14 w-14' : 'h-12 w-12',
-            statusToneClass,
-          )}
-          style={{
-            background: `linear-gradient(135deg, ${avatar.from}, ${avatar.to})`,
-          }}
-        >
-          <span className={cn('font-bold text-white', layout === 'grid' ? 'text-base' : 'text-sm')}>{initials}</span>
-          <span
-            className={cn(
-              'absolute -bottom-1 -right-1 flex h-5 w-5 items-center justify-center rounded-full border shadow-sm',
-              profile.kind === 'agent'
-                ? isDark
-                  ? 'border-zinc-950 bg-violet-500 text-white'
-                  : 'border-white bg-violet-600 text-white'
-                : isDark
-                  ? 'border-zinc-950 bg-cyan-500 text-white'
-                  : 'border-white bg-cyan-600 text-white',
-            )}
+        {profile.kind === 'agent' && profile.liveStatus ? (
+          <AgentStatusPopover
+            agentName={profile.name}
+            roleSlug={profile.agentRoleSlug}
+            status={profile.liveStatus}
+            isDark={isDark}
           >
-            <KindIcon className="h-3 w-3" />
-          </span>
-        </button>
+            {avatarButton}
+          </AgentStatusPopover>
+        ) : (
+          avatarButton
+        )}
 
         <div className="min-w-0 flex-1">
           <div className="flex items-start gap-3">
@@ -451,6 +380,7 @@ export function ProfileCard({
                   <ProfileMenuButton
                     isDark={isDark}
                     profileId={profile.id}
+                    label={t('workspace.profile.actions')}
                     onClick={() => setMenuOpen((value) => !value)}
                   />
                 ) : null}
@@ -514,7 +444,7 @@ export function ProfileCard({
                 setEditingRemark(false);
               }
             }}
-            placeholder="Add a remark"
+            placeholder={t('workspace.profile.addRemark')}
             className={cn(
               'min-w-0 flex-1 rounded-xl border px-3 py-2 text-sm outline-none focus:ring-1',
               isDark
@@ -531,7 +461,7 @@ export function ProfileCard({
             }}
             className="inline-flex h-9 items-center rounded-xl bg-violet-500 px-3 text-xs font-semibold text-white"
           >
-            Save
+            {t('common.save')}
           </button>
           <button
             type="button"
@@ -545,7 +475,7 @@ export function ProfileCard({
               isDark ? 'border-white/[0.08] text-zinc-300' : 'border-zinc-200 text-zinc-700',
             )}
           >
-            Cancel
+            {t('common.cancel')}
           </button>
         </div>
       ) : null}
@@ -563,7 +493,7 @@ export function ProfileCard({
             <ProfileMenuItem
               isDark={isDark}
               icon={<MessageCircle className="h-3.5 w-3.5" />}
-              label="Chat"
+              label={t('workspace.profile.chat')}
               onClick={() => {
                 setMenuOpen(false);
                 profile.onChat?.();
@@ -573,8 +503,8 @@ export function ProfileCard({
           {profile.onOpenProfile ? (
             <ProfileMenuItem
               isDark={isDark}
-              icon={profile.kind === 'agent' ? <Bot className="h-3.5 w-3.5" /> : <User className="h-3.5 w-3.5" />}
-              label={profile.kind === 'agent' ? 'Open profile' : 'Open contact'}
+              icon={<KindIcon className="h-3.5 w-3.5" />}
+              label={profile.kind === 'agent' ? t('workspace.profile.openProfile') : t('workspace.profile.openContact')}
               onClick={() => {
                 setMenuOpen(false);
                 profile.onOpenProfile?.();
@@ -585,7 +515,7 @@ export function ProfileCard({
             <ProfileMenuItem
               isDark={isDark}
               icon={<Copy className="h-3.5 w-3.5" />}
-              label="Copy handle"
+              label={t('workspace.profile.copyHandle')}
               onClick={() => {
                 setMenuOpen(false);
                 profile.onCopyHandle?.();
@@ -596,7 +526,7 @@ export function ProfileCard({
             <ProfileMenuItem
               isDark={isDark}
               icon={<Pencil className="h-3.5 w-3.5" />}
-              label="Edit remark"
+              label={t('workspace.profile.editRemark')}
               onClick={() => {
                 setMenuOpen(false);
                 setRemarkDraft(profile.remark ?? '');
@@ -612,7 +542,7 @@ export function ProfileCard({
               isDark={isDark}
               danger
               icon={<UserMinus className="h-3.5 w-3.5" />}
-              label="Remove"
+              label={t('workspace.profile.remove')}
               onClick={() => {
                 setMenuOpen(false);
                 profile.onRemove?.();
@@ -624,7 +554,7 @@ export function ProfileCard({
               isDark={isDark}
               danger
               icon={<ShieldOff className="h-3.5 w-3.5" />}
-              label="Block"
+              label={t('workspace.profile.block')}
               onClick={() => {
                 setMenuOpen(false);
                 profile.onBlock?.();
@@ -642,10 +572,12 @@ export function ProfileCard({
 function ProfileMenuButton({
   isDark,
   profileId,
+  label,
   onClick,
 }: {
   isDark: boolean;
   profileId: string;
+  label: string;
   onClick: () => void;
 }) {
   return (
@@ -662,8 +594,8 @@ function ProfileMenuButton({
           ? 'border-white/[0.08] bg-white/[0.03] text-zinc-400 hover:text-zinc-100'
           : 'border-zinc-200 bg-white text-zinc-500 hover:text-zinc-900',
       )}
-      title="Profile actions"
-      aria-label="Profile actions"
+      title={label}
+      aria-label={label}
     >
       <MoreVertical className="h-4 w-4" />
     </button>
