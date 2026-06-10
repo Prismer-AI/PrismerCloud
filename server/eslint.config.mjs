@@ -3,10 +3,29 @@ import nextVitals from "eslint-config-next/core-web-vitals";
 import nextTs from "eslint-config-next/typescript";
 import boundaries from "eslint-plugin-boundaries";
 import reactHooks from "eslint-plugin-react-hooks";
+import { createRequire } from "node:module";
+
+// Custom in-repo rules (CJS via createRequire for ESM flat config).
+const require = createRequire(import.meta.url);
+const noWildcardSubRouterMiddleware = require("./eslint-rules/no-wildcard-sub-router-middleware.js");
+
+const customPlugin = {
+  rules: {
+    "no-wildcard-sub-router-middleware": noWildcardSubRouterMiddleware,
+  },
+};
 
 const eslintConfig = defineConfig([
   ...nextVitals,
   ...nextTs,
+
+  // ── Wave 6 G3: 防 Hono sub-router 用 `*` 通配（参 W3 hidden bug）──
+  {
+    plugins: { custom: customPlugin },
+    rules: {
+      "custom/no-wildcard-sub-router-middleware": "error",
+    },
+  },
 
   // ── Architecture boundary enforcement ──────────────────────
   {
@@ -25,6 +44,9 @@ const eslintConfig = defineConfig([
         "src/app/api/im/**",
         // .well-known handlers need direct Prisma access (DID, AASA)
         "src/app/.well-known/**",
+        // Invite-bound registration (P0.1) bridges to the IM invite service to
+        // resolve the inviteeEmail server-side + auto-accept the invite.
+        "src/app/api/auth/register/**",
         // /u/[userId] landing page — lightweight IM user lookup for Universal Link
         "src/app/u/**",
         // instrumentation.ts bootstraps IM server at startup
@@ -36,6 +58,9 @@ const eslintConfig = defineConfig([
         // the dialog under `src/components/`. Deferred to keep Task 2 surgical.
         // TODO(naming-system v2): perform that relocation, then delete this entry.
         "src/app/workspace/components/self-profile-dialog.tsx",
+        // F2 login-QR dialog — same situation as self-profile-dialog: mounts off the
+        // navbar profile dropdown and reuses workspace design tokens (surface/radius).
+        "src/app/workspace/components/login-qr-dialog.tsx",
       ],
     },
     rules: {
@@ -84,9 +109,53 @@ const eslintConfig = defineConfig([
     },
   },
 
+  // ── R1 finding F5 (2026-05-19): allow __tests__ files to cross layer
+  //    boundaries. Tests need to import from any layer they exercise
+  //    (e.g. src/lib/__tests__/sandbox-resources-schema.test.ts probes
+  //    `src/app/api/sandboxes/[id]/resources/route.ts`). Boundaries rule
+  //    is a code-architecture safeguard, not a test-isolation contract.
+  {
+    files: [
+      "src/**/__tests__/**/*.test.ts",
+      "src/**/__tests__/**/*.test.tsx",
+      "src/**/*.test.ts",
+      "src/**/*.test.tsx",
+    ],
+    rules: {
+      "boundaries/dependencies": "off",
+    },
+  },
+
+  // ── v200 §08 A1: sandbox routes must go through the provider registry ──
+  // Direct `@/lib/k8s-sandbox` imports inside `src/app/api/sandboxes/**`
+  // bypass the provider-agnostic abstraction (08 §4.5). Only the
+  // `_admin/sandbox-metrics` route is exempt — it reads `IMContainer` rows
+  // directly from Prisma and does not invoke provider methods.
+  //
+  // Type-only imports (`import type { ... }`) remain allowed since they
+  // do not pull in the implementation at runtime — routes still need
+  // shared shapes (RunCmdArgs / SnapshotResult / etc.) until those move
+  // to `src/lib/execution/`.
+  {
+    files: ["src/app/api/sandboxes/**/*.ts"],
+    ignores: ["src/app/api/sandboxes/_admin/sandbox-metrics/**"],
+    rules: {
+      "no-restricted-imports": ["error", {
+        paths: [
+          {
+            name: "@/lib/k8s-sandbox",
+            importNames: ["k8sSandbox", "K8sSandboxError", "isAlreadyAbsentK8sError"],
+            message: "Sandbox routes must access providers via @/lib/sandbox/registry (resolvePersistent / resolveEphemeral). Catch ProviderError from @/lib/execution/errors. See docs/release200/08-execution-environment-design.md §4.5.",
+          },
+        ],
+      }],
+    },
+  },
+
   // Override default ignores of eslint-config-next.
   globalIgnores([
     ".next/**",
+    ".claude/**",
     ".worktrees/**",
     "out/**",
     "build/**",
@@ -98,6 +167,7 @@ const eslintConfig = defineConfig([
     "e2e-playwright/**",
     "playwright-report/**",
     "test-results/**",
+    "public/pdf.worker.min.mjs",
   ]),
 ]);
 
