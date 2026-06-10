@@ -4,8 +4,9 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetFooter, SheetDescription } from '@/components/ui/sheet';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { useI18n } from '@/contexts/i18n-context';
 import { GitFork, Loader2, Plus, X, AlertTriangle } from 'lucide-react';
-import { CAT_COLORS, glass } from './helpers';
+import { CAT_COLORS } from './helpers';
 
 /* ─── Types ──────────────────────────────────────────── */
 
@@ -49,6 +50,7 @@ function extractSteps(strategy?: { steps?: string[] } | string[]): string[] {
 /* ─── Component ──────────────────────────────────────── */
 
 export function GeneForkSheet({ open, onOpenChange, parentGene, isDark, onForked }: GeneForkSheetProps) {
+  const { t } = useI18n();
   const [title, setTitle] = useState('');
   const [signals, setSignals] = useState<string[]>([]);
   const [steps, setSteps] = useState<string[]>([]);
@@ -72,18 +74,20 @@ export function GeneForkSheet({ open, onOpenChange, parentGene, isDark, onForked
       return;
     }
 
-    const t = `${parentGene.title || 'Untitled Gene'} (fork)`;
+    const forkTitle = t('evolution.geneFork.forkTitle', {
+      title: parentGene.title || t('evolution.common.untitledGene'),
+    });
     const s = extractSignals(parentGene.signals_match);
     const st = extractSteps(parentGene.strategy);
 
-    setTitle(t);
+    setTitle(forkTitle);
     setSignals([...s]);
     setSteps([...st]);
 
-    origTitleRef.current = t;
+    origTitleRef.current = forkTitle;
     origSignalsRef.current = s;
     origStepsRef.current = st;
-  }, [open, parentGene]);
+  }, [open, parentGene, t]);
 
   const addSignal = useCallback(() => {
     const tag = newSignal.trim();
@@ -111,16 +115,16 @@ export function GeneForkSheet({ open, onOpenChange, parentGene, isDark, onForked
   const handleSubmit = useCallback(async () => {
     if (!parentGene) return;
     if (!title.trim()) {
-      setError('Title is required');
+      setError(t('evolution.geneFork.titleRequired'));
       return;
     }
     if (signals.length === 0) {
-      setError('At least one signal is required');
+      setError(t('evolution.geneFork.signalRequired'));
       return;
     }
     const filteredSteps = steps.filter((s) => s.trim());
     if (filteredSteps.length === 0) {
-      setError('At least one strategy step is required');
+      setError(t('evolution.geneFork.stepRequired'));
       return;
     }
 
@@ -147,18 +151,20 @@ export function GeneForkSheet({ open, onOpenChange, parentGene, isDark, onForked
 
       if (!res.ok) {
         const data = await res.json().catch(() => null);
-        throw new Error(data?.error || data?.message || `Fork failed (${res.status})`);
+        throw new Error(
+          data?.error || data?.message || t('evolution.geneFork.forkFailedWithStatus', { status: res.status }),
+        );
       }
 
       const data = await res.json();
       onForked?.(data.data || data);
       onOpenChange(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Fork failed');
+      setError(err instanceof Error ? err.message : t('evolution.geneFork.forkFailed'));
     } finally {
       setSubmitting(false);
     }
-  }, [parentGene, title, signals, steps, onForked, onOpenChange]);
+  }, [parentGene, title, signals, steps, onForked, onOpenChange, t]);
 
   if (!parentGene) return null;
 
@@ -179,10 +185,10 @@ export function GeneForkSheet({ open, onOpenChange, parentGene, isDark, onForked
             className={`text-lg font-bold flex items-center gap-2 ${isDark ? 'text-white' : 'text-zinc-900'}`}
           >
             <GitFork className="w-5 h-5 text-violet-400" />
-            Fork Gene
+            {t('evolution.geneFork.title')}
           </SheetTitle>
           <SheetDescription className={isDark ? 'text-zinc-400' : 'text-zinc-500'}>
-            Forking from: &ldquo;{parentGene.title || 'Untitled Gene'}&rdquo;
+            {t('evolution.geneFork.forkingFrom', { title: parentGene.title || t('evolution.common.untitledGene') })}
             <Badge className={`ml-2 text-[10px] ${cat.bg} ${cat.text} border ${cat.border}`} variant="outline">
               {parentGene.category}
             </Badge>
@@ -198,7 +204,7 @@ export function GeneForkSheet({ open, onOpenChange, parentGene, isDark, onForked
                 isDark ? 'text-zinc-500' : 'text-zinc-400'
               }`}
             >
-              Title *
+              {t('evolution.geneFork.fieldTitle')} *
             </label>
             <div
               className={`rounded-lg transition-all ${
@@ -214,7 +220,7 @@ export function GeneForkSheet({ open, onOpenChange, parentGene, isDark, onForked
                     ? 'bg-zinc-900/60 border-zinc-700 text-white placeholder-zinc-600 focus:border-violet-500'
                     : 'bg-white border-zinc-200 text-zinc-900 placeholder-zinc-400 focus:border-violet-400'
                 }`}
-                placeholder="Gene title"
+                placeholder={t('evolution.geneFork.titlePlaceholder')}
               />
             </div>
           </div>
@@ -226,7 +232,7 @@ export function GeneForkSheet({ open, onOpenChange, parentGene, isDark, onForked
                 isDark ? 'text-zinc-500' : 'text-zinc-400'
               }`}
             >
-              Signals (inherited, editable)
+              {t('evolution.geneFork.signalsInherited')}
             </label>
             <div className="space-y-2">
               <div className="flex flex-wrap gap-1.5">
@@ -273,7 +279,7 @@ export function GeneForkSheet({ open, onOpenChange, parentGene, isDark, onForked
                       addSignal();
                     }
                   }}
-                  placeholder="Add signal (e.g. error:timeout)"
+                  placeholder={t('evolution.geneFork.addSignalPlaceholder')}
                   className={`flex-1 px-3 py-1.5 rounded-lg border text-sm outline-none transition-colors ${
                     isDark
                       ? 'bg-zinc-900/60 border-zinc-700 text-white placeholder-zinc-600 focus:border-violet-500'
@@ -300,7 +306,7 @@ export function GeneForkSheet({ open, onOpenChange, parentGene, isDark, onForked
                 isDark ? 'text-zinc-500' : 'text-zinc-400'
               }`}
             >
-              Strategy Steps (inherited, editable)
+              {t('evolution.geneFork.stepsInherited')}
             </label>
             <div className="space-y-2">
               {steps.map((step, idx) => {
@@ -328,7 +334,7 @@ export function GeneForkSheet({ open, onOpenChange, parentGene, isDark, onForked
                           ? 'bg-zinc-900/60 border-zinc-700 text-white placeholder-zinc-600 focus:border-violet-500'
                           : 'bg-white border-zinc-200 text-zinc-900 placeholder-zinc-400 focus:border-violet-400'
                       }`}
-                      placeholder={`Step ${idx + 1}`}
+                      placeholder={t('evolution.geneFork.stepPlaceholder', { index: idx + 1 })}
                     />
                     <button
                       type="button"
@@ -355,7 +361,7 @@ export function GeneForkSheet({ open, onOpenChange, parentGene, isDark, onForked
                 }`}
               >
                 <Plus className="w-3.5 h-3.5 mr-1" />
-                Add Step
+                {t('evolution.geneFork.addStep')}
               </Button>
             </div>
           </div>
@@ -379,7 +385,7 @@ export function GeneForkSheet({ open, onOpenChange, parentGene, isDark, onForked
               disabled={submitting}
               className={isDark ? 'border-zinc-700 text-zinc-300 hover:bg-zinc-800' : ''}
             >
-              Cancel
+              {t('common.cancel')}
             </Button>
             <div className="flex-1" />
             <Button
@@ -391,10 +397,10 @@ export function GeneForkSheet({ open, onOpenChange, parentGene, isDark, onForked
               {submitting ? (
                 <>
                   <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" />
-                  Forking...
+                  {t('evolution.geneFork.forking')}
                 </>
               ) : (
-                'Create Fork'
+                t('evolution.geneFork.createFork')
               )}
             </Button>
           </div>
