@@ -87,14 +87,14 @@ export function ModeToggle({
 
 // ───────────────────────── Step indicator dots ─────────────────────────
 
-export const STEP_LABELS: readonly string[] = ['Industry', 'Team', 'Launch'];
+export const STEP_LABELS: readonly string[] = ['Industry', 'Team', 'Upload', 'Launch'];
 
 export function StepDots({
   active,
   isDark,
   transition,
 }: {
-  active: 0 | 1 | 2;
+  active: 0 | 1 | 2 | 3;
   isDark: boolean;
   transition: Transition;
 }) {
@@ -185,7 +185,7 @@ export function SimplePlaceholder({
   workspaceId,
 }: {
   isDark: boolean;
-  step: 0 | 1 | 2;
+  step: 0 | 1 | 2 | 3;
   workspaceId: string;
 }) {
   return (
@@ -196,7 +196,7 @@ export function SimplePlaceholder({
       data-testid="unified-creation-simple-placeholder"
     >
       <p className="mb-2 text-base font-semibold">
-        Simple mode · Step {step + 1} of 3 — {STEP_LABELS[step]}
+        Simple mode · Step {step + 1} of {STEP_LABELS.length} — {STEP_LABELS[step]}
       </p>
       <p className="max-w-md text-xs opacity-80">
         Placeholder for B3.2 (industry/size picker) → B3.3 (team review) → B3.4 (provisioning loader). Workspace{' '}
