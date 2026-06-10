@@ -1,27 +1,15 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import {
-  Search,
-  Sparkles,
-  Dna,
-  Download,
-  Compass,
-  ExternalLink,
-  Users,
-  ChevronDown,
-  Loader2,
-  GitFork,
-} from 'lucide-react';
+import { Search, Sparkles, Dna, Download, Users, Loader2, GitFork } from 'lucide-react';
 import { TiltCard } from '@/components/evolution/tilt-card';
+import { useI18n } from '@/contexts/i18n-context';
 import {
   type PublicGene,
   type Skill,
   type SkillCategory,
-  type SkillStats,
   CAT_COLORS,
   GENE_CATEGORIES,
-  SORT_OPTIONS,
   glass,
   getGeneId,
   getSignals,
@@ -44,6 +32,24 @@ type SubTab = 'all' | 'skills' | 'genes';
 
 const LIMIT = 24;
 
+type EvolutionT = ReturnType<typeof useI18n>['t'];
+
+function categoryLabel(category: string | undefined, t: EvolutionT): string {
+  const key = category || 'all';
+  const translationKey = `evolution.common.categoryLabels.${key}` as `evolution.${string}`;
+  const translated = t(translationKey);
+  return translated === translationKey ? key : translated;
+}
+
+function sourceBadgeLabel(source: string | undefined, fallback: string | undefined, t: EvolutionT): string {
+  const sourceKey =
+    source === 'awesome-openclaw' ? 'awesomeOpenclaw' : source === 'evolution' ? 'evolved' : source || '';
+  if (!sourceKey) return fallback || t('evolution.common.community');
+  const translationKey = `evolution.library.sourceBadge.${sourceKey}` as `evolution.${string}`;
+  const translated = t(translationKey);
+  return translated === translationKey ? fallback || sourceKey : translated;
+}
+
 export function LibraryTab({
   isDark,
   onGeneClick,
@@ -51,9 +57,9 @@ export function LibraryTab({
   onGeneImport,
   onGeneFork,
   onSkillInstall,
-  onSkillUninstall,
   isAuthenticated,
 }: LibraryTabProps) {
+  const { t } = useI18n();
   const [subTab, setSubTab] = useState<SubTab>('all');
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
@@ -160,12 +166,7 @@ export function LibraryTab({
       .finally(() => setGeneLoading(false));
   }, [subTab, search, category, sort, page]);
 
-  const loading =
-    subTab === 'skills'
-      ? skillLoading
-      : subTab === 'genes'
-        ? geneLoading
-        : skillLoading || geneLoading;
+  const loading = subTab === 'skills' ? skillLoading : subTab === 'genes' ? geneLoading : skillLoading || geneLoading;
   const total = subTab === 'skills' ? skillTotal : subTab === 'genes' ? geneTotal : skillTotal + geneTotal;
   const totalPages = Math.ceil(total / LIMIT);
 
@@ -180,28 +181,30 @@ export function LibraryTab({
           <div
             className={`flex p-0.5 rounded-lg shrink-0 ${isDark ? 'bg-zinc-900/60 border border-white/5' : 'bg-zinc-100/80 border border-zinc-200/60'}`}
           >
-            {(['all', 'skills', 'genes'] as SubTab[]).map(
-              (t) => (
-                <button
-                  key={t}
-                  onClick={() => {
-                    setSubTab(t);
-                    setPage(1);
-                  }}
-                  className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all capitalize ${
-                    subTab === t
-                      ? isDark
-                        ? 'bg-zinc-800 text-white shadow-sm'
-                        : 'bg-white text-zinc-900 shadow-sm'
-                      : isDark
-                        ? 'text-zinc-500 hover:text-zinc-300'
-                        : 'text-zinc-500 hover:text-zinc-900'
-                  }`}
-                >
-                  {t === 'all' ? 'All' : t === 'skills' ? 'Skills' : 'Genes'}
-                </button>
-              ),
-            )}
+            {(['all', 'skills', 'genes'] as SubTab[]).map((tabKey) => (
+              <button
+                key={tabKey}
+                onClick={() => {
+                  setSubTab(tabKey);
+                  setPage(1);
+                }}
+                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all capitalize ${
+                  subTab === tabKey
+                    ? isDark
+                      ? 'bg-zinc-800 text-white shadow-sm'
+                      : 'bg-white text-zinc-900 shadow-sm'
+                    : isDark
+                      ? 'text-zinc-500 hover:text-zinc-300'
+                      : 'text-zinc-500 hover:text-zinc-900'
+                }`}
+              >
+                {tabKey === 'all'
+                  ? t('evolution.common.all')
+                  : tabKey === 'skills'
+                    ? t('evolution.common.skills')
+                    : t('evolution.common.genes')}
+              </button>
+            ))}
           </div>
 
           {/* Search */}
@@ -213,10 +216,10 @@ export function LibraryTab({
               type="text"
               placeholder={
                 subTab === 'genes'
-                  ? 'Search genes...'
+                  ? t('evolution.common.searchGenes')
                   : subTab === 'skills'
-                    ? 'Search skills...'
-                    : 'Search skills & genes...'
+                    ? t('evolution.common.searchSkills')
+                    : t('evolution.common.searchAll')
               }
               value={searchInput}
               onChange={(e) => setSearchInput(e.target.value)}
@@ -233,12 +236,12 @@ export function LibraryTab({
             }}
             className={`px-3 py-2 rounded-lg text-xs font-medium border shrink-0 ${isDark ? 'bg-zinc-900/60 border-white/10 text-zinc-300' : 'bg-white/60 border-zinc-200/60 text-zinc-700'}`}
           >
-            <option value="recommended">Recommended</option>
-            <option value="most_installed">Most Popular</option>
-            <option value="newest">Newest</option>
-            <option value="name">Name</option>
-            <option value="impact">Impact Score</option>
-            <option value="rising">Rising</option>
+            <option value="recommended">{t('evolution.common.recommended')}</option>
+            <option value="most_installed">{t('evolution.common.mostPopular')}</option>
+            <option value="newest">{t('evolution.common.newest')}</option>
+            <option value="name">{t('evolution.common.name')}</option>
+            <option value="impact">{t('evolution.common.impactScore')}</option>
+            <option value="rising">{t('evolution.common.rising')}</option>
           </select>
         </div>
 
@@ -246,7 +249,7 @@ export function LibraryTab({
         <div className="flex gap-2 overflow-x-auto pb-1 custom-scrollbar">
           {(subTab === 'genes' ? GENE_CATEGORIES.filter((c) => c.key) : skillCategories.slice(0, 15)).map((cat) => {
             const key = 'key' in cat ? cat.key : cat.category;
-            const label = 'label' in cat ? cat.label : cat.category;
+            const label = 'key' in cat ? categoryLabel(cat.key, t) : cat.category;
             return (
               <button
                 key={key}
@@ -297,19 +300,21 @@ export function LibraryTab({
                       <span
                         className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${isDark ? 'bg-violet-500/15 text-violet-300' : 'bg-violet-100 text-violet-600'}`}
                       >
-                        Skill
+                        {t('evolution.common.skill')}
                       </span>
                       {(() => {
                         const badge = getSourceBadge(skill.source, isDark);
                         return badge ? (
-                          <span className={`text-[10px] px-1.5 py-0.5 rounded ${badge.className}`}>{badge.label}</span>
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded ${badge.className}`}>
+                            {sourceBadgeLabel(skill.source, badge.label, t)}
+                          </span>
                         ) : null;
                       })()}
                     </div>
                     <span
                       className={`text-[10px] px-1.5 py-0.5 rounded ${isDark ? 'bg-zinc-800 text-zinc-400' : 'bg-zinc-100 text-zinc-500'}`}
                     >
-                      {skill.category}
+                      {categoryLabel(skill.category, t)}
                     </span>
                   </div>
                   <h4
@@ -325,7 +330,7 @@ export function LibraryTab({
                               ? 'bg-amber-400'
                               : 'bg-red-400'
                         }`}
-                        title={`Quality: ${(skill.qualityScore * 100).toFixed(0)}%`}
+                        title={t('evolution.common.quality', { value: (skill.qualityScore * 100).toFixed(0) })}
                       />
                     )}
                   </h4>
@@ -392,7 +397,7 @@ export function LibraryTab({
                         }}
                         className="flex items-center gap-1 text-[10px] px-2 py-1 rounded-md bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 transition-colors"
                       >
-                        <Download className="w-3 h-3" /> Install
+                        <Download className="w-3 h-3" /> {t('evolution.common.install')}
                       </button>
                     </div>
                   )}
@@ -423,16 +428,18 @@ export function LibraryTab({
                       <span
                         className={`inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full border ${cat.bg} ${cat.text} ${cat.border}`}
                       >
-                        <Dna className="w-3 h-3" /> Gene
+                        <Dna className="w-3 h-3" /> {t('evolution.common.gene')}
                       </span>
                       <span className={`text-xs font-bold tabular-nums ${isDark ? 'text-zinc-400' : 'text-zinc-500'}`}>
-                        PQI {pqi}
+                        {t('evolution.common.pqi', { value: pqi })}
                       </span>
                     </div>
                     <h4
                       className={`font-bold text-sm mb-1 truncate flex items-center gap-1 ${isDark ? 'text-white' : 'text-zinc-900'}`}
                     >
-                      <span className="truncate">{gene.title || getSignals(gene)[0] || 'Untitled Gene'}</span>
+                      <span className="truncate">
+                        {gene.title || getSignals(gene)[0] || t('evolution.common.untitledGene')}
+                      </span>
                       {gene.qualityScore !== undefined && (
                         <span
                           className={`inline-block w-2 h-2 rounded-full shrink-0 ${
@@ -442,7 +449,7 @@ export function LibraryTab({
                                 ? 'bg-amber-400'
                                 : 'bg-red-400'
                           }`}
-                          title={`Quality: ${(gene.qualityScore * 100).toFixed(0)}%`}
+                          title={t('evolution.common.quality', { value: (gene.qualityScore * 100).toFixed(0) })}
                         />
                       )}
                     </h4>
@@ -450,7 +457,10 @@ export function LibraryTab({
                       className={`text-xs leading-relaxed line-clamp-2 mb-3 ${isDark ? 'text-zinc-400' : 'text-zinc-600'}`}
                     >
                       {gene.description ||
-                        `When ${getSignals(gene).join(', ')}, this gene applies a ${gene.category} strategy.`}
+                        t('evolution.library.geneDescription', {
+                          signals: getSignals(gene).join(', '),
+                          category: gene.category,
+                        })}
                     </p>
                     <div
                       className={`flex items-center gap-3 pt-2 border-t ${isDark ? 'border-white/5' : 'border-zinc-200/50'}`}
@@ -468,12 +478,12 @@ export function LibraryTab({
                             {successRate}%
                           </span>
                           <span className={`text-[10px] ${isDark ? 'text-zinc-600' : 'text-zinc-400'}`}>
-                            {totalUses} runs
+                            {t('evolution.common.runsShort', { count: totalUses })}
                           </span>
                         </>
                       ) : (
                         <span className={`text-xs ${isDark ? 'text-zinc-600' : 'text-zinc-400'}`}>
-                          No executions yet
+                          {t('evolution.common.noExecutionsYet')}
                         </span>
                       )}
                       {(gene.forkCount || 0) > 0 && (
@@ -496,7 +506,7 @@ export function LibraryTab({
                           }}
                           className="flex items-center gap-1 text-[10px] px-2 py-1 rounded-md bg-violet-500/10 text-violet-400 hover:bg-violet-500/20 transition-colors"
                         >
-                          <Download className="w-3 h-3" /> Import
+                          <Download className="w-3 h-3" /> {t('evolution.common.import')}
                         </button>
                         <button
                           onClick={(e) => {
@@ -505,7 +515,7 @@ export function LibraryTab({
                           }}
                           className="flex items-center gap-1 text-[10px] px-2 py-1 rounded-md bg-cyan-500/10 text-cyan-400 hover:bg-cyan-500/20 transition-colors"
                         >
-                          <GitFork className="w-3 h-3" /> Fork
+                          <GitFork className="w-3 h-3" /> {t('evolution.common.fork')}
                         </button>
                       </div>
                     )}
@@ -520,7 +530,7 @@ export function LibraryTab({
       {!loading && skills.length === 0 && genes.length === 0 && (
         <div className={`text-center py-20 ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>
           <Sparkles className="w-8 h-8 mx-auto mb-3 opacity-40" />
-          <p className="text-sm">No results found. Try a different search or filter.</p>
+          <p className="text-sm">{t('evolution.common.noResults')}</p>
         </div>
       )}
 
@@ -532,17 +542,21 @@ export function LibraryTab({
             onClick={() => setPage((p) => p - 1)}
             className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors disabled:opacity-40 ${isDark ? 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700' : 'bg-zinc-100 text-zinc-700 hover:bg-zinc-200'}`}
           >
-            Prev
+            {t('evolution.common.prev')}
           </button>
           <span className={`text-xs tabular-nums ${isDark ? 'text-zinc-500' : 'text-zinc-500'}`}>
-            Page {page} of {totalPages} ({total.toLocaleString()} items)
+            {t('evolution.common.pageOfItems', {
+              page,
+              totalPages,
+              total: total.toLocaleString(),
+            })}
           </span>
           <button
             disabled={page >= totalPages}
             onClick={() => setPage((p) => p + 1)}
             className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors disabled:opacity-40 ${isDark ? 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700' : 'bg-zinc-100 text-zinc-700 hover:bg-zinc-200'}`}
           >
-            Next
+            {t('evolution.common.next')}
           </button>
         </div>
       )}
