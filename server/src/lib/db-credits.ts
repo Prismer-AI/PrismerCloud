@@ -255,6 +255,50 @@ async function createCreditTransaction(params: CreateTransactionParams): Promise
 /**
  * 获取用户交易记录
  */
+/**
+ * release202/12 — resolve an admin-typed identifier to the numeric credit
+ * `user_id`. Ops staff don't know `pc_users.id`; they know email / username.
+ *
+ * Accepts:
+ *   - a bare numeric id (`"40"`) → used directly (works even for credit-only
+ *     accounts with no `im_users` row), enriched with email/username if present;
+ *   - an email or username → looked up in `im_users` (which carries the
+ *     `numericId` ↔ email/username mapping; `users`/`pc_users` live on the Go
+ *     backend and aren't in this DB).
+ *
+ * Returns `null` when nothing matches. Email/username are unique in `im_users`.
+ */
+export async function resolveCreditUserIdentity(
+  q: string,
+): Promise<{ userId: number; email: string | null; username: string | null; displayName: string | null } | null> {
+  const trimmed = q.trim();
+  if (!trimmed) return null;
+
+  if (/^\d+$/.test(trimmed)) {
+    const userId = parseInt(trimmed, 10);
+    if (!Number.isSafeInteger(userId) || userId <= 0) return null;
+    const row = await queryOne<{ email: string | null; username: string | null; displayName: string | null } & RowDataPacket>(
+      `SELECT email, username, displayName FROM im_users WHERE numericId = ? LIMIT 1`,
+      [userId],
+    );
+    return { userId, email: row?.email ?? null, username: row?.username ?? null, displayName: row?.displayName ?? null };
+  }
+
+  const row = await queryOne<{ numericId: number; email: string | null; username: string | null; displayName: string | null } & RowDataPacket>(
+    `SELECT numericId, email, username, displayName FROM im_users
+     WHERE numericId IS NOT NULL AND (email = ? OR username = ?)
+     ORDER BY numericId LIMIT 1`,
+    [trimmed, trimmed],
+  );
+  if (!row || row.numericId == null) return null;
+  return {
+    userId: Number(row.numericId),
+    email: row.email ?? null,
+    username: row.username ?? null,
+    displayName: row.displayName ?? null,
+  };
+}
+
 export async function getUserTransactions(
   userId: number,
   page: number = 1,
