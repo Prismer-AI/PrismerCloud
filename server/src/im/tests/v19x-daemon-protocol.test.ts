@@ -14,6 +14,7 @@
  */
 
 import {
+  computeProfilesToDelete,
   computeProfilesToSync,
   trimContextWindow,
   buildTaskDispatchRequest,
@@ -159,6 +160,33 @@ test('multi-agent multi-profile mix', () => {
   assertArrEq(computeProfilesToSync(declared, cloud), ['p1-b', 'p1-c', 'p2-b'], 'profilesToSync');
 });
 
+// ─── computeProfilesToDelete ─────────────────────────────────
+
+console.log('\n🔹 computeProfilesToDelete');
+
+test('declared profile absent from cloud → marks for tombstone', () => {
+  const accepted: HostedAgentDeclaration[] = [
+    {
+      imUserId: 'agent-1',
+      name: 'pm',
+      adapterName: 'hermes',
+      capabilities: [],
+      profiles: [
+        { id: 'prof-live', version: 1 },
+        { id: 'prof-deleted', version: 1 },
+      ],
+    },
+  ];
+  const cloud: CloudProfileSnapshot[] = [{ id: 'prof-live', agentImUserId: 'agent-1', version: 1 }];
+  assertArrEq(computeProfilesToDelete(accepted, cloud), ['prof-deleted'], 'profilesToDelete');
+});
+
+test('ignored declarations are not passed to tombstone calculation', () => {
+  const accepted: HostedAgentDeclaration[] = [];
+  const cloud: CloudProfileSnapshot[] = [];
+  assertArrEq(computeProfilesToDelete(accepted, cloud), [], 'profilesToDelete');
+});
+
 // ─── trimContextWindow ────────────────────────────────────────
 
 console.log('\n🔹 trimContextWindow');
@@ -218,6 +246,10 @@ test('mention-driven task: profileId + context lifted from metadata', () => {
   };
   const payload = buildTaskDispatchRequest(task, 'agent-eng');
   assertEq(payload.taskId, 't-1', 'taskId');
+  // release202/09 §3.2 — metadata.kind='agent_run' promotes to typed
+  // payload.kind='run' + payload.runId (mirrors taskId on the wire).
+  assertEq(payload.kind, 'run', 'kind=run for agent_run');
+  assertEq(payload.runId, 't-1', 'runId mirrors run id');
   assertEq(payload.agentImUserId, 'agent-eng', 'agentImUserId');
   assertEq(payload.profileId, 'prof-eng-1', 'profileId');
   assertEq(payload.capability, 'chat', 'capability');
@@ -255,6 +287,9 @@ test('shell task: routes to target daemon without requiring agent target', () =>
   };
   const payload = buildTaskDispatchRequest(task, '');
   assertEq(payload.agentImUserId, undefined, 'agentImUserId omitted');
+  // release202/09 §3.2 — no agent_run stamp + bare id ⇒ kind='task', no runId.
+  assertEq(payload.kind, 'task', 'kind=task for non-run dispatch');
+  assertEq(payload.runId, undefined, 'no runId for a task');
   assertEq(payload.targetDaemonId, 'daemon-local-1', 'targetDaemonId');
   assertEq(payload.profileId, '', 'profileId is empty string');
   assertEq(payload.runtimeRoute, 'shell', 'runtimeRoute');
@@ -335,6 +370,48 @@ test('survives malformed JSON in input/metadata', () => {
   const payload = buildTaskDispatchRequest(task, 'agent-1');
   assertEq(payload.prompt, 'fallback', 'falls back to title');
   assertEq(payload.profileId, '', 'empty profileId');
+});
+
+// release201/30 §7 Phase 3 — traceId hoist.
+
+test('release201/30: hoists traceId from metadata to top-level payload', () => {
+  const task = {
+    id: 't-trace-1',
+    title: 'send a file',
+    capability: 'chat',
+    input: '{}',
+    metadata: JSON.stringify({ profileId: 'p1', traceId: 'trace_abc123' }),
+  };
+  const payload = buildTaskDispatchRequest(task, 'agent-1');
+  assertEq(payload.traceId, 'trace_abc123', 'top-level traceId');
+  // stripped from extraMetadata so daemon's prompt-builder doesn't refold it
+  if ((payload.metadata as any)?.traceId !== undefined) {
+    throw new Error('metadata.traceId should be stripped after hoist');
+  }
+});
+
+test('release201/30: drops malformed traceId (defensive)', () => {
+  const task = {
+    id: 't-trace-2',
+    title: 'send a file',
+    capability: 'chat',
+    input: '{}',
+    metadata: JSON.stringify({ traceId: 'bad value/with spaces' }),
+  };
+  const payload = buildTaskDispatchRequest(task, 'agent-1');
+  assertEq(payload.traceId, undefined, 'malformed traceId dropped');
+});
+
+test('release201/30: missing traceId is undefined (daemon mints fallback)', () => {
+  const task = {
+    id: 't-trace-3',
+    title: 'no trace here',
+    capability: 'chat',
+    input: '{}',
+    metadata: '{}',
+  };
+  const payload = buildTaskDispatchRequest(task, 'agent-1');
+  assertEq(payload.traceId, undefined, 'absent traceId stays undefined');
 });
 
 // ─── mock-rooms emission flow ─────────────────────────────────
