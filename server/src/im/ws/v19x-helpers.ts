@@ -8,6 +8,9 @@
  */
 
 import type { HostedAgentDeclaration, TaskDispatchContextEntry, TaskDispatchRequestPayload } from '../types/index';
+// release201/25 §7 / release201/26 — typed envelope hoist. Imported as type
+// only; the runtime value comes off task metadata (defensive narrow below).
+import type { ConversationContextEnvelope } from '../types/conversation-envelope';
 
 /**
  * One cloud-side profile snapshot used by `computeProfilesToSync`.
@@ -56,6 +59,27 @@ export function computeProfilesToSync(
 }
 
 /**
+ * Compute cloud-authoritative tombstones for profiles declared by accepted
+ * agents. The caller must pass only declarations that survived ownership and
+ * daemon-binding validation. Ignored declarations are not safe to tombstone:
+ * they may be sandbox-local bootstrap rows that are usable for explicit
+ * in-pod sync but not yet accepted as hosted runtime agents.
+ */
+export function computeProfilesToDelete(
+  acceptedDeclared: HostedAgentDeclaration[],
+  cloudProfiles: CloudProfileSnapshot[],
+): string[] {
+  const cloudProfileIds = new Set(cloudProfiles.map((profile) => profile.id));
+  const result: string[] = [];
+  for (const agent of acceptedDeclared) {
+    for (const profile of agent.profiles) {
+      if (!cloudProfileIds.has(profile.id)) result.push(profile.id);
+    }
+  }
+  return result;
+}
+
+/**
  * Trim a chronological list of context entries from the oldest end so that
  * the total `content.length` stays within `maxChars`. Always keeps at
  * least one entry — even if a single entry exceeds the cap, it's kept
@@ -95,6 +119,8 @@ export function buildTaskDispatchRequest(
     timeoutMs?: number | null;
     conversationId?: string | null;
     runtimeRoute?: string | null;
+    /** release201/09 Phase 2 — propagated to daemon for path composition + env injection. */
+    projectId?: string | null;
   },
   agentImUserId: string,
 ): TaskDispatchRequestPayload {
@@ -113,11 +139,19 @@ export function buildTaskDispatchRequest(
   //   JSON_EXTRACT(input,'$.prompt') IS NOT NULL`.
   const legacyInputPrompt =
     typeof taskInput.prompt === 'string' && taskInput.prompt ? (taskInput.prompt as string) : null;
-  const prompt =
+  const basePrompt =
     (typeof task.description === 'string' && task.description ? task.description : null) ??
     legacyInputPrompt ??
     task.title ??
     '';
+  // P1-2 (2026-05-25): when the previous turn produced files that
+  // daemon's outbox-watcher quarantined for MIME mismatch (e.g. agent
+  // dumped markdown into a `.pdf`), surface that to the agent at the TOP
+  // of the next prompt so it can adjust strategy BEFORE re-executing. The
+  // warning lives ABOVE the user instruction with a clear separator so it
+  // doesn't bleed into the description body.
+  const rejectionsBlock = renderOutboxRejectionsBlock(taskMeta.outboxRejections);
+  const prompt = rejectionsBlock ? `${rejectionsBlock}\n\n${basePrompt}` : basePrompt;
   const context = Array.isArray(taskMeta.context) ? (taskMeta.context as TaskDispatchContextEntry[]) : undefined;
 
   // Hoist conversationType off `taskMeta` onto the top-level payload before
@@ -136,16 +170,92 @@ export function buildTaskDispatchRequest(
   // malformed stamp can't poison the wire payload.
   const participants = readParticipantList(taskMeta.participants);
 
+  // release201/30 — trigger-sender identity. message.service resolves the
+  // sender username + role off the IM user record at dispatch time and
+  // stamps both onto task_run metadata. Daemon consumes them via the wire
+  // payload to label <current_message author="..."> inside the
+  // <conversation_context> XML wrapper the sessions adapter sends.
+  // Defensive narrowing: only forward strings that look like a real
+  // username / valid senderRole — otherwise drop silently and let the
+  // daemon fall back to recipient-self.
+  const rawTriggerSender = taskMeta.triggerSenderUsername;
+  const triggerSenderUsername =
+    typeof rawTriggerSender === 'string' && rawTriggerSender.length > 0
+      ? rawTriggerSender
+      : undefined;
+  const rawTriggerRole = taskMeta.triggerSenderRole;
+  const triggerSenderRole: 'human' | 'agent' | 'admin' | 'system' | undefined =
+    rawTriggerRole === 'human' ||
+    rawTriggerRole === 'agent' ||
+    rawTriggerRole === 'admin' ||
+    rawTriggerRole === 'system'
+      ? rawTriggerRole
+      : undefined;
+
+  // release201/25 §7 / release201/26 — typed L3 envelope hoist. message.service
+  // stamps `contextEnvelope` on task_run metadata when FF_CONTEXT_ENVELOPE_ENABLED
+  // is on; we hoist it to the wire payload's top level so envelope-aware
+  // adapters (sessions-dispatcher.renderContextEnvelope) consume the typed
+  // structure directly instead of grubbing through the daemon-facing
+  // extraMetadata bag. Defensive narrow: only accept envelopes that look
+  // like our v1 shape; malformed stamps drop silently so a poisoned metadata
+  // blob can't break dispatch (the legacy flat fields above still ship).
+  const rawEnvelope = taskMeta.contextEnvelope;
+  const contextEnvelope: ConversationContextEnvelope | undefined =
+    rawEnvelope &&
+    typeof rawEnvelope === 'object' &&
+    !Array.isArray(rawEnvelope) &&
+    (rawEnvelope as { envelopeVersion?: unknown }).envelopeVersion === 1
+      ? (rawEnvelope as ConversationContextEnvelope)
+      : undefined;
+
+  // release201/30 §7 Phase 3 — hoist trace id off task metadata onto the
+  // top-level dispatch payload so daemon doesn't have to grub through the
+  // metadata bag to learn the id. Wire shape matches frontend mint regex
+  // (see src/lib/trace-id.ts). When absent, daemon mints a local fallback.
+  const traceIdRaw = taskMeta.traceId;
+  const traceId =
+    typeof traceIdRaw === 'string' && /^[a-z0-9_]{6,40}$/i.test(traceIdRaw)
+      ? traceIdRaw
+      : undefined;
+
+  // release202/09 §3.2 — promote the run-vs-task signal to typed top-level
+  // fields. `runAsDispatchTask` stamps `metadata.kind='agent_run'` +
+  // `metadata.runId=run.id` for chat-dispatch runs; kanban tasks carry
+  // neither. We map `'agent_run'` → `'run'`. Fallback for legacy/edge rows:
+  // a `run_`-prefixed id is also a run even if metadata lost the stamp.
+  // Daemon trusts `kind`; missing → it falls back to the id-shape then legacy
+  // probe-both. The bare `taskId` field still mirrors the run id on the wire
+  // for back-compat with daemons that predate the typed `runId`.
+  const isAgentRun = taskMeta.kind === 'agent_run' || task.id.startsWith('run_');
+  const kind: 'run' | 'task' = isAgentRun ? 'run' : 'task';
+  const runId = isAgentRun
+    ? typeof taskMeta.runId === 'string' && taskMeta.runId
+      ? (taskMeta.runId as string)
+      : task.id
+    : undefined;
+
   // Strip dispatch-control keys from the metadata that gets shipped to the
   // daemon — those are server-side concerns.
   const extraMetadata: Record<string, unknown> = { ...taskMeta };
   delete extraMetadata.profileId;
   delete extraMetadata.context;
   delete extraMetadata.delivery;
+  // traceId hoisted to top-level payload field above; strip from metadata bag
+  // so daemon's prompt-builder doesn't redundantly fold the id back into the
+  // agent's system prompt.
+  delete extraMetadata.traceId;
   // conversationType is hoisted to the top-level payload field above.
   delete extraMetadata.conversationType;
   // participants is hoisted to the top-level payload field above.
   delete extraMetadata.participants;
+  // release201/30 — trigger sender hoisted above; strip from metadata bag.
+  delete extraMetadata.triggerSenderUsername;
+  delete extraMetadata.triggerSenderRole;
+  // release201/25 §7 / release201/26 — envelope hoisted above; strip from
+  // metadata bag so daemon's metadata pass-through doesn't redundantly
+  // duplicate the envelope (it now rides on the wire payload's top level).
+  delete extraMetadata.contextEnvelope;
   // Wave-8 W1: `assets.{linkedAssetIds,aggregatedAssetIds}` is the
   // server-side asset registry. The daemon receives the hydrated
   // `assetRefs[]` (mime + contentHash) on the top level of the payload,
@@ -153,6 +263,10 @@ export function buildTaskDispatchRequest(
   // server-side accounting.
   delete extraMetadata.assets;
   delete extraMetadata.observability;
+  // P1-2 (2026-05-25): `outboxRejections` is consumed above to build the
+  // top-of-prompt warning. Daemon doesn't need it as raw metadata (it was
+  // the originator) — dropping prevents redundant duplication on the wire.
+  delete extraMetadata.outboxRejections;
 
   const execution = readRecord(extraMetadata.execution);
   const targetDaemonId =
@@ -162,6 +276,11 @@ export function buildTaskDispatchRequest(
 
   return {
     taskId: task.id,
+    // release202/09 §3.2 — typed run-vs-task signal. `taskId` above still
+    // mirrors the run id for legacy daemons; `kind`/`runId` are the new
+    // structural truth the daemon's env-split + execution_context read.
+    kind,
+    ...(runId ? { runId } : {}),
     agentImUserId: agentImUserId || undefined,
     targetDaemonId,
     profileId,
@@ -177,6 +296,20 @@ export function buildTaskDispatchRequest(
     conversationId: task.conversationId ?? undefined,
     conversationType,
     participants,
+    // release201/09 Phase 2 — propagate task.projectId (may be NULL). Daemon
+    // turns NULL into `_unscoped` sentinel for path composition; non-null is
+    // also injected into agent env as `PRISMER_ACTIVE_PROJECT_ID`.
+    projectId: task.projectId ?? null,
+    // release201/30 §7 Phase 3 — see hoist comment above.
+    traceId,
+    // release201/30 — trigger sender identity for the daemon's XML
+    // <conversation_context> wrapper.
+    triggerSenderUsername,
+    triggerSenderRole,
+    // release201/25 §7 / release201/26 — typed L3 envelope (envelope-aware
+    // adapter path). Forward-compat: undefined when flag was off at dispatch
+    // build time; adapter falls back to the legacy flat fields above.
+    contextEnvelope,
   };
 }
 
@@ -235,4 +368,41 @@ function parseJsonObject(raw: string | null | undefined): Record<string, unknown
   } catch {
     return {};
   }
+}
+
+/**
+ * P1-2 (2026-05-25): build the top-of-prompt warning block from the
+ * `outboxRejections` array persisted on `task.metadata` by handler.ts.
+ *
+ * Returns `null` when the field is missing or empty so the prompt builder
+ * skips the section entirely (no spurious heading on the first turn).
+ * Defensively narrows each entry — anything missing `filename`/`reason` is
+ * dropped silently rather than emitted as `undefined` text. Caps the list
+ * surface at 10 entries to keep the prompt section bounded even when the
+ * full daemon-side buffer (20) is exhausted.
+ *
+ * Exported for unit tests (see `test/v19x-helpers.test.ts` if added) but
+ * primarily called from `buildTaskDispatchRequest`.
+ */
+export function renderOutboxRejectionsBlock(raw: unknown): string | null {
+  if (!Array.isArray(raw) || raw.length === 0) return null;
+  const lines: string[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object') continue;
+    const r = entry as Record<string, unknown>;
+    const filename = typeof r.filename === 'string' ? r.filename : '';
+    const reason = typeof r.reason === 'string' ? r.reason : '';
+    if (!filename || !reason) continue;
+    const inferred = typeof r.inferredMime === 'string' ? r.inferredMime : 'unknown';
+    const detected = typeof r.detectedMime === 'string' ? r.detectedMime : 'unknown';
+    lines.push(`- \`${filename}\`: expected ${inferred}, detected ${detected} (${reason})`);
+    if (lines.length >= 10) break;
+  }
+  if (lines.length === 0) return null;
+  return [
+    '## Previous turn outbox rejections',
+    'The following files you wrote in the previous turn were rejected because their byte content did not match the file extension. Adjust your strategy — for example, write actual binary PDFs with reportlab instead of dumping markdown to a `.pdf` extension.',
+    '',
+    ...lines,
+  ].join('\n');
 }
