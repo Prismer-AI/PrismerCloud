@@ -35,14 +35,16 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
+import Editor from '@monaco-editor/react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import {
-  Bot,
   Check,
+  ChevronDown,
   ChevronRight,
   CircleDashed,
   ClipboardCopy,
   Coins,
-  FileText,
   Hash,
   Loader2,
   MessageSquare,
@@ -55,6 +57,9 @@ import {
   X,
 } from 'lucide-react';
 import { AGENT_KIND_PRESETS, classifyAgent, type AgentKind } from '../lib/agent-kind';
+import { getAgentRoleIcon } from '../lib/agent-role-icon';
+import type { AgentLiveStatus } from '../lib/agent-status';
+import { AgentAvatar } from './agent-avatar';
 import {
   avatarGradient,
   avatarInitials,
@@ -68,9 +73,19 @@ import {
   surface,
 } from '../lib/design';
 import { getWorkspaceToken, imFetch } from '../lib/im-api';
-import { approveTask, cancelTask, isCancellableStatus, rejectTask, updateTask } from '../lib/mutations';
-import type { AgentDTO, AssetDTO, TaskDTO, TaskDetailDTO, TaskLogDTO } from '../lib/types';
+import { isCancellableStatus, transitionTask, updateTask } from '../lib/mutations';
+import type { AgentDTO, AssetDTO, TaskDTO, TaskDetailDTO, TaskLogDTO, TaskRunEventDTO } from '../lib/types';
+import { copyText } from '@/lib/clipboard';
 import { MemoryTextPreview } from './memory-text-preview';
+import { WorkProductCard } from './work-products';
+import { TaskDescriptionEditor } from './task-description-editor';
+import {
+  buildAssetRefsFromDescription,
+  extractAssetUris,
+  removeAssetUri,
+  resolveAssetUris,
+} from '../lib/task-asset-refs';
+import { TaskCriteriaEditor, type CriterionDraft } from './task-criteria-editor';
 
 /**
  * Wave-8 W2: typed view of the metadata bag we read off TaskDTO without
@@ -102,8 +117,17 @@ export interface TaskDetailDrawerProps {
   isDark: boolean;
   task: TaskDTO | null;
   agents?: AgentDTO[];
+  /** Task 3 — workspace-wide agent live status map (from page.tsx). */
+  agentStatuses?: Map<string, AgentLiveStatus>;
   /** All workspace assets — drawer filters to ones produced by this task. */
   assets?: AssetDTO[];
+  /**
+   * P6.5 inline edit (§6.2): IM user id of the viewer. Used to gate the
+   * title / description / priority edit affordances client-side. Backend
+   * already enforces permissions on PATCH /tasks/:id, so this is only a UX
+   * gate — when unset the affordances simply stay hidden.
+   */
+  currentUserId?: string | null;
   onClose: () => void;
   onChanged?: () => void;
   /**
@@ -159,6 +183,11 @@ interface TimelineEntry {
 const ACTIVE_STATUSES = new Set(['pending', 'assigned', 'running', 'in_progress']);
 const TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled']);
 
+// P6.5 — priority values picker can write. Mirrors `priorityAccent` keys in
+// design.ts so the chip + dropdown render with the same palette tokens.
+type TaskPriorityValue = 'low' | 'medium' | 'high' | 'urgent';
+const PRIORITY_OPTIONS: TaskPriorityValue[] = ['urgent', 'high', 'medium', 'low'];
+
 // ─────────────────────────────────────────────────────────────────────
 // Component
 // ─────────────────────────────────────────────────────────────────────
@@ -167,7 +196,9 @@ export function TaskDetailDrawer({
   isDark,
   task,
   agents,
+  agentStatuses,
   assets,
+  currentUserId,
   onClose,
   onChanged,
   onOpenTask,
@@ -194,6 +225,39 @@ export function TaskDetailDrawer({
   // metadata.parentTaskId can't lock the drawer.
   const [parentChain, setParentChain] = useState<TaskDTO[]>([]);
 
+  // ─── P6.5 — inline edit state (closes §6.2 gap) ───────────────────
+  //
+  // Three independent local edit machines for title / description / priority.
+  // They're kept separate (vs one shared hook) because each has distinct save
+  // semantics (Enter / Cmd+Enter / pick-saves), and merging them would create
+  // more conditional branches than the duplication costs.
+  //
+  // `optimisticOverlay` is a shallow patch applied on top of `displayTask`
+  // BEFORE the await on updateTask — that's how the new value appears
+  // immediately. On failure the relevant overlay keys are cleared and
+  // `notify` surfaces the error.
+  type OptimisticOverlay = Partial<{
+    title: string;
+    description: string | null;
+    metadata: Record<string, unknown>;
+  }>;
+  const [optimisticOverlay, setOptimisticOverlay] = useState<OptimisticOverlay>({});
+  const [titleEdit, setTitleEdit] = useState<{ editing: boolean; value: string; saving: boolean }>({
+    editing: false,
+    value: '',
+    saving: false,
+  });
+  const [descEdit, setDescEdit] = useState<{ editing: boolean; value: string; saving: boolean }>({
+    editing: false,
+    value: '',
+    saving: false,
+  });
+  const [priorityEdit, setPriorityEdit] = useState<{ open: boolean; saving: boolean }>({
+    open: false,
+    saving: false,
+  });
+  const priorityWrapperRef = useRef<HTMLDivElement>(null);
+
   // Wipe live events whenever the focused task changes, so stale logs from a
   // previous task don't leak into the next one's timeline.
   const taskId = task?.id ?? null;
@@ -206,6 +270,12 @@ export function TaskDetailDrawer({
     setRejectReason('');
     setAssigneePickerOpen(false);
     setParentChain([]);
+    // P6.5 — drop any pending edits / optimistic overlay when the focused
+    // task changes so stale buffers don't leak between drawer sessions.
+    setOptimisticOverlay({});
+    setTitleEdit({ editing: false, value: '', saving: false });
+    setDescEdit({ editing: false, value: '', saving: false });
+    setPriorityEdit({ open: false, saving: false });
   }, [taskId]);
 
   useEffect(() => {
@@ -360,7 +430,27 @@ export function TaskDetailDrawer({
 
   // ─── Derived data ─────────────────────────────────────────────────
 
-  const displayTask = detail?.task ?? task;
+  const baseTask = detail?.task ?? task;
+  // P6.5 — merge optimistic overlay so newly-edited title / description /
+  // priority appear instantly. Metadata is shallow-merged so we don't blow
+  // away unrelated bag fields (parentTaskId, kanban, execution, …) when only
+  // priority changes.
+  const displayTask = useMemo<TaskDTO | null>(() => {
+    if (!baseTask) return null;
+    const hasOverlay =
+      optimisticOverlay.title !== undefined ||
+      optimisticOverlay.description !== undefined ||
+      optimisticOverlay.metadata !== undefined;
+    if (!hasOverlay) return baseTask;
+    return {
+      ...baseTask,
+      ...(optimisticOverlay.title !== undefined ? { title: optimisticOverlay.title } : null),
+      ...(optimisticOverlay.description !== undefined ? { description: optimisticOverlay.description } : null),
+      metadata: optimisticOverlay.metadata
+        ? { ...(baseTask.metadata ?? {}), ...optimisticOverlay.metadata }
+        : baseTask.metadata,
+    };
+  }, [baseTask, optimisticOverlay]);
 
   const assigneeAgent = useMemo<AgentDTO | null>(() => {
     if (!displayTask?.assigneeId || !agents) return null;
@@ -386,6 +476,11 @@ export function TaskDetailDrawer({
       const ts = Date.parse(log.createdAt);
       if (!Number.isFinite(ts)) continue;
       entries.push(logToTimelineEntry(log, displayTask, ts));
+    }
+    for (const event of detail?.runEvents ?? []) {
+      const ts = Date.parse(event.createdAt);
+      if (!Number.isFinite(ts)) continue;
+      entries.push(runEventToTimelineEntry(event, ts));
     }
 
     if (!entries.some((entry) => entry.kind === 'created')) {
@@ -457,7 +552,7 @@ export function TaskDetailDrawer({
       }
     }
     return dedupeTimeline(entries).sort((a, b) => a.ts - b.ts);
-  }, [displayTask, detail?.logs, liveEvents]);
+  }, [displayTask, detail?.logs, detail?.runEvents, liveEvents]);
 
   const progressPct =
     displayTask && typeof displayTask.progress === 'number'
@@ -468,12 +563,45 @@ export function TaskDetailDrawer({
   const statusInfo = displayTask ? (statusAccent[displayTask.status] ?? statusAccent.backlog) : null;
   const taskBody = displayTask ? readTaskBody(displayTask) : null;
 
+  // ─── P6.5 — permission gate for inline edit affordances ──────────────
+  //
+  // Backend enforces the real matrix (L0/L1/L2 always; L3 only if creator;
+  // L4 executor never — see §6.2). This client-side gate is **fail-open**:
+  // we surface the edit affordance and let the backend reject when needed.
+  //
+  // The earlier fail-closed creator-only fallback hid the edit affordance
+  // for any task NOT created by the current user — which in practice means
+  // any task minted via agent dispatch (creatorId = agent.id ≠ user.id).
+  // That swallowed the most common edit case for human owners. Backend
+  // 403 + the existing `notify?.(..., 'error')` plumbing in the save
+  // handlers is the right safety net.
+  //
+  // Only two explicit hides:
+  //   1. `viewerAccess.canManage === false` (read it if backend ever emits
+  //      it on TaskDTO; harmless cast otherwise).
+  //   2. Executor-as-self: an agent viewer who's also the assignee can't
+  //      rewrite the spec it was handed. (Today `currentUserId` is always
+  //      a human in this UI, so this branch is forward-compat for when
+  //      agents render the drawer.)
+  const canEditContent = useMemo<boolean>(() => {
+    if (!displayTask) return false;
+    const access = (displayTask as unknown as { viewerAccess?: { canManage?: boolean } }).viewerAccess;
+    if (access?.canManage === false) return false;
+    if (displayTask.assigneeType === 'agent' && displayTask.assigneeId && displayTask.assigneeId === currentUserId) {
+      return false;
+    }
+    return true;
+  }, [displayTask, currentUserId]);
+
   // ─── Actions ──────────────────────────────────────────────────────
 
+  // v2.0 P5 — Cancel / Approve / Reject all route through the unified
+  // state-machine endpoint so the server's TRANSITIONS matrix is the
+  // single source of truth for what's allowed and who can do it.
   const handleCancel = useCallback(async () => {
     if (!task || busy) return;
     setBusy('cancel');
-    const res = await cancelTask(task.id);
+    const res = await transitionTask(task.id, { to: 'cancelled', reason: 'Cancelled by user' });
     setBusy(null);
     if (!res.ok) {
       notify?.(`Couldn't cancel task: ${res.message}`, 'error');
@@ -486,7 +614,7 @@ export function TaskDetailDrawer({
   const handleApprove = useCallback(async () => {
     if (!task || busy) return;
     setBusy('approve');
-    const res = await approveTask(task.id);
+    const res = await transitionTask(task.id, { to: 'completed', reason: 'Approved' });
     setBusy(null);
     if (!res.ok) {
       notify?.(`Couldn't approve task: ${res.message}`, 'error');
@@ -505,7 +633,14 @@ export function TaskDetailDrawer({
       return;
     }
     setBusy('reject');
-    const res = await rejectTask(task.id, reason);
+    // Reject: review → assigned (back to the assignee with a comment).
+    // `reviewComment` is the structured field the server expects; we also
+    // pass `reason` so the transition log carries it.
+    const res = await transitionTask(task.id, {
+      to: 'assigned',
+      reason: 'Rejected — needs rework',
+      reviewComment: reason,
+    });
     setBusy(null);
     if (!res.ok) {
       notify?.(`Couldn't reject task: ${res.message}`, 'error');
@@ -523,12 +658,9 @@ export function TaskDetailDrawer({
 
   const copyId = useCallback(() => {
     if (!task) return;
-    if (typeof navigator !== 'undefined' && navigator.clipboard) {
-      navigator.clipboard.writeText(task.id).catch(() => {
-        /* ignore */
-      });
-      notify?.('Task ID copied.', 'success');
-    }
+    void copyText(task.id).then((res) => {
+      notify?.(res.ok ? 'Task ID copied.' : (res.error ?? 'Copy failed.'), res.ok ? 'success' : 'error');
+    });
   }, [task, notify]);
 
   // W2-T1: re-target the task to a different agent (or unassign) via PATCH
@@ -555,14 +687,326 @@ export function TaskDetailDrawer({
     [task, busy, agents, notify, onChanged],
   );
 
+  // ─── P6.5 — inline edit handlers (F1 title, F2 description, F3 priority) ──
+  //
+  // All three follow the same shape:
+  //   1. Capture pre-edit value (for rollback).
+  //   2. Apply optimistic overlay so UI updates BEFORE the await.
+  //   3. Await updateTask.
+  //   4. On failure: roll back overlay, surface notify error.
+  //   5. On success: keep overlay until onChanged refreshes the canonical task.
+
+  const handleSaveTitle = useCallback(async () => {
+    if (!task) return;
+    const trimmed = titleEdit.value.trim();
+    // Empty title is rejected by the server too — bail before optimistic flip.
+    if (!trimmed) {
+      notify?.('Title cannot be empty.', 'error');
+      return;
+    }
+    const previousTitle = displayTask?.title ?? '';
+    if (trimmed === previousTitle) {
+      // No-op edit; just exit edit mode.
+      setTitleEdit({ editing: false, value: '', saving: false });
+      return;
+    }
+    setTitleEdit((prev) => ({ ...prev, saving: true }));
+    setOptimisticOverlay((prev) => ({ ...prev, title: trimmed }));
+    const res = await updateTask(task.id, { title: trimmed });
+    if (!res.ok) {
+      // Rollback: drop the title key from overlay so UI reverts.
+      setOptimisticOverlay((prev) => {
+        const { title: _drop, ...rest } = prev;
+        void _drop;
+        return rest;
+      });
+      setTitleEdit((prev) => ({ ...prev, saving: false }));
+      notify?.(`Couldn't save title: ${res.message}`, 'error');
+      return;
+    }
+    setTitleEdit({ editing: false, value: '', saving: false });
+    notify?.('Title saved.', 'success');
+    onChanged?.();
+  }, [task, displayTask, titleEdit.value, notify, onChanged]);
+
+  const handleCancelTitle = useCallback(() => {
+    setTitleEdit({ editing: false, value: '', saving: false });
+  }, []);
+
+  const handleSaveDescription = useCallback(async () => {
+    if (!task) return;
+    const trimmed = descEdit.value;
+    const previousDesc = displayTask?.description ?? '';
+    if (trimmed === previousDesc) {
+      setDescEdit({ editing: false, value: '', saving: false });
+      return;
+    }
+    // Empty string → server clears description (description: null).
+    const wireValue: string | null = trimmed.trim() === '' ? null : trimmed;
+    setDescEdit((prev) => ({ ...prev, saving: true }));
+    setOptimisticOverlay((prev) => ({ ...prev, description: wireValue }));
+    // Wave-8 W1 / L2: extract `prismer://...asset/<hash>` URIs from the
+    // new description text, cross-reference with the workspace asset list,
+    // and send `assetRefs[]` alongside the PATCH. Server validates them
+    // and folds into metadata.assets.linkedAssetIds so the daemon's
+    // dispatch hydrator picks them up. We send `assetRefs` only when the
+    // workspace asset list is available — otherwise the server can't
+    // validate, and we don't want to spuriously clear anything.
+    // Send `assetRefs` unconditionally (even when refs=[]) so the server
+    // can drop `linkedAssetIds` when the user removed the last URI from
+    // the description — the conditional spread used here previously meant
+    // the field was omitted, and the daemon kept re-attaching dropped refs.
+    const refs = displayTask?.workspaceId
+      ? buildAssetRefsFromDescription(wireValue, assets, displayTask.workspaceId)
+      : [];
+    const res = await updateTask(task.id, {
+      description: wireValue,
+      assetRefs: refs,
+    });
+    if (!res.ok) {
+      setOptimisticOverlay((prev) => {
+        const { description: _drop, ...rest } = prev;
+        void _drop;
+        return rest;
+      });
+      setDescEdit((prev) => ({ ...prev, saving: false }));
+      notify?.(`Couldn't save description: ${res.message}`, 'error');
+      return;
+    }
+    setDescEdit({ editing: false, value: '', saving: false });
+    notify?.('Description saved.', 'success');
+    onChanged?.();
+  }, [task, displayTask, descEdit.value, assets, notify, onChanged]);
+
+  const handleCancelDescription = useCallback(() => {
+    setDescEdit({ editing: false, value: '', saving: false });
+  }, []);
+
+  const handlePickPriority = useCallback(
+    async (next: TaskPriorityValue) => {
+      if (!task) return;
+      const currentPriority = priority;
+      if (next === currentPriority) {
+        setPriorityEdit({ open: false, saving: false });
+        return;
+      }
+      setPriorityEdit({ open: false, saving: true });
+      const existingMeta = (displayTask?.metadata ?? {}) as Record<string, unknown>;
+      const nextMeta = { ...existingMeta, priority: next };
+      setOptimisticOverlay((prev) => ({
+        ...prev,
+        metadata: { ...(prev.metadata ?? {}), priority: next },
+      }));
+      const res = await updateTask(task.id, { metadata: nextMeta });
+      if (!res.ok) {
+        // Rollback: clear priority from overlay.metadata. If overlay.metadata
+        // only held priority, drop the key entirely so we revert cleanly.
+        setOptimisticOverlay((prev) => {
+          if (!prev.metadata) return prev;
+          const { priority: _drop, ...rest } = prev.metadata as Record<string, unknown>;
+          void _drop;
+          if (Object.keys(rest).length === 0) {
+            const { metadata: _m, ...without } = prev;
+            void _m;
+            return without;
+          }
+          return { ...prev, metadata: rest };
+        });
+        setPriorityEdit({ open: false, saving: false });
+        notify?.(`Couldn't change priority: ${res.message}`, 'error');
+        return;
+      }
+      setPriorityEdit({ open: false, saving: false });
+      notify?.('Priority updated.', 'success');
+      onChanged?.();
+    },
+    [task, displayTask, priority, notify, onChanged],
+  );
+
+  // Outside-click + Escape close for the priority dropdown. Mirrors the
+  // pattern used by asset-filter-menu so behaviour feels consistent.
+  useEffect(() => {
+    if (!priorityEdit.open) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setPriorityEdit({ open: false, saving: false });
+    };
+    const onPointer = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (!target) return;
+      if (priorityWrapperRef.current?.contains(target)) return;
+      setPriorityEdit({ open: false, saving: false });
+    };
+    document.addEventListener('keydown', onKey);
+    document.addEventListener('pointerdown', onPointer);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      document.removeEventListener('pointerdown', onPointer);
+    };
+  }, [priorityEdit.open]);
+
   // W2-T2: assets produced by this task (sourceTaskId match). The drawer
   // already had a result viewer; this surfaces structured artifacts that
   // the agent uploaded as side-effects of the run, separate from inline
   // result text.
+  //
+  // 2026-05-23 fix: rely on a per-task targeted fetch instead of filtering
+  // the workspace-level `assets` prop alone. Page-level `reloadAssets`
+  // pulls `/assets?workspaceId=X&limit=100`, so workspaces with > 100 total
+  // assets push agent-output rows beyond the cutoff and the drawer would
+  // show no artifacts even when the task did upload files. Forensic on
+  // test env (5/22) showed 31 agent-output assets but only ~2 surfaced.
+  const [drawerFetchedAssets, setDrawerFetchedAssets] = useState<AssetDTO[]>([]);
+  useEffect(() => {
+    if (!task?.id || !task.workspaceId) {
+      setDrawerFetchedAssets([]);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      const res = await imFetch<AssetDTO[]>(
+        `/assets?workspaceId=${encodeURIComponent(task.workspaceId!)}&taskId=${encodeURIComponent(task.id)}&limit=50`,
+      );
+      if (cancelled) return;
+      if (res.ok) setDrawerFetchedAssets(res.data ?? []);
+      else setDrawerFetchedAssets([]);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [task?.id, task?.workspaceId]);
+
   const taskAssets = useMemo<AssetDTO[]>(() => {
-    if (!task || !assets) return [];
-    return assets.filter((asset) => asset.sourceTaskId === task.id);
-  }, [task, assets]);
+    if (!task) return [];
+    // Combine workspace-level filter (covers the case where assets prop
+    // already has it) + drawer-level targeted fetch (covers the >100-cap
+    // overflow case). Dedupe by id.
+    //
+    // release201/09 §9.4a.4 — Artifacts tab is task-bound only. When
+    // an owner clicks Promote ↑ on a row, its boundKind flips to
+    // 'workspace-file' and it disappears from this filtered list (moves
+    // to Library Root); the user gets the success toast and the row
+    // visibly drops out without a full reload.
+    const byId = new Map<string, AssetDTO>();
+    if (assets) {
+      for (const a of assets) {
+        if (a.sourceTaskId === task.id && (a.boundKind ?? 'task-bound') === 'task-bound') {
+          byId.set(a.id, a);
+        }
+      }
+    }
+    for (const a of drawerFetchedAssets) {
+      if ((a.boundKind ?? 'task-bound') === 'task-bound') {
+        byId.set(a.id, a);
+      }
+    }
+    return Array.from(byId.values()).sort((a, b) => {
+      const ta = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+      const tb = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+      return tb - ta;
+    });
+  }, [task, assets, drawerFetchedAssets]);
+
+  /**
+   * release201/09 §9.4a.4 — Promote a task-bound asset to workspace-file
+   * scope. Single PATCH /api/im/assets/:id that flips boundKind +
+   * sourceTaskId + folderPath in one call; on success we trigger a
+   * refresh through the existing onTaskChanged path so the Artifacts list
+   * re-renders without the promoted row.
+   */
+  const handlePromoteAsset = useCallback(
+    async (assetId: string) => {
+      const token = getWorkspaceToken();
+      if (!token) {
+        notify?.('Not authenticated.', 'error');
+        return;
+      }
+      try {
+        const res = await fetch(`/api/im/assets/${encodeURIComponent(assetId)}`, {
+          method: 'PATCH',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            boundKind: 'workspace-file',
+            sourceTaskId: null,
+            folderPath: null,
+          }),
+        });
+        if (!res.ok) {
+          const text = await res.text().catch(() => '');
+          notify?.(`Promote failed: ${res.status} ${text.slice(0, 120)}`, 'error');
+          return;
+        }
+        notify?.('Promoted to workspace file. Now visible in Library Root.', 'success');
+        // Trigger the drawer's existing refresh path so Artifacts list
+        // refetches and the promoted row drops.
+        onChanged?.();
+      } catch (err) {
+        notify?.(`Promote failed: ${err instanceof Error ? err.message : String(err)}`, 'error');
+      }
+    },
+    [notify, onChanged],
+  );
+
+  // Wave-8 W1 / L4: attached assets — extracted from any
+  // `prismer://workspace/<wsId>/asset/<hash>` URIs in the description text
+  // and cross-referenced against the workspace asset list for display
+  // metadata (filename + mime + size). Distinct from `taskAssets` above
+  // (those are products of the task; these are inputs the human attached).
+  //
+  // We deliberately do this against the displayTask body — the same text
+  // we render in the description preview — so the chip row stays in lock
+  // step with what the user can see. When the editor is open the chips
+  // still reflect the LAST SAVED body; the X-button in chips writes-through
+  // to the description, which then re-runs through `displayTask`.
+  const attachedAssets = useMemo(() => {
+    if (!displayTask || !assets) return [];
+    const wsId = displayTask.workspaceId;
+    if (!wsId) return [];
+    const sourceText = displayTask.description ?? taskBody ?? '';
+    const extracted = extractAssetUris(sourceText);
+    if (extracted.length === 0) return [];
+    return resolveAssetUris(extracted, assets, wsId);
+  }, [displayTask, assets, taskBody]);
+
+  // Wave-8 W1 / L4: detach an asset from the description by stripping its
+  // URI and writing the new description back through the existing PATCH
+  // flow. Triggers the same `assetRefs[]` re-validation as a manual save
+  // because the URI is gone, so the resulting refs list shrinks by one.
+  const handleDetachAsset = useCallback(
+    async (contentHash: string) => {
+      if (!task || !displayTask) return;
+      const currentBody = displayTask.description ?? taskBody ?? '';
+      const nextBody = removeAssetUri(currentBody, contentHash);
+      if (nextBody === currentBody) return;
+      const wireValue: string | null = nextBody.trim() === '' ? null : nextBody;
+      setOptimisticOverlay((prev) => ({ ...prev, description: wireValue }));
+      // Always send `assetRefs` (even empty) — when the user removed the
+      // last attachment, the server needs the explicit `[]` to clear
+      // `linkedAssetIds`. Conditional spread would silently keep the old
+      // refs and the daemon dispatch would re-attach the dropped asset.
+      const refs = displayTask.workspaceId
+        ? buildAssetRefsFromDescription(wireValue, assets, displayTask.workspaceId)
+        : [];
+      const res = await updateTask(task.id, {
+        description: wireValue,
+        assetRefs: refs,
+      });
+      if (!res.ok) {
+        setOptimisticOverlay((prev) => {
+          const { description: _drop, ...rest } = prev;
+          void _drop;
+          return rest;
+        });
+        notify?.(`Couldn't detach asset: ${res.message}`, 'error');
+        return;
+      }
+      notify?.('Attachment removed.', 'success');
+      onChanged?.();
+    },
+    [task, displayTask, assets, taskBody, notify, onChanged],
+  );
 
   // ─────────────────────────────────────────────────────────────────
   // Render
@@ -653,12 +1097,65 @@ export function TaskDetailDrawer({
                   <ClipboardCopy className="w-3 h-3 opacity-60" />
                 </button>
 
-                {/* Title */}
-                <h2
-                  className={`mt-3 pr-10 text-xl font-bold leading-tight ${isDark ? 'text-zinc-50' : 'text-zinc-900'}`}
-                >
-                  {displayTask.title || 'Untitled task'}
-                </h2>
+                {/* Title — F1 inline editable. Click to enter edit mode,
+                    Enter / blur saves, Escape cancels. Hidden when the
+                    viewer doesn't have edit permission. */}
+                {titleEdit.editing ? (
+                  <input
+                    type="text"
+                    autoFocus
+                    value={titleEdit.value}
+                    disabled={titleEdit.saving}
+                    onChange={(event) => setTitleEdit((prev) => ({ ...prev, value: event.target.value }))}
+                    onBlur={() => {
+                      if (titleEdit.saving) return;
+                      void handleSaveTitle();
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') {
+                        event.preventDefault();
+                        void handleSaveTitle();
+                      } else if (event.key === 'Escape') {
+                        event.preventDefault();
+                        handleCancelTitle();
+                      }
+                    }}
+                    data-testid="task-drawer-title-input"
+                    className={`mt-3 w-full pr-10 text-xl font-bold leading-tight outline-none border px-2.5 py-1 ${radius.small} ${surface.inset[theme]} ${
+                      isDark ? 'text-zinc-50 focus:border-violet-400/60' : 'text-zinc-900 focus:border-violet-500'
+                    } disabled:opacity-60`}
+                  />
+                ) : canEditContent ? (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setTitleEdit({
+                        editing: true,
+                        value: displayTask.title || '',
+                        saving: false,
+                      })
+                    }
+                    data-testid="task-drawer-title"
+                    title="Click to edit title"
+                    className={`group mt-3 pr-10 w-full text-left text-xl font-bold leading-tight transition-colors rounded ${
+                      isDark ? 'text-zinc-50 hover:bg-white/[0.04]' : 'text-zinc-900 hover:bg-zinc-100/70'
+                    }`}
+                  >
+                    {displayTask.title || 'Untitled task'}
+                    <Pencil
+                      className={`inline-block ml-2 w-3.5 h-3.5 align-middle opacity-0 group-hover:opacity-100 transition-opacity ${
+                        isDark ? 'text-zinc-500' : 'text-zinc-400'
+                      }`}
+                    />
+                  </button>
+                ) : (
+                  <h2
+                    data-testid="task-drawer-title"
+                    className={`mt-3 pr-10 text-xl font-bold leading-tight ${isDark ? 'text-zinc-50' : 'text-zinc-900'}`}
+                  >
+                    {displayTask.title || 'Untitled task'}
+                  </h2>
+                )}
 
                 {/* Chips row */}
                 <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -670,12 +1167,72 @@ export function TaskDetailDrawer({
                       {displayTask.status}
                     </span>
                   ) : null}
-                  <span
-                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 ${radius.chip} text-[11px] ${priorityAccent[priority].chipBg}`}
-                  >
-                    <span className={`inline-block w-1.5 h-1.5 ${radius.chip} ${priorityAccent[priority].dot}`} />
-                    {priorityAccent[priority].label}
-                  </span>
+                  {/* F3 — priority chip → picker. Hidden affordance when
+                      the viewer can't manage; renders as a static chip then. */}
+                  {canEditContent ? (
+                    <div ref={priorityWrapperRef} className="relative inline-flex">
+                      <button
+                        type="button"
+                        onClick={() => setPriorityEdit((prev) => ({ open: !prev.open, saving: prev.saving }))}
+                        disabled={priorityEdit.saving}
+                        aria-haspopup="menu"
+                        aria-expanded={priorityEdit.open}
+                        data-testid="task-drawer-priority-chip"
+                        className={`inline-flex items-center gap-1.5 px-2.5 py-1 ${radius.chip} text-[11px] transition-colors ${priorityAccent[priority].chipBg} hover:brightness-110 disabled:opacity-60`}
+                      >
+                        <span className={`inline-block w-1.5 h-1.5 ${radius.chip} ${priorityAccent[priority].dot}`} />
+                        {priorityAccent[priority].label}
+                        {priorityEdit.saving ? (
+                          <Loader2 className="w-3 h-3 animate-spin" />
+                        ) : (
+                          <ChevronDown
+                            className={`w-3 h-3 transition-transform ${priorityEdit.open ? 'rotate-180' : ''}`}
+                          />
+                        )}
+                      </button>
+                      {priorityEdit.open ? (
+                        <div
+                          role="menu"
+                          data-testid="task-drawer-priority-menu"
+                          className={`absolute left-0 top-full z-30 mt-1.5 w-36 overflow-hidden rounded-xl border p-1 shadow-2xl ${
+                            isDark
+                              ? 'border-white/[0.08] bg-zinc-950 text-zinc-100'
+                              : 'border-zinc-200 bg-white text-zinc-900'
+                          }`}
+                        >
+                          {PRIORITY_OPTIONS.map((option) => {
+                            const active = option === priority;
+                            const accent = priorityAccent[option];
+                            return (
+                              <button
+                                key={option}
+                                type="button"
+                                role="menuitem"
+                                onClick={() => void handlePickPriority(option)}
+                                data-testid={`task-drawer-priority-option-${option}`}
+                                className={`flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-left text-[12px] transition-colors ${
+                                  isDark ? 'hover:bg-white/[0.05]' : 'hover:bg-zinc-100'
+                                } ${active ? 'font-semibold' : ''}`}
+                              >
+                                <span className="inline-flex items-center gap-2">
+                                  <span className={`inline-block w-1.5 h-1.5 ${radius.chip} ${accent.dot}`} />
+                                  {accent.label}
+                                </span>
+                                {active ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : null}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : (
+                    <span
+                      className={`inline-flex items-center gap-1.5 px-2.5 py-1 ${radius.chip} text-[11px] ${priorityAccent[priority].chipBg}`}
+                    >
+                      <span className={`inline-block w-1.5 h-1.5 ${radius.chip} ${priorityAccent[priority].dot}`} />
+                      {priorityAccent[priority].label}
+                    </span>
+                  )}
                   {typeof displayTask.budget === 'number' && displayTask.budget > 0 ? (
                     <span
                       className={`inline-flex items-center gap-1 px-2.5 py-1 ${radius.chip} text-[11px] ${
@@ -716,6 +1273,50 @@ export function TaskDetailDrawer({
                       </span>
                     )
                   ) : null}
+                  {/* Wave-8 W1 / L4: attached-asset chips. Source of truth
+                      is `prismer://workspace/<ws>/asset/<hash>` URIs in the
+                      description text — `attachedAssets` is the dedup'd +
+                      resolved list. Hidden when no URIs resolve. Clicking
+                      a chip opens the asset viewer (same callback the
+                      Artifacts section uses). X removes the URI from the
+                      description (only when the viewer can edit; otherwise
+                      the chip is read-only). */}
+                  {attachedAssets.map(({ asset, contentHash }) => (
+                    <span
+                      key={asset.id}
+                      className={`group/asset inline-flex items-center gap-1 px-2.5 py-1 ${radius.chip} text-[11px] transition-colors ${
+                        isDark
+                          ? 'bg-emerald-500/10 text-emerald-200 hover:bg-emerald-500/15'
+                          : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                      }`}
+                      data-testid={`task-drawer-asset-chip-${asset.id}`}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => onOpenAsset?.(asset.id)}
+                        disabled={!onOpenAsset}
+                        title={asset.filename ?? asset.id}
+                        className="inline-flex items-center gap-1 max-w-[200px]"
+                      >
+                        <Paperclip className="w-3 h-3 shrink-0" />
+                        <span className="truncate">{asset.filename ?? `${contentHash.slice(0, 8)}…`}</span>
+                      </button>
+                      {canEditContent ? (
+                        <button
+                          type="button"
+                          onClick={() => void handleDetachAsset(contentHash)}
+                          title="Remove this attachment"
+                          aria-label="Remove attachment"
+                          data-testid={`task-drawer-asset-chip-remove-${asset.id}`}
+                          className={`inline-flex items-center justify-center w-3.5 h-3.5 rounded-full transition-opacity opacity-60 hover:opacity-100 ${
+                            isDark ? 'hover:bg-white/10' : 'hover:bg-zinc-200/60'
+                          }`}
+                        >
+                          <X className="w-2.5 h-2.5" />
+                        </button>
+                      ) : null}
+                    </span>
+                  ))}
                 </div>
 
                 {/* Assignee row — click to reassign (W2-T1). */}
@@ -729,7 +1330,13 @@ export function TaskDetailDrawer({
                       isDark ? 'hover:bg-white/[0.04]' : 'hover:bg-zinc-100/70'
                     } disabled:opacity-60`}
                   >
-                    <AssigneeAvatar task={displayTask} kind={agentKind} />
+                    <AssigneeAvatar
+                      task={displayTask}
+                      kind={agentKind}
+                      assigneeAgent={assigneeAgent}
+                      status={displayTask.assigneeId ? (agentStatuses?.get(displayTask.assigneeId) ?? null) : null}
+                      isDark={isDark}
+                    />
                     <div className="flex-1 min-w-0">
                       <p
                         className={`text-[11px] uppercase tracking-wide ${isDark ? 'text-zinc-500' : 'text-zinc-500'}`}
@@ -785,15 +1392,111 @@ export function TaskDetailDrawer({
 
             {/* Body — scrollable */}
             <div className="flex-1 overflow-y-auto px-6 py-5 space-y-6">
-              {/* Description — markdown rendered (headings / lists / code / links). */}
-              {taskBody ? (
-                <Section title="Description" isDark={isDark}>
-                  <div
-                    data-testid="task-detail-description"
-                    className={`border ${radius.card} px-4 py-3 ${surface.inset[theme]}`}
-                  >
-                    <MemoryTextPreview content={taskBody} isDark={isDark} />
-                  </div>
+              {/* Description — F2 inline editable. Section is rendered when
+                  the task has a body OR the viewer can edit (so empty tasks
+                  still expose an "Add description" affordance). The edit-mode
+                  swap replaces MemoryTextPreview with a textarea + save/cancel
+                  buttons; Cmd/Ctrl+Enter saves, Escape cancels, blur is NOT
+                  auto-save (long-form input). */}
+              {taskBody || canEditContent ? (
+                <Section
+                  title="Description"
+                  isDark={isDark}
+                  badge={
+                    canEditContent && !descEdit.editing ? (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setDescEdit({
+                            editing: true,
+                            value: displayTask.description ?? taskBody ?? '',
+                            saving: false,
+                          })
+                        }
+                        title={taskBody ? 'Edit description' : 'Add description'}
+                        data-testid="task-drawer-description-edit"
+                        className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-medium transition-colors ${
+                          isDark
+                            ? 'text-zinc-400 hover:bg-white/[0.05] hover:text-zinc-200'
+                            : 'text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800'
+                        }`}
+                      >
+                        <Pencil className="w-3 h-3" />
+                        {taskBody ? 'Edit' : 'Add'}
+                      </button>
+                    ) : null
+                  }
+                >
+                  {descEdit.editing ? (
+                    <div className="space-y-2">
+                      {/* Wave-8 W1 / L2: TaskDescriptionEditor adds the
+                          `#filename` asset picker to the F2 textarea while
+                          keeping the existing Cmd/Ctrl+Enter save + Esc
+                          cancel keyboard contract intact. The picker is
+                          anchored above the textarea (absolute positioning
+                          from AssetPicker), so we don't need to wrap in any
+                          additional positioning context. */}
+                      <TaskDescriptionEditor
+                        isDark={isDark}
+                        autoFocus
+                        value={descEdit.value}
+                        disabled={descEdit.saving}
+                        rows={6}
+                        workspaceId={displayTask.workspaceId ?? null}
+                        onChange={(next) => setDescEdit((prev) => ({ ...prev, value: next }))}
+                        onSubmit={() => void handleSaveDescription()}
+                        onCancel={handleCancelDescription}
+                        placeholder="Add a description… (Cmd/Ctrl+Enter to save, Esc to cancel)"
+                        data-testid="task-drawer-description-input"
+                        className={`w-full resize-y border ${radius.card} px-4 py-3 text-[13px] leading-relaxed outline-none transition-colors ${surface.inset[theme]} ${
+                          isDark
+                            ? 'text-zinc-100 placeholder:text-zinc-600 focus:border-violet-400/60'
+                            : 'text-zinc-900 placeholder:text-zinc-400 focus:border-violet-500'
+                        } disabled:opacity-60`}
+                      />
+                      <div className="flex items-center justify-end gap-2">
+                        <button
+                          type="button"
+                          onClick={handleCancelDescription}
+                          disabled={descEdit.saving}
+                          data-testid="task-drawer-description-cancel"
+                          className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${
+                            isDark ? 'text-zinc-300 hover:bg-white/[0.05]' : 'text-zinc-600 hover:bg-zinc-100'
+                          } disabled:opacity-50`}
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void handleSaveDescription()}
+                          disabled={descEdit.saving}
+                          data-testid="task-drawer-description-save"
+                          className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-60 transition-colors ${
+                            isDark ? 'bg-violet-500 hover:bg-violet-400' : 'bg-violet-600 hover:bg-violet-700'
+                          }`}
+                        >
+                          {descEdit.saving ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
+                          Save
+                        </button>
+                      </div>
+                    </div>
+                  ) : taskBody ? (
+                    <div
+                      data-testid="task-detail-description"
+                      className={`border ${radius.card} px-4 py-3 ${surface.inset[theme]}`}
+                    >
+                      <MemoryTextPreview content={taskBody} isDark={isDark} />
+                    </div>
+                  ) : (
+                    <div
+                      data-testid="task-detail-description-empty"
+                      className={`border ${radius.card} px-4 py-3 text-[12px] italic ${surface.inset[theme]} ${
+                        isDark ? 'text-zinc-500' : 'text-zinc-500'
+                      }`}
+                    >
+                      No description yet — click Add to write one.
+                    </div>
+                  )}
                 </Section>
               ) : null}
 
@@ -813,6 +1516,28 @@ export function TaskDetailDrawer({
                   <span>{detailError ? `Detail load failed: ${detailError}` : 'Loading task activity…'}</span>
                 </div>
               ) : null}
+
+              {/* release201/10 rev 2 §8.2 — SPEC.md + TODO.md + Acceptance criteria. */}
+              <SpecSection
+                taskId={displayTask.id}
+                isDark={isDark}
+                isOwner={displayTask.creatorId === currentUserId}
+                notify={notify}
+              />
+              <TodoSection
+                taskId={displayTask.id}
+                isDark={isDark}
+                isAssignee={displayTask.assigneeId === currentUserId}
+                notify={notify}
+              />
+              <AcceptanceSection
+                taskId={displayTask.id}
+                workspaceId={displayTask.workspaceId ?? null}
+                assets={assets ?? []}
+                isDark={isDark}
+                notify={notify}
+                onChanged={onChanged}
+              />
 
               {/* Timeline */}
               <Section title="Timeline" isDark={isDark}>
@@ -858,8 +1583,16 @@ export function TaskDetailDrawer({
                 </Section>
               ) : null}
 
-              {/* Result viewer */}
-              {displayTask.status === 'completed' || isShellTask(displayTask) || displayTask.error ? (
+              {/* Result viewer. 2026-05-20 — also show in `review` /
+                  `failed` states: the assignee has submitted output (review)
+                  or the run produced partial output before failing. Previously
+                  hidden in `review` → user couldn't see the agent's deliverable
+                  until they approved → "task done but output not in detail". */}
+              {displayTask.status === 'completed' ||
+              displayTask.status === 'review' ||
+              displayTask.status === 'failed' ||
+              isShellTask(displayTask) ||
+              displayTask.error ? (
                 <Section title="Result" isDark={isDark}>
                   <ResultBlock task={displayTask} isDark={isDark} />
                 </Section>
@@ -905,31 +1638,20 @@ export function TaskDetailDrawer({
                     </div>
                   }
                 >
-                  <ul
-                    className={`flex flex-col gap-1.5 border ${radius.card} px-2 py-2 ${surface.inset[theme]}`}
-                    data-testid="task-drawer-artifacts"
-                  >
+                  <ul className="grid gap-2" data-testid="task-drawer-artifacts">
                     {taskAssets.map((asset) => (
                       <li key={asset.id}>
-                        <button
-                          type="button"
-                          onClick={() => onOpenAsset?.(asset.id)}
-                          disabled={!onOpenAsset}
-                          data-testid={`task-drawer-artifact-${asset.id}`}
-                          className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-lg transition-colors text-left ${
-                            isDark ? 'hover:bg-white/[0.04]' : 'hover:bg-zinc-100'
-                          } disabled:cursor-default`}
-                        >
-                          <FileText className={`w-3.5 h-3.5 shrink-0 ${isDark ? 'text-zinc-400' : 'text-zinc-500'}`} />
-                          <span className={`text-[12px] truncate flex-1 ${isDark ? 'text-zinc-200' : 'text-zinc-800'}`}>
-                            {readAssetTitle(asset)}
-                          </span>
-                          {asset.sizeBytes ? (
-                            <span className={`text-[10px] font-mono ${isDark ? 'text-zinc-500' : 'text-zinc-500'}`}>
-                              {formatBytes(asset.sizeBytes)}
-                            </span>
-                          ) : null}
-                        </button>
+                        <WorkProductCard
+                          asset={asset}
+                          isDark={isDark}
+                          compact
+                          onOpen={onOpenAsset}
+                          // release201/09 §9.4a.4 — only viewers with task
+                          // edit permission can promote; mirror the
+                          // description-edit gate (`canEditContent`).
+                          onPromote={canEditContent ? handlePromoteAsset : undefined}
+                          showBoundKindChip
+                        />
                       </li>
                     ))}
                   </ul>
@@ -1007,11 +1729,32 @@ function LiveBadge({ isDark }: { isDark: boolean }): ReactElement {
   );
 }
 
-function AssigneeAvatar({ task, kind }: { task: TaskDTO; kind: AgentKind | null }): ReactElement {
+function AssigneeAvatar({
+  task,
+  kind,
+  assigneeAgent,
+  status,
+  isDark,
+}: {
+  task: TaskDTO;
+  kind: AgentKind | null;
+  assigneeAgent: AgentDTO | null;
+  status: AgentLiveStatus | null;
+  isDark: boolean;
+}): ReactElement {
   const seed = task.assigneeId ?? task.creatorId ?? task.id;
   const grad = avatarGradient(seed);
   const initials = avatarInitials(task.assigneeName ?? task.assigneeId?.slice(-2) ?? '?');
   const ring = kind ? AGENT_KIND_PRESETS[kind].accentRing : 'ring-zinc-400/20';
+
+  // Agent assignee — promote to AgentAvatar so we get the role icon + status
+  // ring + hover popover for free. The legacy AGENT_KIND_PRESETS accent ring
+  // is dropped in favor of the live-status ring (working/waiting/stuck) so
+  // the drawer's avatar matches the kanban card / contacts row.
+  if (assigneeAgent) {
+    return <AgentAvatar agent={assigneeAgent} status={status} size="md" isDark={isDark} />;
+  }
+
   return (
     <div
       className={`relative w-10 h-10 rounded-2xl flex items-center justify-center text-xs font-semibold text-white ring-2 ${ring}`}
@@ -1019,9 +1762,7 @@ function AssigneeAvatar({ task, kind }: { task: TaskDTO; kind: AgentKind | null 
         background: `linear-gradient(135deg, ${grad.from}, ${grad.to})`,
       }}
     >
-      {kind === 'cli' ? (
-        <Bot className="w-4 h-4" />
-      ) : kind === 'long-running' ? (
+      {kind === 'long-running' ? (
         <UserIcon className="w-4 h-4" />
       ) : task.assigneeId ? (
         <span>{initials}</span>
@@ -1075,6 +1816,52 @@ function logToTimelineEntry(log: TaskLogDTO, task: TaskDTO, ts: number): Timelin
   };
 }
 
+function runEventToTimelineEntry(event: TaskRunEventDTO, ts: number): TimelineEntry {
+  const payload = event.payload ?? {};
+  const payloadEvent = typeof payload.event === 'string' ? payload.event : null;
+  const payloadKind = typeof payload.kind === 'string' ? payload.kind : null;
+  const tool =
+    typeof payload.tool === 'string'
+      ? payload.tool
+      : typeof payload.name === 'string'
+        ? payload.name
+        : payloadKind === 'tool' && payloadEvent
+          ? payloadEvent
+          : null;
+  const summary =
+    typeof payload.summary === 'string'
+      ? payload.summary
+      : typeof payload.preview === 'string'
+        ? payload.preview
+        : typeof payload.text === 'string'
+          ? payload.text
+          : null;
+  const kind: TimelineEntry['kind'] = (() => {
+    if (event.type.includes('completed')) return 'completed';
+    if (event.type.includes('failed') || event.level === 'error') return 'failed';
+    if (event.type.includes('dispatched') || event.type.includes('assigned')) return 'assigned';
+    return 'progress';
+  })();
+  const label = (() => {
+    if (kind === 'assigned') return 'Agent run dispatched';
+    if (kind === 'completed') return 'Agent run completed';
+    if (kind === 'failed') return 'Agent run failed';
+    if (payloadKind === 'reasoning' || payloadEvent === 'reasoning.available') return 'Reasoning';
+    if (tool) return `Tool · ${tool}`;
+    return humanizeAction(event.type);
+  })();
+
+  return {
+    key: `run-event-${event.id}`,
+    kind,
+    label,
+    ts,
+    message: summary ?? event.message,
+    actorId: event.actorId,
+    metadata: payload,
+  };
+}
+
 function dedupeTimeline(entries: TimelineEntry[]): TimelineEntry[] {
   const seen = new Set<string>();
   const out: TimelineEntry[] = [];
@@ -1123,18 +1910,187 @@ function TimelineRow({ entry, isDark }: { entry: TimelineEntry; isDark: boolean 
           {formatRelative(entry.ts)}
         </time>
       </div>
-      {entry.message ? (
-        <p className={`mt-0.5 text-[12px] leading-snug ${isDark ? 'text-zinc-400' : 'text-zinc-600'}`}>
-          {entry.message}
-        </p>
-      ) : null}
+      {entry.message ? <TimelineMessage content={entry.message} isDark={isDark} /> : null}
       {entry.actorId ? (
         <p className={`mt-1 font-mono text-[10px] ${isDark ? 'text-zinc-600' : 'text-zinc-400'}`}>
           actor {entry.actorId.slice(-10)}
         </p>
       ) : null}
+      {entry.metadata ? <TimelineMetadata metadata={entry.metadata} isDark={isDark} /> : null}
     </li>
   );
+}
+
+function TimelineMessage({ content, isDark }: { content: string; isDark: boolean }): ReactElement {
+  return (
+    <div
+      className={`mt-1 max-w-full break-words text-[12px] leading-relaxed ${
+        isDark ? 'text-zinc-400' : 'text-zinc-600'
+      } [&_*]:max-w-full [&_p]:m-0 [&_p+p]:mt-1.5 [&_ul]:my-1 [&_ul]:list-disc [&_ul]:pl-4 [&_ol]:my-1 [&_ol]:list-decimal [&_ol]:pl-4 [&_li]:my-0.5 [&_code]:rounded [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[11px] [&_pre]:my-2 [&_pre]:max-h-48 [&_pre]:overflow-auto [&_pre]:rounded-lg [&_pre]:border [&_pre]:p-2 [&_pre_code]:bg-transparent [&_pre_code]:p-0 ${
+        isDark
+          ? '[&_code]:bg-white/[0.06] [&_pre]:border-white/[0.08] [&_pre]:bg-black/20'
+          : '[&_code]:bg-zinc-100 [&_pre]:border-zinc-200 [&_pre]:bg-white/70'
+      }`}
+    >
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          pre({ children }) {
+            return <>{children}</>;
+          },
+          code({ className, children, ...props }: { className?: string; children?: ReactNode }) {
+            const language = typeof className === 'string' ? className.replace(/^language-/, '') : '';
+            const value = String(children ?? '').replace(/\n$/, '');
+            if (language) {
+              return <TimelineCodeBlock code={value} language={language} isDark={isDark} />;
+            }
+            return (
+              <code
+                className={`rounded px-1 py-0.5 font-mono text-[11px] ${
+                  isDark ? 'bg-white/[0.06] text-zinc-200' : 'bg-zinc-100 text-zinc-700'
+                }`}
+                {...props}
+              >
+                {children}
+              </code>
+            );
+          },
+        }}
+      >
+        {content}
+      </ReactMarkdown>
+    </div>
+  );
+}
+
+function TimelineCodeBlock({
+  code,
+  language,
+  isDark,
+}: {
+  code: string;
+  language: string;
+  isDark: boolean;
+}): ReactElement {
+  const height = Math.min(360, Math.max(96, code.split('\n').length * 20 + 24));
+  return (
+    <div
+      className={`my-2 overflow-hidden rounded-lg border ${
+        isDark ? 'border-white/[0.08] bg-[#0d1117]' : 'border-zinc-200 bg-white'
+      }`}
+    >
+      <div
+        className={`flex items-center justify-between border-b px-3 py-1.5 text-[10px] font-medium ${
+          isDark ? 'border-white/[0.08] text-zinc-400' : 'border-zinc-200 text-zinc-500'
+        }`}
+      >
+        <span>{language}</span>
+      </div>
+      <Editor
+        height={height}
+        language={language}
+        value={code}
+        theme={isDark ? 'vs-dark' : 'light'}
+        options={{
+          readOnly: true,
+          minimap: { enabled: false },
+          scrollBeyondLastLine: false,
+          wordWrap: 'on',
+          lineNumbers: 'on',
+          folding: false,
+          glyphMargin: false,
+          lineDecorationsWidth: 8,
+          lineNumbersMinChars: 3,
+          renderLineHighlight: 'none',
+          fontSize: 12,
+          fontFamily:
+            'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
+          automaticLayout: true,
+          overviewRulerLanes: 0,
+          hideCursorInOverviewRuler: true,
+          scrollbar: { verticalScrollbarSize: 8, horizontalScrollbarSize: 8 },
+        }}
+      />
+    </div>
+  );
+}
+
+function TimelineMetadata({
+  metadata,
+  isDark,
+}: {
+  metadata: Record<string, unknown>;
+  isDark: boolean;
+}): ReactElement | null {
+  const details = buildTimelineDetails(metadata);
+  if (details.chips.length === 0 && !details.raw) return null;
+  return (
+    <div className="mt-2 space-y-1.5">
+      {details.chips.length ? (
+        <div className="flex flex-wrap gap-1.5">
+          {details.chips.map((chip) => (
+            <span
+              key={`${chip.label}:${chip.value}`}
+              className={`inline-flex max-w-full items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10px] ${
+                isDark
+                  ? 'border-white/[0.08] bg-white/[0.04] text-zinc-300'
+                  : 'border-zinc-200 bg-white/70 text-zinc-600'
+              }`}
+            >
+              <span className={isDark ? 'text-zinc-500' : 'text-zinc-400'}>{chip.label}</span>
+              <span className="truncate font-mono">{chip.value}</span>
+            </span>
+          ))}
+        </div>
+      ) : null}
+      {details.raw ? (
+        <details className={`text-[10px] ${isDark ? 'text-zinc-500' : 'text-zinc-500'}`}>
+          <summary className="cursor-pointer select-none">payload</summary>
+          <pre
+            className={`mt-1 max-h-36 overflow-auto rounded-lg border px-3 py-2 leading-relaxed ${
+              isDark ? 'border-white/[0.08] bg-black/20 text-zinc-300' : 'border-zinc-200/80 bg-white/70 text-zinc-700'
+            }`}
+          >
+            {details.raw}
+          </pre>
+        </details>
+      ) : null}
+    </div>
+  );
+}
+
+function buildTimelineDetails(metadata: Record<string, unknown>): {
+  chips: Array<{ label: string; value: string }>;
+  raw: string | null;
+} {
+  const chips: Array<{ label: string; value: string }> = [];
+  const push = (label: string, value: unknown) => {
+    if (value === undefined || value === null || value === '') return;
+    const text =
+      typeof value === 'string'
+        ? value
+        : typeof value === 'number' || typeof value === 'boolean'
+          ? String(value)
+          : null;
+    if (text) chips.push({ label, value: text.length > 96 ? `${text.slice(0, 96)}...` : text });
+  };
+  push('kind', metadata.kind);
+  push('event', metadata.event);
+  push('tool', metadata.tool);
+  push('progress', typeof metadata.progress === 'number' ? `${Math.round(metadata.progress * 100)}%` : undefined);
+  push('duration', typeof metadata.duration === 'number' ? `${metadata.duration}s` : undefined);
+  push('error', metadata.error);
+  if (Array.isArray(metadata.assetIds) && metadata.assetIds.length) {
+    push('assets', metadata.assetIds.join(', '));
+  }
+
+  const rawSource: Record<string, unknown> = {};
+  for (const key of ['arguments', 'result']) {
+    if (metadata[key] !== undefined) rawSource[key] = metadata[key];
+  }
+  const text = Object.keys(rawSource).length ? safeStringify(rawSource) : null;
+  if (!text || text === '{}') return { chips, raw: null };
+  return { chips, raw: text.length > 1200 ? `${text.slice(0, 1200)}\n...` : text };
 }
 
 function ResultBlock({ task, isDark }: { task: TaskDTO; isDark: boolean }): ReactElement {
@@ -1190,7 +2146,10 @@ function isShellTask(task: TaskDTO): boolean {
   return (
     task.capability === 'shell' ||
     Boolean(
-      execution && typeof execution === 'object' && !Array.isArray(execution) && (execution as any).kind === 'shell',
+      execution &&
+      typeof execution === 'object' &&
+      !Array.isArray(execution) &&
+      (execution as Record<string, unknown>).kind === 'shell',
     )
   );
 }
@@ -1501,6 +2460,7 @@ function AssigneePicker({
           ) : null}
           {agents.map((agent) => {
             const isCurrent = agent.userId === currentAssigneeId;
+            const RoleIcon = getAgentRoleIcon(agent.agentType ?? null);
             return (
               <li key={agent.userId}>
                 <button
@@ -1512,7 +2472,7 @@ function AssigneePicker({
                     isDark ? 'text-zinc-200 hover:bg-white/[0.04]' : 'text-zinc-800 hover:bg-zinc-100'
                   } ${isCurrent ? 'font-semibold' : ''} disabled:opacity-50`}
                 >
-                  <Bot className="w-3.5 h-3.5 shrink-0 opacity-80" />
+                  <RoleIcon className="w-3.5 h-3.5 shrink-0 opacity-80" />
                   <span className="flex-1 truncate">{agent.name}</span>
                   {isCurrent ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : null}
                 </button>
@@ -1523,25 +2483,6 @@ function AssigneePicker({
       </div>
     </>
   );
-}
-
-function readAssetTitle(asset: AssetDTO): string {
-  const meta = asset.metadata ?? {};
-  const t = (meta as Record<string, unknown>).title;
-  if (typeof t === 'string' && t.trim()) return t;
-  return asset.id.slice(-12);
-}
-
-function formatBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return '';
-  const units = ['B', 'KB', 'MB', 'GB'];
-  let n = bytes;
-  let i = 0;
-  while (n >= 1024 && i < units.length - 1) {
-    n /= 1024;
-    i++;
-  }
-  return `${n < 10 && i > 0 ? n.toFixed(1) : Math.round(n)} ${units[i]}`;
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -1581,4 +2522,650 @@ function safeStringify(value: unknown): string {
   } catch {
     return String(value);
   }
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// release201/10 rev 2 §8.2 — AcceptanceSection + SpecSection + TodoSection
+// ═════════════════════════════════════════════════════════════════════
+
+interface AcceptanceCriterionView {
+  id: string;
+  verifyMode: 'qualitative' | 'quantitative' | 'agent-self-check' | 'manual';
+  expectation: string;
+  verifierAgentId: string | null;
+  status: 'pending' | 'passed' | 'failed' | 'n/a' | 'waived';
+  required?: boolean;
+  verifiedAt?: string | null;
+  verifiedBy?: string | null;
+  verifyOutcomeNote?: string | null;
+  evidenceRefs?: Array<string | { ref: string; crossTaskConfirmed?: boolean; note?: string }>;
+}
+
+interface AcceptanceView {
+  overall: 'none' | 'pending' | 'partial' | 'passed' | 'failed';
+  criteria: AcceptanceCriterionView[];
+  completedCount: number;
+  totalCount: number;
+  passRate: number;
+}
+
+interface AcceptanceSectionProps {
+  taskId: string;
+  workspaceId: string | null;
+  assets: AssetDTO[];
+  isDark: boolean;
+  notify?: (message: string, type: 'success' | 'error' | 'info') => void;
+  onChanged?: () => void;
+}
+
+function AcceptanceSection({
+  taskId,
+  workspaceId: _ws,
+  assets: _a,
+  isDark,
+  notify,
+  onChanged,
+}: AcceptanceSectionProps): ReactElement {
+  const [view, setView] = useState<AcceptanceView | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const [addDraft, setAddDraft] = useState<CriterionDraft[]>([]);
+
+  const reload = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await imFetch<AcceptanceView>(`/tasks/${encodeURIComponent(taskId)}/acceptance`);
+      if (res.ok) setView(res.data ?? null);
+    } finally {
+      setLoading(false);
+    }
+  }, [taskId]);
+
+  useEffect(() => {
+    void reload();
+  }, [reload]);
+
+  async function verify(cid: string, outcome: 'passed' | 'failed' | 'n/a') {
+    try {
+      const res = await imFetch(`/tasks/${encodeURIComponent(taskId)}/criteria/${encodeURIComponent(cid)}/verify`, {
+        method: 'POST',
+        body: JSON.stringify({ outcome }),
+      });
+      if (!res.ok) {
+        notify?.(`Verify failed: ${res.message ?? 'error'}`, 'error');
+        return;
+      }
+      void reload();
+      onChanged?.();
+    } catch (err) {
+      notify?.(`Verify failed: ${(err as Error).message}`, 'error');
+    }
+  }
+
+  async function commitAdded() {
+    if (addDraft.length === 0) {
+      setAdding(false);
+      return;
+    }
+    for (const c of addDraft) {
+      if (!c.expectation.trim()) continue;
+      try {
+        await imFetch(`/tasks/${encodeURIComponent(taskId)}/criteria`, {
+          method: 'POST',
+          body: JSON.stringify({
+            verifyMode: c.verifyMode,
+            expectation: c.expectation,
+            verifierAgentId: c.verifierAgentId ?? null,
+            required: c.required !== false,
+            weight: c.weight ?? 1,
+          }),
+        });
+      } catch (err) {
+        notify?.(`Add criterion failed: ${(err as Error).message}`, 'error');
+      }
+    }
+    setAddDraft([]);
+    setAdding(false);
+    void reload();
+    onChanged?.();
+  }
+
+  async function removeCriterion(cid: string) {
+    if (!confirm('Remove this criterion?')) return;
+    try {
+      await imFetch(`/tasks/${encodeURIComponent(taskId)}/criteria/${encodeURIComponent(cid)}`, {
+        method: 'DELETE',
+      });
+      void reload();
+    } catch (err) {
+      notify?.(`Remove failed: ${(err as Error).message}`, 'error');
+    }
+  }
+
+  const overallChip = view?.overall ?? 'none';
+  const overallStyle =
+    overallChip === 'passed'
+      ? isDark
+        ? 'bg-emerald-500/15 text-emerald-200'
+        : 'bg-emerald-50 text-emerald-700'
+      : overallChip === 'failed'
+        ? isDark
+          ? 'bg-rose-500/15 text-rose-200'
+          : 'bg-rose-50 text-rose-700'
+        : overallChip === 'partial'
+          ? isDark
+            ? 'bg-amber-500/15 text-amber-200'
+            : 'bg-amber-50 text-amber-700'
+          : isDark
+            ? 'bg-white/5 text-zinc-300'
+            : 'bg-zinc-100 text-zinc-600';
+
+  return (
+    <Section
+      title="Acceptance"
+      isDark={isDark}
+      badge={
+        <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${overallStyle}`}>
+          {overallChip}
+          {view ? ` ${view.completedCount}/${view.totalCount}` : ''}
+        </span>
+      }
+    >
+      <div
+        className={`rounded-2xl border px-3 py-2 ${isDark ? 'border-white/10 bg-white/[0.02]' : 'border-zinc-200 bg-white'}`}
+      >
+        {loading && !view ? (
+          <p className={`flex items-center gap-2 text-xs ${isDark ? 'text-zinc-400' : 'text-zinc-600'}`}>
+            <Loader2 className="h-3 w-3 animate-spin" /> Loading acceptance…
+          </p>
+        ) : !view || view.criteria.length === 0 ? (
+          <p className={`text-xs ${isDark ? 'text-zinc-400' : 'text-zinc-600'}`}>
+            No acceptance criteria. The task can still be reviewed/completed (Soft gate).
+          </p>
+        ) : (
+          <ul className="space-y-1.5">
+            {view.criteria.map((c) => {
+              const icon =
+                c.status === 'passed'
+                  ? '✓'
+                  : c.status === 'failed'
+                    ? '✗'
+                    : c.status === 'n/a' || c.status === 'waived'
+                      ? '·'
+                      : '◯';
+              const colour =
+                c.status === 'passed'
+                  ? isDark
+                    ? 'text-emerald-300'
+                    : 'text-emerald-700'
+                  : c.status === 'failed'
+                    ? isDark
+                      ? 'text-rose-300'
+                      : 'text-rose-700'
+                    : isDark
+                      ? 'text-zinc-400'
+                      : 'text-zinc-500';
+              return (
+                <li key={c.id} className="flex items-start gap-2 text-xs">
+                  <span className={`mt-0.5 ${colour}`} aria-hidden>
+                    {icon}
+                  </span>
+                  <div className="flex-1">
+                    <div className={`${isDark ? 'text-zinc-100' : 'text-zinc-900'}`}>
+                      {c.expectation}
+                      <span
+                        className={`ml-2 inline-flex rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wider ${
+                          isDark ? 'bg-white/10 text-zinc-400' : 'bg-zinc-100 text-zinc-600'
+                        }`}
+                      >
+                        {c.verifyMode}
+                      </span>
+                      {c.verifierAgentId ? (
+                        <span className={`ml-1 text-[10px] ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>
+                          → @{c.verifierAgentId}
+                        </span>
+                      ) : null}
+                      {c.required === false ? (
+                        <span className={`ml-1 text-[10px] italic ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>
+                          optional
+                        </span>
+                      ) : null}
+                    </div>
+                    {c.verifyOutcomeNote ? (
+                      <div className={`mt-0.5 text-[10px] ${isDark ? 'text-zinc-400' : 'text-zinc-500'}`}>
+                        {c.verifyOutcomeNote}
+                        {c.verifiedBy ? ` — by ${c.verifiedBy}` : ''}
+                        {c.verifiedAt ? ` · ${formatRelative(new Date(c.verifiedAt).getTime())}` : ''}
+                      </div>
+                    ) : null}
+                  </div>
+                  <div className="flex shrink-0 gap-1">
+                    <button
+                      className={`rounded px-1.5 py-0.5 text-[10px] ${
+                        isDark
+                          ? 'bg-emerald-500/20 text-emerald-200 hover:bg-emerald-500/30'
+                          : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                      }`}
+                      onClick={() => void verify(c.id, 'passed')}
+                      title="Mark passed"
+                      data-testid={`acceptance-pass-${c.id}`}
+                    >
+                      Pass
+                    </button>
+                    <button
+                      className={`rounded px-1.5 py-0.5 text-[10px] ${
+                        isDark
+                          ? 'bg-rose-500/20 text-rose-200 hover:bg-rose-500/30'
+                          : 'bg-rose-50 text-rose-700 hover:bg-rose-100'
+                      }`}
+                      onClick={() => void verify(c.id, 'failed')}
+                      title="Mark failed"
+                    >
+                      Fail
+                    </button>
+                    <button
+                      className={`rounded px-1.5 py-0.5 text-[10px] ${
+                        isDark
+                          ? 'bg-white/10 text-zinc-300 hover:bg-white/20'
+                          : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200'
+                      }`}
+                      onClick={() => void removeCriterion(c.id)}
+                      title="Remove criterion"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+        <div className="mt-3 flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setAdding((s) => !s)}
+            className={`rounded-md border px-2.5 py-1 text-xs ${
+              isDark
+                ? 'border-white/10 bg-white/[0.03] text-zinc-200 hover:bg-white/[0.06]'
+                : 'border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50'
+            }`}
+            data-testid="acceptance-toggle-add"
+          >
+            {adding ? 'Cancel add' : '+ Add criterion'}
+          </button>
+        </div>
+        {adding ? (
+          <div className="mt-2 space-y-2">
+            <TaskCriteriaEditor isDark={isDark} value={addDraft} onChange={setAddDraft} />
+            <button
+              type="button"
+              onClick={() => void commitAdded()}
+              className={`rounded-md px-3 py-1 text-xs font-semibold ${
+                isDark
+                  ? 'bg-violet-500/30 text-violet-100 hover:bg-violet-500/40'
+                  : 'bg-violet-100 text-violet-800 hover:bg-violet-200'
+              }`}
+              data-testid="acceptance-commit-add"
+            >
+              Save
+            </button>
+          </div>
+        ) : null}
+      </div>
+    </Section>
+  );
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// release201/10 rev 2 §8.2 — SpecSection (SPEC.md viewer + owner editor)
+// ═════════════════════════════════════════════════════════════════════
+
+interface SpecSectionProps {
+  taskId: string;
+  isDark: boolean;
+  isOwner?: boolean;
+  notify?: (message: string, type: 'success' | 'error' | 'info') => void;
+}
+
+function SpecSection({ taskId, isDark, isOwner, notify }: SpecSectionProps): ReactElement {
+  const [markdown, setMarkdown] = useState<string>('');
+  const [revision, setRevision] = useState<number>(0);
+  const [editing, setEditing] = useState<boolean>(false);
+  const [draft, setDraft] = useState<string>('');
+  const [saving, setSaving] = useState<boolean>(false);
+
+  const SPEC_TEMPLATE = '## Goal\n\n\n## Background\n\n\n## Constraints\n\n\n## Out of scope\n\n';
+
+  const load = useCallback(async () => {
+    try {
+      const res = await imFetch<{ markdown: string; revision: number }>(`/tasks/${encodeURIComponent(taskId)}/spec`);
+      if (res.ok && res.data) {
+        setMarkdown(res.data.markdown ?? '');
+        setRevision(res.data.revision ?? 0);
+      }
+    } catch (err) {
+      notify?.(`Load SPEC failed: ${(err as Error).message}`, 'error');
+    }
+  }, [taskId, notify]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function save() {
+    setSaving(true);
+    try {
+      const res = await imFetch(`/tasks/${encodeURIComponent(taskId)}/spec`, {
+        method: 'PUT',
+        body: JSON.stringify({ markdown: draft }),
+      });
+      if (!res.ok) {
+        notify?.(`Save SPEC failed: ${res.message ?? 'error'}`, 'error');
+        return;
+      }
+      setEditing(false);
+      void load();
+    } catch (err) {
+      notify?.(`Save SPEC failed: ${(err as Error).message}`, 'error');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Section
+      title="SPEC.md"
+      isDark={isDark}
+      badge={
+        revision > 0 ? (
+          <span
+            className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${
+              isDark ? 'bg-white/5 text-zinc-300' : 'bg-zinc-100 text-zinc-600'
+            }`}
+          >
+            rev {revision}
+          </span>
+        ) : null
+      }
+    >
+      <div
+        className={`rounded-2xl border px-3 py-2 ${isDark ? 'border-white/10 bg-white/[0.02]' : 'border-zinc-200 bg-white'}`}
+      >
+        {editing ? (
+          <div className="space-y-2">
+            <textarea
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              data-testid="spec-editor-textarea"
+              className={`w-full min-h-[260px] resize-y rounded-md border px-2 py-1.5 font-mono text-xs ${
+                isDark ? 'bg-zinc-900 border-white/10 text-zinc-100' : 'bg-white border-zinc-300 text-zinc-900'
+              }`}
+            />
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => void save()}
+                disabled={saving}
+                data-testid="spec-save"
+                className={`rounded-md px-3 py-1 text-xs font-semibold ${
+                  isDark
+                    ? 'bg-violet-500/30 text-violet-100 hover:bg-violet-500/40'
+                    : 'bg-violet-100 text-violet-800 hover:bg-violet-200'
+                } disabled:opacity-60`}
+              >
+                {saving ? 'Saving…' : 'Save SPEC'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setEditing(false)}
+                className={`rounded-md border px-2.5 py-1 text-xs ${
+                  isDark ? 'border-white/10 text-zinc-300' : 'border-zinc-200 text-zinc-700'
+                }`}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : markdown.trim() ? (
+          <pre className={`whitespace-pre-wrap font-mono text-xs ${isDark ? 'text-zinc-200' : 'text-zinc-800'}`}>
+            {markdown}
+          </pre>
+        ) : (
+          <p className={`text-xs ${isDark ? 'text-zinc-400' : 'text-zinc-600'}`}>
+            No SPEC.md yet.{' '}
+            {isOwner ? 'Author one to anchor what done looks like.' : 'Owner has not written a SPEC yet.'}
+          </p>
+        )}
+        {!editing && isOwner ? (
+          <div className="mt-2">
+            <button
+              type="button"
+              data-testid="spec-edit"
+              onClick={() => {
+                setDraft(markdown || SPEC_TEMPLATE);
+                setEditing(true);
+              }}
+              className={`rounded-md border px-2.5 py-1 text-xs ${
+                isDark
+                  ? 'border-white/10 bg-white/[0.03] text-zinc-200 hover:bg-white/[0.06]'
+                  : 'border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50'
+              }`}
+            >
+              {markdown.trim() ? 'Edit SPEC' : 'Write SPEC'}
+            </button>
+          </div>
+        ) : null}
+      </div>
+    </Section>
+  );
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// release201/10 rev 2 §8.2 — TodoSection (TODO.md interactive checklist)
+// ═════════════════════════════════════════════════════════════════════
+
+interface TodoSectionProps {
+  taskId: string;
+  isDark: boolean;
+  isAssignee?: boolean;
+  notify?: (message: string, type: 'success' | 'error' | 'info') => void;
+}
+
+interface TodoItemView {
+  index: number;
+  depth: number;
+  status: 'pending' | 'done';
+  text: string;
+}
+
+interface TodoView {
+  markdown: string;
+  items: TodoItemView[];
+  doneCount: number;
+  totalCount: number;
+  progressPct: number;
+  revision: number;
+}
+
+function TodoSection({ taskId, isDark, isAssignee, notify }: TodoSectionProps): ReactElement {
+  const [view, setView] = useState<TodoView | null>(null);
+  const [draftText, setDraftText] = useState<string>('');
+  const [busy, setBusy] = useState<boolean>(false);
+
+  const load = useCallback(async () => {
+    try {
+      const res = await imFetch<TodoView>(`/tasks/${encodeURIComponent(taskId)}/todo`);
+      if (res.ok && res.data) setView(res.data);
+    } catch (err) {
+      notify?.(`Load TODO failed: ${(err as Error).message}`, 'error');
+    }
+  }, [taskId, notify]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function add() {
+    if (!draftText.trim()) return;
+    setBusy(true);
+    try {
+      const res = await imFetch(`/tasks/${encodeURIComponent(taskId)}/todo/items`, {
+        method: 'POST',
+        body: JSON.stringify({ text: draftText }),
+      });
+      if (!res.ok) {
+        notify?.(`Add TODO failed: ${res.message ?? 'error'}`, 'error');
+        return;
+      }
+      setDraftText('');
+      void load();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function toggle(idx: number, done: boolean) {
+    setBusy(true);
+    try {
+      const res = await imFetch(`/tasks/${encodeURIComponent(taskId)}/todo/items/${idx}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ done }),
+      });
+      if (!res.ok) {
+        notify?.(`Toggle TODO failed: ${res.message ?? 'error'}`, 'error');
+        return;
+      }
+      void load();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove(idx: number) {
+    setBusy(true);
+    try {
+      const res = await imFetch(`/tasks/${encodeURIComponent(taskId)}/todo/items/${idx}`, {
+        method: 'DELETE',
+      });
+      if (!res.ok) {
+        notify?.(`Remove TODO failed: ${res.message ?? 'error'}`, 'error');
+        return;
+      }
+      void load();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const progressPct = view ? Math.round(view.progressPct * 100) : 0;
+  const progressColour =
+    progressPct >= 80
+      ? isDark
+        ? 'bg-emerald-500/15 text-emerald-200'
+        : 'bg-emerald-50 text-emerald-700'
+      : progressPct >= 50
+        ? isDark
+          ? 'bg-amber-500/15 text-amber-200'
+          : 'bg-amber-50 text-amber-700'
+        : isDark
+          ? 'bg-rose-500/15 text-rose-200'
+          : 'bg-rose-50 text-rose-700';
+
+  return (
+    <Section
+      title="TODO.md"
+      isDark={isDark}
+      badge={
+        view && view.totalCount > 0 ? (
+          <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${progressColour}`}>
+            {view.doneCount}/{view.totalCount} · {progressPct}%
+          </span>
+        ) : null
+      }
+    >
+      <div
+        className={`rounded-2xl border px-3 py-2 ${isDark ? 'border-white/10 bg-white/[0.02]' : 'border-zinc-200 bg-white'}`}
+      >
+        {!view || view.items.length === 0 ? (
+          <p className={`text-xs ${isDark ? 'text-zinc-400' : 'text-zinc-600'}`}>
+            No TODO items yet.{' '}
+            {isAssignee ? 'Decompose the SPEC into 3–15 steps.' : 'Assignee has not authored a plan yet.'}
+          </p>
+        ) : (
+          <ul className="space-y-1">
+            {view.items.map((it) => (
+              <li
+                key={it.index}
+                className="flex items-start gap-2 text-xs"
+                style={{ marginLeft: `${it.depth * 12}px` }}
+              >
+                <input
+                  type="checkbox"
+                  checked={it.status === 'done'}
+                  onChange={(e) => void toggle(it.index, e.target.checked)}
+                  disabled={busy || !isAssignee}
+                  data-testid={`todo-toggle-${it.index}`}
+                  className="mt-0.5"
+                />
+                <span
+                  className={`flex-1 ${
+                    it.status === 'done'
+                      ? `line-through ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`
+                      : isDark
+                        ? 'text-zinc-100'
+                        : 'text-zinc-900'
+                  }`}
+                >
+                  {it.text}
+                </span>
+                {isAssignee ? (
+                  <button
+                    type="button"
+                    onClick={() => void remove(it.index)}
+                    className="text-rose-500 hover:text-rose-600"
+                    title="Remove item"
+                    data-testid={`todo-remove-${it.index}`}
+                  >
+                    ✕
+                  </button>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        )}
+        {isAssignee ? (
+          <div className="mt-2 flex items-center gap-2">
+            <input
+              type="text"
+              value={draftText}
+              onChange={(e) => setDraftText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void add();
+              }}
+              placeholder="Add a new TODO item…"
+              data-testid="todo-add-input"
+              className={`flex-1 rounded-md border px-2 py-1 text-xs outline-none focus:ring-1 ${
+                isDark
+                  ? 'bg-zinc-900 border-white/10 text-zinc-100 focus:ring-violet-500/40'
+                  : 'bg-white border-zinc-300 text-zinc-900 focus:ring-violet-400'
+              }`}
+            />
+            <button
+              type="button"
+              onClick={() => void add()}
+              disabled={busy || !draftText.trim()}
+              data-testid="todo-add"
+              className={`rounded-md px-3 py-1 text-xs font-semibold ${
+                isDark
+                  ? 'bg-violet-500/30 text-violet-100 hover:bg-violet-500/40'
+                  : 'bg-violet-100 text-violet-800 hover:bg-violet-200'
+              } disabled:opacity-60`}
+            >
+              Add
+            </button>
+          </div>
+        ) : null}
+      </div>
+    </Section>
+  );
 }
