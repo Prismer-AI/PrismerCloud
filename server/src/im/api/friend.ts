@@ -81,6 +81,7 @@ export function createFriendRouter(
   syncService?: SyncService,
 ): Hono {
   const router = new Hono();
+  // eslint-disable-next-line custom/no-wildcard-sub-router-middleware -- createFriendRouter mounted at /contacts in routes.ts; wildcard scoped to that prefix
   router.use('*', authMiddleware);
 
   // POST /contacts/request — Send friend request
