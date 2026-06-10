@@ -147,7 +147,7 @@ export const authConfig: NextAuthConfig = {
   ],
 
   callbacks: {
-    async jwt({ token, user, account, profile }: { token: any; user: any; account: any; profile: any }) {
+    async jwt({ token, user, account, profile }: { token: any; user?: any; account?: any; profile?: any }) {
       if (user) {
         token.id = user.id;
         token.numericId = user.numericId;
@@ -255,7 +255,7 @@ export const authConfig: NextAuthConfig = {
   },
 
   events: {
-    async signIn({ user, account }: { user: any; account: any }) {
+    async signIn({ user, account }: { user: any; account?: any }) {
       console.log(`[NextAuth] User signed in: ${user.email} via ${account?.provider || 'credentials'}`);
     },
     async signOut() {
