@@ -32,7 +32,7 @@ export default async function DocsLocaleLayout({
               Docs
             </Link>
             <Link
-              href={`/docs/${locale}/cookbook/quickstart`}
+              href={`/docs/${locale}/cookbook`}
               className="text-xs text-zinc-500 hover:text-zinc-900 dark:hover:text-white transition-colors"
             >
               Cookbooks
