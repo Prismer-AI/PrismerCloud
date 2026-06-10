@@ -14,6 +14,9 @@ AKIA[0-9A-Z]{16}
 ghp_[A-Za-z0-9]{30,}
 glpat-[A-Za-z0-9_-]{20,}
 
+# leaked-and-redacted credentials (keep matching so they can never come back)
+BPAUGhhX5iD9
+
 # internal infrastructure identifiers (prod/test/dev environments)
 bd5fb394-7492-440a-9626-9f8a261c500f
 a1ce57f2-0405-45c3-a8b1-35953d1e9aaf

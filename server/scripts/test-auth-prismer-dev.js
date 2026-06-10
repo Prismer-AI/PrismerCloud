@@ -53,20 +53,15 @@ const TEST_GOOGLE_ACCESS_TOKEN =
 async function loadConfigFromNacos() {
   const appEnv = process.env.APP_ENV || 'test'; // dev 未设置 APP_ENV 时默认走 test
 
-  const envNamespaceMap = {
-    prod: 'bd5fb394-7492-440a-9626-9f8a261c500f',
-    production: 'bd5fb394-7492-440a-9626-9f8a261c500f',
-    test: 'a1ce57f2-0405-45c3-a8b1-35953d1e9aaf',
-    dev: 'a49fb6f9-e461-4b2a-aa66-3cccde46126c',
-    development: 'a49fb6f9-e461-4b2a-aa66-3cccde46126c',
-  };
-
-  const namespace = envNamespaceMap[appEnv] || envNamespaceMap.test;
+  // Self-host: the environment→namespace map is private infrastructure;
+  // provide the namespace explicitly via NACOS_NAMESPACE.
+  const namespace = process.env.NACOS_NAMESPACE || '';
 
   let serverAddr =
-    process.env.CONFIG_CENTER_IP ||
-    process.env.NACOS_SERVER_ADDR ||
-    'nacos.prismer.app';
+    process.env.CONFIG_CENTER_IP || process.env.NACOS_SERVER_ADDR || '';
+  if (!serverAddr) {
+    throw new Error('CONFIG_CENTER_IP or NACOS_SERVER_ADDR must be set');
+  }
 
   // nacos client 需要 host:port 形式
   serverAddr = serverAddr.replace(/^https?:\/\//, '');
@@ -76,7 +71,7 @@ async function loadConfigFromNacos() {
   }
 
   const username = process.env.NACOS_USERNAME || 'nacos';
-  const password = process.env.NACOS_PASSWORD || 'prismer123';
+  const password = process.env.NACOS_PASSWORD || '';
 
   console.log('Loading Nacos config...', {
     APP_ENV: appEnv,

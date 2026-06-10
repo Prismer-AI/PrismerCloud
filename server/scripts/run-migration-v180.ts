@@ -131,12 +131,9 @@ async function main() {
   // Load Nacos config to get REMOTE_MYSQL_* env vars
   console.log('Loading Nacos config...');
   await initNacosConfig(true, {
-    namespace:
-      appEnv === 'prod'
-        ? 'bd5fb394-7492-440a-9626-9f8a261c500f'
-        : appEnv === 'test'
-          ? 'a1ce57f2-0405-45c3-a8b1-35953d1e9aaf'
-          : 'a49fb6f9-e461-4b2a-aa66-3cccde46126c',
+    // Self-host: namespace comes from the environment; there is no
+    // hardcoded environment→namespace map in the open-source tree.
+    namespace: process.env.NACOS_NAMESPACE || '',
   });
 
   const host = process.env.REMOTE_MYSQL_HOST;

@@ -25,11 +25,11 @@ import { resolve } from 'path';
 // ─── Config ─────────────────────────────────────────────────
 
 const TEST_DB = {
-  host: '34.207.64.245',
-  port: 3306,
-  user: 'prismer_cloud',
-  password: 'BPAUGhhX5iD9',
-  database: 'prismer_cloud',
+  host: process.env.SOURCE_MYSQL_HOST || '',
+  port: parseInt(process.env.SOURCE_MYSQL_PORT || '3306'),
+  user: process.env.SOURCE_MYSQL_USER || 'prismer_cloud',
+  password: process.env.SOURCE_MYSQL_PASSWORD || '',
+  database: process.env.SOURCE_MYSQL_DATABASE || 'prismer_cloud',
 };
 
 const PROD_API = 'https://prismer.cloud/api/im';
