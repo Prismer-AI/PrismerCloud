@@ -1,9 +1,9 @@
 /**
  * Usage Recorder - 使用量记录工具
- *
+ * 
  * 用于在 API 调用完成后自动记录使用量
  * 支持 load, save, compress, search, parse 等操作类型
- *
+ * 
  * Feature Flag: FF_USAGE_RECORD_LOCAL
  * - true: 直连数据库 (pc_usage_records)
  * - false: 代理到后端
@@ -21,14 +21,14 @@ import { emitLowCreditAlert } from './notification-emitter';
 // ============================================================================
 // 定价模型 (基于成本 + 利润率 50%)
 // ============================================================================
-//
+// 
 // 成本基线:
 //   - OCR (Parse): 1000页 = $2, 即 $0.002/页
 //   - 大模型输出: $8/百万 tokens, 即 $0.008/1K tokens
 //   - Exa 搜索: ~$0.02/次
-//
+// 
 // Credit 换算 (1 Credit = $0.002):
-//
+// 
 // | 操作 | 成本 | 售价(50%利润) | Credits |
 // |------|------|---------------|---------|
 // | Parse Fast | $0.002/页 | $0.004/页 | 2 |
@@ -38,7 +38,7 @@ import { emitLowCreditAlert } from './notification-emitter';
 // | Load URL | 按压缩计费 | - | 按 tokens |
 // | Save | 免费 | 免费 | 0 |
 // | 缓存命中 | 免费 | 免费 | 0 |
-//
+// 
 // 配置项格式 (在 Nacos 中设置):
 //   PRICING_SEARCH_CREDIT_COST=20
 //   PRICING_COMPRESSION_TOKEN_RATE=0.008
@@ -52,30 +52,30 @@ const DEFAULT_PRICING = {
   // Exa 搜索: 20 credits/次
   // 成本: ~$0.02/次, 售价: $0.04/次, 利润率 50%
   SEARCH_CREDIT_COST: 20,
-
+  
   // 大模型压缩 (HQCC): 0.008 credits/token = 8 credits/1K tokens
   // 成本: $0.008/1K, 售价: $0.016/1K, 利润率 50%
   COMPRESSION_TOKEN_RATE: 0.008,
-
+  
   // 缓存命中不收费
   CACHE_HIT_CREDIT: 0,
-
+  
   // Parse Fast: 2 credits/页
   // 成本: $0.002/页, 售价: $0.004/页, 利润率 50%
   PARSE_FAST_PAGE_COST: 2,
-
+  
   // Parse HiRes: 5 credits/页 (含图片提取)
   // 成本: ~$0.005/页, 售价: $0.01/页, 利润率 50%
   PARSE_HIRES_PAGE_COST: 5,
-
+  
   // HiRes 图片: 0 credits (已包含在页面费用中)
   PARSE_HIRES_IMAGE_COST: 0,
 
   // IM API 定价 (极低费用，主要用于跟踪使用量)
   // 0.001 credits ≈ $0.000002
-  IM_SEND_MESSAGE_COST: 0.001, // 发送消息
-  IM_WORKSPACE_INIT_COST: 0.01, // 初始化 Workspace
-  IM_AGENT_INGEST_COST: 0.001, // Agent 内容处理
+  IM_SEND_MESSAGE_COST: 0.001,      // 发送消息
+  IM_WORKSPACE_INIT_COST: 0.01,    // 初始化 Workspace
+  IM_AGENT_INGEST_COST: 0.001,     // Agent 内容处理
 
   // IM 文件上传: 0.5 credits/MB
   // 成本: ~$0.0005/MB (S3 PUT + bandwidth), 售价: $0.001/MB, 利润率 50%
@@ -113,9 +113,7 @@ export const PRICING = {
     return parseFloat(process.env.PRICING_IM_AGENT_INGEST_COST || '') || DEFAULT_PRICING.IM_AGENT_INGEST_COST;
   },
   get IM_FILE_UPLOAD_COST_PER_MB(): number {
-    return (
-      parseFloat(process.env.PRICING_IM_FILE_UPLOAD_COST_PER_MB || '') || DEFAULT_PRICING.IM_FILE_UPLOAD_COST_PER_MB
-    );
+    return parseFloat(process.env.PRICING_IM_FILE_UPLOAD_COST_PER_MB || '') || DEFAULT_PRICING.IM_FILE_UPLOAD_COST_PER_MB;
   },
 };
 
@@ -163,7 +161,8 @@ export interface UsageRecordRequest {
     | 'agent_ingest'
     | 'file_upload'
     | 'llm_proxy'
-    | 'llm_proxy_anthropic';
+    | 'llm_proxy_anthropic'
+    | 'image_generation';
   input: {
     type: 'query' | 'url' | 'urls' | 'file' | 'content';
     value: string;
@@ -189,25 +188,25 @@ export function calculateCost(metrics: UsageMetrics): UsageCost {
   const searchCredits = (metrics.exa_searches || 0) * PRICING.SEARCH_CREDIT_COST;
   const tokensTotal = (metrics.tokens_input || 0) + (metrics.tokens_output || 0);
   const compressionCredits = tokensTotal * PRICING.COMPRESSION_TOKEN_RATE;
-
+  
   // Parse 费用计算 (根据模式区分)
   let parseCredits = 0;
   if (metrics.pages_parsed) {
     const isHires = metrics.parse_mode === 'hires';
     const pageRate = isHires ? PRICING.PARSE_HIRES_PAGE_COST : PRICING.PARSE_FAST_PAGE_COST;
     parseCredits = metrics.pages_parsed * pageRate;
-
+    
     // HiRes 模式还要计算图片费用
     if (isHires && metrics.images_extracted) {
       parseCredits += metrics.images_extracted * PRICING.PARSE_HIRES_IMAGE_COST;
     }
   }
-
+  
   return {
     search_credits: Math.round(searchCredits * 10000) / 10000,
     compression_credits: Math.round(compressionCredits * 10000) / 10000,
     parse_credits: parseCredits > 0 ? Math.round(parseCredits * 10000) / 10000 : undefined,
-    total_credits: Math.round((searchCredits + compressionCredits + parseCredits) * 10000) / 10000,
+    total_credits: Math.round((searchCredits + compressionCredits + parseCredits) * 10000) / 10000
   };
 }
 
@@ -216,9 +215,18 @@ export function calculateCost(metrics: UsageMetrics): UsageCost {
  *
  * @param record - 使用记录请求
  * @param authHeader - 认证头 (Bearer token)
+ * @param resolvedUserId - release202/12 (P2b) — 调用方已经由 `apiGuard` 解析好的
+ *   数字 `pc_users.id`（字符串形态，如 `guard.auth.userId`）。传入后本地扣费路径
+ *   直接用它做唯一身份真相源，**不再**用 `getUserFromAuth(authHeader)` 二次解析
+ *   ——两处解析分叉会把 spend 记错租户或丢失。未传时退回旧的 header 解析（供
+ *   load/save/parse/im 等尚未线程化身份的调用方）。
  * @returns Promise<boolean> - 是否成功记录
  */
-export async function recordUsage(record: UsageRecordRequest, authHeader: string | null): Promise<boolean> {
+export async function recordUsage(
+  record: UsageRecordRequest,
+  authHeader: string | null,
+  resolvedUserId?: string | null
+): Promise<boolean> {
   // 如果没有认证，跳过记录
   if (!authHeader) {
     console.log('[UsageRecorder] Skipping - no auth header');
@@ -234,8 +242,10 @@ export async function recordUsage(record: UsageRecordRequest, authHeader: string
     console.log(`[UsageRecorder] FF_USAGE_RECORD_LOCAL=${process.env.FF_USAGE_RECORD_LOCAL}, useLocal=${useLocal}`);
 
     if (useLocal) {
-      return recordUsageLocal(record, authHeader);
+      return recordUsageLocal(record, authHeader, resolvedUserId);
     } else {
+      // 后端代理路径：身份由后端从 Authorization header 自行解析，cloud 不在本地
+      // 扣费，故无需 resolvedUserId。
       return recordUsageProxy(record, authHeader);
     }
   } catch (error) {
@@ -245,22 +255,56 @@ export async function recordUsage(record: UsageRecordRequest, authHeader: string
 }
 
 /**
+ * release202/12 (P2b/P3) — 把一个已解析的身份串归一成本地扣费用的数字 userId。
+ * 接受 `guard.auth.userId`（数字 pc_users.id 的字符串形态）。
+ *
+ * P3 防线：幻影 `apikey_<hash>` 这类非数字 id 解析失败时返回 null（调用方丢弃记录），
+ * **绝不**把 spend 记到一个解析不出归属的 id 上。注意正常情况下这种身份在更上游就被
+ * P1 余额闸拦掉了（`api-guard.checkBalance` 对非数字 id fail-closed，见 release202/12
+ * P1）——这里只是同一不变量在记账层的纵深防御。
+ */
+function toNumericUserId(resolvedUserId: string | null | undefined): number | null {
+  if (resolvedUserId == null) return null;
+  const n = parseInt(resolvedUserId, 10);
+  return Number.isFinite(n) && String(n) === resolvedUserId.trim() ? n : null;
+}
+
+/**
  * 本地实现：直连数据库
  */
-async function recordUsageLocal(record: UsageRecordRequest, authHeader: string): Promise<boolean> {
+async function recordUsageLocal(
+  record: UsageRecordRequest,
+  authHeader: string,
+  resolvedUserId?: string | null
+): Promise<boolean> {
   console.log('[UsageRecorder] Using LOCAL implementation');
 
   try {
-    // 解析用户 ID
-    const authResult = await getUserFromAuth(authHeader);
-    if (!authResult.success || !authResult.user) {
-      console.error('[UsageRecorder] Auth failed:', authResult.error);
-      return false;
+    // release202/12 (P2b) — ONE identity source of truth. When the caller passed
+    // the already-resolved `guard.auth.userId`, use it directly; do NOT re-derive
+    // the user from the auth header (the double-parse is exactly what could book
+    // spend to the wrong tenant when the two diverged). Fall back to header parse
+    // only for callers that haven't threaded the resolved id yet (load/save/parse/im).
+    // (P3) A non-numeric resolved id — e.g. a phantom `apikey_<hash>` minted when
+    // the DB was unreachable — yields null here and we drop the record rather than
+    // book unattributable spend. That same id is already fail-closed at the P1
+    // balance gate upstream (api-guard.checkBalance), so this is defense-in-depth.
+    let userId: number | null = toNumericUserId(resolvedUserId);
+    if (userId == null) {
+      if (resolvedUserId != null) {
+        console.error('[UsageRecorder] Refusing to record — non-numeric resolved userId:', resolvedUserId);
+        return false;
+      }
+      // No explicit id — legacy header-derived path.
+      const authResult = await getUserFromAuth(authHeader);
+      if (!authResult.success || !authResult.user) {
+        console.error('[UsageRecorder] Auth failed:', authResult.error);
+        return false;
+      }
+      userId = authResult.user.id;
     }
-
-    const userId = authResult.user.id;
     const totalCredits = record.cost?.total_credits || 0;
-
+    
     console.log(`[UsageRecorder] User: ${userId}, Task: ${record.task_id}, Credits: ${totalCredits}`);
 
     // 注意：input.type 可能包含 'content'，需要映射到数据库支持的类型
@@ -270,12 +314,12 @@ async function recordUsageLocal(record: UsageRecordRequest, authHeader: string):
       task_type: record.task_type,
       input: {
         type: inputType as 'query' | 'url' | 'urls' | 'file',
-        value: record.input.value,
+        value: record.input.value
       },
       metrics: record.metrics,
       cost: record.cost,
       sources: record.sources,
-      status: 'completed' as const,
+      status: 'completed' as const
     };
 
     // Atomic: create usage record + deduct credits in a single transaction
@@ -313,7 +357,7 @@ async function recordUsageLocal(record: UsageRecordRequest, authHeader: string):
       task_type: record.task_type,
       record_id: recordId,
       credits_deducted: totalCredits,
-      credits_remaining: creditsRemaining,
+      credits_remaining: creditsRemaining
     });
 
     // Fire-and-forget: check if credits are low
@@ -329,10 +373,13 @@ async function recordUsageLocal(record: UsageRecordRequest, authHeader: string):
 /**
  * 代理实现：调用后端 API
  */
-async function recordUsageProxy(record: UsageRecordRequest, authHeader: string): Promise<boolean> {
+async function recordUsageProxy(
+  record: UsageRecordRequest,
+  authHeader: string
+): Promise<boolean> {
   const backendBase = await getBackendApiBase();
   const url = `${backendBase}/cloud/usage/record`;
-
+  
   // 清理 undefined 字段，确保 JSON 格式正确
   const cleanRecord = {
     task_id: record.task_id,
@@ -345,26 +392,26 @@ async function recordUsageProxy(record: UsageRecordRequest, authHeader: string):
       urls_compressed: record.metrics.urls_compressed || 0,
       tokens_input: record.metrics.tokens_input || 0,
       tokens_output: record.metrics.tokens_output || 0,
-      processing_time_ms: record.metrics.processing_time_ms || 0,
+      processing_time_ms: record.metrics.processing_time_ms || 0
     },
     cost: {
       search_credits: record.cost.search_credits || 0,
       compression_credits: record.cost.compression_credits || 0,
-      total_credits: record.cost.total_credits || 0,
+      total_credits: record.cost.total_credits || 0
     },
-    sources: record.sources || [],
+    sources: record.sources || []
   };
-
+  
   console.log('[UsageRecorder] POST', url);
   console.log('[UsageRecorder] Request body:', JSON.stringify(cleanRecord, null, 2));
-
+  
   const response = await fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: authHeader,
+      'Authorization': authHeader
     },
-    body: JSON.stringify(cleanRecord),
+    body: JSON.stringify(cleanRecord)
   });
 
   if (!response.ok) {
@@ -378,7 +425,7 @@ async function recordUsageProxy(record: UsageRecordRequest, authHeader: string):
   console.log('[UsageRecorder] Recorded successfully:', {
     task_id: record.task_id,
     task_type: record.task_type,
-    credits_deducted: data.data?.credits_deducted,
+    credits_deducted: data.data?.credits_deducted
   });
   return true;
 }
@@ -387,13 +434,18 @@ async function recordUsageProxy(record: UsageRecordRequest, authHeader: string):
  * 后台记录使用量 (fire-and-forget)
  * 不等待结果，不阻塞主流程
  */
-export function recordUsageBackground(record: UsageRecordRequest, authHeader: string | null): void {
+export function recordUsageBackground(
+  record: UsageRecordRequest,
+  authHeader: string | null,
+  resolvedUserId?: string | null
+): void {
   if (!authHeader) {
     return;
   }
 
-  // 异步执行，不等待
-  recordUsage(record, authHeader).catch((err) => {
+  // 异步执行，不等待。release202/12 (P2b) — thread the caller-resolved userId so
+  // the local-credit deduction uses ONE identity source (see recordUsage).
+  recordUsage(record, authHeader, resolvedUserId).catch(err => {
     console.error('[UsageRecorder] Background record failed:', err);
   });
 }
@@ -421,7 +473,7 @@ export function createLoadUsageRecord(params: {
     urls_compressed: params.urlsCompressed,
     tokens_input: params.tokensInput || 0,
     tokens_output: params.tokensOutput || 0,
-    processing_time_ms: params.processingTimeMs,
+    processing_time_ms: params.processingTimeMs
   };
 
   return {
@@ -429,11 +481,11 @@ export function createLoadUsageRecord(params: {
     task_type: 'load',
     input: {
       type: params.inputType === 'urls' ? 'urls' : params.inputType,
-      value: params.input,
+      value: params.input
     },
     metrics,
     cost: calculateCost(metrics),
-    sources: params.sources,
+    sources: params.sources
   };
 }
 
@@ -448,7 +500,7 @@ export function createSaveUsageRecord(params: {
 }): UsageRecordRequest {
   const metrics: UsageMetrics = {
     urls_processed: params.itemCount,
-    processing_time_ms: params.processingTimeMs,
+    processing_time_ms: params.processingTimeMs
   };
 
   // Save 操作目前免费
@@ -457,10 +509,10 @@ export function createSaveUsageRecord(params: {
     task_type: 'save',
     input: {
       type: params.itemCount > 1 ? 'urls' : 'url',
-      value: params.url,
+      value: params.url
     },
     metrics,
-    cost: { total_credits: 0 },
+    cost: { total_credits: 0 }
   };
 }
 
@@ -498,7 +550,7 @@ export function createFileUploadUsageRecord(params: {
 
 /**
  * 创建 Parse API 的使用记录
- *
+ * 
  * 费用计算:
  * - Fast 模式: 0.01 credits/页
  * - HiRes 模式: 0.1 credits/页 + 0.05 credits/图
@@ -517,7 +569,7 @@ export function createParseUsageRecord(params: {
     images_extracted: params.imageCount || 0,
     parse_mode: params.mode || 'fast',
     tokens_output: params.tokensOutput || 0,
-    processing_time_ms: params.processingTimeMs,
+    processing_time_ms: params.processingTimeMs
   };
 
   return {
@@ -525,9 +577,9 @@ export function createParseUsageRecord(params: {
     task_type: 'parse',
     input: {
       type: 'file',
-      value: params.fileName,
+      value: params.fileName
     },
     metrics,
-    cost: calculateCost(metrics),
+    cost: calculateCost(metrics)
   };
 }
