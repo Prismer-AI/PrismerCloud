@@ -22,19 +22,20 @@
 
 import { useCallback, useState, type ComponentType, type SVGProps } from 'react';
 import { AnimatePresence, motion, useReducedMotion, type Transition } from 'framer-motion';
-import { ArrowLeft, Bot, Building2, MessageSquare, Monitor, Settings2 } from 'lucide-react';
+import { ArrowLeft, Bot, Building2, MessageSquare, Monitor, Settings2, Terminal } from 'lucide-react';
 
 import { radius, s, springSnap, springSoft } from '../../lib/design';
 import type { AgentDTO, AgentProfileDTO } from '../../lib/types';
 import { ProTileDevice } from './pro/ProTileDevice';
 import { ProTileAgent } from './pro/ProTileAgent';
+import { ProTileExecutor } from './pro/ProTileExecutor';
 import { ProTileProfile } from './pro/ProTileProfile';
 import { ProTileConversation } from './pro/ProTileConversation';
-import type { UnifiedCreationEvent } from './UnifiedCreationModal';
+import type { UnifiedCreationEvent } from './context';
 
 // ───────────────────────── Public types ─────────────────────────
 
-export type ProEntity = 'workspace' | 'device' | 'agent' | 'profile' | 'conversation';
+export type ProEntity = 'workspace' | 'device' | 'agent' | 'executor' | 'profile' | 'conversation';
 
 export interface ProModeFlowProps {
   isDark: boolean;
@@ -67,9 +68,15 @@ const TILES: readonly TileDef[] = [
     disabled: true,
     disabledTooltip: 'Coming soon — workspaces auto-create per user today',
   },
-  { key: 'device', label: 'Device', description: 'Provision a K8s sandbox pod.', icon: Monitor },
+  { key: 'device', label: 'Device', description: 'Set up a cloud computer.', icon: Monitor },
   { key: 'agent', label: 'Agent', description: 'Register a long-running role.', icon: Bot },
-  { key: 'profile', label: 'Profile', description: 'Adapter config for an agent.', icon: Settings2 },
+  {
+    key: 'executor',
+    label: 'Executor',
+    description: 'CLI executor (codex/claude-code) — bounded coding tasks.',
+    icon: Terminal,
+  },
+  { key: 'profile', label: 'Profile', description: 'How an agent runs.', icon: Settings2 },
   { key: 'conversation', label: 'Conversation', description: 'Open a 1:1 or group chat.', icon: MessageSquare },
 ];
 
@@ -153,6 +160,8 @@ export function ProModeFlow({
                 <ProTileDevice isDark={isDark} workspaceId={workspaceId} onSuccess={onCreated} onBack={goBack} />
               ) : selected === 'agent' ? (
                 <ProTileAgent isDark={isDark} workspaceId={workspaceId} onSuccess={onCreated} onBack={goBack} />
+              ) : selected === 'executor' ? (
+                <ProTileExecutor isDark={isDark} workspaceId={workspaceId} onSuccess={onCreated} onBack={goBack} />
               ) : selected === 'profile' ? (
                 <ProTileProfile
                   isDark={isDark}
