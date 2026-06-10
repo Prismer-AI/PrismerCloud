@@ -22,6 +22,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { Awards } from '@/components/ui/award';
+import { useI18n } from '@/contexts/i18n-context';
 import { glass, RANK_COLORS, type LeaderboardAgentEntry } from './helpers';
 import { Sparkline } from './sparkline';
 
@@ -110,10 +111,27 @@ const BADGE_ICONS: Record<string, { icon: LucideIcon; color: string }> = {
 };
 
 const FALLBACK_BADGE = { icon: Award, color: 'text-zinc-400 bg-zinc-400/10' };
+type EvolutionT = ReturnType<typeof useI18n>['t'];
+
+function localizedBadgeMeta(badge: string, t: EvolutionT): { title: string; subtitle: string } {
+  const fallback = BADGE_META[badge] || {
+    title: badge.replace(/_/g, ' ').toUpperCase(),
+    subtitle: t('evolution.leaderboard.badgeFallbackSubtitle'),
+  };
+  const titleKey = `evolution.leaderboard.badges.${badge}.title` as `evolution.${string}`;
+  const subtitleKey = `evolution.leaderboard.badges.${badge}.subtitle` as `evolution.${string}`;
+  const title = t(titleKey);
+  const subtitle = t(subtitleKey);
+  return {
+    title: title === titleKey ? fallback.title : title,
+    subtitle: subtitle === subtitleKey ? fallback.subtitle : subtitle,
+  };
+}
 
 /* ── Compact badge icon (for row header) ──────────────────── */
 
 export function BadgeIcon({ badge, isDark }: { badge: string; isDark: boolean }) {
+  const { t } = useI18n();
   const config = BADGE_ICONS[badge] || FALLBACK_BADGE;
   const Icon = config.icon;
   const [bg, text] = config.color.split(' ').reduce<[string, string]>(
@@ -124,7 +142,7 @@ export function BadgeIcon({ badge, isDark }: { badge: string; isDark: boolean })
     },
     ['', ''],
   );
-  const badgeName = BADGE_META[badge]?.title || badge.replace(/_/g, ' ');
+  const badgeName = localizedBadgeMeta(badge, t).title;
 
   return (
     <div className="relative group">
@@ -160,8 +178,10 @@ function clampTitle(raw: string): string {
 }
 
 export function AwardBadge({ badge, size = 150, level: levelOverride, recipient, date }: AwardBadgeProps) {
-  const meta = BADGE_META[badge] || { title: badge.replace(/_/g, ' ').toUpperCase(), subtitle: 'Achievement Unlocked' };
+  const { t } = useI18n();
+  const meta = localizedBadgeMeta(badge, t);
   const level = levelOverride || BADGE_LEVEL[badge] || 'bronze';
+  const levelLabel = t(`evolution.leaderboard.awardLevels.${level}` as `evolution.${string}`);
   const title = clampTitle(meta.title);
   const scale = size / NATURAL_W;
   return (
@@ -181,6 +201,7 @@ export function AwardBadge({ badge, size = 150, level: levelOverride, recipient,
           recipient={recipient}
           date={date}
           level={level}
+          levelLabel={levelLabel}
           className="h-full"
         />
       </div>
@@ -193,12 +214,15 @@ export function AwardBadge({ badge, size = 150, level: levelOverride, recipient,
 type AdoptState = 'idle' | 'loading' | 'success' | 'error' | 'no-gene';
 
 export function AdoptGeneButton({ agentId, isDark }: { agentId: string; isDark: boolean }) {
+  const { t } = useI18n();
   const [state, setState] = useState<AdoptState>('idle');
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Cleanup timeout on unmount
   useEffect(() => {
-    return () => { if (timerRef.current) clearTimeout(timerRef.current); };
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
   }, []);
 
   const resetAfter = (ms: number) => {
@@ -215,7 +239,9 @@ export function AdoptGeneButton({ agentId, isDark }: { agentId: string; isDark: 
     try {
       const auth = JSON.parse(localStorage.getItem('prismer_auth') || '{}');
       token = auth?.token || localStorage.getItem('prismer_active_api_key') || null;
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
     if (!token) {
       setState('error');
       resetAfter(2000);
@@ -249,14 +275,14 @@ export function AdoptGeneButton({ agentId, isDark }: { agentId: string; isDark: 
 
   const label =
     state === 'loading'
-      ? 'Adopting...'
+      ? t('evolution.leaderboard.adopt.loading')
       : state === 'success'
-        ? 'Adopted!'
+        ? t('evolution.leaderboard.adopt.success')
         : state === 'error'
-          ? 'Login Required'
+          ? t('evolution.leaderboard.adopt.error')
           : state === 'no-gene'
-            ? 'No Gene Found'
-            : 'Adopt Top Gene';
+            ? t('evolution.leaderboard.adopt.noGene')
+            : t('evolution.leaderboard.adopt.idle');
 
   const cls =
     state === 'success'
@@ -287,8 +313,10 @@ interface LeaderboardRowProps {
 }
 
 export function LeaderboardRow({ entry, isDark, isCurrentUser, onExpand }: LeaderboardRowProps) {
+  const { t } = useI18n();
   const [expanded, setExpanded] = useState(false);
   const rowRef = useRef<HTMLDivElement>(null);
+  const devHoursSaved = Number((entry.value?.devHoursSaved ?? 0).toFixed(1));
 
   const toggle = () => {
     const next = !expanded;
@@ -317,7 +345,9 @@ export function LeaderboardRow({ entry, isDark, isCurrentUser, onExpand }: Leade
         {Math.abs(entry.rankChange)}
       </span>
     ) : entry.prevRank === null ? (
-      <span className="text-[10px] bg-amber-500/15 text-amber-400 px-1.5 py-0.5 rounded-full font-medium">NEW</span>
+      <span className="text-[10px] bg-amber-500/15 text-amber-400 px-1.5 py-0.5 rounded-full font-medium">
+        {t('evolution.leaderboard.newBadge')}
+      </span>
     ) : null;
 
   return (
@@ -385,7 +415,9 @@ export function LeaderboardRow({ entry, isDark, isCurrentUser, onExpand }: Leade
           <div className="text-emerald-400 font-semibold tabular-nums text-sm">
             ${(entry.value?.moneySaved ?? 0).toFixed(0)}
           </div>
-          <div className={`text-xs ${isDark ? 'text-zinc-600' : 'text-zinc-400'}`}>saved</div>
+          <div className={`text-xs ${isDark ? 'text-zinc-600' : 'text-zinc-400'}`}>
+            {t('evolution.leaderboard.saved')}
+          </div>
         </div>
 
         {/* ERR */}
@@ -437,29 +469,31 @@ export function LeaderboardRow({ entry, isDark, isCurrentUser, onExpand }: Leade
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                 <div>
                   <div className={`text-xs font-medium ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>
-                    Tokens Saved
+                    {t('evolution.leaderboard.tokensSaved')}
                   </div>
                   <div className="text-emerald-400 font-semibold tabular-nums mt-0.5">
                     {(entry.value?.tokenSaved ?? 0).toLocaleString()}
                   </div>
                 </div>
                 <div>
-                  <div className={`text-xs font-medium ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>CO2 Reduced</div>
+                  <div className={`text-xs font-medium ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>
+                    {t('evolution.leaderboard.hero.co2Reduced')}
+                  </div>
                   <div className="text-blue-400 font-semibold tabular-nums mt-0.5">
                     {(entry.value?.co2Reduced ?? 0).toFixed(2)} kg
                   </div>
                 </div>
                 <div>
                   <div className={`text-xs font-medium ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>
-                    Dev Hours Saved
+                    {t('evolution.leaderboard.devHoursSaved')}
                   </div>
                   <div className="text-purple-400 font-semibold tabular-nums mt-0.5">
-                    {(entry.value?.devHoursSaved ?? 0).toFixed(1)} hrs
+                    {t('evolution.common.hoursShort', { count: devHoursSaved })}
                   </div>
                 </div>
                 <div>
                   <div className={`text-xs font-medium ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>
-                    Success Rate
+                    {t('evolution.leaderboard.successRate')}
                   </div>
                   <div className={`font-semibold tabular-nums mt-0.5 ${isDark ? 'text-zinc-200' : 'text-zinc-800'}`}>
                     {entry.successRate !== null ? `${Math.round(entry.successRate * 100)}%` : '\u2014'}
@@ -474,7 +508,7 @@ export function LeaderboardRow({ entry, isDark, isCurrentUser, onExpand }: Leade
                   style={{ borderColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)' }}
                 >
                   <div className={`text-xs font-medium mb-3 ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>
-                    Achievements
+                    {t('evolution.leaderboard.achievements')}
                   </div>
                   <div className="flex items-start gap-3 overflow-x-auto pb-2 -mb-2">
                     {entry.badges.map((b, i) => (
@@ -495,7 +529,7 @@ export function LeaderboardRow({ entry, isDark, isCurrentUser, onExpand }: Leade
 
               {entry.percentile != null && entry.percentile > 0 && (
                 <div className={`mt-3 text-xs ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>
-                  Top {(100 - entry.percentile).toFixed(1)}% of all agents
+                  {t('evolution.leaderboard.topPercent', { percent: (100 - entry.percentile).toFixed(1) })}
                 </div>
               )}
 
@@ -515,7 +549,7 @@ export function LeaderboardRow({ entry, isDark, isCurrentUser, onExpand }: Leade
                   style={{ transition: `all 200ms ${SPRING_BOUNCE}` }}
                 >
                   <ExternalLink className="w-3 h-3" />
-                  View Profile
+                  {t('evolution.leaderboard.viewProfile')}
                 </Link>
                 <Link
                   href={`/evolution?tab=library&search=${encodeURIComponent(entry.agentName)}`}
@@ -528,7 +562,7 @@ export function LeaderboardRow({ entry, isDark, isCurrentUser, onExpand }: Leade
                   style={{ transition: `all 200ms ${SPRING_BOUNCE}` }}
                 >
                   <GitFork className="w-3 h-3" />
-                  Browse Genes
+                  {t('evolution.leaderboard.browseGenes')}
                 </Link>
                 <Link
                   href={`/community?authorId=${entry.agentId}`}
@@ -540,7 +574,7 @@ export function LeaderboardRow({ entry, isDark, isCurrentUser, onExpand }: Leade
                   }`}
                   style={{ transition: `all 200ms ${SPRING_BOUNCE}` }}
                 >
-                  Community Posts
+                  {t('evolution.leaderboard.communityPosts')}
                 </Link>
                 <AdoptGeneButton agentId={entry.agentId} isDark={isDark} />
               </div>
