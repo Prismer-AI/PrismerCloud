@@ -27,7 +27,7 @@ datasource db {
 
 model IMUser {
   id           String   @id @default(cuid())
-  username     String   @unique
+  username     String // agents: per-workspace unique (enforced in register.ts); humans: globally unique
   displayName  String
   passwordHash String?
   role         String   @default("human") // human | agent | admin
@@ -55,29 +55,31 @@ model IMUser {
   delegatedBy     String? // Delegator's DID
 
   // Contact system (v1.8.0 P9)
-  institution     String?
-  description     String?
-  lastSeenAt      DateTime?
+  institution String?
+  description String?
+  lastSeenAt  DateTime?
 
   // Native Auth (v1.9.4) — replaces Go-backend `prismer_info.users` for new accounts
-  email         String?  @unique // primary login email (NULL OK for agent rows)
-  phone         String?  @unique // E.164
-  googleId      String?  @unique
-  githubId      String?  @unique
-  appleId       String?  @unique
-  twitterId     String?  @unique
-  emailVerified Boolean  @default(false)
-  numericId     Int?     @unique // BIGINT allocator (Int in SQLite, BigInt UNSIGNED AUTO_INCREMENT in MySQL)
+  email         String? @unique // primary login email (NULL OK for agent rows)
+  phone         String? @unique // E.164
+  googleId      String? @unique
+  githubId      String? @unique
+  appleId       String? @unique
+  twitterId     String? @unique
+  emailVerified Boolean @default(false)
+  numericId     Int?    @unique // BIGINT allocator (Int in SQLite, BigInt UNSIGNED AUTO_INCREMENT in MySQL)
 
-  agentCard            IMAgentCard?
-  identityKey          IMIdentityKey?
-  participations       IMParticipant[]
-  sentMessages         IMMessage[]
-  createdConversations IMConversation[]
-  readCursors          IMReadCursor[]
-  bindings             IMBinding[]
-  credit               IMCredit?
-  fileUploads          IMFileUpload[]
+  agentCard                IMAgentCard?
+  identityKey              IMIdentityKey?
+  participations           IMParticipant[]
+  sentMessages             IMMessage[]
+  createdConversations     IMConversation[]
+  readCursors              IMReadCursor[]
+  bindings                 IMBinding[]
+  channelAccountsOwned     IMChannelAccount[]   @relation("ChannelAccountOwner")
+  externalIdentitiesLinked IMExternalIdentity[] @relation("ExternalIdentityLink")
+  credit                   IMCredit?
+  fileUploads              IMFileUpload[]
 
   // Contact system relations (v1.8.0 P9)
   friendRequestsSent     IMFriendRequest[]   @relation("FriendRequestsSent")
@@ -122,6 +124,7 @@ model IMAgentCard {
   imUser IMUser @relation(fields: [imUserId], references: [id], onDelete: Cascade)
 
   workspaceId String // 1.9.2 Phase 2: workspace-owned memory
+
   @@index([status])
   @@index([workspaceId])
   @@map("im_agent_cards")
@@ -186,15 +189,16 @@ model IMConversation {
   status        String    @default("active") // active | archived | deleted
   metadata      String    @default("{}") // JSON
   createdById   String
-  workspaceId   String?   // 关联 Workspace (1.9.x: 1 ws → N conversations，去掉 1.8.2 误加的 @unique)
+  workspaceId   String? // 关联 Workspace (1.9.x: 1 ws → N conversations，去掉 1.8.2 误加的 @unique)
   lastMessageAt DateTime?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
-  createdBy    IMUser          @relation(fields: [createdById], references: [id])
-  participants IMParticipant[]
-  messages     IMMessage[]
-  readCursors  IMReadCursor[]
+  createdBy        IMUser              @relation(fields: [createdById], references: [id])
+  participants     IMParticipant[]
+  messages         IMMessage[]
+  readCursors      IMReadCursor[]
+  externalRoutings IMExternalRouting[] @relation("ExternalRoutings")
 
   @@index([status])
   @@index([createdById])
@@ -214,9 +218,9 @@ model IMParticipant {
   role           String    @default("member") // owner | admin | member | observer
   joinedAt       DateTime  @default(now())
   leftAt         DateTime?
-  pinned    Boolean   @default(false)
-  muted     Boolean   @default(false)
-  pinnedAt  DateTime?
+  pinned         Boolean   @default(false)
+  muted          Boolean   @default(false)
+  pinnedAt       DateTime?
 
   conversation IMConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   imUser       IMUser         @relation(fields: [imUserId], references: [id], onDelete: Cascade)
@@ -231,17 +235,24 @@ model IMParticipant {
 // ==============================================================================
 
 model IMMessage {
-  id             String   @id @default(cuid())
-  conversationId String
-  senderId       String
-  type           String   @default("text") // text | markdown | code | image | file | tool_call | tool_result | system_event | thinking
-  content        String   @default("")
-  metadata       String   @default("{}") // JSON: MessageMetadata
-  parentId       String? // For threading
-  quotedMessageId String? // Quote reply reference (v1.8.2, distinct from parentId threading)
-  status         String   @default("sent") // sending | sent | delivered | read | failed
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  id                String   @id @default(cuid())
+  conversationId    String
+  senderId          String
+  type              String   @default("text") // text | markdown | code | image | file | tool_call | tool_result | system_event | thinking
+  content           String   @default("")
+  metadata          String   @default("{}") // JSON: MessageMetadata
+  attachments       Json? // JSON: AssetAttachment[]
+  // v2.0 §4.6 / 14b §4.1 (migration 406): canonical multimodal payload as
+  // ContentBlock[] (text | image | audio | video | file | tool_use |
+  // tool_result | reasoning). Dual-write with `content` + `attachments`.
+  contentBlocksJson Json?
+  // v2.0 §4.1 (migration 402): first-class idempotencyKey (UNIQUE with conversationId).
+  idempotencyKey    String?
+  parentId          String? // For threading
+  quotedMessageId   String? // Quote reply reference (v1.8.2, distinct from parentId threading)
+  status            String   @default("sent") // sending | sent | delivered | read | failed
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 
   // E2E Encryption Layer 2: Signing & Integrity (v1.7.2)
   secVersion  Int? // Security protocol version (null = legacy unsigned)
@@ -258,10 +269,20 @@ model IMMessage {
   // E2E Layer 5: encryption first-class field (S5 fix)
   encrypted Boolean @default(false)
 
-  conversation IMConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  sender       IMUser         @relation(fields: [senderId], references: [id])
+  // release201/26 §4 (Conversational Memory Phase 1) — cl100k (tiktoken) token
+  // count, backfilled by a background worker. EXPLICITLY excluded from the
+  // signing canonical string (secVersion|senderDid|type|timestamp|contentHash
+  // and version|senderId|senderKeyId|conversationId|sequence|type|timestamp|
+  // contentHash|prevHash — see src/im/crypto/index.ts:175-232). contentHash
+  // only hashes `content` (computeContentHash), so backfilling this column
+  // never invalidates an existing signature.
+  tokenCountCl100k Int?
+
+  conversation IMConversation      @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender       IMUser              @relation(fields: [senderId], references: [id])
   reactions    IMMessageReaction[]
 
+  @@unique([conversationId, idempotencyKey])
   @@index([conversationId])
   @@index([senderId])
   @@index([createdAt])
@@ -378,9 +399,11 @@ model IMBinding {
 // ==============================================================================
 
 model IMBridgeMessage {
-  id        String @id @default(cuid())
-  bindingId String
-  direction String // inbound | outbound
+  id                 String  @id @default(cuid())
+  bindingId          String
+  channelAccountId   String?
+  externalIdentityId String?
+  direction          String // inbound | outbound
 
   // IM 侧
   imMessageId      String?
@@ -388,6 +411,7 @@ model IMBridgeMessage {
 
   // 外部侧
   externalMessageId String?
+  externalGroupId   String?
 
   // 状态
   status       String  @default("sent") // sent | delivered | failed
@@ -395,11 +419,90 @@ model IMBridgeMessage {
 
   createdAt DateTime @default(now())
 
-  binding IMBinding @relation(fields: [bindingId], references: [id], onDelete: Cascade)
+  binding          IMBinding           @relation(fields: [bindingId], references: [id], onDelete: Cascade)
+  channelAccount   IMChannelAccount?   @relation(fields: [channelAccountId], references: [id], onDelete: Cascade)
+  externalIdentity IMExternalIdentity? @relation(fields: [externalIdentityId], references: [id], onDelete: SetNull)
 
   @@index([bindingId])
+  @@index([channelAccountId, direction, createdAt])
+  @@index([externalMessageId])
   @@index([imMessageId])
   @@map("im_bridge_messages")
+}
+
+// ==============================================================================
+// v2.0.0 — External channel accounts and routing
+// ==============================================================================
+
+model IMChannelAccount {
+  id                String    @id @default(cuid())
+  ownerImUserId     String
+  workspaceId       String?
+  platform          String // wechat | wecom | whatsapp | telegram | discord
+  label             String
+  status            String    @default("pending") // pending | online | offline | failed | revoked
+  credentials       String    @default("{}") // JSON: platform-specific encrypted credentials
+  accountIdentifier String?
+  lastConnectedAt   DateTime?
+  lastErrorMessage  String?
+  capabilities      String    @default("{}") // JSON: { groupNative, outboundOnly, ... }
+  config            String    @default("{}") // JSON: platform runtime config
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  owner              IMUser               @relation("ChannelAccountOwner", fields: [ownerImUserId], references: [id], onDelete: Cascade)
+  workspace          IMWorkspace?         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  externalIdentities IMExternalIdentity[]
+  bridgeMessages     IMBridgeMessage[]
+
+  @@index([ownerImUserId, platform])
+  @@index([workspaceId, platform])
+  @@index([platform, status])
+  @@map("im_channel_accounts")
+}
+
+model IMExternalIdentity {
+  id               String    @id @default(cuid())
+  channelAccountId String
+  externalUserId   String
+  externalName     String?
+  avatarUrl        String?
+  linkedImUserId   String?
+  linkedAt         DateTime?
+  linkSource       String?
+  lastContextToken String?
+  tokenExpiresAt   DateTime?
+  firstSeenAt      DateTime  @default(now())
+  lastSeenAt       DateTime  @default(now())
+  metadata         String    @default("{}") // JSON: platform-specific identity metadata
+
+  channelAccount IMChannelAccount    @relation(fields: [channelAccountId], references: [id], onDelete: Cascade)
+  linkedImUser   IMUser?             @relation("ExternalIdentityLink", fields: [linkedImUserId], references: [id], onDelete: SetNull)
+  routings       IMExternalRouting[]
+  bridgeMessages IMBridgeMessage[]
+
+  @@unique([channelAccountId, externalUserId])
+  @@index([linkedImUserId])
+  @@index([tokenExpiresAt])
+  @@map("im_external_identities")
+}
+
+model IMExternalRouting {
+  id                 String    @id @default(cuid())
+  externalIdentityId String
+  conversationId     String
+  isDefault          Boolean   @default(false)
+  lastInboundAt      DateTime?
+  lastOutboundAt     DateTime?
+  createdAt          DateTime  @default(now())
+
+  externalIdentity IMExternalIdentity @relation(fields: [externalIdentityId], references: [id], onDelete: Cascade)
+  conversation     IMConversation     @relation("ExternalRoutings", fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@unique([externalIdentityId, conversationId])
+  @@index([externalIdentityId, isDefault])
+  @@index([conversationId])
+  @@map("im_external_routings")
 }
 
 // ==============================================================================
@@ -500,16 +603,49 @@ model IMFileUpload {
 // ==============================================================================
 
 model IMSyncEvent {
-  id             Int      @id @default(autoincrement())
+  id             Int       @id @default(autoincrement())
   type           String // message.new | message.edit | message.delete | conversation.create | conversation.update
-  data           String   @default("{}") // JSON
+  data           String    @default("{}") // JSON
   conversationId String?
+  // v2.0 §4.1 (migration 401): per-conversation monotonic seq.
+  boundarySeq    BigInt?
   imUserId       String
-  createdAt      DateTime @default(now())
+  createdAt      DateTime  @default(now())
+  // v2.0 §4.1: publisher worker stamp — NULL until publish succeeds.
+  publishedAt    DateTime?
+  publishRetries Int       @default(0)
 
   @@index([imUserId])
   @@index([conversationId])
+  @@index([conversationId, boundarySeq])
+  @@index([publishedAt, id])
+  @@index([createdAt])
   @@map("im_sync_events")
+}
+
+// v2.0 §4.1 (migration 401): per-conversation monotonic seq counter.
+model IMConversationSeq {
+  conversationId String @id
+  seq            BigInt @default(0)
+
+  @@map("im_conversation_seq")
+}
+
+// v2.0 §4.4.7 (migration 417): streaming partial render chunks.
+// One row per `stream.service` flush tick (~200ms granularity). The chunk
+// buffer for F5 hydration — final message persists separately via the
+// `message.created` outbox event (Wave 2-B1). Reaper sweeps rows >24h
+// (scheduler.sweepMessagePartials).
+model IMMessagePartial {
+  id        String   @id
+  messageId String
+  chunkText String
+  chunkSeq  Int
+  createdAt DateTime @default(now())
+
+  @@index([messageId, chunkSeq])
+  @@index([createdAt])
+  @@map("im_message_partials")
 }
 
 // ==============================================================================
@@ -520,35 +656,46 @@ model IMTask {
   id String @id @default(cuid())
 
   // Task content
-  title       String
-  description String?
-  capability  String? // Required agent capability
+  title        String
+  description  String?
+  capability   String? // Required agent capability
   // Cloud 3 / S3: task execution surface — agent | sandbox | shell
-  runtimeRoute  String?   @default("agent")
+  runtimeRoute String? @default("agent")
   // Cloud 3 / S3: sandbox execution backref (set by dispatchToSandbox)
-  containerId   String?
-  input       String  @default("{}") // JSON: task input
-  contextUri  String? // prismer:// reference
+  containerId  String?
+  input        String  @default("{}") // JSON: task input
+  contextUri   String? // prismer:// reference
 
   // Participants
-  creatorId  String // Who created (human or agent)
-  assigneeId String? // Who is executing
+  creatorId      String // Who created (human or agent)
+  assigneeId     String? // Who is executing
   conversationId String? // Associated conversation (v1.8.2)
 
-  // State machine: pending → assigned → running → review → completed | failed | cancelled
-  status        String @default("pending")
+  // State machine (v2.0 / release 200 §5.1):
+  //   pending → assigned → running → review → completed | failed | cancelled
+  //                            ↘ blocked ↗
+  // 'blocked' is v2.0 addition — agent self-reports stuck, needs intervention.
+  // App-layer enum (VARCHAR, NOT a MySQL ENUM) — see migration 341.
+  status        String  @default("pending")
+  // v2.0 §4.2 (migration 403): execution phase decoupled from status.
+  // thinking | tool_use | reasoning | responding | waiting_user | waiting_dep | stuck.
+  currentPhase  String?
   progress      Float? // 0.0-1.0 numeric progress (v1.8.2)
   statusMessage String? // Human-readable status update (v1.8.2)
+  position      Float? // Kanban order — B-tree midpoint method (v2.0 §8 migration 342)
 
   // Scheduling
-  scheduleType String? // NULL (immediate) | once | interval | cron
-  scheduleAt   DateTime? // once: target time
-  scheduleCron String? // cron: expression (e.g. "0 9 * * *")
-  intervalMs   Int? // interval: milliseconds between runs
-  nextRunAt    DateTime? // Next dispatch time (scheduler uses this)
-  lastRunAt    DateTime?
-  runCount     Int       @default(0)
-  maxRuns      Int? // NULL = unlimited
+  scheduleType     String? // NULL (immediate) | once | interval | cron
+  scheduleAt       DateTime? // once: target time
+  scheduleCron     String? // cron: expression (e.g. "0 9 * * *")
+  intervalMs       Int? // interval: milliseconds between runs
+  nextRunAt        DateTime? // Next dispatch time (scheduler uses this)
+  lastRunAt        DateTime?
+  // v2.0 §4.2 (migration 403): daemon-pushed phase heartbeat (~15s).
+  lastHeartbeatAt  DateTime?
+  heartbeatVersion BigInt    @default(0)
+  runCount         Int       @default(0)
+  maxRuns          Int? // NULL = unlimited
 
   // Result
   result    String? // JSON: execution result
@@ -576,6 +723,15 @@ model IMTask {
   runs IMTaskRun[]
 
   workspaceId String? // 1.9.2 Phase 1 (m2 NULLable, m3 NOT NULL + drop scope)
+
+  // release201/09 Phase 2 (migration 433): project scope. NULL = workspace-level
+  // (unscoped). Composite index supports board/task-list filter by (project + status).
+  projectId String?
+
+  // release201/10 (migration 438): acceptance criteria + rolled-up status.
+  acceptanceCriteriaJson String?
+  acceptanceStatus       String  @default("none")
+
   @@index([status])
   @@index([assigneeId, status])
   @@index([capability, status])
@@ -587,7 +743,28 @@ model IMTask {
   @@index([workspaceId])
   @@index([runtimeRoute, status])
   @@index([containerId])
+  @@index([status, lastHeartbeatAt])
+  @@index([projectId, status])
+  @@index([acceptanceStatus])
   @@map("im_tasks")
+}
+
+// release201/10 (migration 439): IMTaskCriteriaTemplate
+model IMTaskCriteriaTemplate {
+  id           String   @id @default(cuid())
+  workspaceId  String?
+  capability   String
+  name         String
+  description  String?
+  criteriaJson String
+  isDefault    Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([workspaceId, capability])
+  @@index([capability])
+  @@index([capability, isDefault])
+  @@map("im_task_criteria_templates")
 }
 
 model IMTaskLog {
@@ -617,18 +794,18 @@ model IMTaskRun {
   actorId          String?
   sourceKind       String  @default("task")
   capability       String?
-  status       String  @default("running")
-  runtimeRoute String? @default("agent")
-  input        String  @default("{}")
-  output       String?
-  outputUri    String?
-  error        String?
+  status           String  @default("running")
+  runtimeRoute     String? @default("agent")
+  input            String  @default("{}")
+  output           String?
+  outputUri        String?
+  error            String?
 
   startedAt   DateTime?
   completedAt DateTime?
-  metadata    String   @default("{}")
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  metadata    String    @default("{}")
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
   task   IMTask?       @relation(fields: [taskId], references: [id], onDelete: SetNull)
   events IMTaskEvent[]
@@ -647,15 +824,15 @@ model IMTaskRun {
 model IMTaskEvent {
   id String @id @default(cuid())
 
-  runId   String
-  taskId  String?
-  workspaceId String?
+  runId          String
+  taskId         String?
+  workspaceId    String?
   conversationId String?
-  actorId String?
-  type    String
-  level   String  @default("info")
-  message String?
-  payload String  @default("{}")
+  actorId        String?
+  type           String
+  level          String  @default("info")
+  message        String?
+  payload        String  @default("{}")
 
   createdAt DateTime @default(now())
 
@@ -667,6 +844,113 @@ model IMTaskEvent {
   @@index([conversationId, createdAt])
   @@index([type, createdAt])
   @@map("im_task_events")
+}
+
+// v2.0 §4.4 / §12.1 (migration 405): runtime activity timeline.
+model IMTaskRunStep {
+  id          String   @id
+  taskRunId   String
+  taskId      String
+  seq         BigInt
+  kind        String // 'phase_change' | 'tool_call' | 'tool_result' | 'reasoning_chunk' | 'progress' | 'error'
+  payloadJson String // JSON (sqlite has no native JSON column)
+  occurredAt  DateTime
+  durationMs  Int?
+
+  @@index([taskRunId, seq])
+  @@index([taskId, occurredAt])
+  @@index([kind, occurredAt])
+  @@map("im_task_run_steps")
+}
+
+// v2.0 §4.3 (migration 404): dispatch reply two-phase prepare/commit.
+model IMDispatchReply {
+  id                 String    @id
+  taskId             String
+  idempotencyKey     String
+  status             String // 'prepared' | 'committed' | 'aborted'
+  assetIdsJson       String // JSON
+  messageContentJson String? // JSON
+  metricsJson        String? // JSON
+  preparedAt         DateTime  @default(now())
+  committedAt        DateTime?
+  abortedAt          DateTime?
+
+  @@unique([taskId, idempotencyKey])
+  @@index([status, preparedAt])
+  @@map("im_dispatch_replies")
+}
+
+// v2.0 §4.5 (migration 408): persistent WS ack tracker.
+model IMWSAck {
+  id          String    @id
+  userId      String
+  ackId       String
+  payloadJson String // JSON
+  createdAt   DateTime  @default(now())
+  ackedAt     DateTime?
+
+  @@index([userId, ackedAt])
+  @@index([userId, ackId])
+  @@index([createdAt])
+  @@map("im_ws_acks")
+}
+
+// v2.0 §4.8.2 (migration 410): explicit multi-daemon binding ownership.
+model IMAgentBinding {
+  id                String    @id
+  agentImUserId     String    @unique
+  boundDaemonId     String
+  boundDaemonKind   String // 'k8s' | 'local' | 'edge'
+  boundDaemonLabel  String
+  boundAt           DateTime  @default(now())
+  boundBy           String // 'auto-first-declare' | 'user-explicit' | 'cloud-rebalance' | 'transfer'
+  lastHostDeclareAt DateTime  @default(now())
+  lastDispatchAt    DateTime?
+  contestedSince    DateTime?
+  contestCount      Int       @default(0)
+  // release201/09 §9.7 Phase 3 — agent transfer quiesce (migration 435 MySQL).
+  pausedAt          DateTime?
+  // release201/09 §9.7 Phase 3 — 3-stage transfer protocol (migration 443 MySQL).
+  transferState       String?   @default("idle")
+  transferToDaemonId  String?
+  transferInitiatedAt DateTime?
+
+  @@index([boundDaemonId])
+  @@index([contestedSince])
+  @@index([lastDispatchAt])
+  @@map("im_agent_bindings")
+}
+
+// ─── ACP Human Approval Inbox ───────────────────────────────
+model IMApproval {
+  id             String    @id @default(cuid())
+  workspaceId    String
+  conversationId String?
+  taskId         String?
+  requestedById  String
+  decidedById    String?
+  category       String
+  // v2.0 §4.4.8.3 (migration 411): server-side intent dedup hash.
+  intentHash     String?
+  title          String
+  context        String?
+  options        String    @default("[]") // JSON: ApprovalOption[]
+  status         String    @default("pending") // pending | approved | rejected | expired
+  selectedValue  String?
+  metadata       String    @default("{}") // JSON
+  expiresAt      DateTime?
+  decidedAt      DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([workspaceId, status, createdAt])
+  @@index([conversationId, status, createdAt])
+  @@index([taskId, status])
+  @@index([requestedById, createdAt])
+  @@index([decidedById, decidedAt])
+  @@index([workspaceId, conversationId, intentHash, status])
+  @@map("im_approvals")
 }
 
 // ==============================================================================
@@ -744,6 +1028,7 @@ model IMCompactionSummary {
   createdAt         DateTime @default(now())
 
   workspaceId String? // 1.9.2 Phase 1 (m2 NULLable, m3 NOT NULL + drop scope)
+
   @@index([conversationId])
   @@index([workspaceId])
   @@map("im_compaction_summaries")
@@ -770,6 +1055,15 @@ model IMMemoryFile {
 
   workspaceId String // 1.9.2 Phase 2: workspace-owned memory
 
+  // v2.0 Wave 4-E6 (doc 13 §6.1 + 14 §4.7) — agent scope bucket + sentinel
+  //   scope='workspace-shared' → ownerType='workspace', ownerId='__shared__',
+  //                              agentImUserId NULL; all agents RW
+  //   scope='agent-private'    → agentImUserId required; only that agent RW
+  // Migration 412 (doc 13) installs scope column + sentinel UNIQUE key;
+  // migration 418 (Wave 4-E6) adds agentImUserId + (agentImUserId,scope) index.
+  agentImUserId String?
+  scope         String  @default("workspace-shared") // workspace-shared | agent-private
+
   visibility  String  @default("workspace")
   aclJson     String?
   encrypted   Boolean @default(false)
@@ -778,11 +1072,127 @@ model IMMemoryFile {
   sourceKind  String?
   sourceRef   String?
 
-  @@unique([workspaceId, path])
+  // Release 201 P0-6 — role provenance stamps. See schema.mysql.prisma for full
+  // rationale; mirrored here for the sqlite dev fallback.
+  sourceRoleTemplateSlug String?
+  sourceTaskAuthority    String?
+  sourceIsOrchestrator   Boolean?
+
+  @@unique([workspaceId, scope, ownerType, ownerId, path])
   @@index([ownerId, ownerType])
   @@index([workspaceId])
+  @@index([workspaceId, scope, ownerType, ownerId])
   @@index([workspaceId, sourceRef])
+  @@index([agentImUserId, scope])
+  @@index([workspaceId, sourceRoleTemplateSlug])
+  @@index([workspaceId, sourceIsOrchestrator])
   @@map("im_memory_files")
+}
+
+// ==============================================================================
+// release201/26 — Conversational Memory (Phase 1 schema; §4 + §5.1)
+// ==============================================================================
+//
+// L2 "Compressed Session" + quote/identifier indices. All tables here are
+// DERIVED data over the L1 raw ledger (im_messages): they are NOT signed and
+// do not modify any IMMessage row (decision §4 "签名链影响"). Quote ref always
+// points at a raw messageId (decision C); rendering resolves to its segment.
+// JSON-shaped columns are stored as String (mirrors im_* convention; see
+// schema.mysql.prisma for @db.Text native types).
+
+model IMConversationCompressedSegment {
+  id             String @id @default(cuid())
+  conversationId String
+  // Phase 1 only emits 'range'; Topic/Decision/Entity kinds are future (§3 A).
+  segmentKind    String @default("range") // range
+  segmentSeq     Int
+
+  coversFromMessageId    String
+  coversToMessageId      String
+  coveredRawMessageIdsJson String   @default("[]") // JSON: string[]
+  coversFromCreatedAt    DateTime
+  coversToCreatedAt      DateTime
+
+  summary          String   @default("")
+  salientFactsJson String   @default("{}") // JSON: { taskEventCount, approvalCount, ... } (§5.1 metric-only)
+  tokenCountCl100k Int      @default(0)
+  producerModel    String
+  producerVersion  String
+  supersededBy     String? // segment id that replaced this one (regenerate)
+
+  // §12 forward-ref: reserved for embedding index; substring+alias is Phase 1.
+  embeddingRef String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Unique key guards concurrent compaction (§3 + Phase 2 INSERT OR IGNORE).
+  @@unique([conversationId, segmentKind, segmentSeq])
+  @@index([conversationId])
+  @@map("im_conversation_compressed_segments")
+}
+
+model IMConversationRawToSegmentIndex {
+  id           String @id @default(cuid())
+  rawMessageId String
+  segmentId    String
+  segmentKind  String @default("range")
+
+  createdAt DateTime @default(now())
+
+  @@index([rawMessageId])
+  @@index([segmentId])
+  @@map("im_conversation_raw_to_segment_index")
+}
+
+model IMConversationQuoteCache {
+  id                String    @id @default(cuid())
+  quotingMessageId  String
+  quotedMessageId   String
+  snapshotContent   String    @default("") // resilient to source deletion (§10)
+  snapshotSender    String
+  snapshotCreatedAt DateTime
+  sourceDeletedAt   DateTime?
+  conversationId    String
+
+  createdAt DateTime @default(now())
+
+  @@unique([quotingMessageId, quotedMessageId])
+  @@index([quotedMessageId])
+  @@index([conversationId])
+  @@map("im_conversation_quote_cache")
+}
+
+model IMConversationQuoteBackref {
+  id               String @id @default(cuid())
+  quotedMessageId  String
+  quotingMessageId String
+  conversationId   String
+
+  createdAt DateTime @default(now())
+
+  @@unique([quotedMessageId, quotingMessageId])
+  @@index([quotedMessageId])
+  @@map("im_conversation_quote_backrefs")
+}
+
+model IMConversationIdentifierIndex {
+  id                    String @id @default(cuid())
+  conversationId        String
+  identifierKind        String // person | entity | artifact | ...
+  canonicalId           String
+  aliasesJson           String  @default("[]") // JSON: string[]
+  firstSeenMessageId    String
+  lastReferencedMessageId String
+  displayLabel          String?
+  metadataJson          String  @default("{}") // JSON
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([conversationId, identifierKind, canonicalId])
+  @@index([conversationId])
+  @@map("im_conversation_identifier_index")
 }
 
 // ==============================================================================
@@ -790,19 +1200,19 @@ model IMMemoryFile {
 // ==============================================================================
 
 model IMMemoryPage {
-  id                String   @id @default(cuid())
-  workspaceId       String
-  path              String
-  title             String?
-  content           String
+  id                 String   @id @default(cuid())
+  workspaceId        String
+  path               String
+  title              String?
+  content            String
   // M-D (doc 25 §4): HTML is an INDEPENDENT source from `content`, not a
   // derivation. See schema.mysql.prisma for the full rationale comment.
   contentHtml        String?
   contentHtmlVersion Int?     @default(0)
-  version           Int      @default(1)
-  createdByImUserId String
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  version            Int      @default(1)
+  createdByImUserId  String
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
 
   parentPageId  String?
   pageType      String  @default("hub")
@@ -824,6 +1234,11 @@ model IMMemoryPage {
   encrypted   Boolean @default(false)
   contentHash String
 
+  // Release 201 P0-6 — role provenance stamps. Mirror of im_memory_files.
+  sourceRoleTemplateSlug String?
+  sourceTaskAuthority    String?
+  sourceIsOrchestrator   Boolean?
+
   @@unique([workspaceId, path])
   @@index([workspaceId, parentPageId])
   @@index([workspaceId, sourceRef])
@@ -832,6 +1247,8 @@ model IMMemoryPage {
   @@index([workspaceId, pageType])
   @@index([workspaceId, pageType, contentHash])
   @@index([workspaceId, deletedAt])
+  @@index([workspaceId, sourceRoleTemplateSlug])
+  @@index([workspaceId, sourceIsOrchestrator])
   @@map("im_memory_pages")
 }
 
@@ -926,6 +1343,29 @@ model IMMemoryObservabilityEvent {
   @@map("im_memory_observability_events")
 }
 
+// v2.0.7 release201/11 — see prisma/schema.mysql.prisma for the canonical
+// definition + design rationale. SQLite is dev fallback only; production
+// runs MySQL via the .mysql schema.
+model IMMetricEvent {
+  id           Int      @id @default(autoincrement())
+  namespace    String
+  name         String
+  ts           DateTime
+  valueNumeric Float?   @map("value_numeric")
+  valueString  String?  @map("value_string")
+  dimsJson     String?  @map("dims_json")
+  source       String
+  sourceId     String?  @map("source_id")
+  emittedAt    DateTime @map("emitted_at")
+  receivedAt   DateTime @default(now()) @map("received_at")
+  workspaceId  String?  @map("workspace_id")
+
+  @@index([namespace, name, ts])
+  @@index([workspaceId, namespace, name, ts])
+  @@index([source, sourceId, receivedAt])
+  @@map("im_metric_events")
+}
+
 model IMMemoryProposal {
   id                String    @id @default(cuid())
   workspaceId       String
@@ -983,12 +1423,13 @@ model IMGene {
   breakerState     String    @default("closed") // "closed" | "open" | "half_open"
   breakerFailCount Int       @default(0)
   breakerStateAt   DateTime? // when state last changed
-  encrypted       Boolean @default(false) // true = strategy/description are client-encrypted
-  encryptionKeyId String? // identity key ID used for encryption
+  encrypted        Boolean   @default(false) // true = strategy/description are client-encrypted
+  encryptionKeyId  String? // identity key ID used for encryption
 
   signalLinks IMGeneSignal[]
 
   workspaceId String? // 1.9.2 Phase 1 (m2 NULLable, m3 NOT NULL + drop scope)
+
   @@index([ownerAgentId])
   @@index([category])
   @@index([visibility])
@@ -1006,6 +1447,7 @@ model IMGeneSignal {
   gene IMGene @relation(fields: [geneId], references: [id], onDelete: Cascade)
 
   workspaceId String? // 1.9.2 Phase 1 (m2 NULLable, m3 NOT NULL + drop scope)
+
   @@id([geneId, signalId])
   @@index([signalId])
   @@index([workspaceId])
@@ -1068,12 +1510,13 @@ model IMEvolutionCapsule {
   contextSnapshot  String? // JSON: { signals, fallbackUsed, memoryCount, tasksPending, sessionDuration }
 
   workspaceId String? // 1.9.2 Phase 1 (m2 NULLable, m3 NOT NULL + drop scope)
+
   @@index([ownerAgentId])
   @@index([geneId])
   @@index([ownerAgentId, outcome])
   @@index([provider])
   @@index([mode])
-    @@index([workspaceId])
+  @@index([workspaceId])
   @@map("im_evolution_capsules")
 }
 
@@ -1103,6 +1546,7 @@ model IMEvolutionMetrics {
   errApprox  Float? // Error reduction rate (approx)
 
   workspaceId String? // 1.9.2 Phase 1 (m2 NULLable, m3 NOT NULL + drop scope)
+
   @@index([ts, mode])
   @@index([ts])
   @@index([workspaceId])
@@ -1121,6 +1565,7 @@ model IMAtom {
   atoms     IMHyperedgeAtom[]
 
   workspaceId String? // 1.9.2 Phase 1 (m2 NULLable, m3 NOT NULL + drop scope)
+
   @@unique([kind, value])
   @@index([workspaceId])
   @@map("im_atoms")
@@ -1133,6 +1578,7 @@ model IMHyperedge {
   atoms     IMHyperedgeAtom[]
 
   workspaceId String? // 1.9.2 Phase 1 (m2 NULLable, m3 NOT NULL + drop scope)
+
   @@index([type])
   @@index([createdAt])
   @@index([workspaceId])
@@ -1147,6 +1593,7 @@ model IMHyperedgeAtom {
   atom        IMAtom      @relation(fields: [atomId], references: [id])
 
   workspaceId String? // 1.9.2 Phase 1 (m2 NULLable, m3 NOT NULL + drop scope)
+
   @@id([hyperedgeId, atomId])
   @@index([atomId, hyperedgeId])
   @@index([workspaceId])
@@ -1161,6 +1608,7 @@ model IMCausalLink {
   createdAt DateTime @default(now())
 
   workspaceId String? // 1.9.2 Phase 1 (m2 NULLable, m3 NOT NULL + drop scope)
+
   @@id([causeId, effectId])
   @@index([effectId])
   @@index([workspaceId])
@@ -1172,25 +1620,33 @@ model IMCausalLink {
 // ==============================================================================
 
 model IMSkill {
-  id           String   @id @default(cuid())
-  slug         String   @unique // url-safe identifier: "timeout-recovery"
-  name         String // Human readable name
-  description  String   @default("") // One-line description
-  category     String   @default("general") // coding, devops, search, browser, ai, cli, security, etc.
-  tags         String   @default("[]") // JSON: string[] — freeform tags
-  author       String   @default("") // Author name or handle
-  source       String   @default("community") // clawhub | awesome-openclaw | community | prismer
-  sourceUrl    String   @default("") // Link to original (GitHub, ClawHub, etc.)
-  sourceId     String   @default("") // External ID for dedup (e.g. "openclaw:author/skill-name")
-  content      String   @default("") // Full SKILL.md content or strategy text
-  installs     Int      @default(0) // Number of times installed/used
-  stars        Int      @default(0) // Community rating
-  qualityScore Float    @default(0.01)
-  status       String   @default("active") // active | deprecated | pending_review
-  geneId       String? // Linked Gene ID if converted to evolution gene
-  metadata     String   @default("{}") // JSON: extra data (sourceGdi, downloads, etc.)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id                      String    @id @default(cuid())
+  slug                    String    @unique // url-safe identifier: "timeout-recovery"
+  name                    String // Human readable name
+  description             String    @default("") // One-line description
+  category                String    @default("general") // coding, devops, search, browser, ai, cli, security, etc.
+  tags                    String    @default("[]") // JSON: string[] — freeform tags
+  author                  String    @default("") // Author name or handle
+  source                  String    @default("community") // clawhub | awesome-openclaw | community | prismer
+  sourceUrl               String    @default("") // Link to original (GitHub, ClawHub, etc.)
+  sourceId                String    @default("") // External ID for dedup (e.g. "openclaw:author/skill-name")
+  content                 String    @default("") // Full SKILL.md content (single-file legacy; dual-write 6mo)
+  // v2.1 §A.7 — multi-file manifest (agentskills.io compliance)
+  contentManifest         String? // JSON: [{path, sha256, size, content?(b64), url?, inline}]
+  contentManifestRevision String? // sha256 merkle root over files[]
+  installs                Int       @default(0) // Number of times installed/used
+  stars                   Int       @default(0) // Community rating
+  qualityScore            Float     @default(0.01)
+  // status enum (app-layer): active | deprecated | pending_review | draft
+  // release201/07 added `draft` — authoring engine output; filtered from marketplace search,
+  // never installed, never synced to daemons (see services/skill-draft.service.ts).
+  status                  String    @default("active")
+  geneId                  String? // Linked Gene ID if converted to evolution gene
+  metadata                String    @default("{}") // JSON: extra data; built-ins use metadata.source='built-in'
+  executableJson          Json? // v2.0: executable entry metadata for inline-script/mcp-tool/http-endpoint skills
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @updatedAt
+  publishedAt             DateTime? // v2.1 §A.7 marketplace publish timestamp (NULL = unpublished)
 
   // v1.7.2: Skill Ecosystem enhancements
   packageUrl     String? // CDN URL for tarball bundle (multi-file skills)
@@ -1209,6 +1665,17 @@ model IMSkill {
   changelog      String  @default("")
 
   workspaceId String? // 1.9.2 Phase 1 (m2 NULLable, m3 NOT NULL + drop scope)
+
+  // release201/08 §5.1 — Lifecycle SOP fields (migration 430)
+  lifecycleStage String @default("published") @map("lifecycle_stage")
+  publishScope   String @default("private") @map("publish_scope")
+
+  // release202/09 §3.3 — capability-stack governance (migration 456)
+  //   • isSystem        — true = system-capability built-in (A-list)
+  //   • defaultEnabled  — true = auto-installed onto NEW agents by default
+  isSystem       Boolean @default(false) @map("is_system")
+  defaultEnabled Boolean @default(false) @map("default_enabled")
+
   @@index([category])
   @@index([source])
   @@index([installs])
@@ -1216,7 +1683,31 @@ model IMSkill {
   @@index([sourceId])
   @@index([ownerAgentId])
   @@index([workspaceId])
+  @@index([contentManifestRevision])
+  @@index([lifecycleStage])
+  @@index([publishScope])
   @@map("im_skills")
+}
+
+// release201/08 §3.4 + §5.2 — Eval session run history (migration 431).
+model IMSkillEvalRun {
+  id            String    @id
+  skillId       String    @map("skill_id")
+  status        String
+  daemonId      String?   @map("daemon_id")
+  passCount     Int       @default(0) @map("pass_count")
+  failCount     Int       @default(0) @map("fail_count")
+  testCasesJson String    @map("test_cases_json")
+  resultsJson   String?   @map("results_json")
+  agentTraceUrl String?   @map("agent_trace_url")
+  startedAt     DateTime? @map("started_at")
+  finishedAt    DateTime? @map("finished_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  @@index([skillId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("im_skill_eval_runs")
 }
 
 // ==============================================================================
@@ -1245,23 +1736,65 @@ model IMReport {
 
 // ─── Agent-Skill Installation Records ─────────────────────────────
 model IMAgentSkill {
-  id          String    @id @default(cuid())
-  agentId     String // Installer agent ID
-  skillId     String // Skill ID
-  geneId      String? // Auto-created Gene ID from install
-  installedAt DateTime  @default(now())
-  updatedAt   DateTime? // Version update timestamp
-  config      String    @default("{}") // JSON: agent-specific config
-  status      String    @default("active") // active | disabled | uninstalled
-  version     String? // Installed version
+  id                String    @id @default(cuid())
+  agentId           String // Installer agent ID
+  skillId           String // Skill ID
+  geneId            String? // Auto-created Gene ID from install
+  installedAt       DateTime  @default(now())
+  updatedAt         DateTime? // Version update timestamp
+  config            String    @default("{}") // JSON: agent-specific config
+  status            String    @default("active") // active | disabled | uninstalled
+  version           String? // Installed version
+  installedRevision String? // skill content hash acked by daemon
+  lastSyncedAt      DateTime? // last successful daemon skill sync
+  lastSyncError     String? // daemon-reported sync error
 
   workspaceId String? // 1.9.2 Phase 1 (m2 NULLable, m3 NOT NULL + drop scope)
+
   @@unique([agentId, skillId])
   @@index([agentId, status])
   @@index([agentId])
+  @@index([agentId, lastSyncedAt])
   @@index([skillId])
   @@index([workspaceId])
   @@map("im_agent_skills")
+}
+
+// ─── ACP Role Templates (Cloud-side executable agent blueprints) ───
+model IMRoleTemplate {
+  id                  String    @id @default(cuid())
+  slug                String    @unique
+  version             String    @default("1.0.0")
+  name                String    @default("{}") // JSON: I18nString
+  description         String    @default("{}") // JSON: I18nString
+  agentType           String    @default("specialist")
+  category            String    @default("general")
+  tags                String    @default("[]") // JSON: string[]
+  baseSkillSet        String    @default("prismer-base")
+  requiredSkills      String    @default("[]") // JSON: SkillRequirement[]
+  mcpServers          String    @default("[]") // JSON: McpServerConfig[]
+  hermesConfig        String? // JSON: HermesRoleConfig
+  openclawConfig      String? // JSON: OpenClawRoleConfig
+  operatingPrinciples String? // JSON: I18nString or structured prompt object
+  taskAuthority       String    @default("executor")
+  approvalPolicy      String    @default("auto-low-risk")
+  status              String    @default("active")
+  source              String    @default("prismer-native") // agency-agents | prismer-native | custom
+  sourceSlug          String?
+  sourceCommit        String?
+  importedAt          DateTime?
+  curatedQuality      String    @default("review") // gold | silver | bronze | review
+  metadata            Json? // theme, skillRefs, curation sidecar
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  @@index([category])
+  @@index([agentType])
+  @@index([status])
+  @@index([taskAuthority])
+  @@index([source, curatedQuality])
+  @@index([curatedQuality, status])
+  @@map("im_role_templates")
 }
 
 // ─── Unmatched Signals (evolution frontier) ────────────────────────
@@ -1279,6 +1812,7 @@ model IMUnmatchedSignal {
   updatedAt  DateTime @updatedAt
 
   workspaceId String? // 1.9.2 Phase 1 (m2 NULLable, m3 NOT NULL + drop scope)
+
   @@unique([signalKey, agentId])
   @@index([signalKey])
   @@index([count])
@@ -1296,6 +1830,7 @@ model IMEvolutionAchievement {
   metadata   String   @default("{}")
 
   workspaceId String? // 1.9.2 Phase 1 (m2 NULLable, m3 NOT NULL + drop scope)
+
   @@unique([agentId, badgeKey])
   @@index([agentId])
   @@index([workspaceId])
@@ -1316,10 +1851,11 @@ model IMEvolutionACL {
 
   workspaceId String? // 1.9.2 Phase 1 (m2 NULLable, m3 NOT NULL + drop scope)
   geneId      String? // 1.9.2 — split out from resourceId 三义
+
+  @@unique([resourceType, workspaceId, geneId, subjectType, subjectId, permission], map: "uq_acl_v2")
   @@index([subjectType, subjectId])
   @@index([workspaceId])
   @@index([geneId])
-  @@unique([resourceType, workspaceId, geneId, subjectType, subjectId, permission], map: "uq_acl_v2")
   @@map("im_evolution_acl")
 }
 
@@ -1337,6 +1873,7 @@ model IMSignalCluster {
   updatedAt     DateTime @updatedAt
 
   workspaceId String? // 1.9.2 Phase 1 (m2 NULLable, m3 NOT NULL + drop scope)
+
   @@index([frequency])
   @@index([workspaceId])
   @@map("im_signal_clusters")
@@ -1489,6 +2026,7 @@ model IMValueMetrics {
   growthRate      Float?
 
   workspaceId String? // 1.9.2 Phase 1 (m2 NULLable, m3 NOT NULL + drop scope)
+
   @@index([entityType, period, snapshotDate])
   @@index([entityType, entityId, period])
   @@index([period, rankByValue, snapshotDate])
@@ -1512,6 +2050,7 @@ model IMAntiCheatLog {
   createdAt  DateTime  @default(now())
 
   workspaceId String? // 1.9.2 Phase 1 (m2 NULLable, m3 NOT NULL + drop scope)
+
   @@index([ruleKey, createdAt])
   @@index([entityId])
   @@index([workspaceId])
@@ -1530,6 +2069,7 @@ model IMTokenBaseline {
   updatedAt       DateTime @updatedAt
 
   workspaceId String? // 1.9.2 Phase 1 (m2 NULLable, m3 NOT NULL + drop scope)
+
   @@index([workspaceId])
   @@map("im_token_baseline")
 }
@@ -1549,10 +2089,11 @@ model IMKnowledgeLink {
   createdAt  DateTime @default(now())
 
   workspaceId String? // 1.9.2 Phase 1 (m2 NULLable, m3 NOT NULL + drop scope)
+
   @@unique([sourceType, sourceId, targetType, targetId, linkType])
   @@index([sourceType, sourceId])
   @@index([targetType, targetId])
-    @@index([workspaceId])
+  @@index([workspaceId])
   @@map("im_knowledge_links")
 }
 
@@ -1561,45 +2102,45 @@ model IMKnowledgeLink {
 // ==============================================================================
 
 model IMCommunityPost {
-  id            String   @id @default(cuid())
-  boardId       String? // nullable — pure tag system; legacy boards stored as tags
-  authorId      String
-  authorType    String   @default("human") // 'human' | 'agent'
+  id         String  @id @default(cuid())
+  boardId    String? // nullable — pure tag system; legacy boards stored as tags
+  authorId   String
+  authorType String  @default("human") // 'human' | 'agent'
 
-  title         String
-  content       String
-  contentHtml   String?
-  contentJson   String?  // ProseMirror JSON for WYSIWYG editor round-trip
+  title       String
+  content     String
+  contentHtml String?
+  contentJson String? // ProseMirror JSON for WYSIWYG editor round-trip
 
-  tags          Json?
-  postType      String   @default("discussion") // 'discussion' | 'battleReport' | 'milestone' | 'geneRelease' | 'help' | 'idea' | 'changelog'
-  status        String   @default("active") // 'active' | 'solved' | 'planned' | 'shipped' | 'archived' | 'hidden'
+  tags     Json?
+  postType String @default("discussion") // 'discussion' | 'battleReport' | 'milestone' | 'geneRelease' | 'help' | 'idea' | 'changelog'
+  status   String @default("active") // 'active' | 'solved' | 'planned' | 'shipped' | 'archived' | 'hidden'
 
   linkedGeneIds   Json?
   linkedSkillIds  Json?
   linkedAgentId   String?
   linkedCapsuleId String?
 
-  attachments     Json?
+  attachments Json?
 
-  upvotes       Int      @default(0)
-  downvotes     Int      @default(0)
-  commentCount  Int      @default(0)
-  viewCount     Int      @default(0)
-  bookmarkCount Int      @default(0)
+  upvotes       Int @default(0)
+  downvotes     Int @default(0)
+  commentCount  Int @default(0)
+  viewCount     Int @default(0)
+  bookmarkCount Int @default(0)
 
-  solvedAt      DateTime?
-  bestAnswerId  String?
+  solvedAt     DateTime?
+  bestAnswerId String?
 
-  deletedAt     DateTime?
-  deletedBy     String?
+  deletedAt DateTime?
+  deletedBy String?
 
-  pinned        Boolean  @default(false)
-  featured      Boolean  @default(false)
-  autoGenerated Boolean  @default(false)
+  pinned        Boolean @default(false)
+  featured      Boolean @default(false)
+  autoGenerated Boolean @default(false)
 
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([boardId, createdAt])
   @@index([boardId, upvotes])
@@ -1611,31 +2152,31 @@ model IMCommunityPost {
 }
 
 model IMCommunityComment {
-  id          String   @id @default(cuid())
-  postId      String
-  parentId    String?
-  authorId    String
-  authorType  String   @default("human")
+  id         String  @id @default(cuid())
+  postId     String
+  parentId   String?
+  authorId   String
+  authorType String  @default("human")
 
   content     String
   contentHtml String?
 
-  commentType String   @default("reply") // 'reply' | 'answer'
+  commentType String @default("reply") // 'reply' | 'answer'
 
-  upvotes     Int      @default(0)
-  downvotes   Int      @default(0)
+  upvotes   Int @default(0)
+  downvotes Int @default(0)
 
-  isBestAnswer Boolean @default(false)
+  isBestAnswer  Boolean @default(false)
   autoGenerated Boolean @default(false)
 
   linkedGeneIds Json?
   metrics       Json?
 
-  deletedAt   DateTime?
-  deletedBy   String?
+  deletedAt DateTime?
+  deletedBy String?
 
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([postId, createdAt])
   @@index([postId, upvotes])
@@ -1646,13 +2187,13 @@ model IMCommunityComment {
 }
 
 model IMCommunityVote {
-  id          String   @id @default(cuid())
-  userId      String
-  targetType  String // 'post' | 'comment'
-  targetId    String
-  value       Int // +1 or -1
+  id         String @id @default(cuid())
+  userId     String
+  targetType String // 'post' | 'comment'
+  targetId   String
+  value      Int // +1 or -1
 
-  createdAt   DateTime @default(now())
+  createdAt DateTime @default(now())
 
   @@unique([userId, targetType, targetId])
   @@index([targetType, targetId])
@@ -1660,13 +2201,14 @@ model IMCommunityVote {
 }
 
 model IMCommunityBookmark {
-  id          String   @id @default(cuid())
-  userId      String
-  postId      String
+  id     String @id @default(cuid())
+  userId String
+  postId String
 
-  createdAt   DateTime @default(now())
+  createdAt DateTime @default(now())
 
   workspaceId String? // 1.9.2 Phase 1 (m2 NULLable, m3 NOT NULL + drop scope)
+
   @@unique([userId, postId])
   @@index([userId, createdAt])
   @@index([workspaceId])
@@ -1674,12 +2216,12 @@ model IMCommunityBookmark {
 }
 
 model IMCommunityFollow {
-  id            String   @id @default(cuid())
+  id            String @id @default(cuid())
   followerId    String
   followingId   String
-  followingType String   @default("user") // 'user' | 'agent' | 'gene' | 'board'
+  followingType String @default("user") // 'user' | 'agent' | 'gene' | 'board'
 
-  createdAt     DateTime @default(now())
+  createdAt DateTime @default(now())
 
   @@unique([followerId, followingId, followingType])
   @@index([followingId, followingType])
@@ -1687,10 +2229,10 @@ model IMCommunityFollow {
 }
 
 model IMCommunityTag {
-  id        String   @id @default(cuid())
-  name      String   @unique
-  postCount Int      @default(0)
-  trending  Boolean  @default(false)
+  id        String  @id @default(cuid())
+  name      String  @unique
+  postCount Int     @default(0)
+  trending  Boolean @default(false)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1714,24 +2256,24 @@ model IMCommunityPostTag {
 // ── Community v1.5: Dynamic Boards ──────────────────────────────────
 
 model IMCommunityBoard {
-  id              String   @id @default(cuid())
-  slug            String   @unique // URL path: "showcase", "rust-agents"
-  name            String   // display name
-  description     String?  // board description (Markdown)
-  icon            String?  // emoji or icon key
+  id          String  @id @default(cuid())
+  slug        String  @unique // URL path: "showcase", "rust-agents"
+  name        String // display name
+  description String? // board description (Markdown)
+  icon        String? // emoji or icon key
 
-  creatorId       String   // im_users.id
-  isSystem        Boolean  @default(false)
+  creatorId String // im_users.id
+  isSystem  Boolean @default(false)
 
-  rules           String?  // JSON: { allowedPostTypes?, requireTags?, approvalRequired? }
+  rules String? // JSON: { allowedPostTypes?, requireTags?, approvalRequired? }
 
-  postCount       Int      @default(0)
-  subscriberCount Int      @default(0)
+  postCount       Int @default(0)
+  subscriberCount Int @default(0)
 
-  status          String   @default("active") // 'active' | 'archived' | 'hidden'
+  status String @default("active") // 'active' | 'archived' | 'hidden'
 
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([status, postCount])
   @@index([creatorId])
@@ -1739,10 +2281,10 @@ model IMCommunityBoard {
 }
 
 model IMCommunityBoardAdmin {
-  id        String   @id @default(cuid())
-  boardId   String
-  userId    String
-  role      String   @default("moderator") // 'owner' | 'moderator'
+  id      String @id @default(cuid())
+  boardId String
+  userId  String
+  role    String @default("moderator") // 'owner' | 'moderator'
 
   createdAt DateTime @default(now())
 
@@ -1754,21 +2296,21 @@ model IMCommunityBoardAdmin {
 // ── Community v1.5: User Profile ────────────────────────────────────
 
 model IMCommunityProfile {
-  id             String    @id // = im_users.id (1:1)
-  bio            String?
-  website        String?
+  id      String  @id // = im_users.id (1:1)
+  bio     String?
+  website String?
 
-  postCount      Int       @default(0)
-  commentCount   Int       @default(0)
-  karmaTotal     Int       @default(0)
-  followerCount  Int       @default(0)
-  followingCount Int       @default(0)
+  postCount      Int @default(0)
+  commentCount   Int @default(0)
+  karmaTotal     Int @default(0)
+  followerCount  Int @default(0)
+  followingCount Int @default(0)
 
-  lastActiveAt   DateTime?
-  streakDays     Int       @default(0)
+  lastActiveAt DateTime?
+  streakDays   Int       @default(0)
 
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@map("im_community_profiles")
 }
@@ -1776,18 +2318,19 @@ model IMCommunityProfile {
 // ── Community v1.5: Drafts ──────────────────────────────────────────
 
 model IMCommunityDraft {
-  id          String   @id @default(cuid())
+  id          String  @id @default(cuid())
   authorId    String
   boardSlug   String?
   title       String?
-  contentJson String?  // editor JSON snapshot
-  content     String?  // Markdown snapshot
+  contentJson String? // editor JSON snapshot
+  content     String? // Markdown snapshot
 
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  expiresAt   DateTime // 7 days TTL
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  expiresAt DateTime // 7 days TTL
 
   workspaceId String? // 1.9.2 Phase 1 (m2 NULLable, m3 NOT NULL + drop scope)
+
   @@index([authorId, updatedAt])
   @@index([workspaceId])
   @@map("im_community_drafts")
@@ -1798,14 +2341,14 @@ model IMCommunityDraft {
 // ==============================================================================
 
 model IMFriendRequest {
-  id          String   @id @default(cuid())
-  fromUserId  String
-  toUserId    String
-  reason      String?
-  source      String?   // search | qr_code | group | recommendation
-  status      String   @default("pending") // pending | accepted | rejected | expired
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id         String   @id @default(cuid())
+  fromUserId String
+  toUserId   String
+  reason     String?
+  source     String? // search | qr_code | group | recommendation
+  status     String   @default("pending") // pending | accepted | rejected | expired
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
 
   fromUser IMUser @relation("FriendRequestsSent", fields: [fromUserId], references: [id])
   toUser   IMUser @relation("FriendRequestsReceived", fields: [toUserId], references: [id])
@@ -1863,18 +2406,28 @@ model IMBlock {
 model IMWorkspace {
   id            String    @id @default(cuid())
   ownerImUserId String
-  name          String                              // 'Personal' | 'Acme Inc'
-  slug          String                              // URL-friendly
+  name          String // 'Personal' | 'Acme Inc'
+  slug          String // URL-friendly
   isDefault     Boolean   @default(false)
-  metadata      String    @default("{}")            // JSON: avatar / color / description
+  metadata      String    @default("{}") // JSON: avatar / color / description
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
   deletedAt     DateTime?
 
-  members       IMWorkspaceMember[]
-  agentProfiles IMAgentProfile[]
-  assets        IMAsset[]
-  files         IMWorkspaceFile[]
+  // Orchestrator deputy (v2.0 release 200 §4 — migration 343).
+  // At most one active orchestrator per workspace (service-layer enforced).
+  // Authorized by owner; revocable. See 15-task-state-machine-and-kanban.md.
+  orchestratorAgentId              String?
+  orchestratorAuthorizedAt         DateTime?
+  orchestratorAuthorizedByImUserId String?
+  orchestratorRevokedAt            DateTime?
+
+  members         IMWorkspaceMember[]
+  invites         IMWorkspaceInvite[]
+  agentProfiles   IMAgentProfile[]
+  assets          IMAsset[]
+  files           IMWorkspaceFile[]
+  channelAccounts IMChannelAccount[]
 
   @@unique([ownerImUserId, slug, deletedAt])
   @@index([ownerImUserId, isDefault])
@@ -1885,7 +2438,7 @@ model IMWorkspaceMember {
   id             String   @id @default(cuid())
   workspaceId    String
   memberImUserId String
-  role           String                              // 'owner' | 'admin' | 'member'
+  role           String // 'owner' | 'admin' | 'member'
   joinedAt       DateTime @default(now())
 
   workspace IMWorkspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
@@ -1895,20 +2448,85 @@ model IMWorkspaceMember {
   @@map("im_workspace_members")
 }
 
+// release201/16 Phase 9 — workspace invite token system. See mysql schema for
+// the full rationale; SQLite mirror lives here for dev parity.
+model IMWorkspaceInvite {
+  id               String    @id @default(cuid())
+  workspaceId      String
+  inviterUserId    String
+  token            String    @unique
+  inviteeEmail     String?
+  inviteeImUserId  String?
+  role             String    @default("member") // 'admin' | 'member'
+  status           String    @default("pending") // 'pending' | 'accepted' | 'rejected' | 'revoked' | 'expired'
+  expiresAt        DateTime
+  acceptedByUserId String?
+  acceptedAt       DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  workspace IMWorkspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, status])
+  @@index([inviteeEmail])
+  @@index([inviteeImUserId])
+  @@index([expiresAt])
+  @@map("im_workspace_invites")
+}
+
+// Project scope container (release201/09 Phase 1, v2.0.7) — see mysql schema for full rationale.
+model IMProject {
+  id          String    @id @default(cuid())
+  workspaceId String
+  slug        String
+  name        String
+  description String?
+  status      String    @default("active") // 'active' | 'archived'
+  ownerUserId String
+  metadata    String    @default("{}")
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  archivedAt  DateTime?
+
+  members IMAgentProjectMembership[]
+
+  @@unique([workspaceId, slug])
+  @@index([workspaceId])
+  @@index([ownerUserId])
+  @@index([status])
+  @@map("im_projects")
+}
+
+model IMAgentProjectMembership {
+  id            String   @id @default(cuid())
+  projectId     String
+  principalKind String // 'user' | 'agent'
+  principalId   String
+  role          String   @default("contributor") // 'owner' | 'contributor' | 'observer'
+  joinedAt      DateTime @default(now())
+
+  project IMProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, principalKind, principalId])
+  @@index([projectId])
+  @@index([principalKind, principalId])
+  @@map("im_agent_project_memberships")
+}
+
 model IMAsset {
-  id                  String   @id @default(cuid())
+  id                  String    @id @default(cuid())
   workspaceId         String
   ownerImUserId       String
-  contentHash         String                                    // sha256 of bytes (64 hex chars)
-  storageUri          String                                    // 's3://bucket/<hash>' | 'file:///abs/path'
+  contentHash         String // sha256 of bytes (64 hex chars)
+  storageUri          String // 's3://bucket/<hash>' | 'file:///abs/path'
   sizeBytes           BigInt?
   mime                String?
-  kind                String   @default("file")                 // 'file' | 'image' | 'transcript' | 'snippet'
-  sourceAgentImUserId String?                                   // 哪个 agent 产的
-  sourceTaskId        String?                                   // 哪个 task 产的
-  metadata            String   @default("{}")                   // JSON
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
+  kind                String    @default("file") // 'file' | 'image' | 'transcript' | 'snippet'
+  sourceAgentImUserId String? // 哪个 agent 产的
+  sourceTaskId        String? // 哪个 task 产的
+  metadata            String    @default("{}") // JSON
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
   deletedAt           DateTime?
 
   parentAssetId  String?
@@ -1918,6 +2536,12 @@ model IMAsset {
   ingestError    String?
   assetIndexSeq  BigInt  @default(0)
   cdnUrl         String?
+  thumbnailUrl   String?
+  previewUrls    Json? // JSON: { small?: string, medium?: string, large?: string } | null
+  // release202/13 §3b① — thumbHash (base64, ~20-30 bytes) for an instant
+  // ~0-network blurred placeholder while the real image loads. Best-effort:
+  // null on legacy rows / non-image assets → client falls back to spinner.
+  blurHash       String?
   previewAssetId String?
   folderPath     String?
   filename       String?
@@ -1927,16 +2551,21 @@ model IMAsset {
   revision       Int     @default(1)
   visibility     String  @default("workspace")
   aclJson        String?
-  description    String?                                         // Wave-54 B2: optional agent-authored hint surfaced to other agents
+  description    String? // Wave-54 B2: optional agent-authored hint surfaced to other agents
 
-  workspace IMWorkspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  parentAsset IMAsset?        @relation("IMAssetDerivations", fields: [parentAssetId], references: [id])
-  derivedAssets IMAsset[]     @relation("IMAssetDerivations")
-  previewAsset IMAsset?       @relation("IMAssetPreview", fields: [previewAssetId], references: [id])
-  previewFor   IMAsset[]      @relation("IMAssetPreview")
-  files     IMWorkspaceFile[]
+  // release201/09 Phase 2 (migration 434): user-perspective role.
+  //   'task-bound' | 'workspace-file' | NULL (legacy, post-backfill 应不再出现)
+  boundKind String?
 
-  @@unique([workspaceId, contentHash, deletedAt])
+  workspace     IMWorkspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  parentAsset   IMAsset?          @relation("IMAssetDerivations", fields: [parentAssetId], references: [id])
+  derivedAssets IMAsset[]         @relation("IMAssetDerivations")
+  previewAsset  IMAsset?          @relation("IMAssetPreview", fields: [previewAssetId], references: [id])
+  previewFor    IMAsset[]         @relation("IMAssetPreview")
+  revisions     IMAssetRevision[]
+  files         IMWorkspaceFile[]
+
+  @@unique([workspaceId, contentHash, sourceRef, deletedAt], map: "uk_im_assets_ws_hash_source_deleted")
   @@index([contentHash])
   @@index([workspaceId, kind])
   @@index([workspaceId, sourceTaskId])
@@ -1946,7 +2575,52 @@ model IMAsset {
   @@index([workspaceId, ingestStatus])
   @@index([workspaceId, parentAssetId])
   @@index([workspaceId, previewAssetId])
+  @@index([workspaceId, boundKind])
   @@map("im_assets")
+}
+
+model IMAssetRevision {
+  id                  String    @id @default(cuid())
+  assetId             String
+  workspaceId         String
+  revision            Int
+  contentHash         String
+  storageUri          String
+  sizeBytes           BigInt?
+  mime                String?
+  kind                String
+  ownerImUserId       String
+  sourceAgentImUserId String?
+  sourceTaskId        String?
+  metadata            String
+  parentAssetId       String?
+  derivationKind      String?
+  ingestStatus        String
+  ingestVersion       Int
+  ingestError         String?
+  cdnUrl              String?
+  thumbnailUrl        String?
+  previewUrls         Json?
+  previewAssetId      String?
+  folderPath          String?
+  filename            String?
+  sourceRef           String?
+  sourceKind          String?
+  sourceMetadata      String?
+  visibility          String
+  aclJson             String?
+  description         String?
+  deletedAt           DateTime?
+  createdByImUserId   String?
+  reason              String?
+  createdAt           DateTime  @default(now())
+
+  asset IMAsset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  @@unique([assetId, revision])
+  @@index([workspaceId, assetId, revision])
+  @@index([workspaceId, createdAt])
+  @@map("im_asset_revisions")
 }
 
 model IMAssetIndexCounter {
@@ -1985,7 +2659,7 @@ model IMWorkspaceFile {
   path             String
   assetId          String
   version          Int       @default(1)
-  parentVersionId  String?                                       // 历史链 (FK to im_workspace_files.id, 同表自引用)
+  parentVersionId  String? // 历史链 (FK to im_workspace_files.id, 同表自引用)
   modifierImUserId String
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
@@ -2003,11 +2677,11 @@ model IMWorkspaceFile {
 model IMAgentProfile {
   id            String    @id @default(cuid())
   workspaceId   String
-  agentImUserId String                                            // FK → im_users.id (agent role)
-  adapterName   String                                            // 'hermes' | 'claude-code' | 'openclaw' | 'codex'
-  name          String                                            // 'Project A backend'
-  config        String    @default("{}")                         // JSON: adapter-specific (cwd/model/MCP/env/prompt)
-  version       Int       @default(1)                             // 乐观锁
+  agentImUserId String // FK → im_users.id (agent role)
+  adapterName   String // 'hermes' | 'claude-code' | 'openclaw' | 'codex'
+  name          String // 'Project A backend'
+  config        String    @default("{}") // JSON: adapter-specific (cwd/model/MCP/env/prompt)
+  version       Int       @default(1) // 乐观锁
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
   deletedAt     DateTime?
@@ -2024,14 +2698,14 @@ model IMAgentProfile {
 // ==============================================================================
 
 model IMPairingOffer {
-  nonce            String    @id                            // daemon-generated
-  devicePub        String?                                  // ed25519 pubkey, anti-replay
-  deviceName       String?                                  // 'My MacBook Pro'
-  approverImUserId String?                                  // mobile user who approved
+  nonce            String    @id // daemon-generated
+  devicePub        String? // ed25519 pubkey, anti-replay
+  deviceName       String? // 'My MacBook Pro'
+  approverImUserId String? // mobile user who approved
   approvedAt       DateTime?
-  apiKeyId         String?                                  // new API key minted at approval
-  consumedAt       DateTime?                                 // daemon poll consumed it (one-shot)
-  expiresAt        DateTime                                 // now + 5min
+  apiKeyId         String? // new API key minted at approval
+  consumedAt       DateTime? // daemon poll consumed it (one-shot)
+  expiresAt        DateTime // now + 5min
   createdAt        DateTime  @default(now())
 
   @@index([expiresAt])
@@ -2043,29 +2717,41 @@ model IMPairingOffer {
 // ==============================================================================
 
 model IMContainer {
-  id            String    @id @default(cuid())
+  id            String  @id @default(cuid())
   workspaceId   String
+  // Migration 448 (release201/20 §1) — optional project scope for
+  // runtime-installation containers. NULL = workspace-level.
+  projectId     String?
   tenantId      String
   agentImUserId String?
   taskId        String?
 
-  podName       String    @unique
-  namespace     String    @default("default")
-  image         String
-  imageTag      String
+  podName   String @unique
+  namespace String @default("default")
+  image     String
+  imageTag  String
 
-  status        String    // pending|bound|running|stopping|stopped|errored|provisioning
+  status String // pending|bound|running|stopping|stopped|errored|provisioning
 
   // Wave-8 W11 — runtime backing kind. "docker" is the legacy local-daemon-on-EKS
   // path; "k8s" is the wizard-provisioned pod path.
   // §26 B5 Stage 1: parallel `deviceType` field added; future stage retires runtimeKind.
-  runtimeKind   String    @default("docker")
+  runtimeKind String @default("docker")
 
   // §26 B5 Stage 1 — device-semantic fields (migration 317):
   //   deviceType: 'local' | 'k8s' | 'docker-host' | (future) — supersedes runtimeKind
   //   daemonId:   1 device = 1 daemon (nullable in Stage 1)
-  deviceType    String    @default("k8s")
-  daemonId      String?
+  deviceType String  @default("k8s")
+  daemonId   String?
+
+  // Migration 336 (08 §6.1) — provider abstraction convergence field;
+  // replaces the runtimeKind+deviceType pair (kept in parallel during the
+  // dual-write window; v210 drops the legacy pair).
+  providerKind       String    @default("k8s")
+  // Migration 336 (08 §5.4) — daemon /healthz reconciler state.
+  // misses≥3 → status=degraded; reset to 0 on a successful probe.
+  daemonHealthMisses Int       @default(0)
+  lastDaemonHealthAt DateTime?
 
   // Migration 322 — provisioning progress signals for workspace UI + admin
   // console. provisioningStep is the current step name (null when not in
@@ -2079,19 +2765,27 @@ model IMContainer {
   // that can register against this device. Default 3 (Web base subscription
   // tier). Enforcement happens in agent.register (server-side) — schema-only
   // here, read path lands in §30 B3.
-  maxAgents     Int       @default(3)
+  // 2026-06-06 — schema default was still 3 while DB migration 340 bumped the
+  // column DEFAULT to 10; Prisma bakes the SCHEMA default into the insert, so
+  // every Prisma-created device got 3 → the "maximum is 3" cap. Align to 10.
+  maxAgents Int @default(10)
 
   cpuRequest    String
   cpuLimit      String
   memoryRequest String
   memoryLimit   String
 
-  gatewayUrl    String?
+  gatewayUrl String?
 
-  startedAt     DateTime?
-  stoppedAt     DateTime?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  // v2.0 §4.8 (migration 409): daemon transport-probe report.
+  transport        String? // 'ws' | 'http' | 'both'
+  gatewayIsPrivate Boolean?
+  lastProbeAt      DateTime?
+
+  startedAt DateTime?
+  stoppedAt DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
 
   @@index([workspaceId, status])
   @@index([tenantId])
@@ -2099,31 +2793,79 @@ model IMContainer {
   @@index([daemonId])
   @@index([deviceType])
   @@index([provisioningStep])
+  @@index([providerKind, status])
+  @@index([transport, lastProbeAt])
+  // Migration 448 — project scope filter (release201/20 §1).
+  @@index([projectId, status])
   @@map("im_containers")
 }
 
 model IMContainerSnapshot {
-  id           String    @id @default(cuid())
-  containerId  String
+  id             String            @id @default(cuid())
+  containerId    String
   // S3 (302): imageTag/imageDigest/sizeBytes set by docker-commit snapshots.
   // Daemon-first FS manifest snapshots leave them null and store the file
   // digest list in `metadata` (kind="fs-manifest").
-  imageTag     String?
-  imageDigest  String?   // sha256:...
-  sizeBytes    BigInt?
-  createdBy    String    // imUserId
-  createdAt    DateTime  @default(now())
-  metadata     String    @default("{}")
+  imageTag       String?
+  imageDigest    String? // sha256:...
+  sizeBytes      BigInt?
+  createdBy      String // imUserId
+  createdAt      DateTime          @default(now())
+  metadata       String            @default("{}")
+  agentSnapshots IMAgentSnapshot[]
 
   @@index([containerId, createdAt])
   @@map("im_container_snapshots")
 }
 
+model IMAgentSnapshot {
+  id                      String   @id @default(cuid())
+  agentImUserId           String
+  workspaceId             String
+  definitionJson          Json
+  skillsJson              Json
+  containerSnapshotId     String?
+  perAgentDirManifestJson Json?
+  memoryDumpRef           String?
+  includeMemory           Boolean  @default(false)
+  createdAt               DateTime @default(now())
+  createdBy               String
+  status                  String   @default("ready")
+  sizeBytes               BigInt?
+
+  containerSnapshot IMContainerSnapshot? @relation(fields: [containerSnapshotId], references: [id], onDelete: SetNull)
+
+  @@index([agentImUserId, createdAt])
+  @@index([workspaceId, createdAt])
+  @@index([containerSnapshotId])
+  @@map("im_agent_snapshots")
+}
+
+model IMAgentPackage {
+  id                String   @id @default(cuid())
+  slug              String   @unique
+  version           String
+  publisherImUserId String
+  publisherDid      String
+  definitionJson    Json
+  skillsJson        Json
+  environmentJson   Json
+  metadataJson      Json?
+  license           String   @default("proprietary")
+  curatedQuality    String   @default("review")
+  status            String   @default("active")
+  createdAt         DateTime @default(now())
+
+  @@index([publisherImUserId, createdAt])
+  @@index([curatedQuality, status])
+  @@map("im_agent_packages")
+}
+
 model IMSandboxRunLog {
-  id            String    @id @default(cuid())
-  containerId   String
-  workspaceId   String
-  tenantId      String
+  id          String @id @default(cuid())
+  containerId String
+  workspaceId String
+  tenantId    String
 
   startedAt     DateTime
   endedAt       DateTime?
@@ -2131,15 +2873,76 @@ model IMSandboxRunLog {
   cpuSeconds    Float?
   memoryGbHours Float?
 
-  trigger       String    // task | manual
-  taskId        String?
+  trigger String // task | manual
+  taskId  String?
 
-  exitReason    String?   // user_stop | task_complete | error | timeout
-  exitCode      Int?
+  exitReason String? // user_stop | task_complete | error | timeout
+  exitCode   Int?
 
-  createdAt     DateTime  @default(now())
+  createdAt DateTime @default(now())
 
   @@index([tenantId, startedAt])
   @@index([workspaceId, startedAt])
   @@map("im_sandbox_run_logs")
+}
+
+// Migration 337 (08 §5.4 + §6.1) — Reconciler resource time series.
+// Sampled ~30s. 7-day retention (trim job out of scope).
+model IMSandboxResourceSample {
+  id            String   @id @default(cuid())
+  containerId   String
+  sampledAt     DateTime
+  cpuUsagePct   Float
+  memUsedBytes  BigInt
+  memLimitBytes BigInt
+  daemonRttMs   Int
+  createdAt     DateTime @default(now())
+
+  @@index([containerId, sampledAt])
+  @@index([sampledAt])
+  @@map("im_sandbox_resource_samples")
+}
+
+// Migration 338 (08 §6.1) — Unified run record across ephemeral + persistent
+// providers. Supersedes IMSandboxRunLog; kept in parallel during cutover.
+// SQLite: executionKind stored as String ('ephemeral' | 'persistent').
+// MySQL: backed by SandboxExecutionKind enum.
+model IMSandboxRun {
+  id                String    @id @default(cuid())
+  containerId       String?
+  providerKind      String
+  executionKind     String // 'ephemeral' | 'persistent'
+  workspaceId       String
+  tenantId          String?
+  taskId            String?
+  startedAt         DateTime
+  endedAt           DateTime?
+  durationMs        Int?
+  exitCode          Int?
+  exitReason        String?
+  cpuSeconds        Float?
+  memoryGbHours     Float?
+  billedAmountCents Int?
+  createdAt         DateTime  @default(now())
+
+  @@index([workspaceId, startedAt])
+  @@index([taskId])
+  @@index([providerKind, executionKind])
+  @@index([exitCode, startedAt])
+  @@map("im_sandbox_runs")
+}
+
+// Migration 338 (08 §6.1) — per-workspace concurrency + monthly caps.
+// Defaults intentionally loose (08 §11) to avoid 503 false-positive at GA.
+model IMSandboxQuota {
+  workspaceId             String   @id
+  maxConcurrentRuns       Int      @default(10)
+  maxMonthlyPodHours      Int      @default(1000)
+  maxMonthlyEphemeralRuns Int      @default(10000)
+  currentPodHours         Float    @default(0)
+  currentEphemeralRuns    Int      @default(0)
+  rollingWindowStartedAt  DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+
+  @@map("im_sandbox_quotas")
 }
