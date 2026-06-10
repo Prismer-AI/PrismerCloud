@@ -148,11 +148,16 @@ export const FEED_ICONS: Record<string, { color: string }> = {
 // Helpers
 export const glass = (isDark: boolean, level: 'subtle' | 'base' | 'elevated' | 'hero' = 'base') => {
   if (!isDark) {
+    // release201/24 §Phase3 — real frosted glassmorphism in light mode too
+    // (was opaque flat white → no depth). Translucent white + backdrop-blur
+    // picks up the page gradient behind it; layered soft shadow + hairline
+    // ring give the same physical "pane of glass" read as the dark variants.
     const map = {
-      subtle: 'bg-white/60 border border-zinc-200/60',
-      base: 'bg-white shadow-sm border border-zinc-200',
-      elevated: 'bg-white shadow-md border border-zinc-200',
-      hero: 'bg-gradient-to-br from-violet-50/80 to-cyan-50/50 border border-violet-100',
+      subtle: 'backdrop-blur-md bg-white/55 border border-white/70 ring-1 ring-zinc-900/[0.03]',
+      base: 'backdrop-blur-xl bg-white/70 border border-white/80 ring-1 ring-zinc-900/[0.04] shadow-[0_4px_24px_-10px_rgba(16,24,40,0.12)]',
+      elevated:
+        'backdrop-blur-2xl bg-white/80 border border-white/90 ring-1 ring-zinc-900/[0.05] shadow-[0_10px_36px_-12px_rgba(16,24,40,0.16)]',
+      hero: 'backdrop-blur-2xl bg-gradient-to-br from-white/85 to-violet-50/40 border border-white/80 ring-1 ring-violet-500/[0.06] shadow-[0_16px_56px_-16px_rgba(139,92,246,0.20)]',
     };
     return map[level];
   }
@@ -184,6 +189,13 @@ export const SOURCE_BADGE: Record<string, { label: string; dark: string; light: 
     light: 'bg-emerald-100 text-emerald-600',
   },
   gstack: { label: 'gstack', dark: 'bg-amber-500/15 text-amber-300', light: 'bg-amber-100 text-amber-600' },
+  // 2026-05-20 §A.7 Phase 1 — evolve.exportSkill 现在写 source='evolution' (was 'prismer')
+  prismer: { label: 'Prismer', dark: 'bg-violet-500/15 text-violet-300', light: 'bg-violet-100 text-violet-700' },
+  evolution: {
+    label: 'Evolved',
+    dark: 'bg-fuchsia-500/15 text-fuchsia-300',
+    light: 'bg-fuchsia-100 text-fuchsia-700',
+  },
 };
 
 export function getSourceBadge(source: string, isDark: boolean): { label: string; className: string } | null {
