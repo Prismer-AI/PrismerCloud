@@ -12,6 +12,10 @@ import type { SignalNode, ZoomLevel } from '../../map-types';
 import { SIGNAL_CATEGORY_COLORS } from './colors';
 import { breathingPulse } from './shapes';
 
+export interface SignalNodeLabels {
+  timeAgo: (iso: string) => string;
+}
+
 export function drawSignalNode(
   ctx: CanvasRenderingContext2D,
   node: SignalNode,
@@ -21,6 +25,7 @@ export function drawSignalNode(
   isHovered: boolean,
   isDark: boolean,
   time: number,
+  labels?: SignalNodeLabels,
 ) {
   ctx.save();
   ctx.globalAlpha = opacity;
@@ -174,7 +179,7 @@ export function drawSignalNode(
         ctx.globalAlpha = opacity * 0.45;
         ctx.fillStyle = isDark ? '#71717a' : '#a1a1aa';
         ctx.font = `${7 * s}px -apple-system, sans-serif`;
-        ctx.fillText(formatLastSeen(node.lastSeen), cx, infoY);
+        ctx.fillText(labels?.timeAgo(node.lastSeen) ?? formatLastSeen(node.lastSeen), cx, infoY);
       }
     }
   }
