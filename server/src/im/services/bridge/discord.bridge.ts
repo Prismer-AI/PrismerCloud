@@ -9,37 +9,46 @@ import type {
   BindingRecord,
   BindingConfig,
   InboundHandler,
-} from "./bridge.interface";
-import type { BridgeResult } from "../../types/index";
+  BridgeSendRecord,
+  BridgeOutboundTarget,
+} from './bridge.interface';
+import { LEGACY_BRIDGE_CAPABILITIES } from './bridge.interface';
+import type { BridgeResult } from '../../types/index';
 
-const DISCORD_API = "https://discord.com/api/v10";
+const DISCORD_API = 'https://discord.com/api/v10';
 
 export class DiscordBridge implements MessageBridge {
-  platform = "discord";
+  platform = 'discord';
+  capabilities = LEGACY_BRIDGE_CAPABILITIES;
 
   /** Active polling handles */
   private pollers = new Map<string, { abort: AbortController }>();
 
   async sendMessage(
-    binding: BindingRecord,
-    content: string
+    binding: BridgeSendRecord,
+    content: string,
+    _metadata?: Record<string, unknown>,
+    target?: BridgeOutboundTarget,
   ): Promise<BridgeResult> {
-    if (!binding.botToken || !binding.channelId) {
-      return { success: false, error: "Missing botToken or channelId" };
+    const botToken = 'botToken' in binding ? binding.botToken : undefined;
+    const channelId =
+      target?.externalConversationId ??
+      target?.externalGroupId ??
+      ('channelId' in binding ? binding.channelId : undefined);
+
+    if (!botToken || !channelId) {
+      return { success: false, error: 'Missing botToken or channelId' };
     }
 
     try {
-      const res = await fetch(
-        `${DISCORD_API}/channels/${binding.channelId}/messages`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bot ${binding.botToken}`,
-          },
-          body: JSON.stringify({ content }),
-        }
-      );
+      const res = await fetch(`${DISCORD_API}/channels/${channelId}/messages`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bot ${botToken}`,
+        },
+        body: JSON.stringify({ content }),
+      });
 
       if (!res.ok) {
         const err = await res.text();
@@ -53,11 +62,10 @@ export class DiscordBridge implements MessageBridge {
     }
   }
 
-  async startListening(
-    binding: BindingRecord,
-    onMessage: InboundHandler
-  ): Promise<void> {
-    if (!binding.botToken || !binding.channelId) return;
+  async startListening(binding: BridgeSendRecord, onMessage: InboundHandler): Promise<void> {
+    const botToken = 'botToken' in binding ? binding.botToken : undefined;
+    const channelId = 'channelId' in binding ? binding.channelId : undefined;
+    if (!botToken || !channelId) return;
 
     const abort = new AbortController();
     this.pollers.set(binding.id, { abort });
@@ -69,11 +77,11 @@ export class DiscordBridge implements MessageBridge {
       while (!abort.signal.aborted) {
         try {
           const url = lastMessageId
-            ? `${DISCORD_API}/channels/${binding.channelId}/messages?after=${lastMessageId}&limit=10`
-            : `${DISCORD_API}/channels/${binding.channelId}/messages?limit=1`;
+            ? `${DISCORD_API}/channels/${channelId}/messages?after=${lastMessageId}&limit=10`
+            : `${DISCORD_API}/channels/${channelId}/messages?limit=1`;
 
           const res = await fetch(url, {
-            headers: { Authorization: `Bot ${binding.botToken}` },
+            headers: { Authorization: `Bot ${botToken}` },
             signal: abort.signal,
           });
 
@@ -86,9 +94,7 @@ export class DiscordBridge implements MessageBridge {
             }>;
 
             // Skip bot messages and process in chronological order
-            const userMessages = messages
-              .filter((m) => !m.author.bot)
-              .reverse();
+            const userMessages = messages.filter((m) => !m.author.bot).reverse();
 
             for (const msg of userMessages) {
               lastMessageId = msg.id;
@@ -107,8 +113,8 @@ export class DiscordBridge implements MessageBridge {
             }
           }
         } catch (err) {
-          if ((err as Error).name === "AbortError") break;
-          console.warn("[DiscordBridge] Poll error:", (err as Error).message);
+          if ((err as Error).name === 'AbortError') break;
+          console.warn('[DiscordBridge] Poll error:', (err as Error).message);
         }
 
         // Wait 5s between polls
@@ -139,14 +145,11 @@ export class DiscordBridge implements MessageBridge {
     }
   }
 
-  async sendVerification(
-    binding: BindingRecord,
-    code: string
-  ): Promise<boolean> {
+  async sendVerification(binding: BindingRecord, code: string): Promise<boolean> {
     if (!binding.botToken || !binding.channelId) return false;
     const result = await this.sendMessage(
       binding,
-      `Your Prismer IM verification code: **${code}**\n\nEnter this code in your Prismer dashboard to complete the binding.`
+      `Your Prismer IM verification code: **${code}**\n\nEnter this code in your Prismer dashboard to complete the binding.`,
     );
     return result.success;
   }
