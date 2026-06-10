@@ -1,18 +1,53 @@
 'use client';
 
 /**
- * Evolution Map — Detail Panel (v0.6 Glassmorphic Drawer)
+ * Evolution Map — Detail Panel (v0.7 Enhanced Drawer)
  *
- * Right-side drawer showing human-readable information about
- * signals, genes, and edges. Uses glassmorphism styling with
- * useful, non-raw-data presentation.
+ * Right-side drawer with collapsible sections, richer metadata,
+ * and glassmorphism styling. Each entity type (gene/signal/edge)
+ * shows an overview at the top and expandable detail sections below.
  */
 
 import { useState } from 'react';
 import Link from 'next/link';
-import type { DetailTarget } from './types/evolution-map.types';
+import { useI18n } from '@/contexts/i18n-context';
+import type { DetailTarget, EdgePath, GeneNode, SignalNode } from './types/evolution-map.types';
 import { SIGNAL_CATEGORY_COLORS, GENE_CATEGORY_COLORS, confidenceToColor } from './canvas/renderer/colors';
-import { X, ArrowRight, AlertTriangle, Download, GitFork, Check, Loader2 } from 'lucide-react';
+import {
+  X,
+  ArrowRight,
+  AlertTriangle,
+  Download,
+  GitFork,
+  Check,
+  Loader2,
+  ChevronDown,
+  Zap,
+  BarChart3,
+  Layers,
+  Info,
+  Link2,
+} from 'lucide-react';
+
+type EvolutionT = ReturnType<typeof useI18n>['t'];
+
+function localizedTimeSince(ts: string, t: EvolutionT): string {
+  const diff = Date.now() - new Date(ts).getTime();
+  const m = Math.floor(diff / 60000);
+  if (m < 1) return t('evolution.common.justNow');
+  if (m < 60) return t('evolution.common.minutesAgo', { count: m });
+  const h = Math.floor(m / 60);
+  if (h < 24) return t('evolution.common.hoursAgo', { count: h });
+  const d = Math.floor(h / 24);
+  return t('evolution.common.daysAgo', { count: d });
+}
+
+function categoryLabel(category: string | undefined, t: EvolutionT): string {
+  const key = category || 'all';
+  const translationKey = `evolution.common.categoryLabels.${key}` as `evolution.${string}`;
+  const translated = t(translationKey);
+  return translated === translationKey ? key : translated;
+}
 
 interface Props {
   target: DetailTarget;
@@ -28,25 +63,81 @@ export function MapDetailPanel({ target, onClose, isDark }: Props) {
     : 'backdrop-blur-2xl bg-white/60 border border-white/40';
 
   return (
-    <div
-      className={`w-80 max-h-full overflow-y-auto rounded-2xl ${glass} shadow-2xl`}
-      style={{ scrollbarWidth: 'none' }}
-    >
-      {/* Close button */}
-      <button
-        onClick={onClose}
-        className={`absolute top-3 right-3 z-10 p-1.5 rounded-lg transition-colors ${
-          isDark ? 'hover:bg-white/10 text-zinc-400' : 'hover:bg-black/10 text-zinc-500'
-        }`}
-      >
-        <X size={16} />
-      </button>
+    <div className={`w-full h-full flex flex-col rounded-2xl ${glass}`}>
+      {/* Fixed header with close button */}
+      <div className="flex justify-end shrink-0 px-3 pt-3 pb-1">
+        <button
+          onClick={onClose}
+          className={`p-1.5 rounded-lg transition-colors ${
+            isDark ? 'hover:bg-white/10 text-zinc-400' : 'hover:bg-black/10 text-zinc-500'
+          }`}
+        >
+          <X size={16} />
+        </button>
+      </div>
 
-      <div className="p-5 space-y-5">
+      {/* Scrollable content */}
+      <div className="flex-1 overflow-y-auto px-5 pb-5 space-y-4" style={{ scrollbarWidth: 'thin' }}>
         {target.type === 'signal' && <SignalDetail target={target} isDark={isDark} />}
         {target.type === 'gene' && <GeneDetail target={target} isDark={isDark} />}
         {target.type === 'edge' && <EdgeDetail target={target} isDark={isDark} />}
       </div>
+    </div>
+  );
+}
+
+// ─── Collapsible Section ─────────────────────────────────────────────
+
+function Section({
+  title,
+  icon,
+  isDark,
+  defaultOpen = false,
+  badge,
+  children,
+}: {
+  title: string;
+  icon: React.ReactNode;
+  isDark: boolean;
+  defaultOpen?: boolean;
+  badge?: string | number;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+
+  return (
+    <div>
+      <button
+        onClick={() => setOpen(!open)}
+        className={`w-full flex items-center gap-2 py-1.5 text-left transition-colors ${
+          isDark ? 'hover:bg-white/[0.04]' : 'hover:bg-black/[0.02]'
+        } rounded-md -mx-1 px-1`}
+      >
+        <span className={isDark ? 'text-zinc-500' : 'text-zinc-400'}>{icon}</span>
+        <span
+          className={`text-[11px] font-semibold uppercase tracking-wide flex-1 ${
+            isDark ? 'text-zinc-400' : 'text-zinc-500'
+          }`}
+        >
+          {title}
+        </span>
+        {badge !== undefined && (
+          <span
+            className={`text-[9px] font-mono px-1.5 py-0.5 rounded-full ${
+              isDark ? 'bg-white/[0.08] text-zinc-400' : 'bg-black/[0.06] text-zinc-500'
+            }`}
+          >
+            {badge}
+          </span>
+        )}
+        <ChevronDown
+          size={12}
+          className={`transition-transform duration-200 ${open ? 'rotate-180' : ''} ${
+            isDark ? 'text-zinc-600' : 'text-zinc-400'
+          }`}
+        />
+      </button>
+      {open && <div className="mt-2 space-y-2">{children}</div>}
     </div>
   );
 }
@@ -60,16 +151,23 @@ function GeneDetail({
   target: Extract<NonNullable<DetailTarget>, { type: 'gene' }>;
   isDark: boolean;
 }) {
+  const { t } = useI18n();
   const { data, connectedSignals, connectedEdges } = target;
   const catColor = GENE_CATEGORY_COLORS[data.category] || '#71717a';
   const textPrimary = isDark ? 'text-zinc-100' : 'text-zinc-900';
   const textMuted = isDark ? 'text-zinc-500' : 'text-zinc-400';
   const cardBg = isDark ? 'bg-white/[0.04] border border-white/[0.06]' : 'bg-black/[0.03] border border-black/[0.04]';
 
+  // Compute derived metrics
+  const successCount = Math.round(data.totalExecutions * data.successRate);
+  const failCount = data.totalExecutions - successCount;
+  const establishedEdges = connectedEdges.filter((e) => !e.isExploring);
+  const exploringEdges = connectedEdges.filter((e) => e.isExploring);
+
   return (
     <>
       {/* Header: colored dot + title + category label */}
-      <div className="pr-8">
+      <div>
         <div className="flex items-center gap-2.5 mb-1">
           <div
             className="w-3 h-3 rounded-full shrink-0"
@@ -77,13 +175,24 @@ function GeneDetail({
           />
           <h3 className={`text-base font-bold leading-tight ${textPrimary}`}>{data.title}</h3>
         </div>
-        <span className={`text-[11px] uppercase tracking-wider ${textMuted}`}>{data.category}</span>
+        <div className="flex items-center gap-2 mt-0.5">
+          <span className={`text-[11px] uppercase tracking-wider ${textMuted}`}>{data.category}</span>
+          <span
+            className={`text-[9px] px-1.5 py-0.5 rounded-full font-mono ${
+              isDark ? 'bg-white/[0.06] text-zinc-500' : 'bg-black/[0.04] text-zinc-400'
+            }`}
+          >
+            {data.id.slice(0, 8)}
+          </span>
+        </div>
       </div>
 
       {/* Success rate: full-width progress bar */}
       <div>
         <div className="flex items-center justify-between mb-1.5">
-          <span className={`text-xs font-medium ${isDark ? 'text-zinc-300' : 'text-zinc-600'}`}>Success Rate</span>
+          <span className={`text-xs font-medium ${isDark ? 'text-zinc-300' : 'text-zinc-600'}`}>
+            {t('evolution.map.detail.successRate')}
+          </span>
           <span className={`text-sm font-mono font-bold ${textPrimary}`}>{Math.round(data.successRate * 100)}%</span>
         </div>
         <div className={`h-1.5 rounded-full ${isDark ? 'bg-white/[0.08]' : 'bg-black/[0.06]'}`}>
@@ -95,31 +204,35 @@ function GeneDetail({
             }}
           />
         </div>
+        <div className={`flex justify-between mt-1 text-[10px] ${textMuted}`}>
+          <span>{t('evolution.map.detail.passed', { count: successCount })}</span>
+          <span>{t('evolution.map.detail.failedCount', { count: failCount })}</span>
+        </div>
       </div>
 
       {/* Stats grid: 2x2 glassmorphic cards */}
       <div className="grid grid-cols-2 gap-2">
         <div className={`p-3 rounded-lg ${cardBg}`}>
           <div className={`text-sm font-bold font-mono ${textPrimary}`}>{data.totalExecutions}</div>
-          <div className={`text-[10px] mt-0.5 ${textMuted}`}>Executions</div>
+          <div className={`text-[10px] mt-0.5 ${textMuted}`}>{t('evolution.map.detail.executions')}</div>
         </div>
         <div className={`p-3 rounded-lg ${cardBg}`}>
           <div className={`text-sm font-bold font-mono ${textPrimary}`}>{data.agentCount}</div>
-          <div className={`text-[10px] mt-0.5 ${textMuted}`}>Agents</div>
+          <div className={`text-[10px] mt-0.5 ${textMuted}`}>{t('evolution.map.detail.agents')}</div>
         </div>
         <div className={`p-3 rounded-lg ${cardBg}`}>
           <div className={`text-sm font-bold font-mono ${textPrimary}`}>{data.pqi}</div>
-          <div className={`text-[10px] mt-0.5 ${textMuted}`}>PQI Score</div>
+          <div className={`text-[10px] mt-0.5 ${textMuted}`}>{t('evolution.map.detail.pqiScore')}</div>
         </div>
         <div className={`p-3 rounded-lg ${cardBg}`}>
           <div className={`text-sm font-bold ${textPrimary}`} style={{ color: catColor }}>
             {data.category}
           </div>
-          <div className={`text-[10px] mt-0.5 ${textMuted}`}>Category</div>
+          <div className={`text-[10px] mt-0.5 ${textMuted}`}>{t('evolution.map.detail.category')}</div>
         </div>
       </div>
 
-      {/* Beta Confidence Interval — PRD §7.2 natural language narrative */}
+      {/* Beta Confidence Interval */}
       {data.totalExecutions >= 5 && (
         <div className={`p-3 rounded-lg text-xs leading-relaxed ${cardBg} ${textMuted}`}>
           {(() => {
@@ -128,18 +241,23 @@ function GeneDetail({
             const se = Math.sqrt((p * (1 - p)) / Math.max(n, 1));
             const lo = Math.max(0, p - 1.96 * se);
             const hi = Math.min(1, p + 1.96 * se);
-            return `Based on ${n} runs, the true success rate is likely between ${Math.round(lo * 100)}% and ${Math.round(hi * 100)}% (95% confidence).`;
+            return t('evolution.map.detail.confidenceRange', {
+              runs: n,
+              low: Math.round(lo * 100),
+              high: Math.round(hi * 100),
+            });
           })()}
         </div>
       )}
 
-      {/* Strategy section — render actual steps if available */}
-      <div>
-        <h4
-          className={`text-[11px] font-semibold uppercase tracking-wide mb-2 ${isDark ? 'text-zinc-400' : 'text-zinc-500'}`}
-        >
-          Strategy
-        </h4>
+      {/* ─── Expandable: Strategy ─── */}
+      <Section
+        title={t('evolution.map.detail.strategy')}
+        icon={<Layers size={12} />}
+        isDark={isDark}
+        defaultOpen={!!(data.strategySteps && data.strategySteps.length > 0)}
+        badge={data.strategySteps?.length ?? 0}
+      >
         <div className={`p-3 rounded-lg ${cardBg}`}>
           {data.strategySteps && data.strategySteps.length > 0 ? (
             <ol className="space-y-1.5 list-decimal list-inside">
@@ -150,57 +268,224 @@ function GeneDetail({
               ))}
             </ol>
           ) : (
-            <p className={`text-xs leading-relaxed ${textMuted}`}>No strategy steps available yet</p>
+            <p className={`text-xs leading-relaxed ${textMuted}`}>{t('evolution.map.detail.noStrategy')}</p>
           )}
         </div>
-      </div>
+      </Section>
 
-      {/* Recent Activity: connected edges as signal -> outcome */}
-      <div>
-        <h4
-          className={`text-[11px] font-semibold uppercase tracking-wide mb-2 ${isDark ? 'text-zinc-400' : 'text-zinc-500'}`}
-        >
-          Recent Activity
-        </h4>
+      {/* ─── Expandable: Signal Connections ─── */}
+      <Section
+        title={t('evolution.map.detail.signalConnections')}
+        icon={<Link2 size={12} />}
+        isDark={isDark}
+        defaultOpen={connectedEdges.length > 0 && connectedEdges.length <= 8}
+        badge={connectedEdges.length}
+      >
         {connectedEdges.length > 0 ? (
           <div className="space-y-1.5">
-            {connectedEdges.slice(0, 5).map((edge) => {
-              const signal = connectedSignals.find((s) => s.key === edge.signalKey);
-              const signalLabel = signal ? signal.key : edge.signalKey;
-              const status = edge.isExploring ? 'exploring' : 'established';
-              return (
-                <div
-                  key={`${edge.signalKey}-${edge.geneId}`}
-                  className={`flex items-center gap-2 p-2 rounded-md ${cardBg}`}
-                >
-                  <span
-                    className={`text-[10px] font-mono truncate flex-1 ${isDark ? 'text-zinc-300' : 'text-zinc-600'}`}
-                  >
-                    {signalLabel}
-                  </span>
-                  <span
-                    className={`text-[9px] px-1.5 py-0.5 rounded-full font-medium ${
-                      status === 'established' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-amber-500/10 text-amber-400'
-                    }`}
-                  >
-                    {status}
-                  </span>
+            {/* Established paths */}
+            {establishedEdges.length > 0 && (
+              <div>
+                <div className={`text-[9px] uppercase tracking-wider mb-1 ${textMuted}`}>
+                  {t('evolution.map.detail.established')} ({establishedEdges.length})
                 </div>
-              );
-            })}
+                {establishedEdges.map((edge) => (
+                  <EdgeRow
+                    key={`${edge.signalKey}-${edge.geneId}`}
+                    edge={edge}
+                    connectedSignals={connectedSignals}
+                    isDark={isDark}
+                    cardBg={cardBg}
+                  />
+                ))}
+              </div>
+            )}
+            {/* Exploring paths */}
+            {exploringEdges.length > 0 && (
+              <div>
+                <div className={`text-[9px] uppercase tracking-wider mb-1 mt-2 ${textMuted}`}>
+                  {t('evolution.map.detail.exploring')} ({exploringEdges.length})
+                </div>
+                {exploringEdges.map((edge) => (
+                  <EdgeRow
+                    key={`${edge.signalKey}-${edge.geneId}`}
+                    edge={edge}
+                    connectedSignals={connectedSignals}
+                    isDark={isDark}
+                    cardBg={cardBg}
+                  />
+                ))}
+              </div>
+            )}
           </div>
         ) : (
-          <p className={`text-xs ${textMuted}`}>No activity recorded yet</p>
+          <p className={`text-xs ${textMuted}`}>{t('evolution.map.detail.noSignalConnections')}</p>
         )}
-      </div>
+      </Section>
 
-      {/* Action buttons — connected to real API */}
+      {/* ─── Expandable: Advanced Stats ─── */}
+      <Section title={t('evolution.map.detail.advanced')} icon={<BarChart3 size={12} />} isDark={isDark}>
+        <div className={`p-3 rounded-lg space-y-2 ${cardBg}`}>
+          <StatRow label={t('evolution.map.detail.geneId')} value={data.id} mono isDark={isDark} />
+          {data.communityId !== undefined && (
+            <StatRow label={t('evolution.map.detail.community')} value={`#${data.communityId}`} isDark={isDark} />
+          )}
+          {data.communityMembership !== undefined && (
+            <StatRow
+              label={t('evolution.map.detail.membership')}
+              value={`${Math.round(data.communityMembership * 100)}%`}
+              isDark={isDark}
+            />
+          )}
+          <StatRow
+            label={t('evolution.map.detail.establishedPaths')}
+            value={`${establishedEdges.length} / ${connectedEdges.length}`}
+            isDark={isDark}
+          />
+          {connectedEdges.length > 0 && (
+            <StatRow
+              label={t('evolution.map.detail.avgConfidence')}
+              value={`${Math.round(
+                (connectedEdges.reduce((sum, e) => sum + e.confidence, 0) / connectedEdges.length) * 100,
+              )}%`}
+              isDark={isDark}
+            />
+          )}
+          {connectedEdges.some((e) => (e.bimodalityIndex ?? 0) > 0.3) && (
+            <StatRow
+              label={t('evolution.map.detail.bimodalPaths')}
+              value={`${connectedEdges.filter((e) => (e.bimodalityIndex ?? 0) > 0.3).length}`}
+              warn
+              isDark={isDark}
+            />
+          )}
+        </div>
+      </Section>
+
+      {/* Action buttons */}
       <GeneActions geneId={data.id} isDark={isDark} />
     </>
   );
 }
 
+/** Single edge row for gene detail */
+function EdgeRow({
+  edge,
+  connectedSignals,
+  isDark,
+  cardBg,
+}: {
+  edge: EdgePath;
+  connectedSignals: SignalNode[];
+  isDark: boolean;
+  cardBg: string;
+}) {
+  const { t } = useI18n();
+  const [expanded, setExpanded] = useState(false);
+  const signal = connectedSignals.find((s) => s.key === edge.signalKey);
+  const signalLabel = signal ? signal.key : edge.signalKey;
+
+  return (
+    <div className={`rounded-md ${cardBg} overflow-hidden`}>
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className={`w-full flex items-center gap-2 p-2 text-left ${
+          isDark ? 'hover:bg-white/[0.03]' : 'hover:bg-black/[0.02]'
+        }`}
+      >
+        <span className={`text-[10px] font-mono truncate flex-1 ${isDark ? 'text-zinc-300' : 'text-zinc-600'}`}>
+          {signalLabel}
+        </span>
+        <span className="text-[9px] font-mono font-bold" style={{ color: confidenceToColor(edge.confidence) }}>
+          {Math.round(edge.confidence * 100)}%
+        </span>
+        <ChevronDown
+          size={10}
+          className={`transition-transform duration-200 ${expanded ? 'rotate-180' : ''} ${
+            isDark ? 'text-zinc-600' : 'text-zinc-400'
+          }`}
+        />
+      </button>
+      {expanded && (
+        <div className={`px-2 pb-2 space-y-1 text-[10px] ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>
+          <div className="flex justify-between">
+            <span>{t('evolution.map.detail.observations')}</span>
+            <span className="font-mono">{edge.totalObs}</span>
+          </div>
+          <div className="flex justify-between">
+            <span>{t('evolution.map.detail.alphaBeta')}</span>
+            <span className="font-mono">
+              {edge.alpha.toFixed(1)} / {edge.beta.toFixed(1)}
+            </span>
+          </div>
+          {edge.routingWeight !== undefined && (
+            <div className="flex justify-between">
+              <span>{t('evolution.map.detail.routingWeight')}</span>
+              <span className="font-mono">{(edge.routingWeight * 100).toFixed(1)}%</span>
+            </div>
+          )}
+          {edge.coverageLevel !== undefined && (
+            <div className="flex justify-between">
+              <span>{t('evolution.map.detail.coverage')}</span>
+              <span className="font-mono">
+                {[
+                  t('evolution.map.detail.coverageCoarse'),
+                  t('evolution.map.detail.coverageMedium'),
+                  t('evolution.map.detail.coverageFine'),
+                ][edge.coverageLevel] ?? edge.coverageLevel}
+              </span>
+            </div>
+          )}
+          {(edge.bimodalityIndex ?? 0) > 0 && (
+            <div className="flex justify-between">
+              <span>{t('evolution.map.detail.bimodality')}</span>
+              <span className={`font-mono ${(edge.bimodalityIndex ?? 0) > 0.3 ? 'text-amber-400' : ''}`}>
+                {((edge.bimodalityIndex ?? 0) * 100).toFixed(0)}%
+              </span>
+            </div>
+          )}
+          {edge.taskSuccessRate !== undefined && (
+            <div className="flex justify-between">
+              <span>{t('evolution.map.detail.taskSuccess')}</span>
+              <span className="font-mono">{Math.round(edge.taskSuccessRate * 100)}%</span>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Stat row for advanced section */
+function StatRow({
+  label,
+  value,
+  mono,
+  warn,
+  isDark,
+}: {
+  label: string;
+  value: string;
+  mono?: boolean;
+  warn?: boolean;
+  isDark: boolean;
+}) {
+  return (
+    <div className="flex items-center justify-between">
+      <span className={`text-[10px] ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>{label}</span>
+      <span
+        className={`text-[10px] ${mono ? 'font-mono' : ''} ${
+          warn ? 'text-amber-400' : isDark ? 'text-zinc-300' : 'text-zinc-600'
+        }`}
+      >
+        {value}
+      </span>
+    </div>
+  );
+}
+
 function GeneActions({ geneId, isDark }: { geneId: string; isDark: boolean }) {
+  const { t } = useI18n();
   const [importState, setImportState] = useState<'idle' | 'loading' | 'done' | 'error'>('idle');
   const [forkState, setForkState] = useState<'idle' | 'loading' | 'done' | 'error'>('idle');
   const [errorMsg, setErrorMsg] = useState('');
@@ -215,14 +500,14 @@ function GeneActions({ geneId, isDark }: { geneId: string; isDark: boolean }) {
 
   const callApi = async (endpoint: string, body: Record<string, unknown>) => {
     const token = getToken();
-    if (!token) throw new Error('Please sign in first');
+    if (!token) throw new Error(t('evolution.map.detail.signInToInstall'));
     const res = await fetch(`/api/im/evolution/genes/${endpoint}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
       body: JSON.stringify(body),
     });
     const json = await res.json();
-    if (!json.ok) throw new Error(json.error || 'Failed');
+    if (!json.ok) throw new Error(json.error || t('evolution.map.detail.failed'));
     return json.data;
   };
 
@@ -242,7 +527,7 @@ function GeneActions({ geneId, isDark }: { geneId: string; isDark: boolean }) {
       await callApi('import', { gene_id: geneId });
       setImportState('done');
     } catch (err: unknown) {
-      setErrorMsg((err as Error).message || 'Failed');
+      setErrorMsg((err as Error).message || t('evolution.map.detail.failed'));
       setImportState('error');
       setTimeout(() => {
         setImportState('idle');
@@ -259,7 +544,7 @@ function GeneActions({ geneId, isDark }: { geneId: string; isDark: boolean }) {
       await callApi('fork', { gene_id: geneId });
       setForkState('done');
     } catch (err: unknown) {
-      setErrorMsg((err as Error).message || 'Failed');
+      setErrorMsg((err as Error).message || t('evolution.map.detail.failed'));
       setForkState('error');
       setTimeout(() => {
         setForkState('idle');
@@ -276,19 +561,21 @@ function GeneActions({ geneId, isDark }: { geneId: string; isDark: boolean }) {
       <div
         className={`flex flex-col items-center gap-2 pt-1 pb-1 px-2 rounded-lg text-center ${isDark ? 'bg-white/[0.04]' : 'bg-black/[0.02]'}`}
       >
-        <p className={`text-xs ${isDark ? 'text-zinc-400' : 'text-zinc-500'}`}>Sign in to install or fork genes</p>
+        <p className={`text-xs ${isDark ? 'text-zinc-400' : 'text-zinc-500'}`}>
+          {t('evolution.map.detail.signInToInstall')}
+        </p>
         <div className="flex gap-2">
           <Link
             href="/auth"
             className="px-4 py-1.5 rounded-lg text-xs font-medium bg-violet-600 text-white hover:bg-violet-500 transition-colors"
           >
-            Sign In
+            {t('evolution.map.detail.signIn')}
           </Link>
           <button
             onClick={() => setShowAuthPrompt(false)}
             className={`px-3 py-1.5 rounded-lg text-xs ${isDark ? 'text-zinc-500 hover:text-zinc-300' : 'text-zinc-400 hover:text-zinc-600'} transition-colors`}
           >
-            Cancel
+            {t('evolution.map.detail.cancel')}
           </button>
         </div>
       </div>
@@ -314,7 +601,11 @@ function GeneActions({ geneId, isDark }: { geneId: string; isDark: boolean }) {
         ) : (
           <Download size={12} />
         )}
-        {importState === 'done' ? 'Installed' : importState === 'error' ? 'Failed' : 'Install'}
+        {importState === 'done'
+          ? t('evolution.map.detail.installed')
+          : importState === 'error'
+            ? t('evolution.map.detail.failed')
+            : t('evolution.map.detail.install')}
       </button>
       <button
         onClick={handleFork}
@@ -335,7 +626,11 @@ function GeneActions({ geneId, isDark }: { geneId: string; isDark: boolean }) {
         ) : (
           <GitFork size={12} />
         )}
-        {forkState === 'done' ? 'Forked' : forkState === 'error' ? 'Failed' : 'Fork'}
+        {forkState === 'done'
+          ? t('evolution.map.detail.forked')
+          : forkState === 'error'
+            ? t('evolution.map.detail.failed')
+            : t('evolution.map.detail.fork')}
       </button>
       {errorMsg && <p className="w-full text-[10px] text-red-400 text-center">{errorMsg}</p>}
     </div>
@@ -351,76 +646,209 @@ function SignalDetail({
   target: Extract<NonNullable<DetailTarget>, { type: 'signal' }>;
   isDark: boolean;
 }) {
+  const { t } = useI18n();
   const { data, connectedGenes, connectedEdges } = target;
   const catColor = SIGNAL_CATEGORY_COLORS[data.category] || '#71717a';
   const textPrimary = isDark ? 'text-zinc-100' : 'text-zinc-900';
   const textMuted = isDark ? 'text-zinc-500' : 'text-zinc-400';
   const cardBg = isDark ? 'bg-white/[0.04] border border-white/[0.06]' : 'bg-black/[0.03] border border-black/[0.04]';
 
+  // Compute derived metrics
+  const avgConfidence =
+    connectedEdges.length > 0 ? connectedEdges.reduce((s, e) => s + e.confidence, 0) / connectedEdges.length : 0;
+
   return (
     <>
       {/* Header: colored dot + signal key (monospace) */}
-      <div className="flex items-center gap-2.5 pr-8">
-        <div
-          className="w-3 h-3 rounded-full shrink-0"
-          style={{ backgroundColor: catColor, boxShadow: `0 0 8px ${catColor}60` }}
-        />
-        <span className={`text-sm font-mono font-semibold ${textPrimary}`}>{data.key}</span>
+      <div>
+        <div className="flex items-center gap-2.5 mb-1">
+          <div
+            className="w-3 h-3 rounded-full shrink-0"
+            style={{ backgroundColor: catColor, boxShadow: `0 0 8px ${catColor}60` }}
+          />
+          <span className={`text-sm font-mono font-semibold break-all ${textPrimary}`}>{data.key}</span>
+        </div>
+        <span className={`text-[11px] uppercase tracking-wider ${textMuted}`}>{data.category}</span>
       </div>
 
-      {/* Stats line */}
-      <p className={`text-xs ${isDark ? 'text-zinc-400' : 'text-zinc-500'}`}>
-        Triggered <span className={`font-mono font-bold ${textPrimary}`}>{data.frequency}</span> times
-        {data.lastSeen && <> &middot; Last seen: {timeSince(data.lastSeen)}</>}
-      </p>
+      {/* Stats cards */}
+      <div className="grid grid-cols-3 gap-2">
+        <div className={`p-2.5 rounded-lg text-center ${cardBg}`}>
+          <div className={`text-sm font-bold font-mono ${textPrimary}`}>{data.frequency}</div>
+          <div className={`text-[9px] mt-0.5 ${textMuted}`}>{t('evolution.map.detail.triggers')}</div>
+        </div>
+        <div className={`p-2.5 rounded-lg text-center ${cardBg}`}>
+          <div className={`text-sm font-bold font-mono ${textPrimary}`}>{connectedGenes.length}</div>
+          <div className={`text-[9px] mt-0.5 ${textMuted}`}>{t('evolution.map.detail.genes')}</div>
+        </div>
+        <div className={`p-2.5 rounded-lg text-center ${cardBg}`}>
+          <div className={`text-sm font-bold font-mono ${textPrimary}`}>{Math.round(avgConfidence * 100)}%</div>
+          <div className={`text-[9px] mt-0.5 ${textMuted}`}>{t('evolution.map.detail.avgConfidence')}</div>
+        </div>
+      </div>
 
-      {/* Connected Strategies */}
-      <div>
-        <h4
-          className={`text-[11px] font-semibold uppercase tracking-wide mb-2 ${isDark ? 'text-zinc-400' : 'text-zinc-500'}`}
-        >
-          Connected Strategies
-        </h4>
+      {data.lastSeen && (
+        <p className={`text-[10px] ${textMuted}`}>
+          {t('evolution.map.detail.lastSeen', { time: localizedTimeSince(data.lastSeen, t) })}
+        </p>
+      )}
+
+      {/* Connected Strategies — expandable */}
+      <Section
+        title={t('evolution.map.detail.connectedStrategies')}
+        icon={<Zap size={12} />}
+        isDark={isDark}
+        defaultOpen={connectedGenes.length > 0 && connectedGenes.length <= 6}
+        badge={connectedGenes.length}
+      >
         {connectedGenes.length > 0 ? (
           <div className="space-y-2">
-            {connectedGenes.map((g) => {
-              const edge = connectedEdges.find((e) => e.geneId === g.id);
-              const sr = Math.round(g.successRate * 100);
-              return (
-                <div key={g.id} className={`p-2.5 rounded-lg ${cardBg}`}>
-                  <div className="flex items-center justify-between mb-1.5">
-                    <span className={`text-xs font-medium truncate ${textPrimary}`}>{g.title}</span>
-                    {edge && (
-                      <span
-                        className="text-[10px] font-mono font-bold"
-                        style={{ color: confidenceToColor(edge.confidence) }}
-                      >
-                        {Math.round(edge.confidence * 100)}%
-                      </span>
-                    )}
-                  </div>
-                  {/* Mini success bar */}
-                  <div className={`h-1 rounded-full ${isDark ? 'bg-white/[0.08]' : 'bg-black/[0.06]'}`}>
-                    <div
-                      className="h-full rounded-full"
-                      style={{
-                        width: `${sr}%`,
-                        backgroundColor: confidenceToColor(g.successRate),
-                      }}
-                    />
-                  </div>
-                  <div className={`text-[10px] mt-1 ${textMuted}`}>
-                    {g.totalExecutions} runs &middot; {sr}% success
-                  </div>
-                </div>
-              );
-            })}
+            {connectedGenes.map((g) => (
+              <GeneCard
+                key={g.id}
+                gene={g}
+                edge={connectedEdges.find((e) => e.geneId === g.id)}
+                isDark={isDark}
+                cardBg={cardBg}
+                textPrimary={textPrimary}
+                textMuted={textMuted}
+              />
+            ))}
           </div>
         ) : (
-          <p className={`text-xs ${textMuted}`}>No strategies connected yet</p>
+          <p className={`text-xs ${textMuted}`}>{t('evolution.map.detail.noStrategies')}</p>
         )}
-      </div>
+      </Section>
+
+      {/* Advanced */}
+      <Section title={t('evolution.map.detail.advanced')} icon={<BarChart3 size={12} />} isDark={isDark}>
+        <div className={`p-3 rounded-lg space-y-2 ${cardBg}`}>
+          <StatRow label={t('evolution.map.detail.signalKey')} value={data.key} mono isDark={isDark} />
+          <StatRow label={t('evolution.map.detail.category')} value={data.category} isDark={isDark} />
+          <StatRow label={t('evolution.map.detail.frequency30d')} value={String(data.frequency)} mono isDark={isDark} />
+          {data.lastSeen && (
+            <StatRow
+              label={t('evolution.map.detail.lastSeenLabel')}
+              value={new Date(data.lastSeen).toLocaleString()}
+              isDark={isDark}
+            />
+          )}
+          <StatRow
+            label={t('evolution.map.detail.connectedGenes')}
+            value={String(connectedGenes.length)}
+            mono
+            isDark={isDark}
+          />
+          <StatRow
+            label={t('evolution.map.detail.establishedPaths')}
+            value={String(connectedEdges.filter((e) => !e.isExploring).length)}
+            mono
+            isDark={isDark}
+          />
+          <StatRow
+            label={t('evolution.map.detail.exploringPaths')}
+            value={String(connectedEdges.filter((e) => e.isExploring).length)}
+            mono
+            isDark={isDark}
+          />
+        </div>
+      </Section>
     </>
+  );
+}
+
+/** Gene mini-card for signal detail */
+function GeneCard({
+  gene,
+  edge,
+  isDark,
+  cardBg,
+  textPrimary,
+  textMuted,
+}: {
+  gene: GeneNode;
+  edge?: EdgePath;
+  isDark: boolean;
+  cardBg: string;
+  textPrimary: string;
+  textMuted: string;
+}) {
+  const { t } = useI18n();
+  const [expanded, setExpanded] = useState(false);
+  const sr = Math.round(gene.successRate * 100);
+  const catColor = GENE_CATEGORY_COLORS[gene.category] || '#71717a';
+
+  return (
+    <div className={`rounded-lg overflow-hidden ${cardBg}`}>
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className={`w-full p-2.5 text-left ${isDark ? 'hover:bg-white/[0.03]' : 'hover:bg-black/[0.02]'}`}
+      >
+        <div className="flex items-center justify-between mb-1.5">
+          <div className="flex items-center gap-1.5">
+            <div className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: catColor }} />
+            <span className={`text-xs font-medium truncate ${textPrimary}`}>{gene.title}</span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            {edge && (
+              <span className="text-[10px] font-mono font-bold" style={{ color: confidenceToColor(edge.confidence) }}>
+                {Math.round(edge.confidence * 100)}%
+              </span>
+            )}
+            <ChevronDown
+              size={10}
+              className={`transition-transform duration-200 ${expanded ? 'rotate-180' : ''} ${
+                isDark ? 'text-zinc-600' : 'text-zinc-400'
+              }`}
+            />
+          </div>
+        </div>
+        {/* Mini success bar */}
+        <div className={`h-1 rounded-full ${isDark ? 'bg-white/[0.08]' : 'bg-black/[0.06]'}`}>
+          <div
+            className="h-full rounded-full"
+            style={{ width: `${sr}%`, backgroundColor: confidenceToColor(gene.successRate) }}
+          />
+        </div>
+        <div className={`text-[10px] mt-1 ${textMuted}`}>
+          {t('evolution.common.runsShort', { count: gene.totalExecutions })} &middot; {sr}%{' '}
+          {t('evolution.common.successStatus')}
+        </div>
+      </button>
+      {expanded && (
+        <div
+          className={`px-2.5 pb-2.5 space-y-1.5 text-[10px] border-t ${isDark ? 'border-white/[0.04]' : 'border-black/[0.04]'}`}
+        >
+          <div className="pt-1.5" />
+          <div className={`flex justify-between ${textMuted}`}>
+            <span>{t('evolution.map.detail.pqiScore')}</span>
+            <span className="font-mono">{gene.pqi}</span>
+          </div>
+          <div className={`flex justify-between ${textMuted}`}>
+            <span>{t('evolution.map.detail.agents')}</span>
+            <span className="font-mono">{gene.agentCount}</span>
+          </div>
+          <div className={`flex justify-between ${textMuted}`}>
+            <span>{t('evolution.map.detail.category')}</span>
+            <span style={{ color: catColor }}>{categoryLabel(gene.category, t)}</span>
+          </div>
+          {edge && (
+            <>
+              <div className={`flex justify-between ${textMuted}`}>
+                <span>{t('evolution.map.detail.observations')}</span>
+                <span className="font-mono">{edge.totalObs}</span>
+              </div>
+              <div className={`flex justify-between ${textMuted}`}>
+                <span>{t('evolution.map.detail.alphaBeta')}</span>
+                <span className="font-mono">
+                  {edge.alpha.toFixed(1)} / {edge.beta.toFixed(1)}
+                </span>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -433,6 +861,7 @@ function EdgeDetail({
   target: Extract<NonNullable<DetailTarget>, { type: 'edge' }>;
   isDark: boolean;
 }) {
+  const { t } = useI18n();
   const { data, signal: _signal, gene } = target;
   const color = confidenceToColor(data.confidence);
   const textPrimary = isDark ? 'text-zinc-100' : 'text-zinc-900';
@@ -443,7 +872,7 @@ function EdgeDetail({
   return (
     <>
       {/* Header: signal -> gene */}
-      <div className="flex items-center gap-2 pr-8 flex-wrap">
+      <div className="flex items-center gap-2 flex-wrap">
         <span className={`text-xs font-mono font-semibold ${textPrimary}`}>{data.signalKey}</span>
         <ArrowRight size={12} className={textMuted} />
         <span className={`text-xs font-medium ${textPrimary}`}>{gene.title || data.geneId}</span>
@@ -454,13 +883,22 @@ function EdgeDetail({
         <div className="text-2xl font-bold font-mono" style={{ color }}>
           {Math.round(data.confidence * 100)}%
         </div>
-        <div className={`text-[11px] mt-1 ${textMuted}`}>Path Confidence</div>
+        <div className={`text-[11px] mt-1 ${textMuted}`}>{t('evolution.map.detail.pathConfidence')}</div>
       </div>
 
-      {/* Tested count */}
-      <p className={`text-xs ${isDark ? 'text-zinc-400' : 'text-zinc-500'}`}>
-        Tested <span className={`font-mono font-bold ${textPrimary}`}>{data.totalObs}</span> times
-      </p>
+      {/* Stats grid */}
+      <div className="grid grid-cols-2 gap-2">
+        <div className={`p-2.5 rounded-lg text-center ${cardBg}`}>
+          <div className={`text-sm font-bold font-mono ${textPrimary}`}>{data.totalObs}</div>
+          <div className={`text-[9px] mt-0.5 ${textMuted}`}>{t('evolution.map.detail.observations')}</div>
+        </div>
+        <div className={`p-2.5 rounded-lg text-center ${cardBg}`}>
+          <div className={`text-sm font-bold font-mono ${textPrimary}`}>
+            {data.alpha.toFixed(1)} / {data.beta.toFixed(1)}
+          </div>
+          <div className={`text-[9px] mt-0.5 ${textMuted}`}>{t('evolution.map.detail.alphaBeta')}</div>
+        </div>
+      </div>
 
       {/* Bimodality warning */}
       {bimodality > 0.3 && (
@@ -470,9 +908,14 @@ function EdgeDetail({
           }`}
         >
           <AlertTriangle size={14} className="text-amber-500 shrink-0 mt-0.5" />
-          <p className={`text-xs leading-relaxed ${isDark ? 'text-amber-300' : 'text-amber-700'}`}>
-            High variance — results on this path vary significantly
-          </p>
+          <div>
+            <p className={`text-xs leading-relaxed ${isDark ? 'text-amber-300' : 'text-amber-700'}`}>
+              {t('evolution.map.detail.highVariance')}
+            </p>
+            <p className={`text-[10px] mt-0.5 ${isDark ? 'text-amber-400/60' : 'text-amber-600/60'}`}>
+              {t('evolution.map.detail.bimodalityIndex', { value: (bimodality * 100).toFixed(0) })}
+            </p>
+          </div>
         </div>
       )}
 
@@ -485,25 +928,67 @@ function EdgeDetail({
               : 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
           }`}
         >
-          {data.isExploring ? 'Exploring' : 'Established'}
+          {data.isExploring ? t('evolution.map.detail.exploring') : t('evolution.map.detail.established')}
         </span>
         <span className={`text-[10px] ${textMuted}`}>
-          {data.isExploring ? '< 10 observations' : `${data.totalObs} observations`}
+          {data.isExploring
+            ? t('evolution.map.detail.lowObservationCount')
+            : t('evolution.map.detail.observationCount', { count: data.totalObs })}
         </span>
       </div>
+
+      {/* Expandable: Advanced */}
+      <Section title={t('evolution.map.detail.advanced')} icon={<Info size={12} />} isDark={isDark}>
+        <div className={`p-3 rounded-lg space-y-2 ${cardBg}`}>
+          <StatRow label={t('evolution.map.detail.signal')} value={data.signalKey} mono isDark={isDark} />
+          <StatRow label={t('evolution.map.detail.gene')} value={gene.title || data.geneId} isDark={isDark} />
+          <StatRow
+            label={t('evolution.map.detail.confidence')}
+            value={`${Math.round(data.confidence * 100)}%`}
+            isDark={isDark}
+          />
+          <StatRow label={t('evolution.map.detail.alpha')} value={data.alpha.toFixed(2)} mono isDark={isDark} />
+          <StatRow label={t('evolution.map.detail.beta')} value={data.beta.toFixed(2)} mono isDark={isDark} />
+          <StatRow label={t('evolution.map.detail.observations')} value={String(data.totalObs)} mono isDark={isDark} />
+          {data.routingWeight !== undefined && (
+            <StatRow
+              label={t('evolution.map.detail.routingWeight')}
+              value={`${(data.routingWeight * 100).toFixed(1)}%`}
+              mono
+              isDark={isDark}
+            />
+          )}
+          {data.taskSuccessRate !== undefined && (
+            <StatRow
+              label={t('evolution.map.detail.taskSuccess')}
+              value={`${Math.round(data.taskSuccessRate * 100)}%`}
+              mono
+              isDark={isDark}
+            />
+          )}
+          {data.coverageLevel !== undefined && (
+            <StatRow
+              label={t('evolution.map.detail.coverage')}
+              value={
+                [
+                  t('evolution.map.detail.coverageCoarse'),
+                  t('evolution.map.detail.coverageMedium'),
+                  t('evolution.map.detail.coverageFine'),
+                ][data.coverageLevel] ?? String(data.coverageLevel)
+              }
+              isDark={isDark}
+            />
+          )}
+          {bimodality > 0 && (
+            <StatRow
+              label={t('evolution.map.detail.bimodalityIndexLabel')}
+              value={`${(bimodality * 100).toFixed(0)}%`}
+              warn={bimodality > 0.3}
+              isDark={isDark}
+            />
+          )}
+        </div>
+      </Section>
     </>
   );
-}
-
-// ─── Helpers ────────────────────────────────────────────────────────
-
-function timeSince(ts: string): string {
-  const diff = Date.now() - new Date(ts).getTime();
-  const m = Math.floor(diff / 60000);
-  if (m < 1) return 'just now';
-  if (m < 60) return `${m}m ago`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h ago`;
-  const d = Math.floor(h / 24);
-  return `${d}d ago`;
 }
