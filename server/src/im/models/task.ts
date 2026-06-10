@@ -6,6 +6,7 @@
 
 import prisma from '../db';
 import type { TaskStatus, ScheduleType } from '../types';
+import { generateRunId } from '../utils/id-gen';
 
 export interface CreateTaskData {
   title: string;
@@ -34,6 +35,8 @@ export interface CreateTaskData {
   metadata?: string; // JSON
   /** Cloud 3 / S3: 'agent' | 'sandbox' | 'shell' (defaults to 'agent' at the column level). */
   runtimeRoute?: string;
+  /** release201/09 §4.1 — project scope. NULL = workspace-level. */
+  projectId?: string | null;
 }
 
 export interface TaskListFilter {
@@ -46,6 +49,13 @@ export interface TaskListFilter {
   scope?: string;
   conversationId?: string;
   scheduleType?: ScheduleType;
+  /**
+   * release201/09 §4.2 — Project scope filter.
+   *   - undefined → no project filter
+   *   - '__unscoped' → projectId IS NULL
+   *   - exact id or {in: [...]} → matched
+   */
+  projectId?: string | { in: string[] } | { isNull: true };
   limit?: number;
   cursor?: string;
 }
@@ -143,6 +153,9 @@ export class TaskModel {
         budget: data.budget,
         metadata: data.metadata ?? '{}',
         runtimeRoute: data.runtimeRoute ?? 'agent',
+        // release201/09 §4.1 — projectId persistence (Prisma maps undefined
+        // to "don't write"; explicit null clears).
+        ...(data.projectId !== undefined ? { projectId: data.projectId } : {}),
       },
     });
   }
@@ -162,6 +175,20 @@ export class TaskModel {
     if (filter.workspaceId) where.workspaceId = filter.workspaceId;
     if (filter.conversationId) where.conversationId = filter.conversationId;
     if (filter.scheduleType) where.scheduleType = filter.scheduleType;
+    // release201/09 §4.2 — project scope filter. Three shapes:
+    //   - string                 → exact match
+    //   - { in: [...] }          → IN list (multi-select chip)
+    //   - { isNull: true }       → projectId IS NULL (__unscoped)
+    if (filter.projectId !== undefined) {
+      const pid = filter.projectId;
+      if (typeof pid === 'string') {
+        where.projectId = pid;
+      } else if ('in' in pid) {
+        where.projectId = { in: pid.in };
+      } else if ('isNull' in pid) {
+        where.projectId = null;
+      }
+    }
 
     return prisma.iMTask.findMany({
       where,
@@ -265,7 +292,22 @@ export class TaskModel {
   }
 
   /**
-   * Find tasks that have been running past their timeout.
+   * Find tasks that have been running past their timeout — SLIDING WINDOW.
+   *
+   * 2026-05-20 — the timeout anchor is now the most recent task activity
+   * (progress log OR run start), not the run start. Previously a task that
+   * dispatched at T0 and was still streaming progress events at T0+295s
+   * would be marked timed out at T0+300s even though it was actively
+   * working. The dispatch surface routinely emits `tool.started` /
+   * `tool.completed` events every few seconds via task-service.reportProgress
+   * (which inserts IMTaskLog rows with action='progress'). Using the latest
+   * log time as the timeout anchor means: a task only times out when it
+   * STOPS reporting activity for `timeoutMs`, not from absolute dispatch
+   * age. Tasks that legitimately complete a multi-step plan over 10+
+   * minutes no longer false-positive.
+   *
+   * One round-trip more (the IMTaskLog aggregate) but the relation is
+   * indexed by taskId.
    */
   async findTimedOutTasks(limit: number = 20) {
     const tasks = await prisma.iMTask.findMany({
@@ -273,10 +315,25 @@ export class TaskModel {
       take: limit * 2, // Over-fetch to filter in app
     });
 
+    if (tasks.length === 0) return tasks;
+
+    const taskIds = (tasks as Array<{ id: string }>).map((t) => t.id);
+    const logs = (await prisma.iMTaskLog.findMany({
+      where: { taskId: { in: taskIds } },
+      orderBy: { createdAt: 'desc' },
+      select: { taskId: true, createdAt: true },
+    })) as Array<{ taskId: string; createdAt: Date }>;
+    const lastActivityByTask = new Map<string, Date>();
+    for (const log of logs) {
+      if (!lastActivityByTask.has(log.taskId)) lastActivityByTask.set(log.taskId, log.createdAt);
+    }
+
     const now = Date.now();
     return tasks.filter((t: any) => {
       if (!t.lastRunAt) return false;
-      return now - t.lastRunAt.getTime() > t.timeoutMs;
+      const lastLog = lastActivityByTask.get(t.id);
+      const anchor = lastLog && lastLog > t.lastRunAt ? lastLog : t.lastRunAt;
+      return now - anchor.getTime() > t.timeoutMs;
     });
   }
 
@@ -401,8 +458,13 @@ export class TaskModel {
   // ─── Task Runs / Events ───────────────────────────────────
 
   async createRun(data: CreateTaskRunData) {
+    // release202/09 §3.2 — generate a `run_`-prefixed id in the app layer
+    // (passing an explicit `id` overrides the schema `@default(cuid())`).
+    // Only NEW runs get the prefix; legacy bare-cuid run ids stay valid via
+    // the daemon/CLI probe-both fallback. Tasks keep bare cuid (untouched).
     return (prisma as any).iMTaskRun.create({
       data: {
+        id: generateRunId(),
         taskId: data.taskId ?? undefined,
         workspaceId: data.workspaceId ?? undefined,
         conversationId: data.conversationId ?? undefined,
