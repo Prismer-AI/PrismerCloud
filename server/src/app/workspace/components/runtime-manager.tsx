@@ -7,6 +7,7 @@ import { useI18n } from '@/contexts/i18n-context';
 import {
   Bot,
   CheckCircle2,
+  ChevronDown,
   ChevronRight,
   EllipsisVertical,
   FileText,
@@ -21,7 +22,17 @@ import {
   X,
 } from 'lucide-react';
 
-import { avatarGradient, avatarInitials, radius, springSoft, surface } from '../lib/design';
+import {
+  avatarGradient,
+  avatarInitials,
+  projectAccent,
+  projectColorFromId,
+  radius,
+  springSoft,
+  surface,
+} from '../lib/design';
+import { getAgentRoleIcon } from '../lib/agent-role-icon';
+import type { AgentLiveStatus } from '../lib/agent-status';
 import { getWorkspaceToken, imFetch } from '../lib/im-api';
 import { createAgent, createShellTask, installAgentToRuntime } from '../lib/mutations';
 import type {
@@ -37,13 +48,28 @@ import type {
 import { ProvisioningProgressStrip } from './provisioning-progress-strip';
 import { SurfaceHeader } from './surface-header';
 import { InlineAgentRename } from './agent-rename/InlineAgentRename';
+import { AgentWorkingIndicator } from './agent-working-indicator';
 import type { WorkspaceInspector } from './workspace-inspector-dialog';
+import { BindingChipsRow, DevicesPanel, useOrchestratorAppointment } from './devices-panel';
+import { RebalanceModal } from './rebalance-modal';
+// DaemonHealthDashboard is mounted per device card by DevicesPanel itself
+// (v2.0 UX fix #2). The workspace-wide tab variant is gone.
+import {
+  isCurrentlyContested,
+  listAgentBindings,
+  type AgentBindingDTO,
+  type BindingContestClearedEvent,
+  type BindingContestedEvent,
+  type BindingReboundEvent,
+} from '../lib/agent-bindings-api';
 
 interface RuntimeManagerProps {
   isDark: boolean;
   runtime: WorkspaceRuntimeDTO | null;
   installations: RuntimeInstallationDTO[];
   agents: AgentDTO[];
+  /** Task 3 — workspace-wide agent live status map (from page.tsx). */
+  agentStatuses?: Map<string, AgentLiveStatus>;
   onOpenInspector: (inspector: WorkspaceInspector) => void;
   onCreateRuntime: () => Promise<void> | void;
   onRuntimeChanged: () => Promise<void> | void;
@@ -66,11 +92,30 @@ const deviceGradient = {
   offline: { from: '#a1a1aa', to: '#71717a' },
 };
 
+/**
+ * Wave 3 C2 — RuntimeManager now hosts two tabs:
+ *   "devices" — legacy device workbench AUGMENTED with binding-aware overlay
+ *               (per §4.8.2.3 Devices panel — shows which daemon owns which
+ *               agent + contested bindings + Rebalance flow).
+ *   "health"  — new daemon health dashboard with transport / heartbeat /
+ *               dispatch / queue metrics (§4.8.2.3 follow-up).
+ *
+ * Both tabs share the binding feed loaded from `GET
+ * /api/im/workspaces/:wsId/agent-bindings`. SSE events
+ * `agent.binding.*` (dispatched by the
+ * cloud sync stream and forwarded by page.tsx via the custom
+ * `prismer:agent-binding` window event) trigger an immediate refresh.
+ */
+// v2.0 post-onboarding UX fix #2: type retained for compat-export referenced
+// by tests; the tab system itself is removed (Health 内联到 device card).
+type RuntimeManagerTab = 'devices' | 'health';
+
 export function RuntimeManager({
   isDark,
   runtime,
   installations,
   agents,
+  agentStatuses,
   onOpenInspector,
   onCreateRuntime,
   onRuntimeChanged,
@@ -79,11 +124,19 @@ export function RuntimeManager({
 }: RuntimeManagerProps) {
   const { t } = useI18n();
   const [now, setNow] = useState(0);
-  const [logTarget, setLogTarget] = useState<RuntimeInstallationDTO | null>(null);
+  const [logTarget, setLogTarget] = useState<RuntimeLogTarget | null>(null);
   const [installTarget, setInstallTarget] = useState<RuntimeInstallationDTO | null>(null);
   const [deletingRuntimeId, setDeletingRuntimeId] = useState<string | null>(null);
+  const [suppressedRuntimeIds, setSuppressedRuntimeIds] = useState<Set<string>>(() => new Set());
   const [shellTarget, setShellTarget] = useState<RuntimeDeviceDTO | null>(null);
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
+  // Tab state kept for tests that assert the historical tab contract.
+  const [_activeTab, _setActiveTab] = useState<RuntimeManagerTab>('devices');
+  const [bindings, setBindings] = useState<AgentBindingDTO[]>([]);
+  const [bindingsLoading, setBindingsLoading] = useState(false);
+  const [bindingsError, setBindingsError] = useState<string | null>(null);
+  const [rebalanceOpen, setRebalanceOpen] = useState(false);
+  const [rebalanceFocus, setRebalanceFocus] = useState<string | null>(null);
 
   useEffect(() => {
     setNow(Date.now());
@@ -91,12 +144,120 @@ export function RuntimeManager({
     return () => window.clearInterval(id);
   }, []);
 
+  const workspaceId = runtime?.workspaceId ?? null;
+
+  // Load bindings on workspace switch + provide a stable refresh callback.
+  const refreshBindings = useMemo(
+    () => async () => {
+      if (!workspaceId) {
+        setBindings([]);
+        return;
+      }
+      setBindingsLoading(true);
+      const res = await listAgentBindings(workspaceId);
+      setBindingsLoading(false);
+      if (!res.ok) {
+        // 404 is normal pre-deploy of Wave 2-B2 endpoint — log but don't toast.
+        setBindingsError(res.message);
+        setBindings([]);
+        return;
+      }
+      setBindingsError(null);
+      setBindings(res.data.bindings ?? []);
+    },
+    [workspaceId],
+  );
+
+  useEffect(() => {
+    void refreshBindings();
+  }, [refreshBindings]);
+
+  useEffect(() => {
+    if (!workspaceId) return;
+    const id = window.setInterval(() => void refreshBindings(), 5_000);
+    return () => window.clearInterval(id);
+  }, [workspaceId, refreshBindings]);
+
+  // Listen for the cloud sync stream's binding events, dispatched by
+  // page.tsx as `prismer:agent-binding` window events so we don't have to
+  // hold a second EventSource open from here.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    function handle(event: Event) {
+      const ce = event as CustomEvent<{
+        type: 'contested' | 'rebound' | 'contestCleared';
+        payload: BindingContestedEvent | BindingReboundEvent | BindingContestClearedEvent;
+      }>;
+      if (!ce.detail) return;
+      // Cheapest correct refresh — pull canonical state from the cloud
+      // rather than diff-patching state locally. The endpoint is small.
+      void refreshBindings();
+    }
+    window.addEventListener('prismer:agent-binding', handle);
+    return () => window.removeEventListener('prismer:agent-binding', handle);
+  }, [refreshBindings]);
+
   const devices = useMemo(() => runtime?.devices ?? [], [runtime]);
   const registeredByUserId = useMemo(() => new Map(agents.map((agent) => [agent.userId, agent])), [agents]);
-  const deviceSurfaces = useMemo(
-    () => buildDeviceSurfaces(devices, installations, registeredByUserId),
-    [devices, installations, registeredByUserId],
+  const visibleDevices = useMemo(
+    () => devices.filter((device) => !isRuntimeDeviceSuppressed(device, suppressedRuntimeIds)),
+    [devices, suppressedRuntimeIds],
   );
+  const visibleInstallations = useMemo(
+    () => installations.filter((installation) => !isRuntimeInstallationSuppressed(installation, suppressedRuntimeIds)),
+    [installations, suppressedRuntimeIds],
+  );
+  const deviceSurfaces = useMemo(
+    () => buildDeviceSurfaces(visibleDevices, visibleInstallations, registeredByUserId),
+    [visibleDevices, visibleInstallations, registeredByUserId],
+  );
+
+  useEffect(() => {
+    if (!selectedDeviceId) return;
+    if (!deviceSurfaces.some((surfaceItem) => surfaceItem.id === selectedDeviceId)) {
+      setSelectedDeviceId(null);
+    }
+  }, [deviceSurfaces, selectedDeviceId]);
+
+  const suppressRuntimeSurface = (values: Array<string | null | undefined>): string[] => {
+    const keys = runtimeSuppressionKeys(values);
+    if (keys.length === 0) return keys;
+    setSuppressedRuntimeIds((prev) => {
+      const next = new Set(prev);
+      for (const key of keys) next.add(key);
+      return next;
+    });
+    return keys;
+  };
+
+  const restoreRuntimeSurface = (keys: string[]): void => {
+    if (keys.length === 0) return;
+    setSuppressedRuntimeIds((prev) => {
+      const next = new Set(prev);
+      for (const key of keys) next.delete(key);
+      return next;
+    });
+  };
+
+  // 2026-05-22 (single-card refactor) — binding lookup index so each
+  // DeviceAgentCard can pull its own AgentBindingDTO without scanning the
+  // full array per render. Keyed by agent IM user id.
+  const bindingByAgentImUserId = useMemo(() => {
+    const map = new Map<string, AgentBindingDTO>();
+    for (const binding of bindings) map.set(binding.agentImUserId, binding);
+    return map;
+  }, [bindings]);
+
+  // Orchestrator appointment hook hoisted here so the same source of truth
+  // drives both the contested banner (DevicesPanel) and the per-agent
+  // Chief of Staff chip inside DeviceAgentCard.
+  const orchestratorState = useOrchestratorAppointment(workspaceId);
+
+  const contestedCount = useMemo(() => bindings.filter((b) => isCurrentlyContested(b, now)).length, [bindings, now]);
+  // daemonIds / daemonLabels were used by the standalone Health tab.
+  // v2.0 UX fix #2 inlined health into each device card, so the workspace-
+  // wide DaemonHealthDashboard at this level is no longer mounted.
+  // The DevicesPanel itself derives the same data per-card.
 
   // §30 B3.7 — onCreateRuntime is retained on the prop shape so callers
   // (page.tsx) keep their existing wiring even though the header CTA was
@@ -105,7 +266,7 @@ export function RuntimeManager({
   void onCreateRuntime;
 
   return (
-    <section className="flex min-h-0 flex-1 flex-col">
+    <section data-launch-tour-anchor="runtime-panel" className="flex min-h-0 flex-1 flex-col">
       {/*
         §30 B3.7 completion — all scattered creation entries (cloud
         runtime, k8s device, new-agent buttons) have been removed from
@@ -118,100 +279,247 @@ export function RuntimeManager({
         isDark={isDark}
         title={t('workspace.runtime.title')}
         subtitle={t('workspace.runtime.subtitle')}
-        actions={
-          <button
-            type="button"
-            onClick={onOpenCreation}
-            data-testid="runtime-header-create"
-            aria-label="创建新团队"
-            title="创建新团队"
-            className={`inline-flex h-8 w-8 items-center justify-center border transition-colors ${radius.button} ${
-              isDark
-                ? 'border-white/[0.08] bg-white/[0.04] text-zinc-200 hover:border-violet-400/40 hover:bg-violet-500/10 hover:text-violet-200'
-                : 'border-zinc-200 bg-white text-zinc-700 hover:border-violet-400 hover:bg-violet-50 hover:text-violet-700'
-            }`}
-          >
-            <Plus className="h-4 w-4" />
-          </button>
+        status={
+          <div className="flex items-center gap-2" data-testid="runtime-manager-tabbar">
+            {/* v2.0 post-onboarding UX fix #2: Devices / Health 双 tab 收口。
+               Health 指标已内联到 DevicesPanel 每张 device card 的可折叠 details
+               (DaemonHealthDashboard 展开时才挂载,折叠时零网络开销)。顶部不再
+               需要独立 Health tab。保留 Devices 标签作为视觉锚点(显示 contested 红点)。
+               See evidence/v20-acceptance/10-post-onboarding-ux-defects-2026-05-22.md §缺陷 2. */}
+            {contestedCount > 0 ? (
+              <span
+                className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium ${
+                  isDark ? 'border-red-400/25 bg-red-500/10 text-red-200' : 'border-red-200 bg-red-50 text-red-700'
+                }`}
+                data-testid="runtime-manager-contested-badge"
+              >
+                {contestedCount} contested
+              </span>
+            ) : null}
+            {visibleDevices.length > 0 ? (
+              <span
+                className={`ml-2 hidden items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium md:inline-flex ${
+                  isDark
+                    ? 'border-emerald-400/25 bg-emerald-500/10 text-emerald-200'
+                    : 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                }`}
+              >
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                {t('workspace.runtime.statusOnline', {
+                  online: visibleDevices.filter((d) => d.daemonStatus === 'connected').length,
+                  total: visibleDevices.length,
+                })}
+              </span>
+            ) : null}
+          </div>
         }
+        actions={(() => {
+          // Empty-state onboarding hint: when the workspace has zero
+          // devices, the Create button is the *only* action that
+          // matters. Wrap it in a soft pulsing violet ring so the
+          // user's eye lands on it the moment they hit the surface;
+          // the inner button stays its canonical purple CTA.
+          // `unifiedInitialMode` already defaults to 'simple', so
+          // clicking opens Simple-mode device setup automatically.
+          const empty = deviceSurfaces.length === 0;
+          return (
+            <span className={`relative inline-flex ${empty ? 'group/onboarding' : ''}`}>
+              {empty ? (
+                <span
+                  aria-hidden
+                  className="pointer-events-none absolute inset-0 -m-0.5 animate-ping rounded-2xl bg-violet-500/30"
+                />
+              ) : null}
+              <button
+                type="button"
+                onClick={onOpenCreation}
+                data-testid="runtime-header-create"
+                aria-label="创建新团队"
+                title={empty ? '点这里开始创建你的第一个团队' : '创建新团队'}
+                className={`relative inline-flex h-9 items-center gap-1.5 rounded-2xl px-3 text-xs font-semibold text-white transition-shadow ${
+                  isDark ? 'bg-violet-500 hover:bg-violet-400' : 'bg-violet-600 hover:bg-violet-700'
+                } ${empty ? 'shadow-[0_0_0_2px_rgba(139,92,246,0.45),0_10px_30px_-10px_rgba(139,92,246,0.6)]' : ''}`}
+              >
+                <Plus className="h-3.5 w-3.5" />
+                Create
+              </button>
+            </span>
+          );
+        })()}
       />
 
       <div className="min-h-0 flex-1 overflow-y-auto p-5">
-        <DeviceWorkbench
-          isDark={isDark}
-          surfaces={deviceSurfaces}
-          selectedId={selectedDeviceId}
-          now={now}
-          onSelect={setSelectedDeviceId}
-          onClose={() => setSelectedDeviceId(null)}
-          onShell={(device) => setShellTarget(device)}
-          onLogs={(installation) => setLogTarget(installation)}
-          onInstall={(installation) => setInstallTarget(installation)}
-          onOpenCreation={onOpenCreation}
-          onOpenAgent={(agentId) => onOpenInspector({ kind: 'agent', agentId })}
-          onDeleteAgent={async (agentId) => {
-            if (!window.confirm('Delete this agent identity?')) return;
-            const res = await imFetch(`/agents/${encodeURIComponent(agentId)}`, { method: 'DELETE' });
-            if (!res.ok) {
-              notify(`Agent delete failed: ${res.message}`, 'error');
-              return;
-            }
-            await onRuntimeChanged();
-            notify('Agent deleted.', 'success');
-          }}
-          onDeleteInstallation={async (installation) => {
-            if (!window.confirm(`Delete runtime ${installation.runtimeInstanceId}?`)) return;
-            setDeletingRuntimeId(installation.id);
-            try {
-              const token = getWorkspaceToken();
-              if (!token) {
-                notify('No auth token for runtime delete.', 'error');
-                return;
-              }
-              const res = await fetch(`/api/sandboxes/${encodeURIComponent(installation.id)}`, {
-                method: 'DELETE',
-                headers: { Authorization: `Bearer ${token}` },
-              });
-              if (!res.ok) {
-                const body = await res.text().catch(() => '');
-                notify(`Runtime delete failed: ${body || res.status}`, 'error');
-                return;
-              }
-              await onRuntimeChanged();
-              notify('Runtime deleted.', 'success');
-            } finally {
-              setDeletingRuntimeId(null);
-            }
-          }}
-          onForgetBinding={async (daemonId) => {
-            if (!runtime?.workspaceId) {
-              notify('No workspace selected for device unbind.', 'error');
-              return;
-            }
-            if (!window.confirm(`Forget local daemon ${daemonId} from this workspace?`)) return;
-            setDeletingRuntimeId(daemonId);
-            try {
-              const res = await imFetch(
-                `/workspaces/${encodeURIComponent(runtime.workspaceId)}/runtime/bindings/${encodeURIComponent(daemonId)}/forget`,
-                { method: 'POST' },
-              );
-              if (!res.ok) {
-                notify(`Forget daemon failed: ${res.message}`, 'error');
-                return;
-              }
-              await onRuntimeChanged();
-              notify('Daemon forgotten from workspace.', 'success');
-            } finally {
-              setDeletingRuntimeId(null);
-            }
-          }}
-          deletingRuntimeId={deletingRuntimeId}
-          onRuntimeChanged={onRuntimeChanged}
-          notify={notify}
-        />
+        {/* v2.0 post-onboarding UX fix #2: Health tab 已并入每个 device card
+            的可折叠 details(见 DevicesPanel)。这里永远渲染 Devices 视图。 */}
+        {
+          <>
+            {/*
+              §4.8.2.3 Devices panel — binding-aware overlay. Now ONLY
+              renders when there is at least one contested binding
+              (deserves a top-of-page warning) OR a load error. The
+              DeviceWorkbench card grid below is the canonical day-to-day
+              view and already lists each daemon's agents — having a
+              duplicate banner above for routine state is redundant
+              (2026-05-22 user feedback).
+            */}
+            {workspaceId && (bindings.some((b) => isCurrentlyContested(b, now)) || bindingsError) ? (
+              <div className="mb-5">
+                <DevicesPanel
+                  isDark={isDark}
+                  workspaceId={workspaceId}
+                  bindings={bindings}
+                  runtime={runtime}
+                  now={now}
+                  loading={bindingsLoading}
+                  loadError={bindingsError}
+                  onOpenRebalance={(focus) => {
+                    setRebalanceFocus(focus?.agentImUserId ?? null);
+                    setRebalanceOpen(true);
+                  }}
+                  onRefreshBindings={refreshBindings}
+                />
+              </div>
+            ) : null}
+            <DeviceWorkbench
+              isDark={isDark}
+              surfaces={deviceSurfaces}
+              selectedId={selectedDeviceId}
+              now={now}
+              onSelect={setSelectedDeviceId}
+              onClose={() => setSelectedDeviceId(null)}
+              onShell={(device) => setShellTarget(device)}
+              onLogs={(target) => setLogTarget(target)}
+              onInstall={(installation) => setInstallTarget(installation)}
+              onOpenCreation={onOpenCreation}
+              onOpenAgent={(agentId) => onOpenInspector({ kind: 'agent', agentId })}
+              onDeleteAgent={async (agentId) => {
+                if (!window.confirm('Delete this agent identity?')) return;
+                const res = await imFetch(`/agents/${encodeURIComponent(agentId)}`, { method: 'DELETE' });
+                if (!res.ok) {
+                  notify(`Agent delete failed: ${res.message}`, 'error');
+                  return;
+                }
+                await onRuntimeChanged();
+                notify('Agent deleted.', 'success');
+              }}
+              onDeleteInstallation={async (installation) => {
+                if (!window.confirm(`Remove device ${installation.runtimeInstanceId} from this workspace?`)) return;
+                const token = getWorkspaceToken();
+                if (!token) {
+                  notify('No auth token for runtime delete.', 'error');
+                  return;
+                }
+                const hiddenKeys = suppressRuntimeSurface(runtimeInstallationIdentityValues(installation));
+                setDeletingRuntimeId(installation.id);
+                let deleteSucceeded = false;
+                try {
+                  const res = await fetch(
+                    `/api/workspace/runtime-installations/${encodeURIComponent(installation.id)}`,
+                    {
+                      method: 'DELETE',
+                      headers: { Authorization: `Bearer ${token}` },
+                    },
+                  );
+                  if (!res.ok) {
+                    restoreRuntimeSurface(hiddenKeys);
+                    const body = await res.text().catch(() => '');
+                    notify(`Device remove failed: ${body || res.status}`, 'error');
+                    return;
+                  }
+                  deleteSucceeded = true;
+                  if (runtime?.workspaceId && installation.daemonId) {
+                    const forget = await imFetch(
+                      `/workspaces/${encodeURIComponent(runtime.workspaceId)}/runtime/bindings/${encodeURIComponent(installation.daemonId)}/forget`,
+                      { method: 'POST' },
+                    );
+                    if (!forget.ok) {
+                      notify(`Device removed, but binding cleanup failed: ${forget.message}`, 'error');
+                    }
+                  }
+                  await onRuntimeChanged();
+                  await refreshBindings();
+                  notify('Device removed.', 'success');
+                } catch (err) {
+                  if (!deleteSucceeded) restoreRuntimeSurface(hiddenKeys);
+                  const message = err instanceof Error ? err.message : String(err);
+                  notify(
+                    deleteSucceeded
+                      ? `Device removed, but refresh failed: ${message}`
+                      : `Device remove failed: ${message}`,
+                    'error',
+                  );
+                } finally {
+                  setDeletingRuntimeId(null);
+                }
+              }}
+              onForgetBinding={async (daemonId) => {
+                if (!runtime?.workspaceId) {
+                  notify('No workspace selected for device unbind.', 'error');
+                  return;
+                }
+                if (!window.confirm(`Remove device ${daemonId} from this workspace?`)) return;
+                const hiddenKeys = suppressRuntimeSurface(runtimeIdentityValues(daemonId));
+                setDeletingRuntimeId(daemonId);
+                let forgetSucceeded = false;
+                try {
+                  const res = await imFetch(
+                    `/workspaces/${encodeURIComponent(runtime.workspaceId)}/runtime/bindings/${encodeURIComponent(daemonId)}/forget`,
+                    { method: 'POST' },
+                  );
+                  if (!res.ok) {
+                    restoreRuntimeSurface(hiddenKeys);
+                    notify(`Forget daemon failed: ${res.message}`, 'error');
+                    return;
+                  }
+                  forgetSucceeded = true;
+                  await onRuntimeChanged();
+                  await refreshBindings();
+                  notify('Device removed from workspace.', 'success');
+                } catch (err) {
+                  if (!forgetSucceeded) restoreRuntimeSurface(hiddenKeys);
+                  const message = err instanceof Error ? err.message : String(err);
+                  notify(
+                    forgetSucceeded
+                      ? `Device removed from workspace, but refresh failed: ${message}`
+                      : `Forget daemon failed: ${message}`,
+                    'error',
+                  );
+                } finally {
+                  setDeletingRuntimeId(null);
+                }
+              }}
+              deletingRuntimeId={deletingRuntimeId}
+              onRuntimeChanged={onRuntimeChanged}
+              notify={notify}
+              bindingByAgentImUserId={bindingByAgentImUserId}
+              orchestratorAgentImUserId={orchestratorState.orchestrator?.agentImUserId ?? null}
+              usernameByImUserId={orchestratorState.usernameByImUserId}
+              orchestratorToggleBusy={orchestratorState.orchestratorToggleBusy}
+              onToggleChiefOfStaff={orchestratorState.onToggleChiefOfStaff}
+              onOpenRebalance={(agentImUserId) => {
+                setRebalanceFocus(agentImUserId);
+                setRebalanceOpen(true);
+              }}
+              agentStatuses={agentStatuses}
+            />
+          </>
+        }
       </div>
+      <RebalanceModal
+        isDark={isDark}
+        open={rebalanceOpen}
+        bindings={bindings}
+        runtime={runtime}
+        focusAgentImUserId={rebalanceFocus}
+        onClose={() => {
+          setRebalanceOpen(false);
+          setRebalanceFocus(null);
+        }}
+        onRebound={refreshBindings}
+        notify={notify}
+      />
       {logTarget ? (
-        <RuntimeLogsPanel isDark={isDark} installation={logTarget} onClose={() => setLogTarget(null)} notify={notify} />
+        <RuntimeLogsPanel isDark={isDark} target={logTarget} onClose={() => setLogTarget(null)} notify={notify} />
       ) : null}
       {installTarget ? (
         <InstallAgentPanel
@@ -234,7 +542,8 @@ export function RuntimeManager({
           onClose={() => setShellTarget(null)}
           onCreated={async () => {
             await onRuntimeChanged();
-            setShellTarget(null);
+            // NOT setting shellTarget=null here — the shell panel stays open
+            // so the user can see command output and run follow-up commands.
           }}
           notify={notify}
         />
@@ -259,19 +568,67 @@ interface DeviceSurface {
   agents: Array<{ runtimeAgent: RuntimeAgentDTO; registered: AgentDTO | null }>;
 }
 
+interface RuntimeLogTarget {
+  device: RuntimeDeviceDTO | null;
+  installation: RuntimeInstallationDTO | null;
+}
+
+function runtimeIdentityValues(value: string | null | undefined): string[] {
+  return value ? [value] : [];
+}
+
+function runtimeInstallationIdentityValues(installation: RuntimeInstallationDTO): Array<string | null | undefined> {
+  return [
+    installation.id,
+    `container-row:${installation.id}`,
+    installation.daemonId,
+    installation.runtimeInstanceId,
+    installation.podName,
+  ];
+}
+
+function runtimeSuppressionKeys(values: Array<string | null | undefined>): string[] {
+  const keys = new Set<string>();
+  for (const value of values) {
+    const trimmed = value?.trim();
+    if (!trimmed) continue;
+    keys.add(trimmed);
+    if (trimmed.startsWith('container:')) {
+      const unprefixed = trimmed.slice('container:'.length);
+      if (unprefixed) keys.add(unprefixed);
+    } else {
+      keys.add(`container:${trimmed}`);
+    }
+  }
+  return [...keys];
+}
+
+function isRuntimeDeviceSuppressed(device: RuntimeDeviceDTO, suppressedIds: Set<string>): boolean {
+  return runtimeSuppressionKeys([device.deviceId]).some((key) => suppressedIds.has(key));
+}
+
+function isRuntimeInstallationSuppressed(installation: RuntimeInstallationDTO, suppressedIds: Set<string>): boolean {
+  return runtimeSuppressionKeys(runtimeInstallationIdentityValues(installation)).some((key) => suppressedIds.has(key));
+}
+
 function buildDeviceSurfaces(
   devices: RuntimeDeviceDTO[],
   installations: RuntimeInstallationDTO[],
   registeredByUserId: Map<string, AgentDTO>,
 ): DeviceSurface[] {
   const matchedInstallations = new Set<string>();
-  const surfaces = devices.map((device): DeviceSurface => {
+  const seenIds = new Set<string>();
+  const surfaces: DeviceSurface[] = [];
+
+  for (const device of devices) {
+    if (seenIds.has(device.deviceId)) continue;
+    seenIds.add(device.deviceId);
     const installation =
       installations.find(
         (item) => item.daemonId === device.deviceId || device.deviceId.endsWith(item.runtimeInstanceId),
       ) ?? null;
     if (installation) matchedInstallations.add(installation.id);
-    return {
+    surfaces.push({
       id: device.deviceId,
       name: device.name,
       kind: installation?.runtimeKind ?? (device.deviceId.startsWith('container:') ? 'k8s' : 'docker'),
@@ -281,11 +638,13 @@ function buildDeviceSurfaces(
         runtimeAgent: agent,
         registered: registeredByUserId.get(agent.id) ?? null,
       })),
-    };
-  });
+    });
+  }
 
   for (const installation of installations) {
     if (matchedInstallations.has(installation.id)) continue;
+    if (seenIds.has(installation.daemonId)) continue;
+    seenIds.add(installation.daemonId);
     surfaces.push({
       id: installation.daemonId,
       name: installation.runtimeInstanceId,
@@ -297,6 +656,33 @@ function buildDeviceSurfaces(
   }
 
   return surfaces.sort((a, b) => Number(Boolean(b.device)) - Number(Boolean(a.device)) || a.name.localeCompare(b.name));
+}
+
+function readInstallationFailureMessage(installation: RuntimeInstallationDTO | null): string | null {
+  if (!installation) return null;
+  const failed =
+    installation.status === 'errored' || installation.status === 'failed' || installation.phase === 'failed';
+  if (!failed) return null;
+  const history = installation.provisioning?.history ?? [];
+  const lastError = history
+    .slice()
+    .reverse()
+    .find((entry) => entry.status === 'error' && entry.error);
+  return lastError?.error ?? `Runtime failed with status ${installation.status}`;
+}
+
+// 2026-05-22 (single-card refactor) — Binding/orchestrator props bundle
+// threaded from RuntimeManager down to each DeviceAgentCard so the binding
+// chips (Contested / Pinned / Chief of Staff / last dispatch / Rebalance)
+// render inline on the agent row rather than in a duplicate BindingsView
+// card above. See devices-panel.tsx::BindingChipsRow.
+interface BindingChipsContext {
+  bindingByAgentImUserId: Map<string, AgentBindingDTO>;
+  orchestratorAgentImUserId: string | null;
+  usernameByImUserId: Map<string, string>;
+  orchestratorToggleBusy: string | null;
+  onToggleChiefOfStaff: (agentImUserId: string, currentlyOn: boolean) => void | Promise<void>;
+  onOpenRebalance: (agentImUserId: string) => void;
 }
 
 function DeviceWorkbench({
@@ -317,6 +703,13 @@ function DeviceWorkbench({
   deletingRuntimeId,
   onRuntimeChanged,
   notify,
+  bindingByAgentImUserId,
+  orchestratorAgentImUserId,
+  usernameByImUserId,
+  orchestratorToggleBusy,
+  onToggleChiefOfStaff,
+  onOpenRebalance,
+  agentStatuses,
 }: {
   isDark: boolean;
   surfaces: DeviceSurface[];
@@ -325,7 +718,7 @@ function DeviceWorkbench({
   onSelect: (id: string) => void;
   onClose: () => void;
   onShell: (device: RuntimeDeviceDTO) => void;
-  onLogs: (installation: RuntimeInstallationDTO) => void;
+  onLogs: (target: RuntimeLogTarget) => void;
   onInstall: (installation: RuntimeInstallationDTO) => void;
   onOpenAgent: (agentId: string) => void;
   onOpenCreation: () => void;
@@ -335,7 +728,23 @@ function DeviceWorkbench({
   deletingRuntimeId: string | null;
   onRuntimeChanged: () => Promise<void> | void;
   notify: (message: string, type?: 'success' | 'error' | 'info') => void;
+  bindingByAgentImUserId: Map<string, AgentBindingDTO>;
+  orchestratorAgentImUserId: string | null;
+  usernameByImUserId: Map<string, string>;
+  orchestratorToggleBusy: string | null;
+  onToggleChiefOfStaff: (agentImUserId: string, currentlyOn: boolean) => void | Promise<void>;
+  onOpenRebalance: (agentImUserId: string) => void;
+  agentStatuses?: Map<string, AgentLiveStatus>;
 }) {
+  const bindingCtx: BindingChipsContext = {
+    bindingByAgentImUserId,
+    orchestratorAgentImUserId,
+    usernameByImUserId,
+    orchestratorToggleBusy,
+    onToggleChiefOfStaff,
+    onOpenRebalance,
+  };
+  const { t } = useI18n();
   const selectedSurface = surfaces.find((surfaceItem) => surfaceItem.id === selectedId) ?? null;
 
   if (surfaces.length === 0) {
@@ -353,20 +762,23 @@ function DeviceWorkbench({
           >
             <Bot className="h-8 w-8" />
           </div>
-          <h3 className={`text-xl font-bold ${isDark ? 'text-zinc-100' : 'text-zinc-900'}`}>还没有 AI 团队</h3>
+          <h3 className={`text-xl font-bold ${isDark ? 'text-zinc-100' : 'text-zinc-900'}`}>
+            {t('workspace.runtime.emptyTitle')}
+          </h3>
           <p className={`text-sm leading-6 ${isDark ? 'text-zinc-400' : 'text-zinc-600'}`}>
-            点这里创建你的第一个 AI 团队 — 选行业 + 规模, 30 秒上岗。
+            {t('workspace.runtime.emptyHint')}
           </p>
           <button
             type="button"
             onClick={onOpenCreation}
             data-testid="device-empty-create-cta"
+            data-tour-anchor="setup-cta"
             className={`mt-2 inline-flex items-center gap-2 px-5 py-2.5 text-sm font-semibold text-white shadow-[0_18px_42px_-22px_rgba(139,92,246,0.85)] transition-colors ${radius.button} ${
               isDark ? 'bg-violet-500 hover:bg-violet-400' : 'bg-violet-600 hover:bg-violet-500'
             }`}
           >
             <Plus className="h-4 w-4" />
-            创建团队
+            {t('workspace.runtime.emptyCta')}
           </button>
         </div>
       </div>
@@ -394,6 +806,8 @@ function DeviceWorkbench({
             deletingRuntimeId={deletingRuntimeId}
             onRuntimeChanged={onRuntimeChanged}
             notify={notify}
+            bindingCtx={bindingCtx}
+            agentStatuses={agentStatuses}
           />
         ))}
       </div>
@@ -414,6 +828,8 @@ function DeviceWorkbench({
           deletingRuntimeId={deletingRuntimeId}
           onRuntimeChanged={onRuntimeChanged}
           notify={notify}
+          bindingCtx={bindingCtx}
+          agentStatuses={agentStatuses}
         />
       ) : null}
     </section>
@@ -436,6 +852,8 @@ function DeviceSurfaceCard({
   deletingRuntimeId,
   onRuntimeChanged,
   notify,
+  bindingCtx,
+  agentStatuses,
 }: {
   isDark: boolean;
   surfaceItem: DeviceSurface;
@@ -443,7 +861,7 @@ function DeviceSurfaceCard({
   index: number;
   onOpen: () => void;
   onShell: (device: RuntimeDeviceDTO) => void;
-  onLogs: (installation: RuntimeInstallationDTO) => void;
+  onLogs: (target: RuntimeLogTarget) => void;
   onInstall: (installation: RuntimeInstallationDTO) => void;
   onOpenAgent: (agentId: string) => void;
   onDeleteAgent: (agentId: string) => Promise<void> | void;
@@ -452,20 +870,53 @@ function DeviceSurfaceCard({
   deletingRuntimeId: string | null;
   onRuntimeChanged: () => Promise<void> | void;
   notify: (message: string, type?: 'success' | 'error' | 'info') => void;
+  bindingCtx: BindingChipsContext;
+  agentStatuses?: Map<string, AgentLiveStatus>;
 }) {
   const device = surfaceItem.device;
   const installation = surfaceItem.installation;
-  const online = device ? isDeviceOnline(device, now) : false;
-  const daemonStatus = device?.daemonStatus ?? (online ? 'connected' : device?.lastSeenAt ? 'stale' : 'offline');
+  const failureMessage = readInstallationFailureMessage(installation);
+  const online = device ? isDeviceOnline(device, now, installation) : false;
+  // F11 — when installation is terminal (stopped/errored), don't show
+  // "connected" daemon badge even if the daemon-process heartbeat is fresh.
+  const installationTerminal = installation?.status === 'stopped' || installation?.status === 'errored';
+  const daemonStatus = installationTerminal
+    ? 'offline'
+    : (device?.daemonStatus ?? (online ? 'connected' : device?.lastSeenAt ? 'stale' : 'offline'));
+  const { t } = useI18n();
   const [menuOpen, setMenuOpen] = useState(false);
   const gradient =
     surfaceItem.kind === 'k8s' ? deviceGradient.k8s : online ? deviceGradient.local : deviceGradient.offline;
   const DeviceIcon = surfaceItem.kind === 'k8s' ? Server : Laptop;
+  // 2026-06-05 — friendly device identity. The title is now a human-readable
+  // type ("Cloud computer" / "Local computer") plus, for local machines, a
+  // nickname when one is available. The raw daemon UUID prefix drops to a
+  // muted, click-to-copy meta chip in the subtitle so non-technical users
+  // aren't faced with `1d618601-…` as the card title.
+  const daemonShortId = surfaceItem.id.slice(0, 8);
+  const runtimeNickname = surfaceItem.name && surfaceItem.name !== surfaceItem.id ? surfaceItem.name : null;
+  const deviceKindLabel =
+    surfaceItem.kind === 'k8s'
+      ? t('workspace.runtime.deviceKind.cloud')
+      : t('workspace.runtime.deviceKind.local');
+  // Append the nickname only for local machines — k8s pod names
+  // (`prismer-agent-rt-…`) are technical noise the user shouldn't read.
+  const deviceTitle =
+    surfaceItem.kind !== 'k8s' && runtimeNickname ? `${deviceKindLabel} · ${runtimeNickname}` : deviceKindLabel;
+  // 2026-05-22 G3B — Orphan device downgrade. A daemon that's reporting
+  // connected/stale but has zero declared agents is doing nothing useful:
+  // either the runtime restarted and lost its agents, or the user paired a
+  // daemon and never wired up agents. Visually de-emphasise (opacity 50%),
+  // surface the diagnosis in the subtitle, and offer a "Forget device" CTA
+  // so the user can clean up in one click.
+  const isOrphan = daemonStatus !== 'offline' && surfaceItem.agents.length === 0;
   return (
     <motion.div
       initial={{ opacity: 0, y: 12, scale: 0.985 }}
       animate={{ opacity: 1, y: 0, scale: 1 }}
       transition={{ ...springSoft, delay: index * 0.025 }}
+      className={isOrphan ? 'opacity-50' : undefined}
+      data-orphan={isOrphan ? 'true' : 'false'}
     >
       <GradientCard
         gradientFrom={gradient.from}
@@ -476,11 +927,12 @@ function DeviceSurfaceCard({
       >
         <article
           data-testid={`device-card-${surfaceItem.id}`}
+          data-device-id={surfaceItem.id}
           onClick={() => {
             setMenuOpen(false);
             onOpen();
           }}
-          className={`relative z-20 flex h-[308px] cursor-pointer flex-col overflow-visible rounded-3xl border p-4 backdrop-blur-xl transition-all duration-300 ${
+          className={`relative z-20 flex h-[340px] cursor-pointer flex-col overflow-hidden rounded-3xl border p-4 backdrop-blur-xl transition-all duration-300 ${
             isDark
               ? 'border-white/[0.08] bg-zinc-950/72 text-zinc-100 shadow-[0_24px_80px_-45px_rgba(0,0,0,0.9)] hover:border-white/[0.14]'
               : 'border-white/80 bg-white/82 text-zinc-900 shadow-[0_24px_80px_-50px_rgba(15,23,42,0.35)] hover:border-white'
@@ -504,8 +956,12 @@ function DeviceSurfaceCard({
               <DeviceIcon className="h-5 w-5" />
             </span>
             <span className="min-w-0 flex-1 pr-10">
-              <span className={`block truncate text-[15px] font-bold ${isDark ? 'text-zinc-50' : 'text-zinc-950'}`}>
-                {surfaceItem.name}
+              <span
+                data-testid={`device-card-title-${surfaceItem.id}`}
+                className={`block truncate text-[15px] font-bold ${isDark ? 'text-zinc-50' : 'text-zinc-950'}`}
+                title={deviceTitle}
+              >
+                {deviceTitle}
               </span>
               <span
                 className={`mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] ${
@@ -513,9 +969,53 @@ function DeviceSurfaceCard({
                 }`}
               >
                 <StatusDot tone={online ? 'green' : 'zinc'} />
-                <span>{surfaceItem.kind === 'k8s' ? 'k8s' : 'local'}</span>
-                <span>daemon {daemonStatus}</span>
-                <span>{surfaceItem.agents.length} agents</span>
+                {/* Raw device id, de-emphasised to a click-to-copy chip so it
+                    stays available for debugging without dominating the card. */}
+                <span
+                  role="button"
+                  tabIndex={0}
+                  data-device-short-id={daemonShortId}
+                  title={`Copy device id · ${surfaceItem.id}`}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    void navigator.clipboard?.writeText(surfaceItem.id);
+                    notify('Device id copied', 'info');
+                  }}
+                  className={`inline-flex items-center rounded-md px-1.5 py-0.5 font-mono text-[10px] ${
+                    isDark ? 'bg-white/[0.06] text-zinc-400 hover:bg-white/[0.1]' : 'bg-zinc-100 text-zinc-500 hover:bg-zinc-200'
+                  }`}
+                >
+                  #{daemonShortId}
+                </span>
+                {/* 2026-05-22 (single-card refactor) — show last heartbeat
+                    here so users don't have to expand details just to know
+                    when this device was last seen. Previously this lived in
+                    the BindingsView card above the workbench. */}
+                {failureMessage ? (
+                  <span title={failureMessage}>· failed</span>
+                ) : device?.lastSeenAt ? (
+                  <span title={`Last heartbeat ${device.lastSeenAt}`}>
+                    · last seen {formatRelative(device.lastSeenAt, now)}
+                  </span>
+                ) : (
+                  <span>· {daemonStatus}</span>
+                )}
+                <span>· {surfaceItem.agents.length} agents</span>
+                {/* M448 (doc 20 Gap A) — project scope chip. Color derives from
+                    the projectId via projectColorFromId so it stays stable
+                    across reloads and matches 09 §8.8 task-board badges. */}
+                {installation?.projectId ? (
+                  <span
+                    data-testid={`device-card-project-chip-${surfaceItem.id}`}
+                    data-project-id={installation.projectId}
+                    className={`inline-flex items-center rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${
+                      projectAccent[projectColorFromId(installation.projectId)].chip
+                    }`}
+                    title={`Project scope · ${installation.projectId}`}
+                  >
+                    {installation.projectId.slice(0, 8)}
+                  </span>
+                ) : null}
               </span>
             </span>
           </button>
@@ -577,22 +1077,25 @@ function DeviceSurfaceCard({
 
           <div className="mt-auto pt-4">
             {surfaceItem.agents.length > 0 ? (
-              <div className="flex flex-wrap gap-2">
+              <div className="flex flex-col gap-2">
                 {surfaceItem.agents.slice(0, 3).map((item) => (
                   <DeviceAgentCard
                     key={item.runtimeAgent.id}
                     isDark={isDark}
                     runtimeAgent={item.runtimeAgent}
                     registered={item.registered}
-                    expanded={false}
+                    liveStatus={agentStatuses?.get(item.runtimeAgent.id) ?? null}
+                    expanded
+                    deviceOnline={online}
                     onOpen={() => onOpenAgent(item.runtimeAgent.id)}
                     onDelete={() => void onDeleteAgent(item.runtimeAgent.id)}
                     onRenamed={() => void onRuntimeChanged()}
+                    bindingCtx={bindingCtx}
                   />
                 ))}
                 {surfaceItem.agents.length > 3 ? (
                   <span
-                    className={`inline-flex h-9 items-center rounded-2xl border px-3 text-[11px] ${
+                    className={`inline-flex h-8 w-full items-center rounded-2xl border px-3 text-[11px] ${
                       isDark
                         ? 'border-white/[0.08] bg-white/[0.03] text-zinc-400'
                         : 'border-zinc-200 bg-white/70 text-zinc-500'
@@ -603,12 +1106,61 @@ function DeviceSurfaceCard({
                 ) : null}
               </div>
             ) : (
+              /* 2026-05-22 G3B — Orphan device hint. When the daemon is
+                 connected/stale but no agents are declared, tell the user
+                 explicitly and offer a one-click Forget. The card already
+                 inherits opacity-50 from the parent motion.div. */
               <div
+                data-testid={`device-card-orphan-${surfaceItem.id}`}
                 className={`rounded-2xl border border-dashed px-3 py-3 text-xs ${
                   isDark ? 'border-white/[0.08] text-zinc-500' : 'border-zinc-200 text-zinc-500'
                 }`}
               >
-                No agents declared
+                {failureMessage ? (
+                  <div className="flex items-start justify-between gap-2">
+                    <span className="min-w-0 flex-1 line-clamp-2">Provisioning failed — {failureMessage}</span>
+                    {installation ? (
+                      <button
+                        type="button"
+                        data-testid={`device-card-remove-failed-${installation.id}`}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          void onDeleteInstallation(installation);
+                        }}
+                        className={`shrink-0 rounded-lg border px-2 py-0.5 text-[11px] font-semibold transition-colors ${
+                          isDark
+                            ? 'border-white/[0.12] text-zinc-300 hover:bg-white/[0.06]'
+                            : 'border-zinc-300 text-zinc-700 hover:bg-zinc-100'
+                        }`}
+                      >
+                        Remove
+                      </button>
+                    ) : null}
+                  </div>
+                ) : isOrphan ? (
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="min-w-0 flex-1 truncate">
+                      No agents declared — orphan device, may be cleaned up
+                    </span>
+                    <button
+                      type="button"
+                      data-testid={`device-card-forget-${surfaceItem.id}`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void onForgetBinding(surfaceItem.id);
+                      }}
+                      className={`shrink-0 rounded-lg border px-2 py-0.5 text-[11px] font-semibold transition-colors ${
+                        isDark
+                          ? 'border-white/[0.12] text-zinc-300 hover:bg-white/[0.06]'
+                          : 'border-zinc-300 text-zinc-700 hover:bg-zinc-100'
+                      }`}
+                    >
+                      Forget device
+                    </button>
+                  </div>
+                ) : (
+                  'No agents declared'
+                )}
               </div>
             )}
           </div>
@@ -633,13 +1185,15 @@ function DeviceDetailsDialog({
   deletingRuntimeId,
   onRuntimeChanged,
   notify,
+  bindingCtx,
+  agentStatuses,
 }: {
   isDark: boolean;
   surfaceItem: DeviceSurface;
   now: number;
   onClose: () => void;
   onShell: (device: RuntimeDeviceDTO) => void;
-  onLogs: (installation: RuntimeInstallationDTO) => void;
+  onLogs: (target: RuntimeLogTarget) => void;
   onInstall: (installation: RuntimeInstallationDTO) => void;
   onOpenAgent: (agentId: string) => void;
   onDeleteAgent: (agentId: string) => Promise<void> | void;
@@ -648,9 +1202,13 @@ function DeviceDetailsDialog({
   deletingRuntimeId: string | null;
   onRuntimeChanged: () => Promise<void> | void;
   notify: (message: string, type?: 'success' | 'error' | 'info') => void;
+  bindingCtx: BindingChipsContext;
+  agentStatuses?: Map<string, AgentLiveStatus>;
 }) {
   const device = surfaceItem.device;
-  const online = device ? isDeviceOnline(device, now) : false;
+  // F11 — thread installation through so the dialog's "online" pill respects
+  // the terminal status (matches the card variant logic above).
+  const online = device ? isDeviceOnline(device, now, surfaceItem.installation) : false;
   const DeviceIcon = surfaceItem.kind === 'k8s' ? Server : Laptop;
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm">
@@ -740,14 +1298,31 @@ function DeviceDetailsDialog({
                 >
                   Agents
                 </p>
-                {surfaceItem.installation ? (
-                  <RuntimeActionButton
-                    isDark={isDark}
-                    onClick={() => onInstall(surfaceItem.installation!)}
-                    icon={<Plus className="h-3.5 w-3.5" />}
-                    label="Attach agent"
-                  />
-                ) : null}
+                <span className="flex items-center gap-1">
+                  {surfaceItem.agents.length > 0 && onDeleteAgent ? (
+                    <RuntimeActionButton
+                      isDark={isDark}
+                      onClick={async () => {
+                        const count = surfaceItem.agents.length;
+                        if (!window.confirm(`Delete all ${count} agents on this device?`)) return;
+                        for (const item of surfaceItem.agents) {
+                          await onDeleteAgent(item.runtimeAgent.id);
+                        }
+                        notify(`${count} agent(s) deleted.`, 'success');
+                      }}
+                      icon={<Trash2 className="h-3 w-3" />}
+                      label="Remove all"
+                    />
+                  ) : null}
+                  {surfaceItem.installation ? (
+                    <RuntimeActionButton
+                      isDark={isDark}
+                      onClick={() => onInstall(surfaceItem.installation!)}
+                      icon={<Plus className="h-3.5 w-3.5" />}
+                      label="Attach"
+                    />
+                  ) : null}
+                </span>
               </div>
               <div className="grid gap-2">
                 {surfaceItem.agents.length === 0 ? (
@@ -763,10 +1338,13 @@ function DeviceDetailsDialog({
                       isDark={isDark}
                       runtimeAgent={item.runtimeAgent}
                       registered={item.registered}
+                      liveStatus={agentStatuses?.get(item.runtimeAgent.id) ?? null}
                       expanded
+                      deviceOnline={online}
                       onOpen={() => onOpenAgent(item.runtimeAgent.id)}
                       onDelete={() => void onDeleteAgent(item.runtimeAgent.id)}
                       onRenamed={() => void onRuntimeChanged()}
+                      bindingCtx={bindingCtx}
                     />
                   ))
                 )}
@@ -801,7 +1379,7 @@ function DeviceActionMenu({
   onClose: () => void;
   onDetails: () => void;
   onShell: (device: RuntimeDeviceDTO) => void;
-  onLogs: (installation: RuntimeInstallationDTO) => void;
+  onLogs: (target: RuntimeLogTarget) => void;
   onInstall: (installation: RuntimeInstallationDTO) => void;
   onDeleteInstallation: (installation: RuntimeInstallationDTO) => Promise<void> | void;
   onForgetBinding: (daemonId: string) => Promise<void> | void;
@@ -856,7 +1434,7 @@ function DeviceActionMenu({
         isDark={isDark}
         testid={`device-action-terminal-${device?.deviceId ?? installation?.id ?? 'unknown'}`}
         icon={<TerminalSquare className="h-3.5 w-3.5" />}
-        label="Open terminal"
+        label="Run shell task"
         disabled={!device}
         onClick={() => {
           if (!device) return;
@@ -873,7 +1451,7 @@ function DeviceActionMenu({
             label="Logs"
             onClick={() => {
               onClose();
-              onLogs(installation);
+              onLogs({ device, installation });
             }}
           />
           <DeviceMenuItem
@@ -886,41 +1464,45 @@ function DeviceActionMenu({
               onInstall(installation);
             }}
           />
-          <div className={`my-1 h-px ${isDark ? 'bg-white/[0.06]' : 'bg-zinc-200'}`} />
-          <DeviceMenuItem
-            isDark={isDark}
-            testid={`device-action-start-${installation.id}`}
-            icon={
-              busyAction === 'start' ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Play className="h-3.5 w-3.5" />
-              )
-            }
-            label={busyAction === 'start' ? 'Starting' : 'Start runtime'}
-            disabled={busyAction !== null}
-            onClick={() => void runtimeAction('start')}
-          />
-          <DeviceMenuItem
-            isDark={isDark}
-            testid={`device-action-stop-${installation.id}`}
-            icon={
-              busyAction === 'stop' ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Square className="h-3.5 w-3.5" />
-              )
-            }
-            label={busyAction === 'stop' ? 'Stopping' : 'Stop runtime'}
-            disabled={busyAction !== null}
-            onClick={() => void runtimeAction('stop')}
-          />
+          {installation.runtimeKind !== 'docker' ? (
+            <>
+              <div className={`my-1 h-px ${isDark ? 'bg-white/[0.06]' : 'bg-zinc-200'}`} />
+              <DeviceMenuItem
+                isDark={isDark}
+                testid={`device-action-start-${installation.id}`}
+                icon={
+                  busyAction === 'start' ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Play className="h-3.5 w-3.5" />
+                  )
+                }
+                label={busyAction === 'start' ? 'Starting' : 'Start runtime'}
+                disabled={busyAction !== null}
+                onClick={() => void runtimeAction('start')}
+              />
+              <DeviceMenuItem
+                isDark={isDark}
+                testid={`device-action-stop-${installation.id}`}
+                icon={
+                  busyAction === 'stop' ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Square className="h-3.5 w-3.5" />
+                  )
+                }
+                label={busyAction === 'stop' ? 'Stopping' : 'Stop runtime'}
+                disabled={busyAction !== null}
+                onClick={() => void runtimeAction('stop')}
+              />
+            </>
+          ) : null}
           <DeviceMenuItem
             isDark={isDark}
             danger
             testid={`device-action-delete-${installation.id}`}
             icon={deleting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
-            label={deleting ? 'Deleting' : 'Delete runtime'}
+            label={deleting ? 'Removing' : 'Remove device'}
             disabled={deleting}
             onClick={() => {
               onClose();
@@ -936,7 +1518,7 @@ function DeviceActionMenu({
             danger
             testid={`device-action-forget-${device.deviceId}`}
             icon={deleting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
-            label={deleting ? 'Forgetting' : 'Forget from workspace'}
+            label={deleting ? 'Removing' : 'Remove device'}
             disabled={deleting}
             onClick={() => {
               onClose();
@@ -1005,7 +1587,7 @@ function DeviceRuntimeSummary({
   device: RuntimeDeviceDTO | null;
   installation: RuntimeInstallationDTO | null;
   now: number;
-  onLogs: (installation: RuntimeInstallationDTO) => void;
+  onLogs: (target: RuntimeLogTarget) => void;
   onInstall: (installation: RuntimeInstallationDTO) => void;
   onDeleteInstallation: (installation: RuntimeInstallationDTO) => Promise<void> | void;
   onForgetBinding: (daemonId: string) => Promise<void> | void;
@@ -1014,9 +1596,21 @@ function DeviceRuntimeSummary({
   notify: (message: string, type?: 'success' | 'error' | 'info') => void;
 }) {
   const [busyAction, setBusyAction] = useState<'start' | 'stop' | null>(null);
-  const online = device ? isDeviceOnline(device, now) : false;
-  const daemonStatus: RuntimeDaemonStatus =
-    device?.daemonStatus ?? (online ? 'connected' : device?.lastSeenAt ? 'stale' : 'offline');
+  // 2026-05-30 — collapse Start / Stop behind 高级. Reason: pod lifecycle is
+  // already auto-managed (cloud provisions a new pod on the next dispatch
+  // when no live daemon owns the agent, kills it after the idle window
+  // closes). Surfacing Start / Stop next to Logs / Attach agent gave new
+  // users the wrong mental model ("do I have to Start the device before
+  // I can talk to the agents?"). Keep them available — they're real ops
+  // for the rare cases where you want to force-cold-spawn or force-kill
+  // — but tuck them out of the default field of view.
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const online = device ? isDeviceOnline(device, now, installation) : false;
+  // F11 — terminal installation status overrides daemon-heartbeat staleness.
+  const installationTerminal = installation?.status === 'stopped' || installation?.status === 'errored';
+  const daemonStatus: RuntimeDaemonStatus = installationTerminal
+    ? 'offline'
+    : (device?.daemonStatus ?? (online ? 'connected' : device?.lastSeenAt ? 'stale' : 'offline'));
   const containerStatus = installation?.containerStatus ?? 'unknown';
 
   async function runtimeAction(kind: 'start' | 'stop') {
@@ -1047,7 +1641,7 @@ function DeviceRuntimeSummary({
       className={`rounded-2xl border p-3 ${isDark ? 'border-white/[0.07] bg-white/[0.025]' : 'border-zinc-200 bg-white/70'}`}
     >
       <div className="grid gap-2 sm:grid-cols-3">
-        <RuntimeStat isDark={isDark} label="Daemon" value={daemonStatus} />
+        <RuntimeStat isDark={isDark} label="Connection" value={daemonStatus} />
         <RuntimeStat isDark={isDark} label="Runtime" value={installation ? containerStatus : 'local'} />
         <RuntimeStat
           isDark={isDark}
@@ -1060,7 +1654,7 @@ function DeviceRuntimeSummary({
           <>
             <RuntimeActionButton
               isDark={isDark}
-              onClick={() => onLogs(installation)}
+              onClick={() => onLogs({ device, installation })}
               icon={<FileText className="h-3.5 w-3.5" />}
               label="Logs"
             />
@@ -1070,6 +1664,43 @@ function DeviceRuntimeSummary({
               icon={<Bot className="h-3.5 w-3.5" />}
               label="Attach agent"
             />
+            <RuntimeActionButton
+              isDark={isDark}
+              onClick={() => void onDeleteInstallation(installation)}
+              icon={deleting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+              label={deleting ? 'Removing' : 'Remove device'}
+            />
+            <RuntimeActionButton
+              isDark={isDark}
+              onClick={() => setShowAdvanced((v) => !v)}
+              icon={
+                showAdvanced ? (
+                  <ChevronDown className="h-3.5 w-3.5" />
+                ) : (
+                  <ChevronRight className="h-3.5 w-3.5" />
+                )
+              }
+              label="高级"
+            />
+          </>
+        ) : device && device.deviceId !== '__unbound__' ? (
+          <RuntimeActionButton
+            isDark={isDark}
+            onClick={() => void onForgetBinding(device.deviceId)}
+            icon={deleting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+            label={deleting ? 'Removing' : 'Remove device'}
+          />
+        ) : (
+          <span className={`text-[11px] ${isDark ? 'text-zinc-500' : 'text-zinc-500'}`}>
+            This synthetic group has no daemon binding.
+          </span>
+        )}
+      </div>
+      {installation && showAdvanced ? (
+        <div
+          className={`mt-2 rounded-xl border px-3 py-2 ${isDark ? 'border-white/[0.06] bg-white/[0.02]' : 'border-zinc-200/70 bg-zinc-50'}`}
+        >
+          <div className="flex flex-wrap items-center gap-2">
             <RuntimeActionButton
               isDark={isDark}
               onClick={() => void runtimeAction('start')}
@@ -1094,26 +1725,13 @@ function DeviceRuntimeSummary({
               }
               label={busyAction === 'stop' ? 'Stopping' : 'Stop'}
             />
-            <RuntimeActionButton
-              isDark={isDark}
-              onClick={() => void onDeleteInstallation(installation)}
-              icon={deleting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
-              label={deleting ? 'Deleting' : 'Delete runtime'}
-            />
-          </>
-        ) : device && device.deviceId !== '__unbound__' ? (
-          <RuntimeActionButton
-            isDark={isDark}
-            onClick={() => void onForgetBinding(device.deviceId)}
-            icon={deleting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
-            label={deleting ? 'Forgetting' : 'Forget from workspace'}
-          />
-        ) : (
-          <span className={`text-[11px] ${isDark ? 'text-zinc-500' : 'text-zinc-500'}`}>
-            This synthetic group has no daemon binding.
-          </span>
-        )}
-      </div>
+          </div>
+          <p className={`mt-2 text-[11px] leading-snug ${isDark ? 'text-zinc-500' : 'text-zinc-500'}`}>
+            Pod 生命周期由 cloud 自动管理 — 收到新消息时按需 provision，idle 超时自动 stop。
+            这里手动操作只用于强制冷启动 / 强制停掉一个还活着的 pod，正常使用不需要碰。
+          </p>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -1151,7 +1769,7 @@ function DeviceCliPreview({
           disabled={!device}
           className="h-7 rounded-xl border border-white/10 px-2 text-[10px] font-semibold text-zinc-200 disabled:opacity-40"
         >
-          Open terminal
+          Run shell task
         </button>
       </div>
       <pre className="max-h-28 overflow-auto px-3 py-2 text-[11px] leading-5 text-zinc-300">
@@ -1168,14 +1786,25 @@ function DeviceAgentCard({
   runtimeAgent,
   registered,
   expanded,
+  deviceOnline = true,
   onOpen,
   onDelete,
   onRenamed,
+  bindingCtx,
+  liveStatus,
 }: {
   isDark: boolean;
   runtimeAgent: RuntimeAgentDTO;
   registered: AgentDTO | null;
+  /** Task 3 — agent live status (working/waiting/stuck/idle/offline). */
+  liveStatus?: AgentLiveStatus | null;
   expanded: boolean;
+  /**
+   * When the host daemon is offline, the agent is unreachable regardless of
+   * the last `status` field it reported — force the dot to zinc so the UI
+   * doesn't claim green while the device card right above says "daemon offline".
+   */
+  deviceOnline?: boolean;
   onOpen: () => void;
   onDelete: () => void;
   /**
@@ -1183,11 +1812,21 @@ function DeviceAgentCard({
    * patch its local `agents` cache without waiting for the WS event.
    */
   onRenamed?: (agentImUserId: string, newSlug: string) => void;
+  /**
+   * 2026-05-22 (single-card refactor) — binding metadata for THIS agent
+   * + orchestrator state shared across all rows. Optional so the card can
+   * still render in contexts where the binding feed isn't loaded (e.g.
+   * tests / forgotten-daemon fallback). When present, renders
+   * `<BindingChipsRow>` beneath the agent identity line.
+   */
+  bindingCtx?: BindingChipsContext;
 }) {
   const label = registered?.name ?? runtimeAgent.name;
   const slug = registered?.username ?? null;
-  const statusTone =
-    runtimeAgent.status === 'busy'
+  const binding = bindingCtx?.bindingByAgentImUserId.get(runtimeAgent.id) ?? null;
+  const statusTone = !deviceOnline
+    ? 'zinc'
+    : runtimeAgent.status === 'busy'
       ? 'amber'
       : runtimeAgent.status === 'online' || runtimeAgent.status === 'idle'
         ? 'green'
@@ -1196,8 +1835,13 @@ function DeviceAgentCard({
   // <button> elements don't get nested inside the card's <button> (invalid
   // HTML). Hover state is shared via the `group/agent` Tailwind class on the
   // outer wrapper.
+  //
+  // 2026-05-22 (single-card refactor) — Outer wrapper changed `<span>` →
+  // `<div>` so we can render the BindingChipsRow as a column sibling
+  // beneath the motion.button (BindingChipsRow contains nested buttons
+  // which can't legally nest inside a <button> ancestor).
   return (
-    <span className={`group/agent relative inline-flex ${expanded ? 'w-full' : 'max-w-full'}`}>
+    <div className={`group/agent relative ${expanded ? 'flex w-full flex-col' : 'inline-flex max-w-full'}`}>
       <motion.button
         type="button"
         data-testid={`device-agent-${runtimeAgent.id}`}
@@ -1222,7 +1866,14 @@ function DeviceAgentCard({
               }`
         }`}
       >
-        <RuntimeAgentAvatar seed={runtimeAgent.id} label={label} />
+        <AgentWorkingIndicator agentImUserId={runtimeAgent.id}>
+          <RuntimeAgentAvatar
+            seed={runtimeAgent.id}
+            label={label}
+            roleSlug={registered?.agentType ?? null}
+            liveStatus={liveStatus ?? null}
+          />
+        </AgentWorkingIndicator>
         <span className="min-w-0 flex-1">
           <span className={`block truncate text-xs font-semibold ${isDark ? 'text-zinc-100' : 'text-zinc-900'}`}>
             {label}
@@ -1296,7 +1947,24 @@ function DeviceAgentCard({
           />
         </span>
       ) : null}
-    </span>
+      {/* 2026-05-22 (single-card refactor) — Binding chips (Contested /
+          Pinned / Chief of Staff / Rebalance + last dispatch text) render
+          here as a sibling of the motion.button so their nested buttons
+          don't violate HTML semantics. Only shown in `expanded` mode (the
+          chip row would be cluttered next to the inline pill variant). */}
+      {expanded && bindingCtx && binding ? (
+        <div className="px-3 pb-2">
+          <BindingChipsRow
+            isDark={isDark}
+            binding={binding}
+            orchestratorAgentImUserId={bindingCtx.orchestratorAgentImUserId}
+            usernameByImUserId={bindingCtx.usernameByImUserId}
+            orchestratorToggleBusy={bindingCtx.orchestratorToggleBusy}
+            onToggleChiefOfStaff={bindingCtx.onToggleChiefOfStaff}
+          />
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -1322,21 +1990,29 @@ function dotClass(tone: 'green' | 'cyan' | 'amber' | 'red' | 'zinc'): string {
 
 function RuntimeLogsPanel({
   isDark,
-  installation,
+  target,
   onClose,
   notify,
 }: {
   isDark: boolean;
-  installation: RuntimeInstallationDTO;
+  target: RuntimeLogTarget;
   onClose: () => void;
   notify: (message: string, type?: 'success' | 'error' | 'info') => void;
 }) {
+  const logPath = resolveRuntimeLogsPath(target);
+  const label =
+    target.device?.name ?? target.installation?.runtimeInstanceId ?? target.installation?.podName ?? 'device';
   const [lines, setLines] = useState<string[]>([]);
   const [status, setStatus] = useState<'connecting' | 'streaming' | 'closed' | 'error'>(() =>
-    getWorkspaceToken() ? 'connecting' : 'error',
+    getWorkspaceToken() && logPath ? 'connecting' : 'error',
   );
 
   useEffect(() => {
+    if (!logPath) {
+      notify('Device runtime logs are unavailable for this device.', 'error');
+      return;
+    }
+    const path = logPath;
     const token = getWorkspaceToken();
     if (!token) {
       notify('No auth token for device runtime logs.', 'error');
@@ -1346,13 +2022,20 @@ function RuntimeLogsPanel({
 
     async function streamLogs() {
       try {
-        const res = await fetch(installation.observability.logsPath, {
+        const res = await fetch(path, {
           headers: { Authorization: `Bearer ${token}` },
           signal: ctrl.signal,
         });
         if (!res.ok || !res.body) {
           setStatus('error');
-          notify(`Device runtime logs failed: ${res.status}`, 'error');
+          let message = `Device runtime logs failed: ${res.status}`;
+          try {
+            const body = (await res.json()) as { error?: string; message?: string };
+            message = body.error || body.message || message;
+          } catch {
+            /* keep status-only message */
+          }
+          notify(message, 'error');
           return;
         }
         setStatus('streaming');
@@ -1373,7 +2056,15 @@ function RuntimeLogsPanel({
                 .map((line) => line.slice(6))
                 .join('\n'),
             )
-            .filter(Boolean);
+            .filter(Boolean)
+            .map((payload) => {
+              try {
+                const parsed = JSON.parse(payload);
+                return typeof parsed === 'string' ? parsed : payload;
+              } catch {
+                return payload;
+              }
+            });
           if (nextLines.length > 0) {
             setLines((prev) => [...prev, ...nextLines].slice(-400));
           }
@@ -1388,7 +2079,7 @@ function RuntimeLogsPanel({
 
     void streamLogs();
     return () => ctrl.abort();
-  }, [installation.observability.logsPath, notify]);
+  }, [logPath, notify]);
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-end bg-black/35 p-4 backdrop-blur-sm">
@@ -1407,7 +2098,7 @@ function RuntimeLogsPanel({
               Device runtime logs
             </p>
             <p className={`truncate text-[11px] ${isDark ? 'text-zinc-500' : 'text-zinc-500'}`}>
-              {installation.podName} · {status}
+              {label} · {status}
             </p>
           </div>
           <button
@@ -1421,11 +2112,20 @@ function RuntimeLogsPanel({
         <pre
           className={`min-h-0 flex-1 overflow-auto p-4 text-[11px] leading-5 ${isDark ? 'bg-black/20 text-zinc-300' : 'bg-zinc-950 text-zinc-100'}`}
         >
-          {lines.length === 0 ? `Waiting for log frames from ${installation.podName}...\n` : lines.join('\n')}
+          {lines.length === 0 ? `Waiting for log frames from ${label}...\n` : lines.join('\n')}
         </pre>
       </motion.aside>
     </div>
   );
+}
+
+function resolveRuntimeLogsPath(target: RuntimeLogTarget): string | null {
+  if (target.device?.deviceId && target.installation?.workspaceId && !target.device.deviceId.startsWith('container:')) {
+    return `/api/im/workspaces/${encodeURIComponent(target.installation.workspaceId)}/runtime/devices/${encodeURIComponent(
+      target.device.deviceId,
+    )}/logs`;
+  }
+  return target.installation?.observability.logsPath ?? null;
 }
 
 /**
@@ -1837,9 +2537,13 @@ function RuntimeActionButton({
 }
 
 /**
- * Real-time terminal panel for daemon shell execution.
+ * Shell-task output panel for daemon shell execution.
  *
- * Why a terminal (not a one-shot form):
+ * TODO(runtime-control-plane): a true device terminal must be a separate
+ * runtime control channel. This panel intentionally creates shell tasks,
+ * because task execution and device terminal are different product semantics.
+ *
+ * Why this panel streams task output:
  * - The daemon already streams stdout/stderr chunks back as
  *   `task.dispatch.progress` (see sdk/.../shell-executor.ts) which the cloud
  *   persists into `im_task_logs` (see ws/handler.ts handleTaskDispatchProgress).
@@ -1847,7 +2551,7 @@ function RuntimeActionButton({
  * - Previous fire-and-forget `ShellCommandPanel` created the task but never
  *   surfaced output, leaving users blind.
  * - This panel polls /tasks/:id every 1.2s (cache-warm, cheap) until the task
- *   reaches a terminal status, then renders chunks as a scrollback terminal.
+ *   reaches a terminal status, then renders chunks as command scrollback.
  *   Each command's output stays visible above the prompt.
  *
  * Trade-offs:
@@ -1866,7 +2570,7 @@ interface TerminalEntry {
   status: 'submitting' | 'running' | 'completed' | 'failed' | 'error';
   exitCode: number | null;
   errorMessage: string | null;
-  /** Concatenated stdout+stderr in arrival order (mirrors a real terminal). */
+  /** Concatenated stdout+stderr in arrival order for this shell task. */
   output: string;
   /** Highest sequence we've already merged so re-polls don't duplicate chunks. */
   seenSequence: number;
@@ -1909,6 +2613,14 @@ function ShellCommandPanel({
     if (el) el.scrollTop = el.scrollHeight;
   }, [entries]);
 
+  // Refocus the prompt after submit flips back to idle. Calling .focus()
+  // inside the submit() finally block runs before React re-renders the input
+  // as enabled, so the call is a no-op. Watching `submitting` here defers
+  // until after the input's `disabled` attribute is cleared.
+  useEffect(() => {
+    if (!submitting) inputRef.current?.focus();
+  }, [submitting]);
+
   // Polling loop: every 1.2s, find any non-terminal entry and fetch /tasks/:id
   // to merge new progress logs. Stops automatically once all entries are
   // terminal — no leftover timer when the user closes the panel.
@@ -1944,7 +2656,7 @@ function ShellCommandPanel({
     const trimmed = command.trim();
     if (!trimmed || submitting) return;
     if (!isOnline) {
-      notify('Daemon is offline; reconnect before running commands.', 'error');
+      notify('Device is offline; reconnect before running commands.', 'error');
       return;
     }
     const entryId = `term-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -1992,8 +2704,8 @@ function ShellCommandPanel({
       await onCreated();
     } finally {
       setSubmitting(false);
-      // Refocus the prompt so the user can keep typing without a click.
-      inputRef.current?.focus();
+      // Focus restoration handled by the useEffect watching `submitting` —
+      // see comment near the effect for why this can't run synchronously.
     }
   }
 
@@ -2022,9 +2734,9 @@ function ShellCommandPanel({
             <TerminalSquare className="h-5 w-5" />
           </span>
           <div className="min-w-0 flex-1">
-            <h3 className="text-sm font-bold">Terminal · {device.name}</h3>
+            <h3 className="text-sm font-bold">Shell task · {device.name}</h3>
             <p className={`mt-0.5 truncate text-[11px] ${isDark ? 'text-zinc-500' : 'text-zinc-500'}`}>
-              daemon {device.deviceId} · {isOnline ? 'online' : 'offline'} · output streams from task.dispatch.progress
+              daemon {device.deviceId} · {isOnline ? 'online' : 'offline'} · shell task output
             </p>
           </div>
           <button
@@ -2038,7 +2750,7 @@ function ShellCommandPanel({
           <button
             type="button"
             onClick={onClose}
-            aria-label="Close terminal"
+            aria-label="Close shell task panel"
             className={`flex h-8 w-8 items-center justify-center rounded-2xl border ${isDark ? 'border-white/[0.08] text-zinc-300 hover:bg-white/[0.05]' : 'border-zinc-200 text-zinc-600 hover:bg-zinc-100'}`}
           >
             <X className="h-3.5 w-3.5" />
@@ -2082,7 +2794,7 @@ function ShellCommandPanel({
               value={command}
               onChange={(e) => setCommand(e.target.value)}
               autoFocus
-              placeholder={isOnline ? 'ls -la' : 'daemon offline — commands will queue'}
+              placeholder={isOnline ? 'ls -la' : 'device offline — commands will queue'}
               disabled={submitting}
               spellCheck={false}
               autoComplete="off"
@@ -2102,7 +2814,7 @@ function ShellCommandPanel({
             <input
               value={cwd}
               onChange={(e) => setCwd(e.target.value)}
-              placeholder="cwd (daemon default)"
+              placeholder="cwd (device default)"
               className={`h-8 rounded-2xl border px-3 font-mono text-[11px] outline-none ${isDark ? 'border-white/[0.06] bg-black/30 text-zinc-200 placeholder-zinc-600' : 'border-zinc-200 bg-white text-zinc-700 placeholder-zinc-400'}`}
             />
             <input
@@ -2201,8 +2913,19 @@ function mergeTaskDetail(prev: TerminalEntry[], entryId: string, detail: TaskDet
       // ws/handler.ts already populated.
       exitCode = exitCode ?? null;
       completedAt = e.completedAt ?? Date.now();
-      if (nextOutput.length === 0 && typeof detail.task.result === 'string') {
-        nextOutput = detail.task.result as string;
+      if (nextOutput.length === 0) {
+        if (typeof detail.task.result === 'string') {
+          nextOutput = detail.task.result as string;
+        } else if (
+          detail.task.result &&
+          typeof detail.task.result === 'object' &&
+          !Array.isArray(detail.task.result) &&
+          typeof (detail.task.result as { output?: unknown }).output === 'string'
+        ) {
+          nextOutput = (detail.task.result as { output: string }).output;
+        } else if (detail.task.error) {
+          nextOutput = `${detail.task.error}\n`;
+        }
       }
     } else if (status === 'running' || status === 'assigned') {
       nextStatus = 'running';
@@ -2230,19 +2953,60 @@ function formatDurationFromTimestamps(startedAt: number, completedAt: number | n
   return formatDuration(Math.max(0, end - startedAt));
 }
 
-function RuntimeAgentAvatar({ seed, label, cli = false }: { seed: string; label: string; cli?: boolean }) {
+function RuntimeAgentAvatar({
+  seed,
+  label,
+  cli = false,
+  roleSlug = null,
+  liveStatus = null,
+}: {
+  seed: string;
+  label: string;
+  cli?: boolean;
+  /** Task 3 — drives the role-specific icon (Crown / Wrench / Megaphone / …). */
+  roleSlug?: string | null;
+  /** Task 3 — drives the status ring tint (working/waiting/stuck/offline). */
+  liveStatus?: AgentLiveStatus | null;
+}) {
   const avatar = avatarGradient(seed);
+  const RoleIcon = roleSlug ? getAgentRoleIcon(roleSlug) : null;
+  const ringClass = liveStatus
+    ? liveStatus.kind === 'working'
+      ? 'ring-2 ring-emerald-400/60'
+      : liveStatus.kind === 'waiting'
+        ? 'ring-2 ring-amber-400/60'
+        : liveStatus.kind === 'stuck'
+          ? 'ring-2 ring-rose-400/60'
+          : liveStatus.kind === 'offline'
+            ? 'ring-1 ring-zinc-500/40 opacity-80'
+            : ''
+    : '';
   return (
     <span
-      className="flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl text-[10px] font-bold text-white"
+      className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl text-[10px] font-bold text-white ${ringClass}`}
       style={{ background: `linear-gradient(135deg, ${avatar.from}, ${avatar.to})` }}
     >
-      {cli ? <TerminalSquare className="h-4 w-4" /> : avatarInitials(label)}
+      {cli ? (
+        <TerminalSquare className="h-4 w-4" />
+      ) : RoleIcon ? (
+        <RoleIcon className="h-4 w-4" />
+      ) : (
+        avatarInitials(label)
+      )}
     </span>
   );
 }
 
-function isDeviceOnline(device: RuntimeDeviceDTO, now: number): boolean {
+function isDeviceOnline(device: RuntimeDeviceDTO, now: number, installation?: RuntimeInstallationDTO | null): boolean {
+  // F11 (2026-05-19) — `lastSeenAt` is the daemon's last heartbeat ts. For
+  // docker installations the daemon is a host-level process that survives
+  // container stops, so it keeps heartbeating after Stop and the card lies
+  // "online" for the entire ONLINE_WINDOW_MS. Trust the installation status
+  // when it is terminal — stopped/errored containers are never online no
+  // matter how recent the daemon's last heartbeat was.
+  if (installation && (installation.status === 'stopped' || installation.status === 'errored')) {
+    return false;
+  }
   if (!device.lastSeenAt) return false;
   const ts = Date.parse(device.lastSeenAt);
   return Number.isFinite(ts) && now - ts <= ONLINE_WINDOW_MS;
@@ -2273,6 +3037,15 @@ function formatDuration(ms: number): string {
  * from the (default) docker daemon path; both share the same square-border
  * shape so the strip stays visually quiet.
  */
+/**
+ * Wave 3 C2 — minimal tab button used by RuntimeManager to flip between the
+ * "Devices" and "Health" surfaces in the SurfaceHeader status slot.
+ *
+ * The optional `badge` prop displays a small numeric indicator (e.g.
+ * contested-binding count) so users see the warning even without entering
+ * the tab.
+ */
+
 function RuntimeKindBadge({ isDark, kind }: { isDark: boolean; kind: RuntimeKind }) {
   const isK8s = kind === 'k8s';
   return (
