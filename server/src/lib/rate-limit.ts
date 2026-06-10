@@ -9,6 +9,10 @@
  *   if (!rl.allowed) return rateLimitResponse(rl);
  */
 import { NextResponse } from 'next/server';
+import { getCacheRedis } from '@/lib/llm-proxy-cache';
+import { createModuleLogger } from '@/lib/logger';
+
+const log = createModuleLogger('RateLimit');
 
 const WINDOW_MS = 60_000; // 1 minute
 
@@ -73,6 +77,66 @@ export function checkRateLimit(userId: string, action: string): RateLimitResult 
   entry.count++;
   const remaining = Math.max(0, limit - entry.count);
   return { allowed: true, remaining, limit, resetAt: ws + WINDOW_MS };
+}
+
+// Distributed (cluster-wide) LLM rate-limit window: minute-aligned bucket so
+// every replica increments the same Redis key. Window length kept identical to
+// the in-memory limiter (60s) so the 'llm' limit (ACTION_LIMITS.llm) is the
+// TOTAL across the cluster, not per-pod.
+const LLM_RL_KEY_PREFIX = 'llm-rl:';
+const LLM_RL_WINDOW_SECONDS = WINDOW_MS / 1000; // 60
+
+/**
+ * Cluster-wide LLM rate limiter backed by the shared ioredis client.
+ *
+ * Atomic fixed-window via INCR + EXPIRE-on-first-hit. The key is namespaced by
+ * userId and the minute bucket so all N replicas converge on a single counter
+ * (fixes P4 — in-memory Map gives an effective limit of 30/min × N and resets
+ * on pod restart).
+ *
+ * Fail-open: any Redis error degrades gracefully to the in-process
+ * `checkRateLimit(userId, 'llm')`. A Redis blip must never hard-block LLM
+ * traffic (rate-limit fail-open is safe — billing is the hard gate, not this).
+ *
+ * Returns the same {@link RateLimitResult} shape as `checkRateLimit`, so
+ * `rateLimitResponse` / `withRateLimitHeaders` work unchanged.
+ */
+export async function checkLlmRateLimitDistributed(userId: string): Promise<RateLimitResult> {
+  const limit = ACTION_LIMITS.llm ?? ACTION_LIMITS.default;
+  const ws = currentWindow();
+  const bucket = ws / WINDOW_MS; // minute bucket index
+  const resetAt = ws + WINDOW_MS;
+  const key = `${LLM_RL_KEY_PREFIX}${userId}:${bucket}`;
+
+  try {
+    const redis = getCacheRedis();
+    // INCR + EXPIRE in ONE pipeline so the TTL is always issued alongside the
+    // INCR. A standalone EXPIRE that failed after a successful INCR would leave
+    // a TTL-less orphan key (the minute bucket rolls each window, so it'd never
+    // be reused, just leak). Re-issuing EXPIRE every hit is harmless (the key
+    // self-expires ~window after the last hit; counting is unaffected because
+    // the bucket index changes each minute). No `NX` flag → Redis < 7 safe.
+    const res = await redis
+      .multi()
+      .incr(key)
+      .expire(key, LLM_RL_WINDOW_SECONDS + 1)
+      .exec();
+    const incrReply = res?.[0]; // [err, value]
+    if (!incrReply || incrReply[0]) {
+      throw incrReply?.[0] ?? new Error('rate-limit pipeline returned no INCR reply');
+    }
+    const count = Number(incrReply[1]);
+    if (count > limit) {
+      return { allowed: false, remaining: 0, limit, resetAt };
+    }
+    return { allowed: true, remaining: Math.max(0, limit - count), limit, resetAt };
+  } catch (err) {
+    log.warn(
+      { userId, error: String(err) },
+      'distributed LLM rate-limit unavailable — failing open to in-memory limiter',
+    );
+    return checkRateLimit(userId, 'llm');
+  }
 }
 
 /**
