@@ -12,8 +12,11 @@ import { ServerEvents } from '../ws/events';
 import type { SigningService } from '../services/signing.service';
 import type { RateLimiterService } from '../services/rate-limiter.service';
 import { createRateLimitMiddleware } from '../middleware/rate-limit';
-import type { ApiResponse, MessageType } from '../types/index';
+import type { ApiResponse, MessageType, AssetAttachment } from '../types/index';
 import prisma from '../db';
+import { requireAgentToolAllowed, resolveConversationWorkspaceId } from '../security/mcp-allowlist';
+import { canObserveWorkspaceConversation } from './conversation-visibility';
+import { StreamService } from '../services/stream.service';
 
 // v1.8.2: Resolve quoted message summary for quote replies
 async function resolveQuotedMessage(messageId: string | null | undefined) {
@@ -41,6 +44,7 @@ export function createMessagesRouter(
 ) {
   const router = new Hono();
 
+  // eslint-disable-next-line custom/no-wildcard-sub-router-middleware -- mounted at /messages in routes.ts; wildcard scoped to that prefix
   router.use('*', authMiddleware);
 
   /**
@@ -95,9 +99,12 @@ export function createMessagesRouter(
     const user = c.get('user');
     const conversationId = c.req.param('conversationId')!;
 
-    // Check participation (use imUserId for resolved identity)
+    // Check participation (use imUserId for resolved identity). Workspace
+    // owners/members may also read agent-only workspace conversations for the
+    // ACP control-plane session list, even when the human was not added as a
+    // participant to the agent-agent direct chat.
     const isMember = await conversationService.isParticipant(conversationId, user.imUserId);
-    if (!isMember) {
+    if (!isMember && !(await canObserveWorkspaceConversation(conversationId, user.imUserId))) {
       return c.json<ApiResponse>({ ok: false, error: 'Not a participant' }, 403);
     }
 
@@ -177,6 +184,7 @@ export function createMessagesRouter(
       type,
       content,
       metadata,
+      attachments,
       parentId,
       quotedMessageId,
       secVersion,
@@ -190,7 +198,8 @@ export function createMessagesRouter(
       timestamp,
     } = body;
 
-    if (!content && type !== 'tool_call' && type !== 'system_event') {
+    const hasAttachments = Array.isArray(attachments) && attachments.length > 0;
+    if (!content && !hasAttachments && type !== 'tool_call' && type !== 'system_event') {
       return c.json<ApiResponse>({ ok: false, error: 'content is required' }, 400);
     }
 
@@ -252,9 +261,13 @@ export function createMessagesRouter(
       }
     }
 
-    // Support idempotency for offline SDK retries
+    // Support idempotency for offline SDK retries.
+    // Defensively spread (metadata ?? {}) because body.metadata may be
+    // undefined when client only supplied the header path.
     const idempotencyKey = c.req.header('X-Idempotency-Key');
-    const enrichedMetadata = idempotencyKey ? { ...metadata, _idempotencyKey: idempotencyKey } : metadata;
+    const enrichedMetadata = idempotencyKey
+      ? { ...(metadata ?? {}), _idempotencyKey: idempotencyKey }
+      : metadata;
 
     try {
       const result = await messageService.send({
@@ -263,6 +276,7 @@ export function createMessagesRouter(
         type: type as MessageType,
         content: content ?? '',
         metadata: enrichedMetadata,
+        attachments,
         parentId,
         quotedMessageId,
         // E2E Signing fields (pass through if verified by this route)
@@ -299,6 +313,7 @@ export function createMessagesRouter(
         type: msg.type as any,
         content: msg.content,
         metadata: messageMetadata,
+        attachments: msg.attachments ?? undefined,
         parentId: msg.parentId ?? undefined,
         createdAt: msg.createdAt instanceof Date ? msg.createdAt.toISOString() : String(msg.createdAt),
       });
@@ -310,11 +325,32 @@ export function createMessagesRouter(
       // v1.8.2: Resolve quoted message summary if present
       const quotedMessage = await resolveQuotedMessage((result.message as any).quotedMessageId);
 
+      // v2.0 §4.1: Surface the freshly-allocated per-conversation
+      // `boundarySeq` so the SDK / front-end can advance its reconcile
+      // cursor synchronously with the POST response (don't wait for the
+      // SSE echo). The boundarySeq lives on the IMSyncEvent row written
+      // in the same tx — look it up by message id + type.
+      let boundarySeq: number | null = null;
+      try {
+        const evt = await prisma.iMSyncEvent.findFirst({
+          where: { conversationId, type: 'message.new', data: { contains: `"id":"${msg.id}"` } },
+          orderBy: { id: 'desc' },
+          select: { boundarySeq: true },
+        });
+        boundarySeq = evt?.boundarySeq != null ? Number(evt.boundarySeq) : null;
+      } catch {
+        // Non-fatal — SDK falls back to SSE for boundarySeq.
+      }
+
       return c.json<ApiResponse>(
         {
           ok: true,
           data: {
-            message: { ...result.message, ...(quotedMessage ? { quotedMessage } : {}) },
+            message: {
+              ...result.message,
+              ...(quotedMessage ? { quotedMessage } : {}),
+              ...(boundarySeq != null ? { boundarySeq } : {}),
+            },
             routing: result.routing
               ? {
                   mode: result.routing.mode,
@@ -353,6 +389,12 @@ export function createMessagesRouter(
     const conversationId = c.req.param('conversationId')!;
     const messageId = c.req.param('messageId')!;
     const body = await c.req.json();
+    const denied = await requireAgentToolAllowed(
+      c,
+      'prismer.message.edit',
+      await resolveConversationWorkspaceId(conversationId),
+    );
+    if (denied) return denied;
 
     const msg = await messageService.getById(messageId);
     if (!msg) {
@@ -394,12 +436,98 @@ export function createMessagesRouter(
   });
 
   /**
+   * POST /api/messages/:conversationId/:messageId/attach — release202/09 P5#3
+   * (A2): append an already-uploaded asset to an ALREADY-PERSISTED message.
+   *
+   * Complements A1 (`cloud deliver`, which rides the reply that doesn't exist
+   * yet). Use case: the agent already replied (`cloud send` / `cloud file send`
+   * returned a messageId), then produced a file it wants on THAT message.
+   *
+   * Body: `{ assetId }`. The asset must already exist (the daemon uploads it
+   * first with its own credential, then calls this with the resulting assetId).
+   * Auth = same agent-proxy as every other IM op (X-IM-Agent → resolved
+   * `user.imUserId`); sender-only (you may only attach to your own message),
+   * matching the PATCH/DELETE edit guard. Re-emits `message.updated` carrying
+   * the new `attachments[]` so the UI picks it up in-place (im-channel.tsx).
+   */
+  router.post('/:conversationId/:messageId/attach', async (c) => {
+    const user = c.get('user');
+    const conversationId = c.req.param('conversationId');
+    const messageId = c.req.param('messageId');
+    let body: { assetId?: unknown };
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json<ApiResponse>({ ok: false, error: 'invalid JSON body' }, 400);
+    }
+    const assetId = typeof body.assetId === 'string' ? body.assetId.trim() : '';
+    if (!assetId) {
+      return c.json<ApiResponse>({ ok: false, error: 'assetId is required' }, 400);
+    }
+
+    const denied = await requireAgentToolAllowed(
+      c,
+      'prismer.message.edit',
+      await resolveConversationWorkspaceId(conversationId),
+    );
+    if (denied) return denied;
+
+    const msg = await messageService.getById(messageId);
+    if (!msg) {
+      return c.json<ApiResponse>({ ok: false, error: 'Message not found' }, 404);
+    }
+    if (msg.conversationId !== conversationId) {
+      // The messageId must belong to the conversation in the path — prevents a
+      // valid credential from attaching to a message in someone else's thread.
+      return c.json<ApiResponse>({ ok: false, error: 'Message does not belong to this conversation' }, 404);
+    }
+    if (msg.senderId !== user.imUserId) {
+      return c.json<ApiResponse>({ ok: false, error: 'Can only attach to your own messages' }, 403);
+    }
+
+    try {
+      const { message: updated, attachment, added } = await messageService.attachAssetToMessage(messageId, assetId);
+
+      if (added) {
+        const updatedMetadata = updated.metadata
+          ? typeof updated.metadata === 'string'
+            ? JSON.parse(updated.metadata)
+            : updated.metadata
+          : undefined;
+        const event = ServerEvents.messageUpdated({
+          id: updated.id,
+          conversationId,
+          content: updated.content,
+          type: (updated.type ?? msg.type ?? 'text') as MessageType,
+          attachments: (updated as { attachments?: AssetAttachment[] | null }).attachments ?? undefined,
+          metadata: updatedMetadata,
+        });
+        const participants = await conversationService.getParticipantIds(conversationId);
+        for (const uid of participants) {
+          rooms.sendToUser(uid, event);
+        }
+      }
+
+      return c.json<ApiResponse>({ ok: true, data: { messageId: updated.id, assetId, attachment, added } });
+    } catch (err) {
+      const e = err as Error & { status?: number };
+      return c.json<ApiResponse>({ ok: false, error: e.message }, (e.status as 400 | 404 | 422) ?? 500);
+    }
+  });
+
+  /**
    * DELETE /api/messages/:conversationId/:messageId — Delete a message
    */
   router.delete('/:conversationId/:messageId', async (c) => {
     const user = c.get('user');
-    const conversationId = c.req.param('conversationId')!;
-    const messageId = c.req.param('messageId')!;
+    const conversationId = c.req.param('conversationId');
+    const messageId = c.req.param('messageId');
+    const denied = await requireAgentToolAllowed(
+      c,
+      'prismer.message.delete',
+      await resolveConversationWorkspaceId(conversationId),
+    );
+    if (denied) return denied;
 
     const msg = await messageService.getById(messageId);
     if (!msg) {
@@ -433,6 +561,12 @@ export function createMessagesRouter(
     const conversationId = c.req.param('conversationId');
     const messageId = c.req.param('messageId');
     const body = await c.req.json();
+    const denied = await requireAgentToolAllowed(
+      c,
+      'prismer.message.react',
+      await resolveConversationWorkspaceId(conversationId),
+    );
+    if (denied) return denied;
 
     if (!body.emoji || typeof body.emoji !== 'string') {
       return c.json<ApiResponse>({ ok: false, error: 'emoji is required' }, 400);
@@ -503,6 +637,57 @@ export function createMessagesRouter(
     }
 
     return c.json<ApiResponse>({ ok: true, data: { reactions } });
+  });
+
+  /**
+   * GET /api/messages/:conversationId/:messageId/partials?afterSeq=N
+   *
+   * v2.0 §4.4.7 — F5 hydration endpoint for streaming partial chunks.
+   * Returns persisted `im_message_partials` rows for `messageId` with
+   * `chunkSeq > afterSeq`, ordered ASC. The browser uses this on reload
+   * to rebuild the half-written placeholder before the SSE catches up.
+   *
+   * Partials live for 24h then the scheduler.sweepMessagePartials reaper
+   * clears them. A missing message → 404; a message with no partials
+   * (already-completed stream) → `{ partials: [] }`.
+   *
+   * Query params:
+   *   afterSeq — last seen chunkSeq (default 0)
+   *   limit    — max chunks (1-500, default 500)
+   *
+   * 403 if caller is not a participant in the conversation.
+   */
+  router.get('/:conversationId/:messageId/partials', async (c) => {
+    const user = c.get('user');
+    const conversationId = c.req.param('conversationId');
+    const messageId = c.req.param('messageId');
+    const afterSeq = parseInt(c.req.query('afterSeq') ?? '0', 10);
+    const limit = Math.min(parseInt(c.req.query('limit') ?? '500', 10), 500);
+
+    if (!Number.isFinite(afterSeq) || afterSeq < 0) {
+      return c.json<ApiResponse>({ ok: false, error: 'afterSeq must be a non-negative integer' }, 400);
+    }
+
+    // Participant check — same surface as POST /messages/:cid.
+    const participant = await prisma.iMParticipant.findFirst({
+      where: { conversationId, imUserId: user.imUserId, leftAt: null },
+      select: { id: true },
+    });
+    if (!participant) {
+      return c.json<ApiResponse>({ ok: false, error: 'Not a participant' }, 403);
+    }
+
+    try {
+      const partials = await StreamService.getPartials(messageId, afterSeq, limit);
+      const lastSeq = partials.length > 0 ? partials[partials.length - 1].chunkSeq : afterSeq;
+      return c.json<ApiResponse>({
+        ok: true,
+        data: { messageId, partials, lastSeq },
+      });
+    } catch (err) {
+      console.error('[Messages] /partials error:', err);
+      return c.json<ApiResponse>({ ok: false, error: 'partial hydration failed' }, 500);
+    }
   });
 
   return router;
