@@ -1,9 +1,9 @@
 /**
  * /admin/sandbox — daemon-first cold-start metrics console.
  *
- * RBAC gate: NextAuth session ➜ email ➜ isSandboxAdmin allowlist.
- * Returns notFound() (404) for non-admins, deliberately not 403, so the
- * existence of the admin endpoint is not leaked to unauthenticated probes.
+ * RBAC gate: NextAuth session ➜ email ➜ isSandboxAdmin allowlist when a
+ * server session exists. JWT-only browser sessions are checked by the client
+ * data route because the server component cannot read localStorage tokens.
  *
  * The actual data (container status, run logs, cold-start latency) is
  * fetched client-side from /api/sandboxes/_admin/sandbox-metrics, which
@@ -21,24 +21,37 @@ import { notFound } from 'next/navigation';
 import { auth } from '@/lib/auth/nextauth';
 import { isSandboxAdmin } from '@/lib/admin-rbac';
 import { AdminSandboxClient } from './admin-sandbox-client';
+import { FleetTable } from './fleet-table';
+import { OrphanVacuumSection } from './orphan-vacuum-section';
 
 export default async function AdminSandboxPage() {
   const session = await auth();
-  if (!isSandboxAdmin(session?.user?.email)) {
+  if (session?.user?.email && !isSandboxAdmin(session.user.email)) {
     notFound();
   }
 
   return (
-    <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100">
-      <div className="max-w-6xl mx-auto px-6 py-8 space-y-6">
+    <div className="max-w-7xl mx-auto px-6 py-8 space-y-6">
+      <header>
+        <h1 className="text-2xl font-semibold">Sandbox Fleet</h1>
+        <p className="text-sm text-zinc-500 dark:text-zinc-400 mt-1">
+          Daemon-first cold-start metrics + cross-workspace fleet management.
+        </p>
+      </header>
+      <AdminSandboxClient />
+      <section className="space-y-2 pt-6 border-t border-zinc-200 dark:border-zinc-800">
         <header>
-          <h1 className="text-2xl font-semibold">Sandbox SRE Console</h1>
+          <h2 className="text-xl font-semibold">Fleet management</h2>
           <p className="text-sm text-zinc-500 dark:text-zinc-400 mt-1">
-            Daemon-first cold-start metrics — containers, runs, and latency.
+            Cross-workspace inventory with K8s live state · drift detection · batch force-delete / stop / reconcile · orphan pod cleanup.
           </p>
         </header>
-        <AdminSandboxClient />
-      </div>
+        <FleetTable />
+      </section>
+
+      <section className="space-y-2 pt-6 border-t border-zinc-200 dark:border-zinc-800">
+        <OrphanVacuumSection />
+      </section>
     </div>
   );
 }
