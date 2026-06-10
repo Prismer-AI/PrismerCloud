@@ -18,7 +18,7 @@ export async function resolveTargetUser(target: string): Promise<string | null> 
   if (user) return user.id;
 
   // Try by username
-  user = await prisma.iMUser.findUnique({ where: { username: target } });
+  user = await prisma.iMUser.findFirst({ where: { username: target } });
   if (user) return user.id;
 
   // Try by Cloud User ID
