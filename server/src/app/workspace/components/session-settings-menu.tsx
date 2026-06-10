@@ -38,14 +38,20 @@ import {
   Trash2,
   Check,
 } from 'lucide-react';
+import { useI18n } from '@/contexts/i18n-context';
 
 export interface SessionSettingsMenuProps {
   isDark: boolean;
   isGroup: boolean;
-  /** Caller's role on the participant row — drives Leave/Delete visibility. */
-  myRole: string | undefined;
   pinned: boolean;
   muted: boolean;
+  canAddMember: boolean;
+  canRename: boolean;
+  canPin: boolean;
+  canMute: boolean;
+  canArchive: boolean;
+  canLeave: boolean;
+  canDelete: boolean;
   onAddMember: () => void;
   onRename: () => void;
   onTogglePin: () => void;
@@ -58,9 +64,15 @@ export interface SessionSettingsMenuProps {
 export function SessionSettingsMenu({
   isDark,
   isGroup,
-  myRole,
   pinned,
   muted,
+  canAddMember,
+  canRename,
+  canPin,
+  canMute,
+  canArchive,
+  canLeave,
+  canDelete,
   onAddMember,
   onRename,
   onTogglePin,
@@ -69,6 +81,7 @@ export function SessionSettingsMenu({
   onLeave,
   onDelete,
 }: SessionSettingsMenuProps) {
+  const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -124,8 +137,6 @@ export function SessionSettingsMenu({
     };
   }, [open]);
 
-  const isOwner = myRole === 'owner';
-
   function close<T extends () => void>(fn: T): () => void {
     return () => {
       setOpen(false);
@@ -143,7 +154,8 @@ export function SessionSettingsMenu({
         type="button"
         onClick={() => setOpen((v) => !v)}
         data-testid="session-settings-toggle"
-        title="Session settings"
+        title={t('workspace.sessionSettings.title')}
+        aria-label={t('workspace.sessionSettings.title')}
         aria-haspopup="menu"
         aria-expanded={open}
         className={`p-1 rounded-md ${
@@ -174,7 +186,7 @@ export function SessionSettingsMenu({
                 isDark ? 'bg-zinc-900 border-white/10' : 'bg-white border-zinc-200'
               }`}
             >
-              {isGroup ? (
+              {isGroup && canAddMember ? (
                 <button
                   type="button"
                   role="menuitem"
@@ -183,53 +195,67 @@ export function SessionSettingsMenu({
                   className={`${itemBase} ${itemIdle}`}
                 >
                   <UserPlus className="w-3.5 h-3.5 opacity-70" />
-                  Add member
+                  {t('workspace.sessionSettings.addMember')}
                 </button>
               ) : null}
-              <button
-                type="button"
-                role="menuitem"
-                data-testid="session-settings-rename"
-                onClick={close(onRename)}
-                className={`${itemBase} ${itemIdle}`}
-              >
-                <Pencil className="w-3.5 h-3.5 opacity-70" />
-                Rename
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                data-testid="session-settings-mute"
-                onClick={close(onToggleMute)}
-                className={`${itemBase} ${itemIdle}`}
-              >
-                {muted ? <BellOff className="w-3.5 h-3.5 opacity-70" /> : <Bell className="w-3.5 h-3.5 opacity-70" />}
-                <span className="flex-1">{muted ? 'Unmute' : 'Mute'}</span>
-                {muted ? <Check className="w-3.5 h-3.5 opacity-80" /> : null}
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                data-testid="session-settings-pin"
-                onClick={close(onTogglePin)}
-                className={`${itemBase} ${itemIdle}`}
-              >
-                {pinned ? <PinOff className="w-3.5 h-3.5 opacity-70" /> : <Pin className="w-3.5 h-3.5 opacity-70" />}
-                <span className="flex-1">{pinned ? 'Unpin' : 'Pin'}</span>
-                {pinned ? <Check className="w-3.5 h-3.5 opacity-80" /> : null}
-              </button>
-              <div className={`my-1 border-t ${isDark ? 'border-white/5' : 'border-zinc-100'}`} />
-              <button
-                type="button"
-                role="menuitem"
-                data-testid="session-settings-archive"
-                onClick={close(onArchive)}
-                className={`${itemBase} ${itemIdle}`}
-              >
-                <Archive className="w-3.5 h-3.5 opacity-70" />
-                Archive
-              </button>
-              {isGroup && !isOwner ? (
+              {canRename ? (
+                <button
+                  type="button"
+                  role="menuitem"
+                  data-testid="session-settings-rename"
+                  onClick={close(onRename)}
+                  className={`${itemBase} ${itemIdle}`}
+                >
+                  <Pencil className="w-3.5 h-3.5 opacity-70" />
+                  {t('workspace.sessionSettings.rename')}
+                </button>
+              ) : null}
+              {canMute ? (
+                <button
+                  type="button"
+                  role="menuitem"
+                  data-testid="session-settings-mute"
+                  onClick={close(onToggleMute)}
+                  className={`${itemBase} ${itemIdle}`}
+                >
+                  {muted ? <BellOff className="w-3.5 h-3.5 opacity-70" /> : <Bell className="w-3.5 h-3.5 opacity-70" />}
+                  <span className="flex-1">
+                    {muted ? t('workspace.sessionSettings.unmute') : t('workspace.sessionSettings.mute')}
+                  </span>
+                  {muted ? <Check className="w-3.5 h-3.5 opacity-80" /> : null}
+                </button>
+              ) : null}
+              {canPin ? (
+                <button
+                  type="button"
+                  role="menuitem"
+                  data-testid="session-settings-pin"
+                  onClick={close(onTogglePin)}
+                  className={`${itemBase} ${itemIdle}`}
+                >
+                  {pinned ? <PinOff className="w-3.5 h-3.5 opacity-70" /> : <Pin className="w-3.5 h-3.5 opacity-70" />}
+                  <span className="flex-1">
+                    {pinned ? t('workspace.sessionSettings.unpin') : t('workspace.sessionSettings.pin')}
+                  </span>
+                  {pinned ? <Check className="w-3.5 h-3.5 opacity-80" /> : null}
+                </button>
+              ) : null}
+              {canArchive || canLeave || canDelete ? (
+                <div className={`my-1 border-t ${isDark ? 'border-white/5' : 'border-zinc-100'}`} />
+              ) : null}
+              {canArchive ? (
+                <button
+                  type="button"
+                  role="menuitem"
+                  data-testid="session-settings-archive"
+                  onClick={close(onArchive)}
+                  className={`${itemBase} ${itemIdle}`}
+                >
+                  <Archive className="w-3.5 h-3.5 opacity-70" />
+                  {t('workspace.sessionSettings.archive')}
+                </button>
+              ) : null}
+              {isGroup && canLeave ? (
                 <button
                   type="button"
                   role="menuitem"
@@ -238,10 +264,10 @@ export function SessionSettingsMenu({
                   className={`${itemBase} ${itemIdle}`}
                 >
                   <LogOut className="w-3.5 h-3.5 opacity-70" />
-                  Leave
+                  {t('workspace.sessionSettings.leave')}
                 </button>
               ) : null}
-              {isOwner ? (
+              {canDelete ? (
                 <button
                   type="button"
                   role="menuitem"
@@ -250,7 +276,7 @@ export function SessionSettingsMenu({
                   className={`${itemBase} ${itemDestructive}`}
                 >
                   <Trash2 className="w-3.5 h-3.5 opacity-70" />
-                  Delete
+                  {t('workspace.sessionSettings.delete')}
                 </button>
               ) : null}
             </div>,
