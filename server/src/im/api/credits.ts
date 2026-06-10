@@ -13,6 +13,7 @@ import type { ApiResponse } from "../types/index";
 export function createCreditsRouter(creditService: CreditService) {
   const router = new Hono();
 
+  // eslint-disable-next-line custom/no-wildcard-sub-router-middleware -- mounted at /credits in routes.ts; wildcard scoped to that prefix
   router.use("*", authMiddleware);
 
   /**
