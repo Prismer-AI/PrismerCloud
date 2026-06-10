@@ -18,12 +18,14 @@ import {
   Dna,
   LayoutDashboard,
   Settings as SettingsIcon,
+  QrCode,
 } from 'lucide-react';
 import { useApp } from '@/contexts/app-context';
 import { useTheme } from '@/contexts/theme-context';
 import { useI18n } from '@/contexts/i18n-context';
 import { LanguageSwitcher } from '@/components/language-switcher';
 import { SelfProfileDialog } from '@/app/workspace/components/self-profile-dialog';
+import { LoginQrDialog } from '@/app/workspace/components/login-qr-dialog';
 import type { TranslationKey } from '@/lib/i18n';
 
 // Auth headers for notification API calls (mirrors pattern from src/lib/api.ts)
@@ -59,6 +61,13 @@ const NAV_ITEMS = [
 
 type NavItem = { href: string; labelKey: TranslationKey };
 
+interface NavbarSelfProfile {
+  id: string;
+  username: string;
+  displayName: string;
+  avatarUrl: string | null;
+}
+
 export function Navbar() {
   const pathname = usePathname();
   const { isAuthenticated, isAuthLoading, logout, addToast, user } = useApp();
@@ -66,16 +75,28 @@ export function Navbar() {
   const { t } = useI18n();
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [showSelfProfile, setShowSelfProfile] = useState(false);
+  const [showLoginQr, setShowLoginQr] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [headerVisible, setHeaderVisible] = useState(true);
   const bellRef = useRef<HTMLButtonElement>(null);
   const lastScrollY = useRef(0);
+  const [selfProfile, setSelfProfile] = useState<NavbarSelfProfile | null>(null);
 
   const isDark = resolvedTheme === 'dark';
   const showAuthenticatedUI = !isAuthLoading && isAuthenticated;
   const effectiveHeaderVisible = headerVisible || mobileMenuOpen || showNotifications || showProfileMenu;
+  const profileLabel = selfProfile?.displayName || user?.email || t('common.user');
+  const profileSubLabel = selfProfile?.username ? `@${selfProfile.username}` : user?.email;
+  const profileAvatar = selfProfile?.avatarUrl || user?.avatar || (user?.email ? getAvatarUrl(user.email) : '');
+
+  function handleSelfProfileSaved(updated: NavbarSelfProfile) {
+    setSelfProfile(updated);
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('prismer:im-profile-updated', { detail: updated }));
+    }
+  }
 
   // Scroll detection — background change + direction-based hide/show
   useEffect(() => {
@@ -102,6 +123,24 @@ export function Navbar() {
   useEffect(() => {
     setMobileMenuOpen(false);
   }, [pathname]);
+
+  useEffect(() => {
+    if (!showAuthenticatedUI) {
+      setSelfProfile(null);
+      return;
+    }
+    let cancelled = false;
+    fetch('/api/im/me', { headers: getNotificationAuthHeaders() })
+      .then((res) => res.json())
+      .then((body: { ok?: boolean; data?: { user?: NavbarSelfProfile } }) => {
+        if (cancelled) return;
+        if (body.ok && body.data?.user) setSelfProfile(body.data.user);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [showAuthenticatedUI]);
 
   // Lock body scroll when mobile menu is open
   useEffect(() => {
@@ -331,13 +370,11 @@ export function Navbar() {
                       onBlur={() => setTimeout(() => setShowProfileMenu(false), 200)}
                     >
                       <img
-                        src={user?.avatar || (user?.email ? getAvatarUrl(user.email) : '')}
-                        alt={user?.email || 'User'}
+                        src={profileAvatar}
+                        alt={profileLabel}
                         className={`w-7 h-7 rounded-full border ${isDark ? 'border-white/10' : 'border-[var(--prismer-primary)]/20'}`}
                         onError={(e) => {
-                          if (user?.email) {
-                            (e.target as HTMLImageElement).src = getAvatarUrl(user.email);
-                          }
+                          if (user?.email) (e.target as HTMLImageElement).src = getAvatarUrl(user.email);
                         }}
                       />
                       <ChevronDown
@@ -358,8 +395,11 @@ export function Navbar() {
                         >
                           <p className="text-xs text-zinc-500">{t('common.signedInAs')}</p>
                           <p className={`text-sm font-bold truncate ${isDark ? 'text-white' : 'text-zinc-900'}`}>
-                            {user?.email || t('common.user')}
+                            {profileLabel}
                           </p>
+                          {profileSubLabel && profileSubLabel !== profileLabel ? (
+                            <p className="truncate text-xs text-zinc-500">{profileSubLabel}</p>
+                          ) : null}
                         </div>
                         <div className="p-1">
                           <Link
@@ -412,6 +452,21 @@ export function Navbar() {
                           >
                             <UserCog className="w-4 h-4 shrink-0 opacity-80" />
                             {t('nav.editProfile')}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setShowProfileMenu(false);
+                              setShowLoginQr(true);
+                            }}
+                            className={`w-full text-left px-3 py-2 text-sm rounded-lg transition-colors flex items-center gap-2 ${
+                              isDark
+                                ? 'text-zinc-300 hover:bg-white/5'
+                                : 'text-zinc-700 hover:bg-[var(--prismer-primary)]/5'
+                            }`}
+                          >
+                            <QrCode className="w-4 h-4 shrink-0 opacity-80" />
+                            扫码登录新设备
                           </button>
                           <Link
                             href="/settings"
@@ -549,19 +604,22 @@ export function Navbar() {
               <div className="px-4 pt-2 pb-1">
                 <div className="flex items-center gap-3 py-2">
                   <img
-                    src={user?.avatar || (user?.email ? getAvatarUrl(user.email) : '')}
-                    alt={user?.email || 'User'}
+                    src={profileAvatar}
+                    alt={profileLabel}
                     className={`w-8 h-8 rounded-full border ${isDark ? 'border-white/10' : 'border-[var(--prismer-primary)]/20'}`}
                     onError={(e) => {
-                      if (user?.email) {
-                        (e.target as HTMLImageElement).src = getAvatarUrl(user.email);
-                      }
+                      if (user?.email) (e.target as HTMLImageElement).src = getAvatarUrl(user.email);
                     }}
                   />
                   <div className="flex-1 min-w-0">
                     <p className={`text-sm font-medium truncate ${isDark ? 'text-white' : 'text-zinc-900'}`}>
-                      {user?.email || t('common.user')}
+                      {profileLabel}
                     </p>
+                    {profileSubLabel && profileSubLabel !== profileLabel ? (
+                      <p className={`truncate text-xs ${isDark ? 'text-zinc-500' : 'text-zinc-500'}`}>
+                        {profileSubLabel}
+                      </p>
+                    ) : null}
                   </div>
                 </div>
                 <Link
@@ -585,6 +643,19 @@ export function Navbar() {
                   {t('nav.evolutionSpace')}
                 </Link>
                 <button
+                  type="button"
+                  onClick={() => {
+                    setMobileMenuOpen(false);
+                    setShowLoginQr(true);
+                  }}
+                  className={`w-full flex items-center gap-2 px-3 py-2.5 rounded-lg text-sm font-medium ${
+                    isDark ? 'text-zinc-300 hover:bg-white/5' : 'text-zinc-700 hover:bg-[var(--prismer-primary)]/5'
+                  }`}
+                >
+                  <QrCode className="w-4 h-4 shrink-0" />
+                  扫码登录新设备
+                </button>
+                <button
                   onClick={handleLogout}
                   className="w-full text-left px-3 py-2 text-sm text-red-500 hover:bg-red-500/10 rounded-lg transition-colors flex items-center gap-2"
                 >
@@ -596,7 +667,14 @@ export function Navbar() {
         </div>
       </div>
       {/* Radix Portal — escapes the navbar's fixed positioning. */}
-      <SelfProfileDialog open={showSelfProfile} isDark={isDark} onOpenChange={setShowSelfProfile} notify={addToast} />
+      <SelfProfileDialog
+        open={showSelfProfile}
+        isDark={isDark}
+        onOpenChange={setShowSelfProfile}
+        onSaved={handleSelfProfileSaved}
+        notify={addToast}
+      />
+      <LoginQrDialog open={showLoginQr} isDark={isDark} onOpenChange={setShowLoginQr} notify={addToast} />
     </nav>
   );
 }
