@@ -59,8 +59,12 @@ matches_rules() { # $1=path $2=array-name
     if [[ "$line" == */ ]]; then
       [[ "$path" == "$line"* ]] && return 0
     elif [[ "$line" == *\** ]]; then
-      # shellcheck disable=SC2254
-      case "$path" in $line) return 0;; esac
+      # glob: '*' must not cross '/' — require equal directory depth
+      local pdepth="${path//[^\/]/}" rdepth="${line//[^\/]/}"
+      if [[ "${#pdepth}" -eq "${#rdepth}" ]]; then
+        # shellcheck disable=SC2254
+        case "$path" in $line) return 0;; esac
+      fi
     else
       [[ "$path" == "$line" ]] && return 0
     fi
@@ -78,7 +82,14 @@ scrub_scan() { # $1=dir → matches on stdout
 }
 
 blob_is_binary() { # $1=repo $2=sha
-  git -C "$1" cat-file blob "$2" | head -c 8000 | LC_ALL=C grep -q $'\0'
+  # NUL byte in the first 8000 bytes ⇒ binary. NUL can't be passed as a grep
+  # pattern argument, so inspect a hex dump instead; pipefail is suspended so
+  # an early-exiting grep (SIGPIPE upstream) can't poison the result.
+  local rc=0
+  set +o pipefail
+  git -C "$1" cat-file blob "$2" 2>/dev/null | head -c 8000 | od -An -tx1 | grep -q ' 00' || rc=$?
+  set -o pipefail
+  return $rc
 }
 
 stage_blob() { # $1=sha $2=path $3=mode
