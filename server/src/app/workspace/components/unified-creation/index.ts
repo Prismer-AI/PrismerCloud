@@ -18,3 +18,4 @@ export {
 } from './UnifiedCreationModal';
 
 export { CeoAuthorizationModal, type CeoAuthorizationModalProps } from './CeoAuthorizationModal';
+export { RoleTemplateBrowser, type RoleTemplateBrowserProps } from './template-browser';
