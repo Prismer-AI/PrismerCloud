@@ -33,6 +33,17 @@ export interface MemoryPageSummary {
   updatedAt: string;
   inboundLinkCount: number;
   outboundLinkCount: number;
+  /**
+   * Wave 5 F5 — derived scope badge (doc 14 §3.0.2 F-①). `MemoryPage` rows
+   * carry only `visibility`, not the agent-scope column from `im_memory_files`
+   * (E6). To surface the same 🔓 / 🔒 affordance in the Library UI, scope
+   * is computed here from visibility:
+   *   - `'workspace'` (default) → `'workspace-shared'` (🔓 all agents RW)
+   *   - any narrower `task:*` / `human:*` / `secret-ref` → `'agent-private'`
+   *     (🔒 owner-scoped)
+   * Legacy rows with null visibility get `'workspace-shared'`.
+   */
+  scope: 'workspace-shared' | 'agent-private';
 }
 
 export interface MemoryPageDetail extends MemoryPageSummary {
@@ -249,7 +260,20 @@ async function enrichSummaries(rows: PageRow[]): Promise<MemoryPageSummary[]> {
     updatedAt: toIso(r.updatedAt),
     inboundLinkCount: inboundMap.get(r.id) ?? 0,
     outboundLinkCount: outboundMap.get(r.id) ?? 0,
+    scope: deriveScopeFromVisibility(r.visibility),
   }));
+}
+
+/**
+ * Wave 5 F5 — derive the binary scope badge from the `visibility` column.
+ * Returns `'workspace-shared'` for the default `'workspace'` (and any null /
+ * legacy value), `'agent-private'` for every narrower variant. Kept as a
+ * pure helper so the same rule can be reused on `readPage` detail mapping
+ * + future memory write paths.
+ */
+export function deriveScopeFromVisibility(visibility: string | null | undefined): 'workspace-shared' | 'agent-private' {
+  if (!visibility || visibility === 'workspace') return 'workspace-shared';
+  return 'agent-private';
 }
 
 export class MemoryReadService {
