@@ -16,9 +16,10 @@ export class AgentRegistry {
    * Discover agents matching the given criteria.
    */
   async discover(query: AgentDiscoveryQuery): Promise<AgentInfo[]> {
+    const listOptions = { workspaceId: query.workspaceId };
     const agents = query.onlineOnly
-      ? await this.agentService.listOnline()
-      : await this.agentService.listAll();
+      ? await this.agentService.listOnline(listOptions)
+      : await this.agentService.listAll(listOptions);
 
     let results: AgentInfo[] = agents.map((card: typeof agents[number]) => {
       // Parse capabilities from JSON string
@@ -34,6 +35,7 @@ export class AgentRegistry {
       return {
         agentId: card.id,
         userId: card.imUserId,
+        username: (card as any).imUser?.username ?? undefined,
         name: card.name,
         description: card.description,
         agentType: card.agentType as AgentType,
@@ -98,6 +100,7 @@ export class AgentRegistry {
     return {
       agentId: card.id,
       userId: card.imUserId,
+      username: (card as any).imUser?.username ?? undefined,
       name: card.name,
       description: card.description,
       agentType: card.agentType as AgentType,
