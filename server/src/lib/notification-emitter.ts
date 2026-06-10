@@ -264,6 +264,14 @@ interface TaskApprovalInput extends TaskNotificationContext {
   assigneeLabel?: string;
 }
 
+interface HumanApprovalInput extends TaskNotificationContext {
+  approvalId: string;
+  recipientImUserId: string;
+  requestedByImUserId: string;
+  category: string;
+  context?: string | null;
+}
+
 /**
  * Fire `task_approval_requested` notification when an assignee submits work
  * for review (status → `review`). Only the creator gets the Bell row.
@@ -294,6 +302,37 @@ export async function emitTaskApprovalRequestedNotification(input: TaskApprovalI
     });
   } catch (err) {
     console.error('[NotificationEmitter] task_approval_requested failed:', err);
+  }
+}
+
+export async function emitHumanApprovalRequestedNotification(input: HumanApprovalInput): Promise<void> {
+  if (!FEATURE_FLAGS.NOTIFICATIONS_LOCAL) return;
+  if (!input.recipientImUserId) return;
+  try {
+    const cloudId = await resolveCloudUserIdFromIm(input.recipientImUserId);
+    if (!cloudId) return;
+    const titleSafe = trim(input.title, 80);
+    await createNotification({
+      userId: cloudId,
+      type: 'warning',
+      title: 'Approval requested',
+      message: `"${titleSafe}" needs a decision.`,
+      referenceType: 'approval_requested',
+      referenceId: input.approvalId,
+      payload: {
+        approvalId: input.approvalId,
+        taskId: input.taskId,
+        title: input.title,
+        category: input.category,
+        requestedByImUserId: input.requestedByImUserId,
+        conversationId: input.conversationId ?? null,
+        workspaceId: input.workspaceId ?? null,
+        routeTarget: input.taskId ? 'tasks' : 'conversation',
+        context: input.context ?? null,
+      },
+    });
+  } catch (err) {
+    console.error('[NotificationEmitter] approval_requested failed:', err);
   }
 }
 
