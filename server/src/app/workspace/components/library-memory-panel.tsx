@@ -982,6 +982,44 @@ function FilterChip({
   );
 }
 
+/**
+ * Wave 5 F5 — derive the 🔓 / 🔒 scope badge for the memory list.
+ * Prefers the server-supplied `scope` field (see `memory-read.service.ts`
+ * `deriveScopeFromVisibility`); falls back to the same rule against
+ * `visibility` for older API builds; legacy null → `workspace-shared` (🔓).
+ */
+function pageScope(page: MemoryPageSummaryDTO): 'workspace-shared' | 'agent-private' {
+  if (page.scope === 'workspace-shared' || page.scope === 'agent-private') return page.scope;
+  const v = page.visibility;
+  if (!v || v === 'workspace') return 'workspace-shared';
+  return 'agent-private';
+}
+
+function ScopeBadge({ scope, isDark }: { scope: 'workspace-shared' | 'agent-private'; isDark: boolean }) {
+  const isShared = scope === 'workspace-shared';
+  const title = isShared
+    ? 'Workspace-shared — readable + writable by every agent in this workspace'
+    : 'Agent-private — readable + writable only by the owning agent / scope';
+  const colour = isShared
+    ? isDark
+      ? 'bg-emerald-500/15 text-emerald-200'
+      : 'bg-emerald-50 text-emerald-700'
+    : isDark
+      ? 'bg-amber-500/15 text-amber-200'
+      : 'bg-amber-50 text-amber-700';
+  return (
+    <span
+      data-testid="library-memory-page-scope-badge"
+      data-scope={scope}
+      title={title}
+      aria-label={title}
+      className={`inline-flex shrink-0 items-center justify-center rounded-full px-1.5 py-0.5 text-[10px] ${colour}`}
+    >
+      {isShared ? '🔓' : '🔒'}
+    </span>
+  );
+}
+
 function PageRow({
   page,
   selected,
@@ -998,6 +1036,7 @@ function PageRow({
   onToggleSelect: () => void;
 }) {
   const archived = Boolean(page.archivedAt);
+  const scope = pageScope(page);
   return (
     <div
       className={`mb-1 flex w-full items-stretch gap-2 rounded-2xl px-2 py-2 transition-colors ${
@@ -1026,10 +1065,12 @@ function PageRow({
         data-stale={page.stale ? 'true' : undefined}
         data-archived={archived ? 'true' : undefined}
         data-checked={checked ? 'true' : undefined}
+        data-scope={scope}
         onClick={onClick}
         className="flex min-w-0 flex-1 flex-col gap-0.5 text-left"
       >
         <div className="flex items-center gap-1.5">
+          <ScopeBadge scope={scope} isDark={isDark} />
           <span
             className={`min-w-0 flex-1 truncate text-xs font-semibold ${isDark ? 'text-zinc-100' : 'text-zinc-900'}`}
           >
