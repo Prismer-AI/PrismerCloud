@@ -123,6 +123,9 @@ async function setupWSHandler(wss: WebSocketServer): Promise<void> {
     const services = getIMServices();
     const handlers = getIMHandlers();
     if (services && handlers?.setupWebSocket) {
+      if (!services.taskService) {
+        throw new Error('[Server] IM services ready without taskService; refusing to wire WebSocket daemon protocol');
+      }
       handlers.setupWebSocket(wss, {
         redis: services.redis,
         rooms: services.rooms,
@@ -135,8 +138,16 @@ async function setupWSHandler(wss: WebSocketServer): Promise<void> {
         // host.declare branch silently skips redispatchPending() on reconnect
         // and emitDaemonDispatchRequest() on @-mention task creation.
         taskService: services.taskService,
+        // v2.0 §4.8.2 (Wave 2-B2) — needed for `agent.binding.contested`
+        // sync events so the Devices UI can surface the multi-daemon race.
+        syncService: services.syncService,
+        // v2.0 §4.8.1 (Wave 4-E4) — webhook dispatch reply correlation.
+        // Without it, daemon `webhook.dispatch.reply` frames trip
+        // UNKNOWN_EVENT and the WS RPC pending promise never settles
+        // (it'd timeout and fall through to daemon_unreachable).
+        wsRpc: services.wsRpc,
       });
-      console.log('[Server] WebSocket handler ready');
+      console.log('[Server] WebSocket handler ready (taskService=true)');
       return;
     }
     await new Promise((r) => setTimeout(r, 100));
