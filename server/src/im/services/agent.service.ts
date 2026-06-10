@@ -9,6 +9,9 @@ import type Redis from 'ioredis';
 import prisma from '../db';
 import { config } from '../config';
 import type { AgentCapability, AgentStatus, AgentType } from '../types/index';
+import { AgentSkillService } from './agent-skill.service';
+import { BuiltInSkillService } from './built-in-skill.service';
+import { SkillService } from './skill.service';
 
 export interface RegisterAgentInput {
   userId: string;
@@ -37,6 +40,10 @@ export interface HeartbeatInput {
   version?: string;
 }
 
+export interface ListAgentsOptions {
+  workspaceId?: string;
+}
+
 export class AgentService {
   constructor(private redis: Redis) {}
 
@@ -44,6 +51,10 @@ export class AgentService {
    * Register a new agent or update existing registration.
    */
   async register(input: RegisterAgentInput) {
+    const existingCard = await prisma.iMAgentCard.findUnique({
+      where: { imUserId: input.userId },
+      select: { id: true },
+    });
     const card = await prisma.iMAgentCard.upsert({
       where: { imUserId: input.userId },
       update: {
@@ -79,6 +90,13 @@ export class AgentService {
     } catch (err) {
       // Redis optional in dev mode
       console.warn('[Agent] Redis unavailable, skipping cache:', (err as Error).message);
+    }
+
+    if (!existingCard) {
+      const builtInService = new BuiltInSkillService(new AgentSkillService(new SkillService()));
+      await builtInService.installAllBuiltInsToAgent(input.userId, input.workspaceId).catch((err: unknown) => {
+        console.warn('[Agent] Built-in skill auto-install failed:', err instanceof Error ? err.message : String(err));
+      });
     }
 
     return card;
@@ -161,8 +179,16 @@ export class AgentService {
   /**
    * List all registered agents.
    */
-  async listAll() {
+  async listAll(options: ListAgentsOptions = {}) {
     return prisma.iMAgentCard.findMany({
+      where: {
+        ...(options.workspaceId ? { workspaceId: options.workspaceId } : {}),
+        imUser: {
+          role: 'agent',
+          banned: false,
+          OR: [{ suspendedUntil: null }, { suspendedUntil: { lte: new Date() } }],
+        },
+      },
       include: { imUser: true },
     });
   }
@@ -170,9 +196,17 @@ export class AgentService {
   /**
    * List online agents.
    */
-  async listOnline() {
+  async listOnline(options: ListAgentsOptions = {}) {
     return prisma.iMAgentCard.findMany({
-      where: { status: 'online' },
+      where: {
+        status: 'online',
+        ...(options.workspaceId ? { workspaceId: options.workspaceId } : {}),
+        imUser: {
+          role: 'agent',
+          banned: false,
+          OR: [{ suspendedUntil: null }, { suspendedUntil: { lte: new Date() } }],
+        },
+      },
       include: { imUser: true },
     });
   }
@@ -202,7 +236,7 @@ export class AgentService {
   /**
    * Unregister an agent.
    */
-  async unregister(userId: string): Promise<void> {
+  async unregister(userId: string): Promise<{ deletedProfileIds: string[] }> {
     // Why deleteMany + soft delete:
     //   1. `delete()` throws P2025 when the card row is already gone (e.g.
     //      the agent never produced a card, or a prior unregister already
@@ -214,12 +248,16 @@ export class AgentService {
     //      for im_messages.senderId, im_task_runs.assigneeId, etc. Flip
     //      `banned=true` so `/me/agents` (which filters on `banned: false`)
     //      stops listing it; conversation history stays intact.
+    const profiles = await prisma.iMAgentProfile.findMany({
+      where: { agentImUserId: userId, deletedAt: null },
+      select: { id: true },
+    });
     const now = new Date();
     await prisma.$transaction([
       prisma.iMAgentCard.deleteMany({ where: { imUserId: userId } }),
       prisma.iMAgentProfile.updateMany({
         where: { agentImUserId: userId, deletedAt: null },
-        data: { deletedAt: now },
+        data: { deletedAt: now, version: { increment: 1 } },
       }),
       prisma.iMUser.updateMany({
         where: { id: userId, role: 'agent' },
@@ -231,5 +269,6 @@ export class AgentService {
     } catch {
       // Redis optional
     }
+    return { deletedProfileIds: profiles.map((p: { id: string }) => p.id) };
   }
 }
