@@ -23,10 +23,33 @@ import type {
 import type { PrismerGene } from '../types/index';
 
 const LOG = '[WorkspaceView]';
+const MEMORY_SCOPE_WORKSPACE_SHARED = 'workspace-shared';
+const MEMORY_SCOPE_AGENT_PRIVATE = 'agent-private';
+const SHARED_OWNER_TYPE = 'workspace';
+const SHARED_OWNER_ID = '__shared__';
 
 /** Scope filter: global scope → exact match; workspace scope → include global fallback */
 function scopeFilter(scope: string) {
   return scope === 'global' ? 'global' : { in: [scope, 'global'] };
+}
+
+function normalizeMemoryFileScope(scope?: string | null): string {
+  const raw = (scope || '').trim();
+  if (!raw || raw === 'global' || raw === 'workspace' || raw === 'shared' || raw === MEMORY_SCOPE_WORKSPACE_SHARED) {
+    return MEMORY_SCOPE_WORKSPACE_SHARED;
+  }
+  if (raw === 'private' || raw === 'agent' || raw === MEMORY_SCOPE_AGENT_PRIVATE) {
+    return MEMORY_SCOPE_AGENT_PRIVATE;
+  }
+  return raw;
+}
+
+function memoryFileBucketWhere(personIds: string[], scope: string) {
+  const normalized = normalizeMemoryFileScope(scope);
+  if (normalized === MEMORY_SCOPE_WORKSPACE_SHARED) {
+    return { scope: normalized, ownerId: SHARED_OWNER_ID, ownerType: SHARED_OWNER_TYPE };
+  }
+  return { scope: normalized, ownerId: { in: personIds } };
 }
 
 export class WorkspaceViewService {
@@ -287,15 +310,14 @@ export class WorkspaceViewService {
   private async loadMemory(
     workspaceId: string | null,
     personIds: string[],
-    _scope: string,
+    scope: string,
     includeContent: boolean,
   ): Promise<WorkspaceMemoryFile[]> {
-    void _scope; // v1.9.2: im_memory_files.scope dropped — workspace isolation moves to workspaceId
     if (!workspaceId) return [];
     const files = await prisma.iMMemoryFile.findMany({
       where: {
         workspaceId,
-        ownerId: { in: personIds },
+        ...memoryFileBucketWhere(personIds, scope),
         OR: [
           { memoryType: { not: null, notIn: ['soul'] }, NOT: { memoryType: { startsWith: 'ext_' } } },
           { memoryType: null },
@@ -328,14 +350,13 @@ export class WorkspaceViewService {
     agentId: string,
     workspaceId: string | null,
     personIds: string[],
-    _scope: string,
+    scope: string,
   ): Promise<WorkspacePersonality> {
-    void _scope; // v1.9.2: im_memory_files.scope dropped
     const [card, soulFile] = await Promise.all([
       prisma.iMAgentCard.findUnique({ where: { imUserId: agentId }, select: { metadata: true } }),
       workspaceId
         ? prisma.iMMemoryFile.findFirst({
-            where: { workspaceId, ownerId: { in: personIds }, memoryType: 'soul' },
+            where: { workspaceId, ...memoryFileBucketWhere(personIds, scope), memoryType: 'soul' },
             select: { content: true },
           })
         : Promise.resolve(null),
@@ -471,15 +492,14 @@ export class WorkspaceViewService {
   private async loadExtensions(
     workspaceId: string | null,
     personIds: string[],
-    _scope: string,
+    scope: string,
     includeContent: boolean,
   ): Promise<WorkspaceExtension[]> {
-    void _scope; // v1.9.2: im_memory_files.scope dropped
     if (!workspaceId) return [];
     const files = await prisma.iMMemoryFile.findMany({
       where: {
         workspaceId,
-        ownerId: { in: personIds },
+        ...memoryFileBucketWhere(personIds, scope),
         memoryType: { startsWith: 'ext_' },
       },
       select: {
