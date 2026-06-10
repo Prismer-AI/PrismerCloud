@@ -13,6 +13,8 @@ package-lock.json
 # Build artifacts
 dist/
 *.tgz
+server/public/pdf.worker.min.mjs
+server/public/pdfjs/
 *.egg-info/
 build/artifacts/
 build/sync-server/state/

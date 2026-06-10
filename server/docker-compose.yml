@@ -30,6 +30,8 @@ services:
       - STRIPE_PUBLISHABLE_KEY=${STRIPE_PUBLISHABLE_KEY:-}
       # --- IM Server ---
       - IM_SERVER_ENABLED=true
+      # --- Redis (login codes, IM presence/backplane; bundled below) ---
+      - REDIS_URL=redis://redis:6379
       # NOTE: If MYSQL_PASSWORD contains URI-special chars (@, :, /, %), use REMOTE_MYSQL_* vars instead
       - DATABASE_URL=mysql://${MYSQL_USER:-prismer}:${MYSQL_PASSWORD:-prismer}@mysql:3306/prismer_cloud
       # --- MySQL (for db.ts connection pool) ---
@@ -53,6 +55,17 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
     restart: unless-stopped
 
   mysql:
