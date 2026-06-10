@@ -44,13 +44,13 @@ export class UserModel {
   }
 
   async findByUsername(username: string) {
-    return prisma.iMUser.findUnique({
+    return prisma.iMUser.findFirst({
       where: { username },
     });
   }
 
   async findByUserId(userId: string) {
-    return prisma.iMUser.findUnique({
+    return prisma.iMUser.findFirst({
       where: { userId },
     });
   }
