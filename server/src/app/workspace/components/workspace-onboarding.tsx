@@ -1,70 +1,135 @@
 'use client';
 
 import { motion } from 'framer-motion';
-import { Archive, Bot, Check, MessageSquare, Plus, Send, Sparkles } from 'lucide-react';
+import { Bot, Check, FolderPlus, Laptop, MessageSquare, Plus, Send, Sparkles } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
+
+import { useI18n } from '@/contexts/i18n-context';
 
 import { radius, springSnap, springSoft, surface } from '../lib/design';
+
+/**
+ * release201/20 Gap B (v2.0.8 Wave 1 F2) — 6-step onboarding + full i18n.
+ *
+ * Steps (in render order):
+ *   team    → set up workspace team profile (industry + size)
+ *   agent   → create first agent
+ *   project → create first project (NEW per doc 20 §2.2 decision)
+ *   device  → pair a daemon device
+ *   session → open first chat session
+ *   task    → dispatch first task
+ *
+ * Asset step removed per doc 20 §2.2 decision 4 (deferred to v2.1+).
+ */
+interface OnboardingStep {
+  key: 'team' | 'agent' | 'project' | 'device' | 'session' | 'task';
+  label: string;
+  detail: string;
+  done: boolean;
+  icon: LucideIcon;
+  onClick: () => void;
+}
 
 interface WorkspaceOnboardingProps {
   isDark: boolean;
   agentsCount: number;
+  projectsCount: number;
   channelsCount: number;
   tasksCount: number;
-  assetsCount: number;
+  devicesCount: number;
+  onSetupTeam: () => void;
   onNewAgent: () => void;
+  onCreateProject: () => void;
+  onPairDevice?: () => void;
   onNewChannel: () => void;
   onNewTask: () => void;
-  onUploadAsset: () => void;
 }
 
 export function WorkspaceOnboarding({
   isDark,
   agentsCount,
+  projectsCount,
   channelsCount,
   tasksCount,
-  assetsCount,
+  devicesCount,
+  onSetupTeam,
   onNewAgent,
+  onCreateProject,
+  onPairDevice,
   onNewChannel,
   onNewTask,
-  onUploadAsset,
 }: WorkspaceOnboardingProps) {
+  const { t } = useI18n();
   const theme: 'dark' | 'light' = isDark ? 'dark' : 'light';
-  const steps = [
-    {
-      key: 'agent',
-      label: 'Create agent',
-      detail: agentsCount > 0 ? `${agentsCount} agent${agentsCount === 1 ? '' : 's'}` : 'CEO, engineer, CMO, COO',
-      done: agentsCount > 0,
-      icon: Bot,
-      onClick: onNewAgent,
-    },
-    {
-      key: 'session',
-      label: 'Open session',
-      detail: channelsCount > 0 ? `${channelsCount} session${channelsCount === 1 ? '' : 's'}` : 'Direct or group chat',
-      done: channelsCount > 0,
-      icon: MessageSquare,
-      onClick: onNewChannel,
-    },
-    {
-      key: 'task',
-      label: 'Dispatch task',
-      detail: tasksCount > 0 ? `${tasksCount} task${tasksCount === 1 ? '' : 's'}` : 'Track work on the board',
-      done: tasksCount > 0,
-      icon: Send,
-      onClick: onNewTask,
-    },
-    {
-      key: 'asset',
-      label: 'Add asset',
-      detail: assetsCount > 0 ? `${assetsCount} asset${assetsCount === 1 ? '' : 's'}` : 'Upload workspace files',
-      done: assetsCount > 0,
-      icon: Archive,
-      onClick: onUploadAsset,
-    },
-  ];
+
+  // Step 1: team setup (always first, marked done once any device is paired —
+  // device pairing implies the unified setup flow ran).
+  const teamStep: OnboardingStep = {
+    key: 'team',
+    label: t('workspace.onboarding.step.team.label'),
+    detail: t('workspace.onboarding.step.team.detail'),
+    done: devicesCount > 0,
+    icon: Bot,
+    onClick: onSetupTeam,
+  };
+
+  // Step 2: agent
+  const agentStep: OnboardingStep = {
+    key: 'agent',
+    label: t('workspace.onboarding.step.agent.label'),
+    detail:
+      agentsCount > 0
+        ? t('workspace.onboarding.step.agent.detailCount', { n: agentsCount })
+        : t('workspace.onboarding.step.agent.detailEmpty'),
+    done: agentsCount > 0,
+    icon: Bot,
+    onClick: onNewAgent,
+  };
+
+  // Step 3: project (NEW — doc 20 §2.2)
+  const projectStep: OnboardingStep = {
+    key: 'project',
+    label: t('workspace.onboarding.step.project.label'),
+    detail: t('workspace.onboarding.step.project.detail'),
+    done: projectsCount > 0,
+    icon: FolderPlus,
+    onClick: onCreateProject,
+  };
+
+  // Step 4: device
+  const deviceStep: OnboardingStep = {
+    key: 'device',
+    label: t('workspace.onboarding.step.device.label'),
+    detail: t('workspace.onboarding.step.device.detail'),
+    done: devicesCount > 0,
+    icon: Laptop,
+    onClick: onPairDevice ?? onSetupTeam,
+  };
+
+  // Step 5: session
+  const sessionStep: OnboardingStep = {
+    key: 'session',
+    label: t('workspace.onboarding.step.session.label'),
+    detail: t('workspace.onboarding.step.session.detail'),
+    done: channelsCount > 0,
+    icon: MessageSquare,
+    onClick: onNewChannel,
+  };
+
+  // Step 6: task
+  const taskStep: OnboardingStep = {
+    key: 'task',
+    label: t('workspace.onboarding.step.task.label'),
+    detail: t('workspace.onboarding.step.task.detail'),
+    done: tasksCount > 0,
+    icon: Send,
+    onClick: onNewTask,
+  };
+
+  const steps: OnboardingStep[] = [teamStep, agentStep, projectStep, deviceStep, sessionStep, taskStep];
+  const totalCount = steps.length;
   const doneCount = steps.filter((step) => step.done).length;
-  if (doneCount === steps.length) return null;
+  if (doneCount === totalCount) return null;
 
   return (
     <motion.section
@@ -73,6 +138,7 @@ export function WorkspaceOnboarding({
       transition={springSoft}
       className={`mx-5 mt-4 shrink-0 overflow-hidden border ${radius.pane} ${surface.pane[theme]}`}
       data-testid="workspace-onboarding"
+      data-tour-anchor="setup-progress"
     >
       <div className="flex flex-col gap-3 px-4 py-3 2xl:flex-row 2xl:items-center">
         <div className="flex min-w-0 items-center gap-3 2xl:w-[280px]">
@@ -84,20 +150,23 @@ export function WorkspaceOnboarding({
             <Sparkles className="h-5 w-5" />
           </div>
           <div className="min-w-0">
-            <p className={`text-sm font-semibold ${isDark ? 'text-zinc-100' : 'text-zinc-900'}`}>Workspace setup</p>
+            <p className={`text-sm font-semibold ${isDark ? 'text-zinc-100' : 'text-zinc-900'}`}>
+              {t('workspace.onboarding.title')}
+            </p>
             <p className={`text-[11px] ${isDark ? 'text-zinc-500' : 'text-zinc-500'}`}>
-              {doneCount}/4 ready for agent work
+              {t('workspace.onboarding.subtitle', { done: doneCount, total: totalCount })}
             </p>
           </div>
         </div>
 
-        <div className="grid flex-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="grid flex-1 gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
           {steps.map((step) => {
             const Icon = step.icon;
             return (
               <motion.button
                 key={step.key}
                 type="button"
+                data-testid={`workspace-onboarding-step-${step.key}`}
                 onClick={step.done ? undefined : step.onClick}
                 whileTap={step.done ? undefined : { scale: 0.97 }}
                 transition={springSnap}
