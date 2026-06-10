@@ -9,10 +9,34 @@
 
 import { Hono } from 'hono';
 import { authMiddleware } from '../auth/middleware';
-import type { SkillService } from '../services/skill.service';
+import { SkillPermissionError, type SkillService } from '../services/skill.service';
 import type { RateLimiterService } from '../services/rate-limiter.service';
 import { createRateLimitMiddleware } from '../middleware/rate-limit';
 import type { ApiResponse } from '../types/index';
+import { preinstallRoleTemplateSkills } from '../services/role-template.service';
+import prisma from '../db';
+import { requireAgentToolAllowed } from '../security/mcp-allowlist';
+
+async function canManageAgentSkills(
+  actor: { imUserId: string; role?: string },
+  agentId: string,
+  workspaceId?: string,
+): Promise<boolean> {
+  if (actor.role === 'admin' || actor.imUserId === agentId) return true;
+  const profileWhere: Record<string, unknown> = { agentImUserId: agentId, deletedAt: null };
+  if (workspaceId) profileWhere.workspaceId = workspaceId;
+  const profile = await prisma.iMAgentProfile.findFirst({
+    where: profileWhere,
+    select: { workspaceId: true },
+    orderBy: { updatedAt: 'desc' },
+  });
+  if (!profile) return false;
+  const workspace = await prisma.iMWorkspace.findFirst({
+    where: { id: profile.workspaceId, deletedAt: null, ownerImUserId: actor.imUserId },
+    select: { id: true },
+  });
+  return Boolean(workspace);
+}
 
 export function createSkillsRouter(skillService: SkillService, rateLimiter?: RateLimiterService) {
   const router = new Hono();
@@ -88,9 +112,158 @@ export function createSkillsRouter(skillService: SkillService, rateLimiter?: Rat
    */
   router.get('/installed', authMiddleware, async (c) => {
     const user = c.get('user');
-    const scope = c.req.query('scope'); // undefined = no filter
-    const data = await skillService.getInstalledSkills(user.imUserId, scope);
+    const agentId = c.req.query('agentId') || user.imUserId;
+    const workspaceId = c.req.query('workspaceId') || undefined;
+    if (!(await canManageAgentSkills(user, agentId, workspaceId))) {
+      return c.json<ApiResponse>({ ok: false, error: 'Admin, workspace owner, or agent token required' }, 403);
+    }
+    const data = await skillService.getInstalledSkills(agentId, workspaceId);
     return c.json<ApiResponse>({ ok: true, data });
+  });
+
+  /**
+   * POST /api/skills/preinstall — Install required role-template skills for an agent.
+   * Body: { agentId, roleTemplateSlugOrId, workspaceId? }
+   */
+  router.post('/preinstall', authMiddleware, async (c) => {
+    const user = c.get('user');
+    const body = await c.req.json().catch(() => ({}));
+    const agentId = body.agentId || body.agentImUserId;
+    const roleTemplateSlugOrId = body.roleTemplateSlugOrId || body.roleTemplateSlug || body.roleTemplateId;
+    if (!agentId || !roleTemplateSlugOrId) {
+      return c.json<ApiResponse>({ ok: false, error: 'agentId and roleTemplateSlugOrId are required' }, 400);
+    }
+    const workspaceId = body.workspaceId || body.workspace_id;
+    if (!(await canManageAgentSkills(user, agentId, workspaceId))) {
+      return c.json<ApiResponse>({ ok: false, error: 'Admin, workspace owner, or agent token required' }, 403);
+    }
+
+    try {
+      const data = await preinstallRoleTemplateSkills(agentId, roleTemplateSlugOrId, workspaceId);
+      return c.json<ApiResponse>({ ok: true, data });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const status = message === 'Role template not found' ? 404 : 500;
+      return c.json<ApiResponse>({ ok: false, error: message }, status as any);
+    }
+  });
+
+  /**
+   * POST /api/skills/admin/reupsert-built-ins — Re-run Built-in skill discovery
+   *
+   * Re-walks `sdk/prismer-cloud/built-in-skills/` and upserts all SKILL.md
+   * (含子目录递归) into im_skills. Required by cookbook step 7 to mutate a
+   * file locally and observe the daemon picking up the new merkle without
+   * restarting the cloud process.
+   *
+   * Auth: admin-only (no agent / user scope; deploy-time op).
+   * 2026-05-20 §A.7 Phase 1 follow-up (review fix P1-6).
+   */
+  router.post('/admin/reupsert-built-ins', authMiddleware, async (c) => {
+    const user = c.get('user');
+    if (user.role !== 'admin') {
+      return c.json<ApiResponse>({ ok: false, error: 'Admin only' }, 403);
+    }
+    try {
+      const { BuiltInSkillService } = await import('../services/built-in-skill.service');
+      const { AgentSkillService } = await import('../services/agent-skill.service');
+      const builtIn = new BuiltInSkillService(new AgentSkillService(skillService));
+      const result = await builtIn.upsertBuiltInSkills();
+      return c.json<ApiResponse>({ ok: true, data: { skills: result.length } });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return c.json<ApiResponse>({ ok: false, error: message }, 500);
+    }
+  });
+
+  /**
+   * GET /api/skills/admin/built-ins — list every built-in skill for catalog governance.
+   *
+   * release202/09 §P4-b — backend admin "review/enable one-by-one" surface.
+   * Built-in predicate: `source='prismer' OR category='built-in'`. Returns the
+   * two catalog-governance flags (`isSystem` / `defaultEnabled`) alongside the
+   * display fields so `/admin/skills` can split system vs general and toggle the
+   * general ones individually.
+   *
+   * Auth: admin-only (catalog-level governance; same gate as reupsert-built-ins).
+   * NOTE: Must be registered BEFORE the catch-all /:slugOrId route.
+   */
+  router.get('/admin/built-ins', authMiddleware, async (c) => {
+    const user = c.get('user');
+    if (user.role !== 'admin') {
+      return c.json<ApiResponse>({ ok: false, error: 'Admin only' }, 403);
+    }
+    const rows = await prisma.iMSkill.findMany({
+      where: {
+        status: { not: 'deprecated' },
+        OR: [{ source: 'prismer' }, { category: 'built-in' }],
+      },
+      select: {
+        id: true,
+        slug: true,
+        name: true,
+        description: true,
+        category: true,
+        isSystem: true,
+        defaultEnabled: true,
+        status: true,
+      },
+      orderBy: [{ isSystem: 'desc' }, { name: 'asc' }],
+    });
+    return c.json<ApiResponse>({ ok: true, data: rows });
+  });
+
+  /**
+   * PATCH /api/skills/admin/:slugOrId/default-enabled — toggle catalog `defaultEnabled`.
+   *
+   * release202/09 §P4-b — owner enables general built-ins one at a time. This is
+   * catalog-level (does NOT touch per-agent install state). System skills are
+   * always-on and the UI disables their toggle, but the endpoint still allows
+   * setting them (idempotent) so ops can correct drift.
+   *
+   * Body: { defaultEnabled: boolean }
+   * Auth: admin-only.
+   * NOTE: Must be registered BEFORE the catch-all /:slugOrId route.
+   */
+  router.patch('/admin/:slugOrId/default-enabled', authMiddleware, async (c) => {
+    const user = c.get('user');
+    if (user.role !== 'admin') {
+      return c.json<ApiResponse>({ ok: false, error: 'Admin only' }, 403);
+    }
+    const slugOrId = c.req.param('slugOrId');
+    let body: { defaultEnabled?: unknown };
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json<ApiResponse>({ ok: false, error: 'Invalid JSON body' }, 400);
+    }
+    if (typeof body.defaultEnabled !== 'boolean') {
+      return c.json<ApiResponse>({ ok: false, error: 'defaultEnabled (boolean) is required' }, 400);
+    }
+
+    const existing = await prisma.iMSkill.findFirst({
+      where: { OR: [{ slug: slugOrId }, { id: slugOrId }] },
+      select: { id: true },
+    });
+    if (!existing) {
+      return c.json<ApiResponse>({ ok: false, error: 'Skill not found' }, 404);
+    }
+
+    const updated = await prisma.iMSkill.update({
+      where: { id: existing.id },
+      data: { defaultEnabled: body.defaultEnabled },
+      select: {
+        id: true,
+        slug: true,
+        name: true,
+        description: true,
+        category: true,
+        isSystem: true,
+        defaultEnabled: true,
+        status: true,
+      },
+    });
+    return c.json<ApiResponse>({ ok: true, data: updated });
   });
 
   /**
@@ -125,7 +298,22 @@ export function createSkillsRouter(skillService: SkillService, rateLimiter?: Rat
     const slugOrId = c.req.param('slugOrId');
 
     // Skip if it looks like a sub-route that should be handled elsewhere
-    if (['search', 'stats', 'categories', 'trending', 'import', 'sync', 'installed', 'created'].includes(slugOrId)) {
+    if (
+      [
+        'search',
+        'stats',
+        'categories',
+        'trending',
+        'import',
+        'sync',
+        'installed',
+        'created',
+        'preinstall',
+        'draft',
+        'drafts',
+        'admin',
+      ].includes(slugOrId)
+    ) {
       return c.json<ApiResponse>({ ok: false, error: 'Not found' }, 404);
     }
 
@@ -146,6 +334,7 @@ export function createSkillsRouter(skillService: SkillService, rateLimiter?: Rat
   if (rateLimiter) {
     router.post('/import', createRateLimitMiddleware(rateLimiter, 'api.write'));
     router.post('/sync/raw', createRateLimitMiddleware(rateLimiter, 'api.write'));
+    router.post('/preinstall', createRateLimitMiddleware(rateLimiter, 'api.write'));
     router.post('/', createRateLimitMiddleware(rateLimiter, 'api.write'));
     router.patch('/:id', createRateLimitMiddleware(rateLimiter, 'api.write'));
     router.delete('/:id', createRateLimitMiddleware(rateLimiter, 'api.write'));
@@ -235,26 +424,42 @@ export function createSkillsRouter(skillService: SkillService, rateLimiter?: Rat
    * PATCH /api/skills/:id — Update a skill
    */
   router.patch('/:id', authMiddleware, async (c) => {
+    const user = c.get('user');
     const id = c.req.param('id');
     const body = await c.req.json();
 
-    const skill = await skillService.update(id, body);
-    if (!skill) {
-      return c.json<ApiResponse>({ ok: false, error: 'Skill not found' }, 404);
+    try {
+      const skill = await skillService.update(id, body, user.imUserId);
+      if (!skill) {
+        return c.json<ApiResponse>({ ok: false, error: 'Skill not found' }, 404);
+      }
+      return c.json<ApiResponse>({ ok: true, data: skill });
+    } catch (err) {
+      if (err instanceof SkillPermissionError) {
+        return c.json<ApiResponse>({ ok: false, error: err.message }, 403);
+      }
+      throw err;
     }
-    return c.json<ApiResponse>({ ok: true, data: skill });
   });
 
   /**
    * DELETE /api/skills/:id — Deprecate a skill (soft delete)
    */
   router.delete('/:id', authMiddleware, async (c) => {
+    const user = c.get('user');
     const id = c.req.param('id');
-    const result = await skillService.deprecate(id);
-    if (!result) {
-      return c.json<ApiResponse>({ ok: false, error: 'Skill not found' }, 404);
+    try {
+      const result = await skillService.deprecate(id, user.imUserId);
+      if (!result) {
+        return c.json<ApiResponse>({ ok: false, error: 'Skill not found' }, 404);
+      }
+      return c.json<ApiResponse>({ ok: true });
+    } catch (err) {
+      if (err instanceof SkillPermissionError) {
+        return c.json<ApiResponse>({ ok: false, error: err.message }, 403);
+      }
+      throw err;
     }
-    return c.json<ApiResponse>({ ok: true });
   });
 
   /**
@@ -267,6 +472,8 @@ export function createSkillsRouter(skillService: SkillService, rateLimiter?: Rat
 
     try {
       const body = await c.req.json().catch(() => ({}));
+      const denied = await requireAgentToolAllowed(c, 'prismer.skill.install', body.workspaceId ?? body.workspace_id);
+      if (denied) return denied;
       const scope = body.scope || 'global';
       const result = await skillService.installSkill(user.imUserId, idOrSlug, scope);
       return c.json<ApiResponse>({ ok: true, data: result });
@@ -285,6 +492,8 @@ export function createSkillsRouter(skillService: SkillService, rateLimiter?: Rat
     const user = c.get('user');
     const idOrSlug = c.req.param('idOrSlug');
     const scope = c.req.query('scope') || 'global';
+    const denied = await requireAgentToolAllowed(c, 'prismer.skill.uninstall', c.req.query('workspaceId'));
+    if (denied) return denied;
     const result = await skillService.uninstallSkill(user.imUserId, idOrSlug, scope);
     return c.json<ApiResponse>({ ok: true, data: { uninstalled: result } });
   });
