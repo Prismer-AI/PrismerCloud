@@ -19,7 +19,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { createDirectConversation, createGroupConversation } from '../lib/mutations';
 import { imFetch } from '../lib/im-api';
-import type { AgentDTO } from '../lib/types';
+import type { AgentDTO, ContactFriendDTO } from '../lib/types';
 
 type Mode = 'direct' | 'group';
 
@@ -30,14 +30,12 @@ interface ManualMember {
   role: 'human' | 'agent';
 }
 
-interface UserLookupResponse {
+interface DirectoryMember {
   id: string;
-  username: string;
-  displayName: string;
-  role: string;
-  agentType?: string | null;
-  avatarUrl?: string | null;
-  createdAt?: string;
+  name: string;
+  username?: string;
+  role: 'human' | 'agent';
+  typeTag?: string | null;
 }
 
 // Wave-8 W8 C5: relationship status returned by GET /contacts/status. Drives
@@ -75,7 +73,7 @@ function statusLabel(status: ContactStatus): { label: string; tone: 'ok' | 'info
       return { label: 'They blocked you', tone: 'block' };
     case 'stranger':
     default:
-      return { label: 'Stranger — request sent on add', tone: 'info' };
+      return { label: 'Not in contacts yet', tone: 'info' };
   }
 }
 
@@ -84,6 +82,7 @@ interface NewChannelDialogProps {
   onOpenChange: (open: boolean) => void;
   workspaceId?: string | null;
   agents: AgentDTO[];
+  contacts?: ContactFriendDTO[];
   /** Called with the new group/conversation id so the page can refresh + select. */
   onCreated: (conversationId: string) => void;
   isDark: boolean;
@@ -95,6 +94,7 @@ export function NewChannelDialog({
   onOpenChange,
   workspaceId,
   agents,
+  contacts = [],
   onCreated,
   isDark,
   notify,
@@ -131,6 +131,29 @@ export function NewChannelDialog({
   }, [usernameInput]);
 
   const titleId = useId();
+  const directoryMembers = useMemo<DirectoryMember[]>(() => {
+    const agentIds = new Set(agents.map((agent) => agent.userId));
+    const agentMembers = agents.map((agent) => ({
+      id: agent.userId,
+      name: agent.name,
+      username: agent.username,
+      role: 'agent' as const,
+      typeTag: agent.agentType ?? 'agent',
+    }));
+    const contactMembers = contacts
+      .filter((contact) => !agentIds.has(contact.userId))
+      .map((contact) => ({
+        id: contact.userId,
+        name: contact.remark || contact.displayName || contact.username,
+        username: contact.username,
+        role: contact.isAgent || contact.role === 'agent' ? ('agent' as const) : ('human' as const),
+        typeTag: contact.isAgent || contact.role === 'agent' ? 'agent' : 'contact',
+      }));
+    return [...agentMembers, ...contactMembers].sort((a, b) => {
+      if (a.role !== b.role) return a.role === 'agent' ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+  }, [agents, contacts]);
 
   // For direct mode we constrain to exactly one selected counterparty; for
   // group mode the user picks any number (cookbook 3 §1 shows multi-member).
@@ -185,6 +208,18 @@ export function NewChannelDialog({
     }
 
     const u = statusRes.data.user;
+    const directoryMember = directoryMembers.find((member) => member.id === u.id);
+    if (directoryMember) {
+      setSelected((prev) => {
+        const next = new Set(prev);
+        if (mode === 'direct') next.clear();
+        next.add(directoryMember.id);
+        return next;
+      });
+      notify(`${directoryMember.name} selected.`, 'info');
+      setUsernameInput('');
+      return;
+    }
     if (manuallyAddedMembers.some((m) => m.id === u.id) || selected.has(u.id)) {
       notify(`${u.displayName} is already added.`, 'info');
       setUsernameInput('');
@@ -207,7 +242,7 @@ export function NewChannelDialog({
     const memberIds = Array.from(selected);
     if (mode === 'direct') {
       const targetId = memberIds[0];
-      const target = agents.find((a) => a.userId === targetId);
+      const target = directoryMembers.find((member) => member.id === targetId);
       const res = await createDirectConversation(targetId, workspaceId);
       setSubmitting(false);
       if (!res.ok) {
@@ -250,7 +285,7 @@ export function NewChannelDialog({
         <DialogHeader>
           <DialogTitle>New session</DialogTitle>
           <DialogDescription>
-            Start a 1:1 or group session. You&apos;ll be added automatically as the owner.
+            Start a chat or group session. You&apos;ll be added automatically as the owner.
           </DialogDescription>
         </DialogHeader>
 
@@ -280,7 +315,7 @@ export function NewChannelDialog({
                       : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200'
                 }`}
               >
-                {m === 'direct' ? '1:1 chat' : 'Group'}
+                {m === 'direct' ? 'Chat' : 'Group'}
               </button>
             ))}
           </div>
@@ -308,16 +343,18 @@ export function NewChannelDialog({
                 isDark ? 'border-white/10 bg-zinc-900/60' : 'border-zinc-200 bg-zinc-50'
               }`}
             >
-              {agents.length === 0 ? (
+              {directoryMembers.length === 0 ? (
                 <p className={`px-3 py-3 text-xs ${isDark ? 'text-zinc-500' : 'text-zinc-500'}`}>
-                  No agents yet — register one with &quot;+ Agent&quot; first.
+                  {mode === 'group'
+                    ? 'No agents or contacts yet — create an agent, add a contact, or use username below.'
+                    : 'No agents or contacts yet — create an agent or add a contact first.'}
                 </p>
               ) : (
                 <ul className="py-1">
-                  {agents.map((a) => {
-                    const checked = selected.has(a.userId);
+                  {directoryMembers.map((member) => {
+                    const checked = selected.has(member.id);
                     return (
-                      <li key={a.userId}>
+                      <li key={member.id}>
                         <label
                           className={`flex items-center gap-2 px-3 py-1.5 cursor-pointer text-sm ${
                             checked
@@ -332,19 +369,21 @@ export function NewChannelDialog({
                           <input
                             type={mode === 'direct' ? 'radio' : 'checkbox'}
                             name="new-channel-member"
-                            data-testid={`new-channel-member-${a.userId}`}
+                            data-testid={`new-channel-member-${member.id}`}
                             checked={checked}
-                            onChange={() => toggleMember(a.userId)}
+                            onChange={() => toggleMember(member.id)}
                             className="accent-violet-500"
                           />
-                          {a.agentType ? (
+                          {member.role === 'agent' ? (
                             <Bot className="w-3.5 h-3.5 opacity-70 shrink-0" />
                           ) : (
                             <User className="w-3.5 h-3.5 opacity-70 shrink-0" />
                           )}
-                          <span className="truncate">{a.name}</span>
-                          {a.agentType ? (
-                            <span className={`ml-auto text-[10px] uppercase opacity-70 shrink-0`}>{a.agentType}</span>
+                          <span className="truncate">{member.name}</span>
+                          {member.typeTag ? (
+                            <span className={`ml-auto text-[10px] uppercase opacity-70 shrink-0`}>
+                              {member.typeTag}
+                            </span>
                           ) : null}
                         </label>
                       </li>
