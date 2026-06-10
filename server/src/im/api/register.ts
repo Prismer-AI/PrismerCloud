@@ -11,7 +11,7 @@
 import { Hono } from 'hono';
 import type { Context, Next } from 'hono';
 import type Redis from 'ioredis';
-import { authMiddleware } from '../auth/middleware';
+import { authMiddleware, cloudOwnerWhere } from '../auth/middleware';
 import { signToken, verifyToken, decodeToken } from '../auth/jwt';
 import prisma from '../db';
 import type { ApiResponse, RegisterInput, RegisterResult } from '../types/index';
@@ -20,6 +20,9 @@ import type { EvolutionService } from '../services/evolution.service';
 import type { RateLimiterService } from '../services/rate-limiter.service';
 import { createRateLimitMiddleware } from '../middleware/rate-limit';
 import { createModuleLogger } from '@/lib/logger';
+import { AgentSkillService } from '../services/agent-skill.service';
+import { BuiltInSkillService } from '../services/built-in-skill.service';
+import { SkillService } from '../services/skill.service';
 
 const registerLog = createModuleLogger('register');
 
@@ -147,7 +150,11 @@ export function createRegisterRouter(
     if (cloudUserId) {
       // API Key user: find agent with same (cloudUserId, username)
       existingUser = await prisma.iMUser.findFirst({
-        where: { userId: cloudUserId, username },
+        // numericId-aware owner match (release202/08) — api-key cloudUserId is
+        // often im_users.numericId, not the backfilled userId string.
+        where: { username, OR: cloudOwnerWhere(cloudUserId) },
+        // deterministic pick if the numericId-aware OR ever matches >1 row
+        orderBy: { createdAt: 'asc' },
         include: { agentCard: true },
       });
     } else if (user?.imUserId) {
@@ -173,7 +180,7 @@ export function createRegisterRouter(
       }
     }
 
-    // Check username uniqueness (only reject if held by a DIFFERENT identity).
+    // Check username uniqueness within target workspace (per-workspace scope).
     //
     // §30 Q2 (post-decision): slug = im_users.username is GLOBALLY UNIQUE
     // (single-column UNIQUE index). Two paths previously diverged here:
@@ -194,13 +201,47 @@ export function createRegisterRouter(
     // requestedWorkspaceId wins; otherwise the holder's own AgentCard
     // workspaceId is the implicit target (matches update-path behavior
     // at line ~428: `requestedWorkspaceId || existingUser.agentCard.workspaceId`).
-    const usernameHolder = await prisma.iMUser.findUnique({
-      where: { username },
-      include: { agentCard: true },
-    });
+    // Per-workspace lookup: find agent card in the target workspace by username.
+    // im_users.username no longer has a UNIQUE constraint (v1.9.0+ migration 324).
+    const targetWsId = requestedWorkspaceId ?? existingUser?.agentCard?.workspaceId;
+    let usernameHolder: {
+      id: string;
+      userId: string | null;
+      numericId: bigint | number | null;
+      agentCard: { workspaceId: string } | null;
+    } | null = null;
+    if (targetWsId) {
+      const cardInWs = await prisma.iMAgentCard.findFirst({
+        where: { workspaceId: targetWsId, imUser: { username } },
+        select: { imUserId: true, workspaceId: true, imUser: { select: { id: true, userId: true, numericId: true } } },
+      });
+      if (cardInWs) {
+        usernameHolder = {
+          id: cardInWs.imUser.id,
+          userId: cardInWs.imUser.userId,
+          numericId: cardInWs.imUser.numericId,
+          agentCard: { workspaceId: cardInWs.workspaceId },
+        };
+      }
+    } else {
+      // No workspace context — fallback to global lookup (human registration path).
+      const user = await prisma.iMUser.findFirst({ where: { username }, include: { agentCard: true } });
+      if (user)
+        usernameHolder = {
+          id: user.id,
+          userId: user.userId,
+          numericId: user.numericId,
+          agentCard: user.agentCard ? { workspaceId: user.agentCard.workspaceId } : null,
+        };
+    }
     if (usernameHolder) {
       const isOwnUser = existingUser && usernameHolder.id === existingUser.id;
-      const isOwnCloudUser = cloudUserId && usernameHolder.userId === cloudUserId;
+      // numericId-aware (same bug class as the owner lookups): cloudUserId is
+      // often im_users.numericId, so match userId OR numericId.
+      const isOwnCloudUser =
+        !!cloudUserId &&
+        (usernameHolder.userId === cloudUserId ||
+          (usernameHolder.numericId != null && String(usernameHolder.numericId) === cloudUserId));
       if (!isOwnUser && !isOwnCloudUser) {
         return c.json<ApiResponse>(
           {
@@ -217,15 +258,14 @@ export function createRegisterRouter(
       // surface "this slug is yours, but it lives in another workspace —
       // pick a different one" UI without conflating with the generic
       // "taken by someone else" message.
-      if (isOwnCloudUser && usernameHolder.agentCard?.workspaceId && requestedWorkspaceId) {
-        const holderWorkspaceId = usernameHolder.agentCard.workspaceId;
-        if (holderWorkspaceId !== requestedWorkspaceId) {
+      if (targetWsId && isOwnCloudUser && usernameHolder.agentCard?.workspaceId) {
+        if (usernameHolder.agentCard.workspaceId !== targetWsId) {
           return c.json<ApiResponse>(
             {
               ok: false,
               error: {
                 code: 'USERNAME_TAKEN_IN_OTHER_WORKSPACE',
-                message: `Username '${username}' is already used by your agent in another workspace. Slug uniqueness is global; choose a different slug.`,
+                message: `Username '${username}' is already used by your agent in another workspace. Choose a different slug.`,
               },
             },
             409,
@@ -366,12 +406,12 @@ export function createRegisterRouter(
             workspaceId,
             daemonId,
             runtimeInstanceId,
-            message: 'im_containers.maxAgents missing — fallback 3; check migration 323',
+            message: 'im_containers.maxAgents missing — fallback 10; check migration 323/340',
           },
           'maxAgents fallback used',
         );
       }
-      const max = device.maxAgents ?? 3;
+      const max = device.maxAgents ?? 10;
 
       // Count agents already bound to this daemon. metadata is a JSON-encoded
       // string column on im_agent_cards; parse client-side to stay portable.
@@ -458,8 +498,9 @@ export function createRegisterRouter(
       let owner: { id: string; userId?: string | null; numericId?: bigint | number | null };
       if (cloudUserId) {
         const humanOwner = await prisma.iMUser.findFirst({
-          where: { userId: cloudUserId, role: 'human' },
+          where: { role: 'human', OR: cloudOwnerWhere(cloudUserId) },
           select: { id: true, userId: true, numericId: true },
+          orderBy: { createdAt: 'asc' },
         });
         if (!humanOwner) {
           return { ok: false, error: 'No human owner IMUser found for cloud user' };
@@ -482,18 +523,22 @@ export function createRegisterRouter(
           return { ok: false, error: 'No owner IMUser found and no cloudUserId to derive one' };
         }
         const ownerUsername = `user-${cloudUserId.slice(0, 8)}`;
-        owner = await prisma.iMUser.upsert({
+        const existingOwner = await prisma.iMUser.findFirst({
           where: { username: ownerUsername },
-          create: {
-            id: generateIMUserId('human'),
-            username: ownerUsername,
-            displayName: ownerUsername,
-            role: 'human',
-            userId: cloudUserId,
-          },
-          update: {},
           select: { id: true, userId: true, numericId: true },
         });
+        owner =
+          existingOwner ??
+          (await prisma.iMUser.create({
+            data: {
+              id: generateIMUserId('human'),
+              username: ownerUsername,
+              displayName: ownerUsername,
+              role: 'human',
+              userId: cloudUserId,
+            },
+            select: { id: true, userId: true, numericId: true },
+          }));
       }
       ownerUserId = owner.userId ?? null;
       ownerNumericId = owner.numericId ?? null;
@@ -515,14 +560,30 @@ export function createRegisterRouter(
       if (existing) return { ok: true, workspaceId: existing.id };
       // Don't set id — IMWorkspace uses Prisma @default(cuid()) (25 chars,
       // fits VARCHAR(30)). randomUUID() is 36 chars and overflows.
-      const ws = await prisma.iMWorkspace.create({
-        data: {
-          ownerImUserId: ownerId,
-          name: 'Personal',
-          slug: 'personal',
-          isDefault: true,
-        },
-        select: { id: true },
+      // Bug Z1.b (v2.0.7 R3.E cookbook real-run): workspace + owner 的
+      // im_workspace_members 行必须同事务写入，否则 owner GET
+      // /workspaces/<id>/members 返 [] / 404，POST /tasks 被
+      // task-permission.ts NotWorkspaceMemberError 拒 (403)。mirror Z1
+      // (auth/middleware.ts:60 ensureDefaultWorkspace) 的同款 $transaction。
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- interactive tx client typing matches workspace-member.service pattern
+      const ws = await prisma.$transaction(async (tx: any) => {
+        const newWs = await tx.iMWorkspace.create({
+          data: {
+            ownerImUserId: ownerId,
+            name: 'Personal',
+            slug: 'personal',
+            isDefault: true,
+          },
+          select: { id: true },
+        });
+        await tx.iMWorkspaceMember.create({
+          data: {
+            workspaceId: newWs.id,
+            memberImUserId: ownerId,
+            role: 'owner',
+          },
+        });
+        return newWs;
       });
       return { ok: true, workspaceId: ws.id };
     }
@@ -681,14 +742,28 @@ export function createRegisterRouter(
       // /api/im/tasks fails the workspaceId NOT NULL constraint and the
       // user can't create tasks against any agent they own.
       if (type === 'human' && isNew) {
-        const ws = await prisma.iMWorkspace.create({
-          data: {
-            ownerImUserId: newUser.id,
-            name: 'Personal',
-            slug: 'personal',
-            isDefault: true,
-          },
-          select: { id: true },
+        // Bug Z1.b (v2.0.7 R3.E cookbook real-run): mirror Z1 同款 $transaction。
+        // workspace + owner 的 im_workspace_members 行同事务写入，避免 owner
+        // 创建后立即 POST /tasks 被 task-permission.ts 拒 (403)。
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- interactive tx client typing matches workspace-member.service pattern
+        const ws = await prisma.$transaction(async (tx: any) => {
+          const newWs = await tx.iMWorkspace.create({
+            data: {
+              ownerImUserId: newUser.id,
+              name: 'Personal',
+              slug: 'personal',
+              isDefault: true,
+            },
+            select: { id: true },
+          });
+          await tx.iMWorkspaceMember.create({
+            data: {
+              workspaceId: newWs.id,
+              memberImUserId: newUser.id,
+              role: 'owner',
+            },
+          });
+          return newWs;
         });
         resolvedWorkspaceId = ws.id;
       }
@@ -714,12 +789,13 @@ export function createRegisterRouter(
         // Auto-create human owner record if not exists (for owner profile / contributor board)
         if (cloudUserId) {
           const hasOwner = await prisma.iMUser.findFirst({
-            where: { userId: cloudUserId, role: 'human' },
+            where: { role: 'human', OR: cloudOwnerWhere(cloudUserId) },
             select: { id: true },
+            orderBy: { createdAt: 'asc' },
           });
           if (!hasOwner) {
             const ownerUsername = `user-${cloudUserId.slice(0, 8)}`;
-            const existing = await prisma.iMUser.findUnique({ where: { username: ownerUsername } });
+            const existing = await prisma.iMUser.findFirst({ where: { username: ownerUsername } });
             if (!existing) {
               await prisma.iMUser
                 .create({
@@ -741,6 +817,22 @@ export function createRegisterRouter(
     // If the existing user was auto-created as 'human' but registering as 'agent', it's a new registration
     if (existingUser && existingUser.role === 'human' && type === 'agent') {
       isNew = true;
+    }
+
+    if (type === 'agent') {
+      const agentCard = await prisma.iMAgentCard.findUnique({
+        where: { imUserId },
+        select: { workspaceId: true },
+      });
+      if (agentCard?.workspaceId) {
+        const builtInService = new BuiltInSkillService(new AgentSkillService(new SkillService()));
+        await builtInService.installAllBuiltInsToAgent(imUserId, agentCard.workspaceId).catch((err: unknown) => {
+          console.warn(
+            '[Register] Built-in skill auto-install failed:',
+            err instanceof Error ? err.message : String(err),
+          );
+        });
+      }
     }
 
     // Sign new JWT token
