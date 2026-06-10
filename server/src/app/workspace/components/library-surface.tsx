@@ -1,22 +1,40 @@
 'use client';
 
 /**
- * LibrarySurface — Memory Line B / B1.
+ * LibrarySurface — thin shell over `LibraryFilesPanel`.
  *
- * Hosts the three Library views (Files / Memory / Graph) behind a segmented
- * control. B1 only wires the Files segment to the existing files panel;
- * Memory and Graph render coming-soon placeholders that B2 / B6 replace.
+ * The Asset surface is **deliberately asset-only**. Earlier iterations
+ * embedded a Skills quick-view and Memory/Graph sub-panels here. Both were
+ * removed:
  *
- * The segmented control sits at the top so the same surface URL can deep-link
- * into any view (downstream milestones add `?view=memory|graph` query-state).
+ *   • Skills quick-view — assets and skills don't share a user mental model;
+ *     deep skill operations live in `/evolution?tab=studio` and shouldn't
+ *     leak a second entry point into the Asset surface. The embedded view
+ *     also broke layout when a workspace had >10 drafts (flex-1 vs natural
+ *     height collision against LibraryFilesPanel).
+ *   • Memory / Graph — the long-term memory model hasn't converged yet
+ *     (see [[project_im_long_context_optimization]]); exposing it as a
+ *     user-facing surface is premature.
+ *
+ * Re-exposure prerequisites:
+ *   • Skills: nothing planned. If a future need surfaces, it lives inside
+ *     an asset's contextual menu ("this asset is referenced by skill X"),
+ *     not as a sibling panel.
+ *   • Memory: needs the doc 25 long-context redesign to land first. When
+ *     restoring, bring back `LibraryMemoryPanel` (./library-memory-panel),
+ *     `LibraryGraphPanel` (./library-graph-panel), and the
+ *     `ComingSoonPlaceholder` fallback alongside the segmented control.
+ *     The `initialView`, `memoryJumpPath`, `onMemoryJumpHandled`,
+ *     `onMemoryJumpRequest`, `pendingProposalCount`, `onOpenProposalReview`,
+ *     `myImUserId`, `isOwnerHuman`, `activeTaskId`, and `workspaceId`
+ *     props are still threaded through and ignored — they remain in the
+ *     type so callers (page.tsx) don't break and re-exposure is just
+ *     rewiring this file.
+ *
+ * Block-quoted history preserved in `git log -- library-surface.tsx`.
  */
 
-import { useEffect, useState } from 'react';
-import { FolderTree, Network, Workflow } from 'lucide-react';
-
 import { LibraryFilesPanel } from './library-files-panel';
-import { LibraryGraphPanel } from './library-graph-panel';
-import { LibraryMemoryPanel } from './library-memory-panel';
 import type { AssetDTO, WorkspaceFileDTO } from '../lib/types';
 import type { WorkspaceInspector } from './workspace-inspector-dialog';
 
@@ -24,190 +42,73 @@ export type LibraryView = 'files' | 'memory' | 'graph';
 
 interface LibrarySurfaceProps {
   isDark: boolean;
-  workspaceId: string | null;
+  /** @deprecated Skills quick-view removed — see top docstring. */
+  workspaceId?: string | null;
   assets: AssetDTO[];
   files: WorkspaceFileDTO[];
   onUploadAsset: () => void;
+  onUploadFiles?: (files: File[]) => void | Promise<void>;
   onOpenInspector: (inspector: WorkspaceInspector) => void;
   initialFolder?: string | null;
   onAssetsChanged?: () => void | Promise<void>;
   notify?: (message: string, type?: 'success' | 'error' | 'info') => void;
-  /** Initial segmented-control selection (e.g. 'memory' from external "View as Memory" jump). */
+  /** @deprecated Memory/Graph entry disabled — see top docstring. */
   initialView?: LibraryView;
-  /** Memory page path to auto-select after the Memory view loads. */
+  /** @deprecated Memory/Graph entry disabled — see top docstring. */
   memoryJumpPath?: string | null;
+  /** @deprecated Memory/Graph entry disabled — see top docstring. */
   onMemoryJumpHandled?: () => void;
-  /** Called when an in-surface jump is needed (e.g. Graph node → Memory view). */
+  /** @deprecated Memory/Graph entry disabled — see top docstring. */
   onMemoryJumpRequest?: (path: string) => void;
-  /** B4 mutation context — surfaced from the workspace page. */
+  /** @deprecated Memory/Graph entry disabled — see top docstring. */
   myImUserId?: string | null;
+  /** @deprecated Memory/Graph entry disabled — see top docstring. */
   isOwnerHuman?: boolean;
+  /** @deprecated Memory/Graph entry disabled — see top docstring. */
   activeTaskId?: string | null;
-  /** B7 — proposal review entry points. */
+  /** @deprecated Memory/Graph entry disabled — see top docstring. */
   pendingProposalCount?: number;
+  /** @deprecated Memory/Graph entry disabled — see top docstring. */
   onOpenProposalReview?: () => void;
 }
 
-const SEGMENTS: Array<{ key: LibraryView; label: string; Icon: typeof FolderTree }> = [
-  { key: 'files', label: 'Files', Icon: FolderTree },
-  { key: 'memory', label: 'Memory', Icon: Workflow },
-  { key: 'graph', label: 'Graph', Icon: Network },
-];
-
 export function LibrarySurface({
   isDark,
-  workspaceId,
   assets,
   files,
   onUploadAsset,
+  onUploadFiles,
   onOpenInspector,
   initialFolder,
   onAssetsChanged,
   notify,
-  initialView,
-  memoryJumpPath,
-  onMemoryJumpHandled,
-  onMemoryJumpRequest,
-  myImUserId,
-  isOwnerHuman,
-  activeTaskId,
-  pendingProposalCount,
-  onOpenProposalReview,
+  // Below: accepted from page.tsx but currently ignored because both the
+  // Skills quick-view and Memory/Graph views are intentionally hidden.
+  // Restore wiring when re-exposing — see top docstring.
+  workspaceId: _workspaceId,
+  initialView: _initialView,
+  memoryJumpPath: _memoryJumpPath,
+  onMemoryJumpHandled: _onMemoryJumpHandled,
+  onMemoryJumpRequest: _onMemoryJumpRequest,
+  myImUserId: _myImUserId,
+  isOwnerHuman: _isOwnerHuman,
+  activeTaskId: _activeTaskId,
+  pendingProposalCount: _pendingProposalCount,
+  onOpenProposalReview: _onOpenProposalReview,
 }: LibrarySurfaceProps) {
-  const [view, setView] = useState<LibraryView>(initialView ?? 'files');
-
-  // External "View as Memory" jumps force the Memory tab on top of selecting a path.
-  useEffect(() => {
-    if (memoryJumpPath) setView('memory');
-  }, [memoryJumpPath]);
-
   return (
-    <div data-testid="library-surface" data-view={view} className="flex h-full min-h-0 flex-col">
-      <div
-        className={`flex shrink-0 items-center gap-1 border-b px-3 py-2 ${
-          isDark ? 'border-white/[0.06] bg-zinc-950/30' : 'border-zinc-200 bg-zinc-50/60'
-        }`}
-      >
-        <div
-          role="tablist"
-          aria-label="Library view"
-          data-testid="library-segmented-control"
-          className={`inline-flex rounded-2xl border p-0.5 ${
-            isDark ? 'border-white/[0.06] bg-white/[0.02]' : 'border-zinc-200 bg-white/70'
-          }`}
-        >
-          {SEGMENTS.map(({ key, label, Icon }) => {
-            const active = view === key;
-            return (
-              <button
-                key={key}
-                type="button"
-                role="tab"
-                aria-selected={active}
-                data-testid={`library-segment-${key}`}
-                data-active={active ? 'true' : undefined}
-                onClick={() => setView(key)}
-                className={`inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold transition-colors ${
-                  active
-                    ? isDark
-                      ? 'bg-violet-500/20 text-violet-100'
-                      : 'bg-violet-100/80 text-violet-900'
-                    : isDark
-                      ? 'text-zinc-400 hover:text-zinc-100'
-                      : 'text-zinc-500 hover:text-zinc-900'
-                }`}
-              >
-                <Icon className="h-3.5 w-3.5" />
-                {label}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      <div className="min-h-0 flex-1">
-        {view === 'files' ? (
-          <LibraryFilesPanel
-            isDark={isDark}
-            assets={assets}
-            files={files}
-            onUploadAsset={onUploadAsset}
-            onOpenInspector={onOpenInspector}
-            initialFolder={initialFolder}
-            onAssetsChanged={onAssetsChanged}
-            notify={notify}
-          />
-        ) : view === 'memory' ? (
-          workspaceId ? (
-            <LibraryMemoryPanel
-              workspaceId={workspaceId}
-              isDark={isDark}
-              jumpToPath={memoryJumpPath}
-              onJumpHandled={onMemoryJumpHandled}
-              myImUserId={myImUserId ?? null}
-              isOwnerHuman={isOwnerHuman ?? false}
-              activeTaskId={activeTaskId ?? null}
-              notify={notify}
-              pendingProposalCount={pendingProposalCount}
-              onOpenProposalReview={onOpenProposalReview}
-            />
-          ) : (
-            <ComingSoonPlaceholder
-              isDark={isDark}
-              testId="library-memory-no-workspace"
-              title="Memory pages"
-              description="Workspace not loaded yet — pages will appear once bootstrap completes."
-            />
-          )
-        ) : workspaceId ? (
-          <LibraryGraphPanel
-            workspaceId={workspaceId}
-            isDark={isDark}
-            onJumpToMemory={(path) => {
-              setView('memory');
-              onMemoryJumpRequest?.(path);
-            }}
-          />
-        ) : (
-          <ComingSoonPlaceholder
-            isDark={isDark}
-            testId="library-graph-no-workspace"
-            title="Knowledge graph"
-            description="Workspace not loaded yet — graph will appear once bootstrap completes."
-          />
-        )}
-      </div>
-    </div>
-  );
-}
-
-function ComingSoonPlaceholder({
-  isDark,
-  testId,
-  title,
-  description,
-}: {
-  isDark: boolean;
-  testId: string;
-  title: string;
-  description: string;
-}) {
-  return (
-    <div
-      data-testid={testId}
-      className={`flex h-full flex-col items-center justify-center px-6 text-center ${
-        isDark ? 'text-zinc-400' : 'text-zinc-600'
-      }`}
-    >
-      <p className={`text-sm font-semibold ${isDark ? 'text-zinc-200' : 'text-zinc-900'}`}>{title}</p>
-      <p className="mt-2 max-w-sm text-xs leading-relaxed opacity-80">{description}</p>
-      <span
-        className={`mt-4 inline-flex items-center rounded-full border px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${
-          isDark ? 'border-white/[0.08] text-zinc-500' : 'border-zinc-200 text-zinc-500'
-        }`}
-      >
-        Coming soon
-      </span>
+    <div data-testid="library-surface" data-view="files" className="flex h-full min-h-0 flex-col">
+      <LibraryFilesPanel
+        isDark={isDark}
+        assets={assets}
+        files={files}
+        onUploadAsset={onUploadAsset}
+        onUploadFiles={onUploadFiles}
+        onOpenInspector={onOpenInspector}
+        initialFolder={initialFolder}
+        onAssetsChanged={onAssetsChanged}
+        notify={notify}
+      />
     </div>
   );
 }
