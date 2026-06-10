@@ -38,7 +38,7 @@ const TAB_QUERY: Record<Exclude<NotificationTab, 'all'>, string> = {
   runtime: 'runtime',
 };
 
-const TASK_KINDS = ['task_status', 'task_assigned', 'task_approval_requested'] as const;
+const TASK_KINDS = ['task_status', 'task_assigned', 'task_approval_requested', 'approval_requested'] as const;
 const CONTACT_KINDS = ['contact_request', 'contact_accepted', 'contact_blocked', 'contact'] as const;
 const RUNTIME_KINDS = [
   'runtime_degraded',
