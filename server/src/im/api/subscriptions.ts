@@ -16,6 +16,7 @@ import type { ApiResponse } from '../types';
 export function createSubscriptionsRouter(eventBusService: EventBusService) {
   const router = new Hono();
 
+  // eslint-disable-next-line custom/no-wildcard-sub-router-middleware -- mounted at /subscriptions in routes.ts; wildcard scoped to that prefix
   router.use('*', authMiddleware);
 
   /**
