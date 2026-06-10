@@ -11,8 +11,9 @@
  * 5. AGENTS    — Agent leaderboard
  */
 
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { Suspense, useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import Link from 'next/link';
+import { useSearchParams, useRouter, usePathname } from 'next/navigation';
 import {
   Dna,
   Zap,
@@ -45,16 +46,32 @@ import {
   Map,
   GitFork,
   Share2,
+  Wrench,
 } from 'lucide-react';
 import { useTheme } from '@/contexts/theme-context';
 import { useApp } from '@/contexts/app-context';
+import { useI18n } from '@/contexts/i18n-context';
 import { TiltCard } from '@/components/evolution/tilt-card';
 import { EvolutionMap } from '@/components/evolution/evolution-map';
 import { LibraryTab } from './components/library-tab';
 import { GeneForkSheet } from './components/gene-fork-sheet';
 // FeedTab removed — activity feed is now in the Map sidebar
-import { MyEvolutionTab as MyEvolutionPanel } from './components/my-evolution-tab';
-import { WorkspaceTab } from './components/workspace-tab';
+// my-evolution-tab.tsx 已于 v2.0.8 物理删除 (doc-13 §4.4 §11)；未登录用户改用
+// 下方 UnauthenticatedStudioPlaceholder（~30 行登录引导，避免 1050 行 fallback 长尾）。
+import {
+  StudioTab,
+  type SkillsSubview,
+  type StudioView,
+  normalizeLegacyView,
+  normalizeSkillsSubview,
+  legacyViewToSubview,
+} from './components/studio-tab';
+// release201/28 — Evolution Studio v2 shell (feature-flagged, coexists with the
+// legacy StudioTab). normalizeLegacyView aliased to avoid clashing with the
+// legacy studio-tab export of the same name.
+import { StudioShellV2 } from './components/studio/v2/studio-shell';
+import { parseStudioUrl, normalizeLegacyView as normalizeStudioV2Section } from './components/studio/v2/url';
+import { STUDIO_V2_ENABLED } from './components/studio/v2/flags';
 import { getSourceBadge, glass } from './components/helpers';
 import { LeaderboardTab } from './components/leaderboard-tab';
 // ─── Evolution types (inline — leaderboard module removed, pending redesign) ─────
@@ -166,15 +183,17 @@ interface SkillStats {
   total_installs: number;
 }
 
-type TabKey = 'overview' | 'skills' | 'genes' | 'timeline' | 'agents' | 'my' | 'library' | 'feed';
+type TabKey = 'overview' | 'skills' | 'genes' | 'timeline' | 'agents' | 'studio' | 'library' | 'feed';
+
+const VALID_TAB_KEYS = new Set<TabKey>(['overview', 'skills', 'genes', 'timeline', 'agents', 'studio', 'library']);
 
 // ─── Constants ──────────────────────────────────────────
 
-const TABS: { key: TabKey; label: string; icon: typeof Activity }[] = [
-  { key: 'overview', label: 'Map', icon: Map },
-  { key: 'library', label: 'Marketplace', icon: Sparkles },
-  { key: 'agents', label: 'Leaderboard', icon: Trophy },
-  { key: 'my', label: 'My Agents', icon: User },
+const TABS: { key: TabKey; labelKey: `evolution.${string}`; icon: typeof Activity }[] = [
+  { key: 'overview', labelKey: 'evolution.tabs.map', icon: Map },
+  { key: 'library', labelKey: 'evolution.tabs.marketplace', icon: Sparkles },
+  { key: 'agents', labelKey: 'evolution.tabs.leaderboard', icon: Trophy },
+  { key: 'studio', labelKey: 'evolution.tabs.studio', icon: Wrench },
 ];
 
 const CAT_COLORS: Record<string, { text: string; bg: string; border: string; glow: string; hex: string }> = {
@@ -224,24 +243,57 @@ const FEED_ICONS: Record<string, { icon: typeof CircleDot; color: string }> = {
 
 // ─── Helpers ────────────────────────────────────────────
 
-function timeAgo(ts: string): string {
+type EvolutionT = ReturnType<typeof useI18n>['t'];
+
+function localizedTimeAgo(ts: string, t: EvolutionT): string {
   const diff = Date.now() - new Date(ts).getTime();
   const m = Math.floor(diff / 60000);
-  if (m < 1) return 'just now';
-  if (m < 60) return `${m}m ago`;
+  if (m < 1) return t('evolution.common.justNow');
+  if (m < 60) return t('evolution.common.minutesAgo', { count: m });
   const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h ago`;
+  if (h < 24) return t('evolution.common.hoursAgo', { count: h });
   const d = Math.floor(h / 24);
-  if (d < 30) return `${d}d ago`;
+  if (d < 30) return t('evolution.common.daysAgo', { count: d });
   return new Date(ts).toLocaleDateString();
+}
+
+function categoryLabel(category: string | undefined, t: EvolutionT): string {
+  const key = category || 'all';
+  const translationKey = `evolution.common.categoryLabels.${key}` as `evolution.${string}`;
+  const translated = t(translationKey);
+  return translated === translationKey ? key : translated;
+}
+
+function eventActionLabel(type: string | undefined, t: EvolutionT): string {
+  if (type === 'capsule') return t('evolution.legacy.executed');
+  if (type === 'publish') return t('evolution.legacy.published');
+  if (type === 'distill') return t('evolution.legacy.distilled');
+  return t('evolution.legacy.achieved');
+}
+
+function eventTypeLabel(type: string, t: EvolutionT): string {
+  if (!type) return t('evolution.common.all');
+  const key = `evolution.legacy.eventTypes.${type}` as `evolution.${string}`;
+  const translated = t(key);
+  return translated === key ? type : translated;
+}
+
+function sourceBadgeLabel(source: string | undefined, fallback: string | undefined, t: EvolutionT): string {
+  const sourceKey =
+    source === 'awesome-openclaw' ? 'awesomeOpenclaw' : source === 'evolution' ? 'evolved' : source || '';
+  if (!sourceKey) return fallback || t('evolution.common.community');
+  const translationKey = `evolution.library.sourceBadge.${sourceKey}` as `evolution.${string}`;
+  const translated = t(translationKey);
+  return translated === translationKey ? fallback || sourceKey : translated;
 }
 
 /** Hydration-safe time display — renders empty on SSR, fills client-side */
 function TimeAgo({ ts, className }: { ts: string; className?: string }) {
+  const { t } = useI18n();
   const [text, setText] = useState('');
   useEffect(() => {
-    setText(timeAgo(ts));
-  }, [ts]);
+    setText(localizedTimeAgo(ts, t));
+  }, [ts, t]);
   return (
     <span className={className} suppressHydrationWarning>
       {text}
@@ -249,8 +301,20 @@ function TimeAgo({ ts, className }: { ts: string; className?: string }) {
   );
 }
 
-function formatDate(ts: string): string {
-  return new Date(ts).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+function dateLocale(locale: string): string {
+  return locale === 'zh' ? 'zh-CN' : locale === 'en' ? 'en-US' : locale;
+}
+
+function formatDate(ts: string, locale: string): string {
+  const date = new Date(ts);
+  if (Number.isNaN(date.getTime())) return '';
+  return new Intl.DateTimeFormat(dateLocale(locale), { month: 'short', day: 'numeric', year: 'numeric' }).format(date);
+}
+
+function formatDay(ts: string, locale: string): string {
+  const date = new Date(ts);
+  if (Number.isNaN(date.getTime())) return '';
+  return new Intl.DateTimeFormat(dateLocale(locale), { day: 'numeric' }).format(date);
 }
 
 function computePQI(g: PublicGene, maxExecutions: number): number {
@@ -553,12 +617,107 @@ function CardSkeleton({ isDark }: { isDark: boolean }) {
 // ─── Main Page ──────────────────────────────────────────
 
 export default function EvolutionPage() {
+  return (
+    <Suspense fallback={null}>
+      <EvolutionPageContent />
+    </Suspense>
+  );
+}
+
+function EvolutionPageContent() {
   const { resolvedTheme } = useTheme();
   const { isAuthenticated, addToast } = useApp();
+  const { t, locale } = useI18n();
   const isDark = resolvedTheme === 'dark';
 
-  const [activeTab, setActiveTab] = useState<TabKey>('overview');
+  // ─── URL state adapter (13-P0, doc release201/13 §3.1) ──────────
+  // Hydrate tab/view/agentId/draftId from search params so refresh and
+  // book-marks survive. Legacy `?tab=my` middleware was retired in v2.0.9
+  // (S37) — unknown / legacy tab keys fall back to `overview` with a console
+  // warn for debug trace. See doc release201/13 §3.1 and decision D-15.
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+
+  const initialTab: TabKey = (() => {
+    const raw = searchParams?.get('tab');
+    if (raw && VALID_TAB_KEYS.has(raw as TabKey)) return raw as TabKey;
+    if (raw && typeof window !== 'undefined') {
+      // v2.0.9 (S37): legacy `?tab=my` and other unknown keys no longer
+      // rewrite — they degrade to overview. Surface a debug trace so we can
+      // see lingering bookmarks if they materially persist.
+
+      console.warn(`[evolution] Legacy or unknown tab key "${raw}", falling back to overview`);
+    }
+    return 'overview';
+  })();
+  const initialView: StudioView = (() => {
+    // Studio now exposes 3 views (my-agents / skills / metrics). Legacy values
+    // from the 6-domain split are collapsed via normalizeLegacyView so existing
+    // bookmarks keep working.
+    return normalizeLegacyView(searchParams?.get('view'));
+  })();
+
+  const [activeTab, setActiveTab] = useState<TabKey>(initialTab);
   const [tabTransition, setTabTransition] = useState(false);
+  const [studioView, setStudioView] = useState<StudioView>(initialView);
+  const [studioSubview, setStudioSubview] = useState<SkillsSubview>(
+    // release201/13 §3.2 (S22): `?subview=` carries Skills view sub-tab.
+    // release201/24 §Phase3: also honour a legacy `?view=lifecycle|installed|
+    // evolution|authoring` link by deriving the canonical subview from it, so
+    // old deep links (and library-surface's `view=lifecycle`) land correctly.
+    normalizeSkillsSubview(searchParams?.get('subview') ?? legacyViewToSubview(searchParams?.get('view'))),
+  );
+  const [studioAgentId, setStudioAgentId] = useState<string | null>(searchParams?.get('agentId') ?? null);
+  const [studioDraftId, setStudioDraftId] = useState<string | null>(searchParams?.get('draftId') ?? null);
+
+  // ─── URL <-> state sync ────────────────────────────────
+  // Push current state to the URL using router.replace (keeps history clean).
+  const writeUrlState = useCallback(
+    (next: {
+      tab?: TabKey;
+      view?: StudioView;
+      subview?: SkillsSubview;
+      agentId?: string | null;
+      draftId?: string | null;
+    }) => {
+      const params = new URLSearchParams(searchParams?.toString() ?? '');
+      const tab = next.tab ?? activeTab;
+      const view = next.view ?? studioView;
+      const subview = next.subview ?? studioSubview;
+      const agentId = next.agentId === undefined ? studioAgentId : next.agentId;
+      const draftId = next.draftId === undefined ? studioDraftId : next.draftId;
+
+      if (tab === 'overview') params.delete('tab');
+      else params.set('tab', tab);
+
+      if (tab === 'studio') {
+        // `my-agents` is the default; omit it from the URL to keep it short.
+        if (view === 'my-agents') params.delete('view');
+        else params.set('view', view);
+        // Skills view sub-tab — only meaningful when view === 'skills', and
+        // `authoring` is the default we elide.
+        if (view === 'skills' && subview !== 'authoring') {
+          params.set('subview', subview);
+        } else {
+          params.delete('subview');
+        }
+        if (agentId) params.set('agentId', agentId);
+        else params.delete('agentId');
+        if (draftId) params.set('draftId', draftId);
+        else params.delete('draftId');
+      } else {
+        params.delete('view');
+        params.delete('subview');
+        params.delete('agentId');
+        params.delete('draftId');
+      }
+      const qs = params.toString();
+      const url = qs ? `${pathname}?${qs}` : pathname;
+      router.replace(url, { scroll: false });
+    },
+    [searchParams, pathname, router, activeTab, studioView, studioSubview, studioAgentId, studioDraftId],
+  );
 
   // Global data
   const [stats, setStats] = useState<EvolutionStats>({
@@ -632,12 +791,62 @@ export default function EvolutionPage() {
     (tab: TabKey) => {
       if (tab === activeTab) return;
       setTabTransition(true);
+      writeUrlState({ tab });
       setTimeout(() => {
         setActiveTab(tab);
         setTabTransition(false);
       }, 150);
     },
-    [activeTab],
+    [activeTab, writeUrlState],
+  );
+
+  // Studio sub-view setters (write through to URL).
+  const switchStudioView = useCallback(
+    (view: StudioView) => {
+      setStudioView(view);
+      writeUrlState({ view });
+    },
+    [writeUrlState],
+  );
+  const switchStudioSubview = useCallback(
+    (subview: SkillsSubview) => {
+      setStudioSubview(subview);
+      writeUrlState({ subview });
+    },
+    [writeUrlState],
+  );
+  const setStudioAgent = useCallback(
+    (agentId: string | null) => {
+      setStudioAgentId(agentId);
+      writeUrlState({ agentId });
+    },
+    [writeUrlState],
+  );
+  const setStudioDraft = useCallback(
+    (draftId: string | null) => {
+      setStudioDraftId(draftId);
+      writeUrlState({ draftId });
+    },
+    [writeUrlState],
+  );
+
+  // release201/28 — Studio v2 writes `?tab=studio&section=` directly (the legacy
+  // writeUrlState speaks view/subview). roster is the default and is elided.
+  const writeStudioSection = useCallback(
+    (section: string) => {
+      const params = new URLSearchParams(searchParams?.toString() ?? '');
+      params.set('tab', 'studio');
+      params.delete('view');
+      params.delete('subview');
+      // Always write `section` explicitly (incl. roster). Deleting it for roster
+      // made the URL fall back to the legacy view/subview derivation, which maps
+      // the default `my-agents` → `profiles`, so clicking 团队/Roster never landed
+      // on roster. Explicit section is the single source of truth.
+      params.set('section', section);
+      const qs = params.toString();
+      router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+    },
+    [searchParams, pathname, router],
   );
 
   // ─── Fetch global data ────────────────────────────────
@@ -932,9 +1141,12 @@ export default function EvolutionPage() {
         body: JSON.stringify({ gene_id: geneId }),
       });
       const data = await res.json();
-      addToast(data.ok ? 'Gene installed to your agent!' : data.error || 'Failed', data.ok ? 'success' : 'error');
+      addToast(
+        data.ok ? t('evolution.toast.geneInstalled') : data.error || t('evolution.toast.failed'),
+        data.ok ? 'success' : 'error',
+      );
     } catch {
-      addToast('Failed to install gene', 'error');
+      addToast(t('evolution.toast.geneInstallFailed'), 'error');
     }
   };
 
@@ -952,9 +1164,12 @@ export default function EvolutionPage() {
         body: JSON.stringify({ gene_id: geneId }),
       });
       const data = await res.json();
-      addToast(data.ok ? 'Gene forked to your library!' : data.error || 'Failed', data.ok ? 'success' : 'error');
+      addToast(
+        data.ok ? t('evolution.toast.geneForked') : data.error || t('evolution.toast.failed'),
+        data.ok ? 'success' : 'error',
+      );
     } catch {
-      addToast('Failed to fork gene', 'error');
+      addToast(t('evolution.toast.geneForkFailed'), 'error');
     }
   };
 
@@ -973,12 +1188,15 @@ export default function EvolutionPage() {
       const data = await res.json();
       if (data.ok) {
         const geneName = data.data?.gene?.id ? ` + Gene ${data.data.gene.category}` : '';
-        addToast(`Installed ${data.data?.skill?.name || skillId}${geneName}`, 'success');
+        addToast(
+          t('evolution.toast.skillInstalled', { name: data.data?.skill?.name || skillId, gene: geneName }),
+          'success',
+        );
       } else {
-        addToast(data.error || 'Failed to install', 'error');
+        addToast(data.error || t('evolution.toast.skillInstallFailed'), 'error');
       }
     } catch {
-      addToast('Failed to install skill', 'error');
+      addToast(t('evolution.toast.skillInstallFailed'), 'error');
     }
   };
 
@@ -995,14 +1213,15 @@ export default function EvolutionPage() {
   });
 
   // Group timeline by date
-  const timelineGroups: { date: string; events: FeedEvent[] }[] = [];
+  const timelineGroups: { date: string; day: string; events: FeedEvent[] }[] = [];
   for (const event of filteredTimeline) {
-    const date = formatDate(event.timestamp || '');
+    const date = formatDate(event.timestamp || '', locale);
+    const day = formatDay(event.timestamp || '', locale);
     const last = timelineGroups[timelineGroups.length - 1];
     if (last && last.date === date) {
       last.events.push(event);
     } else {
-      timelineGroups.push({ date, events: [event] });
+      timelineGroups.push({ date, day, events: [event] });
     }
   }
 
@@ -1079,14 +1298,14 @@ export default function EvolutionPage() {
           <h1
             className={`text-xl sm:text-2xl md:text-3xl font-bold mb-1 sm:mb-2 ${isDark ? 'text-white' : 'text-zinc-900'}`}
           >
-            Evolution
+            {t('evolution.title')}
           </h1>
           <div className={`flex items-center gap-2 text-xs sm:text-sm ${isDark ? 'text-zinc-400' : 'text-zinc-600'}`}>
             <span className="relative flex h-2 w-2">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
               <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-400" />
             </span>
-            Cross-Agent Learning Network
+            {t('evolution.subtitle')}
           </div>
         </div>
       </div>
@@ -1118,7 +1337,7 @@ export default function EvolutionPage() {
               )}
               <span className="relative flex items-center gap-1.5">
                 <Icon className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">{tab.label}</span>
+                <span className="hidden sm:inline">{t(tab.labelKey)}</span>
               </span>
               {isActive && (
                 <div className="absolute bottom-0 left-1/2 -translate-x-1/2 w-8 h-0.5 rounded-full bg-gradient-to-r from-violet-500 via-cyan-500 to-emerald-500" />
@@ -1160,9 +1379,12 @@ export default function EvolutionPage() {
                   headers: { Authorization: `Bearer ${token}` },
                 });
                 const data = await res.json();
-                addToast(data.ok ? 'Skill uninstalled' : data.error || 'Failed', data.ok ? 'success' : 'error');
+                addToast(
+                  data.ok ? t('evolution.toast.skillUninstalled') : data.error || t('evolution.toast.failed'),
+                  data.ok ? 'success' : 'error',
+                );
               } catch {
-                addToast('Uninstall failed', 'error');
+                addToast(t('evolution.toast.skillUninstallFailed'), 'error');
               }
             }}
             isAuthenticated={isAuthenticated}
@@ -1187,17 +1409,20 @@ export default function EvolutionPage() {
                 {skillExploreMode ? (
                   <>
                     <Compass className="w-3 h-3 inline mr-1 text-violet-400" />
-                    <span className="text-violet-400 font-semibold">Explore Mode</span> — Discovering hidden gems with
-                    high quality and low exposure
+                    <span className="text-violet-400 font-semibold">{t('evolution.legacy.exploreMode')}</span> —{' '}
+                    {t('evolution.legacy.exploreModeBody')}
                   </>
                 ) : (
                   <>
-                    <span className="font-semibold">{(skillStats.total || 0).toLocaleString()}</span> skills from{' '}
-                    <span className="font-semibold">{skillCategories.length}</span> categories
+                    {t('evolution.legacy.skillsFromCategories', {
+                      skills: (skillStats.total || 0).toLocaleString(),
+                      categories: skillCategories.length,
+                    })}
                     {skillStats.by_source && Object.keys(skillStats.by_source).length > 0 && (
                       <>
                         {' '}
-                        | Source: <span className="font-semibold">{Object.keys(skillStats.by_source).join(', ')}</span>
+                        | {t('evolution.legacy.source')}{' '}
+                        <span className="font-semibold">{Object.keys(skillStats.by_source).join(', ')}</span>
                       </>
                     )}
                   </>
@@ -1214,7 +1439,7 @@ export default function EvolutionPage() {
                   <Search className={`w-4 h-4 shrink-0 ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`} />
                   <input
                     type="text"
-                    placeholder="Search skills..."
+                    placeholder={t('evolution.legacy.searchSkills')}
                     value={skillSearchInput}
                     onChange={(e) => setSkillSearchInput(e.target.value)}
                     className={`w-full bg-transparent outline-none text-sm ${isDark ? 'text-white placeholder-zinc-600' : 'text-zinc-900 placeholder-zinc-400'}`}
@@ -1228,9 +1453,9 @@ export default function EvolutionPage() {
                   }}
                   className={`px-3 py-2 rounded-lg text-xs font-medium border shrink-0 ${isDark ? 'bg-zinc-900/60 border-white/10 text-zinc-300' : 'bg-white/60 border-zinc-200/60 text-zinc-700'}`}
                 >
-                  <option value="most_installed">Most Installed</option>
-                  <option value="newest">Newest</option>
-                  <option value="name">Name</option>
+                  <option value="most_installed">{t('evolution.common.mostInstalled')}</option>
+                  <option value="newest">{t('evolution.common.newest')}</option>
+                  <option value="name">{t('evolution.common.name')}</option>
                 </select>
                 <button
                   onClick={() => {
@@ -1246,10 +1471,10 @@ export default function EvolutionPage() {
                         ? 'bg-zinc-900/60 border-white/10 text-zinc-400 hover:text-zinc-200'
                         : 'bg-white/60 border-zinc-200/60 text-zinc-500 hover:text-zinc-700'
                   }`}
-                  title="Explore hidden gems — high quality, low exposure"
+                  title={t('evolution.legacy.exploreTitle')}
                 >
                   <Compass className="w-3.5 h-3.5" />
-                  Explore
+                  {t('evolution.legacy.explore')}
                 </button>
               </div>
 
@@ -1270,7 +1495,7 @@ export default function EvolutionPage() {
                         : 'bg-zinc-100 text-zinc-600 hover:text-zinc-900'
                   }`}
                 >
-                  All
+                  {t('evolution.common.all')}
                 </button>
                 {skillCategories.slice(0, 20).map((cat) => (
                   <button
@@ -1305,7 +1530,7 @@ export default function EvolutionPage() {
             ) : skills.length === 0 ? (
               <div className={`text-center py-20 ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>
                 <Sparkles className="w-8 h-8 mx-auto mb-3 opacity-40" />
-                <p className="text-sm">No skills found. Try a different search or category.</p>
+                <p className="text-sm">{t('evolution.common.noSkillsFound')}</p>
               </div>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -1332,7 +1557,7 @@ export default function EvolutionPage() {
                   onClick={() => setSkillPage((p) => p - 1)}
                   className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors disabled:opacity-40 ${isDark ? 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700' : 'bg-zinc-100 text-zinc-700 hover:bg-zinc-200'}`}
                 >
-                  Prev
+                  {t('evolution.common.prev')}
                 </button>
                 {/* Page numbers (§4.4) */}
                 {(() => {
@@ -1379,11 +1604,14 @@ export default function EvolutionPage() {
                   onClick={() => setSkillPage((p) => p + 1)}
                   className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors disabled:opacity-40 ${isDark ? 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700' : 'bg-zinc-100 text-zinc-700 hover:bg-zinc-200'}`}
                 >
-                  Next
+                  {t('evolution.common.next')}
                 </button>
                 <span className={`text-xs tabular-nums ml-2 ${isDark ? 'text-zinc-600' : 'text-zinc-400'}`}>
-                  {(skillPage - 1) * SKILL_LIMIT + 1}-{Math.min(skillPage * SKILL_LIMIT, skillTotal)} of{' '}
-                  {skillTotal.toLocaleString()}
+                  {t('evolution.legacy.showingRangeCompact', {
+                    from: (skillPage - 1) * SKILL_LIMIT + 1,
+                    to: Math.min(skillPage * SKILL_LIMIT, skillTotal),
+                    total: skillTotal.toLocaleString(),
+                  })}
                 </span>
               </div>
             )}
@@ -1403,7 +1631,7 @@ export default function EvolutionPage() {
                 <Search className={`w-4 h-4 shrink-0 ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`} />
                 <input
                   type="text"
-                  placeholder="Search genes by signal, keyword, or strategy..."
+                  placeholder={t('evolution.legacy.searchGenes')}
                   value={geneSearchInput}
                   onChange={(e) => setGeneSearchInput(e.target.value)}
                   className={`w-full bg-transparent outline-none text-sm ${isDark ? 'text-white placeholder-zinc-600' : 'text-zinc-900 placeholder-zinc-400'}`}
@@ -1429,7 +1657,7 @@ export default function EvolutionPage() {
                           : 'text-zinc-500 hover:text-zinc-900'
                     }`}
                   >
-                    {cat.label}
+                    {categoryLabel(cat.key, t)}
                   </button>
                 ))}
               </div>
@@ -1443,7 +1671,11 @@ export default function EvolutionPage() {
               >
                 {SORT_OPTIONS.map((opt) => (
                   <option key={opt.key} value={opt.key}>
-                    {opt.label}
+                    {opt.key === 'newest'
+                      ? t('evolution.common.newest')
+                      : opt.key === 'most_used'
+                        ? t('evolution.common.mostPopular')
+                        : t('evolution.common.successRate')}
                   </option>
                 ))}
               </select>
@@ -1459,7 +1691,7 @@ export default function EvolutionPage() {
             ) : genes.length === 0 ? (
               <div className={`text-center py-20 ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>
                 <Dna className="w-8 h-8 mx-auto mb-3 opacity-40" />
-                <p className="text-sm">No genes found. Try a different search or filter.</p>
+                <p className="text-sm">{t('evolution.common.noGenesFound')}</p>
               </div>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -1491,17 +1723,21 @@ export default function EvolutionPage() {
                   onClick={() => setGenePage((p) => p - 1)}
                   className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors disabled:opacity-40 ${isDark ? 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700' : 'bg-zinc-100 text-zinc-700 hover:bg-zinc-200'}`}
                 >
-                  Prev
+                  {t('evolution.common.prev')}
                 </button>
                 <span className={`text-xs tabular-nums ${isDark ? 'text-zinc-500' : 'text-zinc-500'}`}>
-                  Showing {(genePage - 1) * GENE_LIMIT + 1}-{Math.min(genePage * GENE_LIMIT, geneTotal)} of {geneTotal}
+                  {t('evolution.legacy.showingRange', {
+                    from: (genePage - 1) * GENE_LIMIT + 1,
+                    to: Math.min(genePage * GENE_LIMIT, geneTotal),
+                    total: geneTotal,
+                  })}
                 </span>
                 <button
                   disabled={genePage >= geneTotalPages}
                   onClick={() => setGenePage((p) => p + 1)}
                   className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors disabled:opacity-40 ${isDark ? 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700' : 'bg-zinc-100 text-zinc-700 hover:bg-zinc-200'}`}
                 >
-                  Next
+                  {t('evolution.common.next')}
                 </button>
               </div>
             )}
@@ -1518,7 +1754,7 @@ export default function EvolutionPage() {
               <span
                 className={`flex items-center gap-1 text-xs font-medium ${isDark ? 'text-zinc-400' : 'text-zinc-600'}`}
               >
-                <Filter className="w-3 h-3" /> Filter:
+                <Filter className="w-3 h-3" /> {t('evolution.legacy.filter')}
               </span>
               {['', 'capsule', 'distill', 'publish', 'milestone'].map((type) => (
                 <button
@@ -1534,7 +1770,7 @@ export default function EvolutionPage() {
                         : 'bg-zinc-100 text-zinc-500 hover:text-zinc-900'
                   }`}
                 >
-                  {type || 'All'}
+                  {eventTypeLabel(type, t)}
                 </button>
               ))}
               <div className="w-px h-5 self-center bg-zinc-700/30" />
@@ -1552,7 +1788,7 @@ export default function EvolutionPage() {
                         : 'bg-zinc-100 text-zinc-500 hover:text-zinc-900'
                   }`}
                 >
-                  {cat || 'All categories'}
+                  {cat ? categoryLabel(cat, t) : t('evolution.legacy.allCategories')}
                 </button>
               ))}
               <div className="w-px h-5 self-center bg-zinc-700/30" />
@@ -1570,7 +1806,11 @@ export default function EvolutionPage() {
                         : 'bg-zinc-100 text-zinc-500 hover:text-zinc-900'
                   }`}
                 >
-                  {outcome || 'All outcomes'}
+                  {outcome
+                    ? outcome === 'success'
+                      ? t('evolution.common.successStatus')
+                      : t('evolution.common.failedStatus')
+                    : t('evolution.legacy.allOutcomes')}
                 </button>
               ))}
             </div>
@@ -1583,7 +1823,7 @@ export default function EvolutionPage() {
             ) : filteredTimeline.length === 0 ? (
               <div className={`text-center py-20 ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>
                 <Clock className="w-8 h-8 mx-auto mb-3 opacity-40" />
-                <p className="text-sm">No events match the current filters.</p>
+                <p className="text-sm">{t('evolution.legacy.noEvents')}</p>
               </div>
             ) : (
               <div className="relative">
@@ -1597,7 +1837,7 @@ export default function EvolutionPage() {
                       <div
                         className={`w-10 h-6 rounded-full flex items-center justify-center text-[10px] font-bold ${isDark ? 'bg-zinc-800 text-zinc-400' : 'bg-zinc-200 text-zinc-600'}`}
                       >
-                        {group.date.split(',')[0].split(' ')[1]}
+                        {group.day}
                       </div>
                       <span className={`text-xs font-medium ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>
                         {group.date}
@@ -1640,13 +1880,7 @@ export default function EvolutionPage() {
                                 {event.agentName}
                               </span>{' '}
                               <span className={isDark ? 'text-zinc-500' : 'text-zinc-400'}>
-                                {event.type === 'capsule'
-                                  ? 'executed'
-                                  : event.type === 'publish'
-                                    ? 'published'
-                                    : event.type === 'distill'
-                                      ? 'distilled'
-                                      : 'achieved'}
+                                {eventActionLabel(event.type, t)}
                               </span>{' '}
                               <span className={`font-medium ${isDark ? 'text-zinc-200' : 'text-zinc-800'}`}>
                                 {event.geneTitle}
@@ -1680,7 +1914,7 @@ export default function EvolutionPage() {
                                     : 'bg-emerald-100 text-emerald-600'
                               }`}
                             >
-                              {isFailure ? 'Failed' : 'Success'}
+                              {isFailure ? t('evolution.common.failedStatus') : t('evolution.common.successStatus')}
                             </span>
                           )}
 
@@ -1697,7 +1931,7 @@ export default function EvolutionPage() {
                                   );
                                 }}
                                 className={`p-1 rounded transition-colors ${isDark ? 'text-zinc-600 hover:text-zinc-400 hover:bg-white/5' : 'text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100'}`}
-                                title="Share"
+                                title={t('evolution.legacy.share')}
                               >
                                 <Share2 className="w-3.5 h-3.5" />
                               </button>
@@ -1705,8 +1939,16 @@ export default function EvolutionPage() {
                                 <SharePopover
                                   title={
                                     event.type === 'capsule'
-                                      ? `${event.agentName} scored ${Math.round((event.score || 0) * 100)}% on ${event.geneTitle}`
-                                      : `${event.agentName} ${event.type === 'publish' ? 'published' : 'achieved'} ${event.geneTitle}`
+                                      ? t('evolution.legacy.eventCapsuleShare', {
+                                          agent: event.agentName || '',
+                                          score: Math.round((event.score || 0) * 100),
+                                          gene: event.geneTitle || '',
+                                        })
+                                      : t('evolution.legacy.eventShare', {
+                                          agent: event.agentName || '',
+                                          action: eventActionLabel(event.type, t),
+                                          gene: event.geneTitle || '',
+                                        })
                                   }
                                   url={`/evolution`}
                                   isDark={isDark}
@@ -1727,29 +1969,56 @@ export default function EvolutionPage() {
       </div>
 
       {/* ═══════════════════════════════════════════════ */}
-      {/* TAB 6: MY AGENTS                                */}
+      {/* TAB 6: STUDIO (replaces My Agents)              */}
       {/* ═══════════════════════════════════════════════ */}
-      {activeTab === 'my' &&
+      {activeTab === 'studio' &&
         (isAuthenticated ? (
-          <WorkspaceTab isDark={isDark} />
+          STUDIO_V2_ENABLED ? (
+            <StudioShellV2
+              initialSection={
+                searchParams?.get('section')
+                  ? parseStudioUrl(searchParams).section
+                  : searchParams?.get('view')
+                    ? normalizeStudioV2Section(studioView, studioSubview)
+                    : 'roster'
+              }
+              initialAgentId={studioAgentId}
+              initialDraftId={studioDraftId}
+              onSectionChange={writeStudioSection}
+              onAgentChange={setStudioAgent}
+              onToWorkspace={() => router.push('/workspace')}
+            />
+          ) : (
+            <StudioTab
+              isDark={isDark}
+              view={studioView}
+              subview={studioSubview}
+              agentId={studioAgentId}
+              draftId={studioDraftId}
+              onViewChange={switchStudioView}
+              onSubviewChange={switchStudioSubview}
+              onAgentChange={setStudioAgent}
+              onDraftChange={setStudioDraft}
+            />
+          )
         ) : (
-          <MyEvolutionPanel isDark={isDark} isAuthenticated={isAuthenticated} />
+          <UnauthenticatedStudioPlaceholder isDark={isDark} />
         ))}
 
       {/* CTA */}
       {!isAuthenticated && activeTab === 'library' && (
         <div className={`text-center mt-12 p-8 rounded-2xl ${glass(isDark)}`}>
           <h3 className={`text-xl font-bold mb-2 ${isDark ? 'text-white' : 'text-zinc-900'}`}>
-            Start Evolving Your Agent
+            {t('evolution.cta.libraryTitle')}
           </h3>
           <p className={`text-sm mb-4 ${isDark ? 'text-zinc-400' : 'text-zinc-600'}`}>
-            Install genes, record outcomes, publish, and earn credits.
+            {t('evolution.cta.libraryBody')}
           </p>
           <Link
             href="/auth"
             className="inline-flex items-center gap-2 px-6 py-2.5 rounded-full text-sm font-bold text-white bg-[var(--prismer-primary)] hover:bg-[var(--prismer-primary-light)] transition-colors"
           >
-            Get Started <ArrowRight className="w-4 h-4" />
+            {t('evolution.cta.getStarted')} <ArrowRight className="w-4 h-4" />
           </Link>
         </div>
       )}
@@ -1768,12 +2037,14 @@ export default function EvolutionPage() {
               onClick={(e) => e.stopPropagation()}
             >
               <Sparkles className={`w-8 h-8 mx-auto mb-3 ${isDark ? 'text-zinc-600' : 'text-zinc-400'}`} />
-              <p className={`text-sm mb-4 ${isDark ? 'text-zinc-400' : 'text-zinc-600'}`}>Skill not found.</p>
+              <p className={`text-sm mb-4 ${isDark ? 'text-zinc-400' : 'text-zinc-600'}`}>
+                {t('evolution.skill.notFound')}
+              </p>
               <button
                 onClick={() => setSkillDetailId(null)}
                 className={`text-sm font-medium px-4 py-2 rounded-lg ${isDark ? 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700' : 'bg-zinc-100 text-zinc-700 hover:bg-zinc-200'}`}
               >
-                Close
+                {t('common.close')}
               </button>
             </div>
           ) : (
@@ -1794,7 +2065,7 @@ export default function EvolutionPage() {
                     <span
                       className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${badge?.className || (isDark ? 'bg-zinc-700/60 text-zinc-400' : 'bg-zinc-100 text-zinc-500')}`}
                     >
-                      {badge?.label || 'Community'}
+                      {sourceBadgeLabel(skillDetail.source, badge?.label, t)}
                     </span>
                   );
                 })()}
@@ -1802,7 +2073,7 @@ export default function EvolutionPage() {
                   <span
                     className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${isDark ? 'bg-cyan-500/15 text-cyan-300' : 'bg-cyan-100 text-cyan-600'}`}
                   >
-                    Has Gene
+                    {t('evolution.common.hasGene')}
                   </span>
                 )}
               </div>
@@ -1815,7 +2086,7 @@ export default function EvolutionPage() {
               <div className={`grid grid-cols-2 gap-3 mb-4 p-3 rounded-lg ${isDark ? 'bg-zinc-800/50' : 'bg-zinc-50'}`}>
                 <div>
                   <p className={`text-[10px] uppercase tracking-wider ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>
-                    Category
+                    {t('evolution.common.category')}
                   </p>
                   <p className={`text-sm font-medium ${isDark ? 'text-zinc-200' : 'text-zinc-800'}`}>
                     {skillDetail.category}
@@ -1823,15 +2094,15 @@ export default function EvolutionPage() {
                 </div>
                 <div>
                   <p className={`text-[10px] uppercase tracking-wider ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>
-                    Author
+                    {t('evolution.common.author')}
                   </p>
                   <p className={`text-sm font-medium ${isDark ? 'text-zinc-200' : 'text-zinc-800'}`}>
-                    {skillDetail.author || 'Unknown'}
+                    {skillDetail.author || t('evolution.common.unknown')}
                   </p>
                 </div>
                 <div>
                   <p className={`text-[10px] uppercase tracking-wider ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>
-                    Installs
+                    {t('evolution.common.installs')}
                   </p>
                   <p className={`text-sm font-medium ${isDark ? 'text-zinc-200' : 'text-zinc-800'}`}>
                     {(skillDetail.installs || 0).toLocaleString()}
@@ -1857,7 +2128,7 @@ export default function EvolutionPage() {
                     onClick={() => handleSkillInstall(skillDetail.id)}
                     className="flex items-center gap-1.5 text-sm font-medium px-3 py-1.5 rounded-lg bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 transition-colors"
                   >
-                    <Download className="w-3.5 h-3.5" /> Install
+                    <Download className="w-3.5 h-3.5" /> {t('evolution.common.install')}
                   </button>
 
                   {skillDetail.sourceUrl && (
@@ -1871,7 +2142,7 @@ export default function EvolutionPage() {
                         background: isDark ? 'rgba(167,139,250,0.1)' : 'rgba(124,58,237,0.06)',
                       }}
                     >
-                      <ExternalLink className="w-3.5 h-3.5" /> Source
+                      <ExternalLink className="w-3.5 h-3.5" /> {t('evolution.common.source')}
                     </a>
                   )}
                 </div>
@@ -1884,7 +2155,7 @@ export default function EvolutionPage() {
                   }}
                   className={`flex items-center gap-1.5 text-sm font-medium mb-4 ${isDark ? 'text-cyan-400 hover:text-cyan-300' : 'text-cyan-600 hover:text-cyan-500'}`}
                 >
-                  <Dna className="w-3.5 h-3.5" /> View Linked Gene
+                  <Dna className="w-3.5 h-3.5" /> {t('evolution.common.viewLinkedGene')}
                 </button>
               )}
               {skillRelated.length > 0 && (
@@ -1892,7 +2163,7 @@ export default function EvolutionPage() {
                   <h4
                     className={`text-xs font-bold uppercase tracking-wider mb-3 ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}
                   >
-                    Related Skills
+                    {t('evolution.common.relatedSkills')}
                   </h4>
                   <div className="space-y-2">
                     {skillRelated.map((r) => (
@@ -1957,7 +2228,7 @@ export default function EvolutionPage() {
         }
         isDark={isDark}
         onForked={() => {
-          addToast('Gene forked to your library!', 'success');
+          addToast(t('evolution.toast.geneForked'), 'success');
           setForkGene(null);
         }}
       />
@@ -1966,151 +2237,32 @@ export default function EvolutionPage() {
 }
 
 // ═════════════════════════════════════════════════════════
-// MY EVOLUTION TAB COMPONENT
+// UNAUTHENTICATED STUDIO PLACEHOLDER (S34, v2.0.8)
 // ═════════════════════════════════════════════════════════
+// Replaces the deleted my-evolution-tab.tsx (1050+ lines) fallback. Used by
+// the Studio tab when the visitor isn't logged in — see doc-13 §4.4 / §11.
 
-function MyEvolutionTab({ isDark }: { isDark: boolean }) {
-  const [report, setReport] = useState<Record<string, unknown> | null>(null);
-  const [myCapsules, setMyCapsules] = useState<Record<string, unknown>[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    const token = (() => {
-      try {
-        return JSON.parse(localStorage.getItem('prismer_auth') || '{}')?.token;
-      } catch {
-        return null;
-      }
-    })();
-    if (!token) {
-      setLoading(false);
-      return;
-    }
-    const headers: HeadersInit = { Authorization: `Bearer ${token}` };
-    Promise.all([
-      fetch('/api/im/evolution/report', { headers }).then((r) => (r.ok ? r.json() : null)),
-      fetch('/api/im/evolution/capsules?limit=20', { headers }).then((r) => (r.ok ? r.json() : null)),
-    ])
-      .then(([rpt, caps]) => {
-        if (rpt?.ok) setReport(rpt.data);
-        if (caps?.ok) setMyCapsules(caps.data || []);
-      })
-      .finally(() => setLoading(false));
-  }, []);
-
-  if (loading) {
-    return (
-      <div className="space-y-4">
-        {Array.from({ length: 3 }).map((_, i) => (
-          <div key={i} className={`animate-pulse rounded-xl p-6 ${glass(isDark)}`}>
-            <div className={`h-4 w-1/3 rounded ${isDark ? 'bg-zinc-800' : 'bg-zinc-200'}`} />
-            <div className={`h-3 w-2/3 rounded mt-3 ${isDark ? 'bg-zinc-800' : 'bg-zinc-200'}`} />
-          </div>
-        ))}
-      </div>
-    );
-  }
-
-  const rpt = report as Record<string, unknown> | null;
-  const totalCapsules = Number(rpt?.total_capsules || 0);
-  const successRate = Number(rpt?.success_rate || 0);
-  const geneCount = Number(rpt?.gene_count || 0);
-  const personality = rpt?.personality as Record<string, number> | undefined;
-
+function UnauthenticatedStudioPlaceholder({ isDark }: { isDark: boolean }) {
+  const { t } = useI18n();
+  // 替代 my-evolution-tab.tsx 1050 行 fallback (S34, v2.0.8)。未登录用户访问
+  // /evolution?tab=studio 看到的登录引导卡片。S37 (v2.0.9) 已下线 `?tab=my`
+  // 重写 — 旧书签现 fallback 到 overview tab。
+  // 设计原则: 极简; 不渲染任何 user-scoped 数据; CTA 引导到 /auth。
   return (
-    <div className="space-y-6">
-      {/* Stats */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-        {[
-          { label: 'My Genes', value: geneCount, icon: Dna, accent: 'text-violet-400' },
-          { label: 'Executions', value: totalCapsules, icon: Zap, accent: 'text-amber-400' },
-          {
-            label: 'Success Rate',
-            value: `${Math.round(successRate * 100)}%`,
-            icon: TrendingUp,
-            accent: 'text-emerald-400',
-          },
-          { label: 'Credits', value: '\u2014', icon: Star, accent: 'text-cyan-400' },
-        ].map(({ label, value, icon: Icon, accent }) => (
-          <div key={label} className={`rounded-xl p-4 text-center ${glass(isDark)}`}>
-            <Icon className={`w-5 h-5 mx-auto mb-2 ${accent}`} />
-            <div className={`text-2xl font-bold tabular-nums ${isDark ? 'text-white' : 'text-zinc-900'}`}>{value}</div>
-            <div className={`text-[10px] uppercase tracking-wider mt-1 text-zinc-500`}>{label}</div>
-          </div>
-        ))}
-      </div>
-
-      {/* Personality */}
-      {personality && (
-        <div className={`rounded-xl p-5 ${glass(isDark)}`}>
-          <h3 className={`text-sm font-bold mb-4 ${isDark ? 'text-white' : 'text-zinc-900'}`}>Personality</h3>
-          <div className="space-y-3">
-            {[
-              { label: 'Rigor', value: personality.rigor ?? 0.7, color: 'bg-orange-500' },
-              { label: 'Creativity', value: personality.creativity ?? 0.35, color: 'bg-cyan-500' },
-              { label: 'Risk Tolerance', value: personality.risk_tolerance ?? 0.4, color: 'bg-violet-500' },
-            ].map(({ label, value, color }) => (
-              <div key={label} className="flex items-center gap-3">
-                <span className={`text-xs w-28 ${isDark ? 'text-zinc-400' : 'text-zinc-600'}`}>{label}</span>
-                <div className={`flex-1 h-2 rounded-full overflow-hidden ${isDark ? 'bg-zinc-800' : 'bg-zinc-200'}`}>
-                  <div className={`h-full rounded-full ${color}`} style={{ width: `${value * 100}%` }} />
-                </div>
-                <span
-                  className={`text-xs font-semibold tabular-nums w-8 text-right ${isDark ? 'text-zinc-300' : 'text-zinc-700'}`}
-                >
-                  {value.toFixed(2)}
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Recent Executions */}
-      <div className={`rounded-xl overflow-hidden ${glass(isDark)}`}>
-        <div className={`px-5 py-3 border-b ${isDark ? 'border-white/5' : 'border-zinc-200/50'}`}>
-          <h3 className={`text-sm font-bold ${isDark ? 'text-white' : 'text-zinc-900'}`}>Recent Executions</h3>
-        </div>
-        {myCapsules.length === 0 ? (
-          <div className={`text-center py-12 ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>
-            <Zap className="w-6 h-6 mx-auto mb-2 opacity-40" />
-            <p className="text-sm">No executions yet. Install a gene and start evolving.</p>
-          </div>
-        ) : (
-          <div className="divide-y divide-transparent">
-            {myCapsules.map((c, i) => {
-              const ok = c.outcome === 'success';
-              return (
-                <div
-                  key={i}
-                  className={`flex items-center gap-3 px-5 py-3 ${isDark ? 'hover:bg-white/[0.02]' : 'hover:bg-black/[0.02]'}`}
-                >
-                  <span
-                    className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold ${ok ? 'bg-emerald-500/15 text-emerald-400' : 'bg-red-500/15 text-red-400'}`}
-                  >
-                    {ok ? '\u2713' : '\u2717'}
-                  </span>
-                  <div className="flex-1 min-w-0">
-                    <p className={`text-sm font-medium truncate ${isDark ? 'text-zinc-200' : 'text-zinc-800'}`}>
-                      {String(c.geneId || c.gene_id || '')}
-                    </p>
-                    <p className={`text-xs truncate ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>
-                      {String(c.summary || '')}
-                    </p>
-                  </div>
-                  {c.score != null && (
-                    <span
-                      className={`text-xs font-semibold tabular-nums ${isDark ? 'text-zinc-400' : 'text-zinc-500'}`}
-                    >
-                      {Math.round(Number(c.score) * 100)}%
-                    </span>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
+    <div className={`rounded-2xl p-10 text-center ${glass(isDark)}`}>
+      <Wrench className={`w-10 h-10 mx-auto mb-4 ${isDark ? 'text-violet-300' : 'text-violet-500'}`} />
+      <h3 className={`text-xl font-bold mb-2 ${isDark ? 'text-white' : 'text-zinc-900'}`}>
+        {t('evolution.cta.signInStudioTitle')}
+      </h3>
+      <p className={`text-sm mb-6 max-w-md mx-auto ${isDark ? 'text-zinc-400' : 'text-zinc-600'}`}>
+        {t('evolution.cta.signInStudioBody')}
+      </p>
+      <Link
+        href="/auth"
+        className="inline-flex items-center gap-2 px-6 py-2.5 rounded-full text-sm font-bold text-white bg-[var(--prismer-primary)] hover:bg-[var(--prismer-primary-light)] transition-colors"
+      >
+        {t('evolution.cta.signIn')} <ArrowRight className="w-4 h-4" />
+      </Link>
     </div>
   );
 }
@@ -2140,6 +2292,7 @@ function OverviewTab({
   onSkillClick: (id: string) => void;
   onGeneClick: (id: string) => void;
 }) {
+  const { t } = useI18n();
   // Extract milestones from feed + auto-detected
   const milestones = feed.filter(
     (e) =>
@@ -2186,14 +2339,13 @@ function OverviewTab({
             className={`inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-medium mb-4 ${isDark ? 'bg-white/[0.06] text-zinc-300' : 'bg-black/[0.04] text-zinc-700'}`}
           >
             <Dna className="w-3.5 h-3.5 text-violet-400" />
-            Self-Improving AI Agents
+            {t('evolution.overview.badge')}
           </div>
           <h2 className={`text-2xl sm:text-4xl font-bold mb-3 max-w-2xl ${isDark ? 'text-white' : 'text-zinc-900'}`}>
-            What is Evolution?
+            {t('evolution.overview.title')}
           </h2>
           <p className={`text-sm sm:text-base max-w-xl leading-relaxed ${isDark ? 'text-zinc-400' : 'text-zinc-600'}`}>
-            Agents detect signals, match proven strategies (genes), execute them, and capture the outcome. Successful
-            patterns are shared across the network, making every agent smarter over time.
+            {t('evolution.overview.body')}
           </p>
         </div>
       </div>
@@ -2202,7 +2354,7 @@ function OverviewTab({
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
         {[
           {
-            label: 'Active Genes',
+            label: t('evolution.overview.activeGenes'),
             value: stats.total_genes,
             icon: Dna,
             accent: 'text-violet-400',
@@ -2210,7 +2362,7 @@ function OverviewTab({
             trend: trends.genes,
           },
           {
-            label: 'Executions',
+            label: t('evolution.overview.executions'),
             value: stats.total_capsules,
             icon: Zap,
             accent: 'text-amber-400',
@@ -2218,7 +2370,7 @@ function OverviewTab({
             trend: trends.capsules,
           },
           {
-            label: 'Avg Success',
+            label: t('evolution.overview.avgSuccess'),
             value: stats.avg_success_rate,
             suffix: '%',
             icon: TrendingUp,
@@ -2227,7 +2379,7 @@ function OverviewTab({
             trend: trends.success,
           },
           {
-            label: 'Agents',
+            label: t('evolution.overview.agents'),
             value: stats.active_agents,
             icon: Network,
             accent: 'text-cyan-400',
@@ -2259,7 +2411,7 @@ function OverviewTab({
                 {trend !== undefined && trend !== 0 && (
                   <div className={`text-[10px] mt-0.5 font-medium ${trend > 0 ? 'text-emerald-400' : 'text-red-400'}`}>
                     {trend > 0 ? '+' : ''}
-                    {suffix === '%' ? `${trend}%` : trend} this week
+                    {suffix === '%' ? `${trend}%` : trend} {t('evolution.overview.thisWeek')}
                   </div>
                 )}
               </div>
@@ -2270,14 +2422,16 @@ function OverviewTab({
 
       {/* How Evolution Works — 4 Steps */}
       <div>
-        <h3 className={`text-lg font-bold mb-4 ${isDark ? 'text-white' : 'text-zinc-900'}`}>How Evolution Works</h3>
+        <h3 className={`text-lg font-bold mb-4 ${isDark ? 'text-white' : 'text-zinc-900'}`}>
+          {t('evolution.overview.howItWorks')}
+        </h3>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 relative">
           {[
             {
               step: 1,
               icon: Zap,
-              title: 'Signal Detected',
-              desc: 'Agent encounters a pattern or error it recognizes as actionable.',
+              title: t('evolution.overview.steps.signalTitle'),
+              desc: t('evolution.overview.steps.signalDesc'),
               color: 'text-orange-400',
               bg: 'from-orange-500/10',
               borderColor: 'border-orange-500/20',
@@ -2285,8 +2439,8 @@ function OverviewTab({
             {
               step: 2,
               icon: Dna,
-              title: 'Gene Matched',
-              desc: 'The best gene for this signal is retrieved from the shared library.',
+              title: t('evolution.overview.steps.geneTitle'),
+              desc: t('evolution.overview.steps.geneDesc'),
               color: 'text-cyan-400',
               bg: 'from-cyan-500/10',
               borderColor: 'border-cyan-500/20',
@@ -2294,8 +2448,8 @@ function OverviewTab({
             {
               step: 3,
               icon: Play,
-              title: 'Strategy Executed',
-              desc: "The gene's multi-step strategy is run against the live context.",
+              title: t('evolution.overview.steps.executeTitle'),
+              desc: t('evolution.overview.steps.executeDesc'),
               color: 'text-emerald-400',
               bg: 'from-emerald-500/10',
               borderColor: 'border-emerald-500/20',
@@ -2303,8 +2457,8 @@ function OverviewTab({
             {
               step: 4,
               icon: Brain,
-              title: 'Knowledge Captured',
-              desc: 'Outcome is recorded as a capsule, strengthening the gene for all.',
+              title: t('evolution.overview.steps.captureTitle'),
+              desc: t('evolution.overview.steps.captureDesc'),
               color: 'text-violet-400',
               bg: 'from-violet-500/10',
               borderColor: 'border-violet-500/20',
@@ -2344,7 +2498,9 @@ function OverviewTab({
       {/* Recent Milestones */}
       {hotGenes.length > 0 && (
         <div>
-          <h3 className={`text-lg font-bold mb-4 ${isDark ? 'text-white' : 'text-zinc-900'}`}>Hot Genes</h3>
+          <h3 className={`text-lg font-bold mb-4 ${isDark ? 'text-white' : 'text-zinc-900'}`}>
+            {t('evolution.overview.hotGenes')}
+          </h3>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {hotGenes.slice(0, 3).map((gene) => {
               const cat = CAT_COLORS[gene.category || ''] || CAT_COLORS.repair;
@@ -2360,13 +2516,13 @@ function OverviewTab({
                       <span
                         className={`inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full border ${cat.bg} ${cat.text} ${cat.border}`}
                       >
-                        {gene.category}
+                        {categoryLabel(gene.category, t)}
                       </span>
                       {gene.is_seed && (
                         <span
                           className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${isDark ? 'bg-violet-500/15 text-violet-300' : 'bg-violet-100 text-violet-600'}`}
                         >
-                          Seed
+                          {t('evolution.common.seed')}
                         </span>
                       )}
                     </div>
@@ -2412,13 +2568,13 @@ function OverviewTab({
                               {successRate}%
                             </span>
                             <span className={`text-[10px] ml-1 ${isDark ? 'text-zinc-600' : 'text-zinc-400'}`}>
-                              {totalUses} uses
+                              {t('evolution.common.uses', { count: totalUses })}
                             </span>
                           </div>
                         </>
                       ) : (
                         <span className={`text-xs ${isDark ? 'text-zinc-600' : 'text-zinc-400'}`}>
-                          No executions yet
+                          {t('evolution.common.noExecutionsYet')}
                         </span>
                       )}
                       {gene.used_by_count != null && gene.used_by_count > 0 && (
@@ -2446,13 +2602,15 @@ function OverviewTab({
           >
             <div className="flex items-center gap-2">
               <TrendingUp className={`w-4 h-4 ${isDark ? 'text-amber-400' : 'text-amber-600'}`} />
-              <h3 className={`text-sm font-bold ${isDark ? 'text-white' : 'text-zinc-900'}`}>Trending Skills</h3>
+              <h3 className={`text-sm font-bold ${isDark ? 'text-white' : 'text-zinc-900'}`}>
+                {t('evolution.overview.trendingSkills')}
+              </h3>
             </div>
             <button
               onClick={() => switchTab('skills')}
               className="text-xs font-medium text-violet-400 hover:text-violet-300 flex items-center gap-1"
             >
-              View all <ArrowRight className="w-3 h-3" />
+              {t('evolution.overview.viewAll')} <ArrowRight className="w-3 h-3" />
             </button>
           </div>
           <div className="divide-y divide-transparent">
@@ -2475,7 +2633,7 @@ function OverviewTab({
                 <span
                   className={`text-[10px] px-1.5 py-0.5 rounded shrink-0 ${isDark ? 'bg-zinc-800/60 text-zinc-500' : 'bg-zinc-100 text-zinc-500'}`}
                 >
-                  {skill.category}
+                  {categoryLabel(skill.category, t)}
                 </span>
                 <span
                   className={`flex items-center gap-1 text-xs tabular-nums shrink-0 ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}
@@ -2493,12 +2651,14 @@ function OverviewTab({
       {milestones.length > 0 && (
         <div>
           <div className="flex items-center justify-between mb-4">
-            <h3 className={`text-lg font-bold ${isDark ? 'text-white' : 'text-zinc-900'}`}>Recent Milestones</h3>
+            <h3 className={`text-lg font-bold ${isDark ? 'text-white' : 'text-zinc-900'}`}>
+              {t('evolution.overview.recentMilestones')}
+            </h3>
             <button
               onClick={() => switchTab('timeline')}
               className="text-xs font-medium text-violet-400 hover:text-violet-300 flex items-center gap-1"
             >
-              View Timeline <ArrowRight className="w-3 h-3" />
+              {t('evolution.overview.viewTimeline')} <ArrowRight className="w-3 h-3" />
             </button>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -2518,14 +2678,15 @@ function OverviewTab({
                     <span
                       className={`text-[10px] uppercase tracking-wider font-semibold ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}
                     >
-                      {event.type}
+                      {eventTypeLabel(event.type || '', t)}
                     </span>
                   </div>
                   <p className={`text-sm font-semibold mb-1 ${isDark ? 'text-white' : 'text-zinc-900'}`}>
                     {event.geneTitle}
                   </p>
                   <p className={`text-xs ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>
-                    by {event.agentName} {event.score != null && `(${Math.round(event.score * 100)}%)`}
+                    {t('evolution.common.authorLabel')} {event.agentName}{' '}
+                    {event.score != null && `(${Math.round(event.score * 100)}%)`}
                   </p>
                   <p className={`text-[10px] mt-1 ${isDark ? 'text-zinc-600' : 'text-zinc-400'}`}>
                     <TimeAgo ts={event.timestamp || ''} />
@@ -2545,7 +2706,9 @@ function OverviewTab({
           >
             <div className="flex items-center gap-2">
               <Trophy className={`w-4 h-4 ${isDark ? 'text-amber-400' : 'text-amber-600'}`} />
-              <h3 className={`text-sm font-bold ${isDark ? 'text-white' : 'text-zinc-900'}`}>Detected Milestones</h3>
+              <h3 className={`text-sm font-bold ${isDark ? 'text-white' : 'text-zinc-900'}`}>
+                {t('evolution.overview.detectedMilestones')}
+              </h3>
             </div>
           </div>
           <div className="divide-y divide-transparent">
@@ -2597,13 +2760,15 @@ function OverviewTab({
           >
             <div className="flex items-center gap-2">
               <Activity className={`w-4 h-4 ${isDark ? 'text-emerald-400' : 'text-emerald-600'}`} />
-              <h3 className={`text-sm font-bold ${isDark ? 'text-white' : 'text-zinc-900'}`}>Recent Activity</h3>
+              <h3 className={`text-sm font-bold ${isDark ? 'text-white' : 'text-zinc-900'}`}>
+                {t('evolution.overview.recentActivity')}
+              </h3>
             </div>
             <button
               onClick={() => switchTab('timeline')}
               className="text-xs font-medium text-violet-400 hover:text-violet-300 flex items-center gap-1"
             >
-              View all <ArrowRight className="w-3 h-3" />
+              {t('evolution.overview.viewAll')} <ArrowRight className="w-3 h-3" />
             </button>
           </div>
           <div className="divide-y divide-transparent max-h-64 overflow-y-auto custom-scrollbar">
@@ -2626,7 +2791,7 @@ function OverviewTab({
                   </div>
                   <p className={`text-sm flex-1 min-w-0 truncate ${isDark ? 'text-zinc-300' : 'text-zinc-700'}`}>
                     <span className="font-semibold">{event.agentName}</span>{' '}
-                    {event.type === 'capsule' ? 'executed' : event.type}{' '}
+                    {event.type === 'capsule' ? t('evolution.legacy.executed') : eventActionLabel(event.type, t)}{' '}
                     <span className="font-medium">{event.geneTitle}</span>
                   </p>
                   <TimeAgo
@@ -2646,13 +2811,13 @@ function OverviewTab({
           onClick={() => switchTab('skills')}
           className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold bg-gradient-to-r from-violet-600 to-violet-500 text-white hover:from-violet-500 hover:to-violet-400 transition-all shadow-lg shadow-violet-500/20"
         >
-          <Sparkles className="w-4 h-4" /> Explore Skills
+          <Sparkles className="w-4 h-4" /> {t('evolution.overview.exploreSkills')}
         </button>
         <button
           onClick={() => switchTab('genes')}
           className={`inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold transition-all ${isDark ? 'bg-white/[0.06] text-white hover:bg-white/[0.1] border border-white/10' : 'bg-zinc-100 text-zinc-900 hover:bg-zinc-200 border border-zinc-200'}`}
         >
-          <Dna className="w-4 h-4" /> Browse Genes
+          <Dna className="w-4 h-4" /> {t('evolution.overview.browseGenes')}
         </button>
       </div>
     </div>
@@ -2680,6 +2845,8 @@ function SkillCard({
   onCardClick: () => void;
   onViewGene?: () => void;
 }) {
+  const { t } = useI18n();
+  const sourceBadge = getSourceBadge(skill.source, isDark);
   return (
     <TiltCard glowColor="rgba(139,92,246,0.08)" maxTilt={2} scale={1.005} className="rounded-xl h-full">
       <div className={`rounded-xl p-5 flex flex-col h-full cursor-pointer ${glass(isDark)}`} onClick={onCardClick}>
@@ -2691,7 +2858,7 @@ function SkillCard({
               <span
                 className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${isDark ? 'bg-cyan-500/15 text-cyan-300' : 'bg-cyan-100 text-cyan-600'}`}
               >
-                Has Gene
+                {t('evolution.common.hasGene')}
               </span>
             )}
             <span
@@ -2705,7 +2872,7 @@ function SkillCard({
                     : 'bg-zinc-100 text-zinc-500'
               }`}
             >
-              {skill.source === 'awesome-openclaw' ? 'Verified' : 'Community'}
+              {sourceBadgeLabel(skill.source, sourceBadge?.label, t)}
             </span>
           </div>
         </div>
@@ -2722,7 +2889,7 @@ function SkillCard({
           <span
             className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${isDark ? 'bg-zinc-800/80 text-zinc-300' : 'bg-zinc-100 text-zinc-600'}`}
           >
-            {skill.category}
+            {categoryLabel(skill.category, t)}
           </span>
           {skill.tags?.slice(0, expanded ? undefined : 2).map((tag) => (
             <span
@@ -2746,7 +2913,7 @@ function SkillCard({
           <div className={`mb-3 pt-3 border-t space-y-2 ${isDark ? 'border-white/5' : 'border-zinc-200/50'}`}>
             {skill.author && (
               <p className={`text-xs ${isDark ? 'text-zinc-400' : 'text-zinc-600'}`}>
-                <span className="font-medium">Author:</span> {skill.author}
+                <span className="font-medium">{t('evolution.common.authorLabel')}</span> {skill.author}
               </p>
             )}
             {skill.sourceUrl && (
@@ -2757,7 +2924,7 @@ function SkillCard({
                 onClick={(e) => e.stopPropagation()}
                 className="inline-flex items-center gap-1 text-xs text-violet-400 hover:text-violet-300"
               >
-                <ExternalLink className="w-3 h-3" /> View Source
+                <ExternalLink className="w-3 h-3" /> {t('evolution.common.viewSource')}
               </a>
             )}
           </div>
@@ -2783,7 +2950,7 @@ function SkillCard({
                 onClick={(e) => e.stopPropagation()}
                 className={`flex items-center gap-0.5 text-xs font-medium transition-colors ${isDark ? 'text-zinc-500 hover:text-zinc-300' : 'text-zinc-400 hover:text-zinc-600'}`}
               >
-                <ExternalLink className="w-3 h-3" /> Source
+                <ExternalLink className="w-3 h-3" /> {t('evolution.common.source')}
               </a>
             )}
             {onViewGene && (
@@ -2794,7 +2961,7 @@ function SkillCard({
                 }}
                 className={`text-xs font-medium transition-colors ${isDark ? 'text-cyan-400 hover:text-cyan-300' : 'text-cyan-600 hover:text-cyan-500'}`}
               >
-                Gene
+                {t('evolution.common.geneShort')}
               </button>
             )}
           </div>
@@ -2829,6 +2996,7 @@ function GeneCard({
   onCardClick?: () => void;
   onAgentClick?: (name: string) => void;
 }) {
+  const { t } = useI18n();
   const [copied, setCopied] = useState(false);
   const cat = CAT_COLORS[gene.category || ''] || CAT_COLORS.repair;
   const totalUses = (gene.success_count || 0) + (gene.failure_count || 0);
@@ -2878,7 +3046,7 @@ function GeneCard({
             <span
               className={`inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full border ${cat.bg} ${cat.text} ${cat.border}`}
             >
-              {gene.category}
+              {categoryLabel(gene.category, t)}
             </span>
             {totalUses > 0 && <span className={`text-[10px] font-bold tabular-nums ${pqiColor}`}>PQI {pqi}</span>}
           </div>
@@ -2887,7 +3055,7 @@ function GeneCard({
               <span
                 className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${isDark ? 'bg-violet-500/15 text-violet-300' : 'bg-violet-100 text-violet-600'}`}
               >
-                Seed
+                {t('evolution.common.seed')}
               </span>
             )}
             {gene.used_by_count != null && gene.used_by_count > 0 && (
@@ -2901,7 +3069,7 @@ function GeneCard({
 
         {/* Title */}
         <h3 className={`font-bold text-sm leading-tight mb-1 ${isDark ? 'text-white' : 'text-zinc-900'}`}>
-          {gene.title || signals[0] || 'Untitled'}
+          {gene.title || signals[0] || t('evolution.common.untitled')}
         </h3>
 
         {/* Description */}
@@ -2924,7 +3092,7 @@ function GeneCard({
               {successRate}%
             </span>
             <span className={`text-[10px] tabular-nums ${isDark ? 'text-zinc-600' : 'text-zinc-400'}`}>
-              {totalUses} uses
+              {t('evolution.common.uses', { count: totalUses })}
             </span>
           </div>
         )}
@@ -2954,7 +3122,7 @@ function GeneCard({
             className={`flex items-center justify-between mb-2 text-[10px] ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}
           >
             <span>
-              by{' '}
+              {t('evolution.common.publishedBy')}{' '}
               {onAgentClick ? (
                 <button
                   onClick={(e) => {
@@ -2971,7 +3139,10 @@ function GeneCard({
             </span>
             {gene.used_by_count != null && gene.used_by_count > 0 && (
               <span>
-                {gene.used_by_count} agent{gene.used_by_count > 1 ? 's' : ''} adopted
+                {t('evolution.common.adoptedByAgents', {
+                  count: gene.used_by_count,
+                  suffix: gene.used_by_count > 1 ? 's' : '',
+                })}
               </span>
             )}
           </div>
@@ -2985,7 +3156,9 @@ function GeneCard({
             </p>
           ))}
           {!expanded && steps.length > 2 && (
-            <p className={isDark ? 'text-zinc-600' : 'text-zinc-400'}>+{steps.length - 2} more</p>
+            <p className={isDark ? 'text-zinc-600' : 'text-zinc-400'}>
+              +{steps.length - 2} {t('evolution.common.more')}
+            </p>
           )}
         </div>
 
@@ -3003,7 +3176,7 @@ function GeneCard({
                 <p
                   className={`text-[10px] font-semibold uppercase tracking-wider mb-0.5 ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}
                 >
-                  Preconditions
+                  {t('evolution.common.preconditions')}
                 </p>
                 {gene.preconditions.map((p: string, i: number) => (
                   <p key={i} className={`text-xs ${isDark ? 'text-zinc-400' : 'text-zinc-600'}`}>
@@ -3028,7 +3201,7 @@ function GeneCard({
             }}
             className={`flex items-center gap-1 text-[10px] font-medium transition-colors ${isDark ? 'text-zinc-500 hover:text-zinc-300' : 'text-zinc-400 hover:text-zinc-700'}`}
           >
-            {expanded ? 'Less' : 'More'}{' '}
+            {expanded ? t('evolution.common.less') : t('evolution.common.more')}{' '}
             <ChevronDown className={`w-3 h-3 transition-transform duration-300 ${expanded ? 'rotate-180' : ''}`} />
           </button>
           <div className="flex items-center gap-2">
@@ -3043,7 +3216,7 @@ function GeneCard({
                   : 'text-[var(--prismer-primary)] hover:bg-[var(--prismer-primary)]/8 border border-transparent hover:border-[var(--prismer-primary)]/20'
               }`}
             >
-              Install Gene
+              {t('evolution.common.installGene')}
             </button>
             <button
               onClick={(e) => {
@@ -3052,7 +3225,7 @@ function GeneCard({
                 navigator.clipboard.writeText(url).catch(() => {});
               }}
               className={`p-1.5 rounded-lg transition-colors ${isDark ? 'text-zinc-500 hover:text-zinc-300 hover:bg-white/[0.04]' : 'text-zinc-400 hover:text-zinc-700 hover:bg-zinc-100'}`}
-              title="Copy share link"
+              title={t('evolution.common.copyShareLink')}
             >
               <Share2 className="w-3.5 h-3.5" />
             </button>
@@ -3099,6 +3272,7 @@ function LineageTree({
   isDark: boolean;
   onGeneClick?: (id: string) => void;
 }) {
+  const { t } = useI18n();
   const NODE_W = 130;
   const NODE_H = 44;
   const GAP_X = 16;
@@ -3235,7 +3409,7 @@ function LineageTree({
           fontWeight="600"
           fill={isDark ? '#f4f4f5' : '#18181b'}
         >
-          {(g.title || 'Untitled').slice(0, 16)}
+          {(g.title || t('evolution.common.untitled')).slice(0, 16)}
           {(g.title || '').length > 16 ? '…' : ''}
         </text>
         {/* Stats line */}
@@ -3247,14 +3421,16 @@ function LineageTree({
           fontWeight="500"
           fill={sr >= 70 ? '#22c55e' : sr >= 40 ? '#eab308' : total > 0 ? '#ef4444' : isDark ? '#71717a' : '#a1a1aa'}
         >
-          {total > 0 ? `${sr}% · ${total} runs` : 'No executions'}
+          {total > 0
+            ? `${sr}% · ${t('evolution.common.runsShort', { count: total })}`
+            : t('evolution.common.noExecutions')}
         </text>
         {/* Origin badge */}
         {isRoot && (
           <>
             <rect x={nx + NODE_W - 36} y={ny - 6} width={36} height={14} rx={7} fill={cat.hex} fillOpacity={0.8} />
             <text x={nx + NODE_W - 18} y={ny + 4} textAnchor="middle" fontSize="7" fontWeight="700" fill="#fff">
-              Origin
+              {t('evolution.legacy.origin')}
             </text>
           </>
         )}
@@ -3278,11 +3454,13 @@ function LineageTree({
     >
       <div className="flex items-center justify-between px-3 pt-2">
         <h4 className={`text-xs font-bold uppercase tracking-wider ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>
-          Evolution Tree
+          {t('evolution.legacy.evolutionTree')}
         </h4>
         <span className={`text-[10px] ${isDark ? 'text-zinc-600' : 'text-zinc-400'}`}>
-          {totalNodes} variants ·{' '}
-          {allNodes.reduce((s, g) => s + g.success_count + (g.failure_count || 0), 0).toLocaleString()} total runs
+          {t('evolution.legacy.variantsTotalRuns', {
+            variants: totalNodes,
+            runs: allNodes.reduce((s, g) => s + g.success_count + (g.failure_count || 0), 0).toLocaleString(),
+          })}
         </span>
       </div>
       <div className="p-2 flex justify-center" style={{ minWidth: Math.max(svgW, 200) }}>
@@ -3395,6 +3573,7 @@ function SharePopover({
   isDark: boolean;
   onClose: () => void;
 }) {
+  const { t } = useI18n();
   const [copied, setCopied] = useState(false);
   const fullUrl = `https://prismer.cloud${url}`;
   const tweetText = encodeURIComponent(`${title} - @PrismerCloud`);
@@ -3413,7 +3592,7 @@ function SharePopover({
           className={`flex items-center gap-2 text-xs font-medium px-3 py-1.5 rounded-lg transition-colors ${isDark ? 'text-zinc-300 hover:bg-white/5' : 'text-zinc-700 hover:bg-zinc-100'}`}
         >
           {copied ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}{' '}
-          {copied ? 'Copied!' : 'Copy Link'}
+          {copied ? t('evolution.common.copied') : t('evolution.common.copyLink')}
         </button>
         <a
           href={`https://twitter.com/intent/tweet?text=${tweetText}&url=${encodeURIComponent(fullUrl)}`}
@@ -3422,7 +3601,7 @@ function SharePopover({
           className={`flex items-center gap-2 text-xs font-medium px-3 py-1.5 rounded-lg transition-colors ${isDark ? 'text-zinc-300 hover:bg-white/5' : 'text-zinc-700 hover:bg-zinc-100'}`}
           onClick={onClose}
         >
-          <ExternalLink className="w-3 h-3" /> Share to X
+          <ExternalLink className="w-3 h-3" /> {t('evolution.common.shareToX')}
         </a>
         <a
           href={`https://www.linkedin.com/sharing/share-offsite/?url=${encodeURIComponent(fullUrl)}`}
@@ -3431,7 +3610,7 @@ function SharePopover({
           className={`flex items-center gap-2 text-xs font-medium px-3 py-1.5 rounded-lg transition-colors ${isDark ? 'text-zinc-300 hover:bg-white/5' : 'text-zinc-700 hover:bg-zinc-100'}`}
           onClick={onClose}
         >
-          <ExternalLink className="w-3 h-3" /> Share to LinkedIn
+          <ExternalLink className="w-3 h-3" /> {t('evolution.common.shareToLinkedIn')}
         </a>
       </div>
     </div>
@@ -3460,6 +3639,7 @@ function GeneDetailModal({
   onAgentClick: (name: string) => void;
   isAuthenticated: boolean;
 }) {
+  const { t } = useI18n();
   const [copied, setCopied] = useState(false);
   const [capsules, setCapsules] = useState<
     { outcome: string; score: number | null; agentName: string; createdAt: string }[]
@@ -3506,13 +3686,13 @@ function GeneDetailModal({
         >
           <Dna className={`w-8 h-8 mx-auto mb-3 ${isDark ? 'text-zinc-600' : 'text-zinc-400'}`} />
           <p className={`text-sm mb-4 ${isDark ? 'text-zinc-400' : 'text-zinc-600'}`}>
-            Gene not found or no longer available.
+            {t('evolution.legacy.geneNotFound')}
           </p>
           <button
             onClick={onClose}
             className={`text-sm font-medium px-4 py-2 rounded-lg ${isDark ? 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700' : 'bg-zinc-100 text-zinc-700 hover:bg-zinc-200'}`}
           >
-            Close
+            {t('common.close')}
           </button>
         </div>
       </div>
@@ -3556,13 +3736,13 @@ function GeneDetailModal({
           <span
             className={`inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full border ${cat.bg} ${cat.text} ${cat.border}`}
           >
-            {gene.category}
+            {categoryLabel(gene.category, t)}
           </span>
           {gene.is_seed && (
             <span
               className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${isDark ? 'bg-violet-500/15 text-violet-300' : 'bg-violet-100 text-violet-600'}`}
             >
-              Seed
+              {t('evolution.common.seed')}
             </span>
           )}
           {totalUses > 0 && (
@@ -3576,7 +3756,7 @@ function GeneDetailModal({
 
         {/* Title */}
         <h2 className={`text-xl font-bold mb-1 ${isDark ? 'text-white' : 'text-zinc-900'}`}>
-          {gene.title || signals[0] || 'Untitled'}
+          {gene.title || signals[0] || t('evolution.common.untitled')}
         </h2>
         <p className={`text-sm leading-relaxed mb-4 ${isDark ? 'text-zinc-400' : 'text-zinc-600'}`}>
           {gene.description || ''}
@@ -3589,7 +3769,7 @@ function GeneDetailModal({
               {totalUses.toLocaleString()}
             </p>
             <p className={`text-[10px] uppercase tracking-wider ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>
-              Executions
+              {t('evolution.common.executions')}
             </p>
           </div>
           <div className="text-center">
@@ -3599,7 +3779,7 @@ function GeneDetailModal({
               {successRate}%
             </p>
             <p className={`text-[10px] uppercase tracking-wider ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>
-              Success Rate
+              {t('evolution.common.successRate')}
             </p>
           </div>
           <div className="text-center">
@@ -3607,7 +3787,7 @@ function GeneDetailModal({
               {gene.used_by_count || 0}
             </p>
             <p className={`text-[10px] uppercase tracking-wider ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>
-              Agents
+              {t('evolution.common.agents')}
             </p>
           </div>
         </div>
@@ -3633,7 +3813,7 @@ function GeneDetailModal({
             <h4
               className={`text-xs font-bold uppercase tracking-wider mb-2 ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}
             >
-              Signals
+              {t('evolution.common.signals')}
             </h4>
             <div className="flex flex-wrap gap-1">
               {signals.map((sig) => (
@@ -3654,7 +3834,7 @@ function GeneDetailModal({
             <h4
               className={`text-xs font-bold uppercase tracking-wider mb-2 ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}
             >
-              Strategy ({steps.length} steps)
+              {t('evolution.common.strategy')} ({steps.length})
             </h4>
             <div className="space-y-1.5">
               {steps.map((step, i) => (
@@ -3677,7 +3857,7 @@ function GeneDetailModal({
             <h4
               className={`text-xs font-bold uppercase tracking-wider mb-2 ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}
             >
-              Preconditions
+              {t('evolution.common.preconditions')}
             </h4>
             <div className="space-y-1">
               {gene.preconditions.map((p: string, i: number) => (
@@ -3695,7 +3875,7 @@ function GeneDetailModal({
             <h4
               className={`text-xs font-bold uppercase tracking-wider mb-2 ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}
             >
-              Recent Executions
+              {t('evolution.common.recentExecutions')}
             </h4>
             <div className="flex gap-1 mb-2">
               {capsules.map((c, i) => (
@@ -3734,11 +3914,13 @@ function GeneDetailModal({
             <h4
               className={`text-xs font-bold uppercase tracking-wider mb-2 ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}
             >
-              Lineage
+              {t('evolution.common.lineage')}
             </h4>
             <div className={`flex gap-4 text-xs ${isDark ? 'text-zinc-400' : 'text-zinc-600'}`}>
-              <span>Original gene</span>
-              <span>{lineage.stats.totalExecutions.toLocaleString()} total executions</span>
+              <span>{t('evolution.common.originalGene')}</span>
+              <span>
+                {t('evolution.common.totalExecutions', { count: lineage.stats.totalExecutions.toLocaleString() })}
+              </span>
             </div>
           </div>
         )}
@@ -3749,7 +3931,7 @@ function GeneDetailModal({
             <div>
               {(gene.published_by || gene.created_by) && (
                 <p className={`text-xs ${isDark ? 'text-zinc-400' : 'text-zinc-600'}`}>
-                  Published by{' '}
+                  {t('evolution.common.publishedBy')}{' '}
                   <button
                     onClick={() => onAgentClick(gene.published_by || gene.created_by || '')}
                     className={`font-semibold underline decoration-dotted ${isDark ? 'text-cyan-400 hover:text-cyan-300' : 'text-cyan-600 hover:text-cyan-500'}`}
@@ -3760,7 +3942,10 @@ function GeneDetailModal({
               )}
               {gene.used_by_count != null && gene.used_by_count > 0 && (
                 <p className={`text-xs mt-0.5 ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>
-                  Adopted by {gene.used_by_count} agent{gene.used_by_count > 1 ? 's' : ''}
+                  {t('evolution.common.adoptedByAgents', {
+                    count: gene.used_by_count,
+                    suffix: gene.used_by_count > 1 ? 's' : '',
+                  })}
                 </p>
               )}
             </div>
@@ -3778,13 +3963,13 @@ function GeneDetailModal({
               onClick={() => onImport(id)}
               className="flex-1 text-sm font-semibold px-4 py-2.5 rounded-lg transition-all bg-gradient-to-r from-violet-600 to-violet-500 text-white hover:from-violet-500 hover:to-violet-400 shadow-lg shadow-violet-500/20"
             >
-              Install Gene
+              {t('evolution.common.installGene')}
             </button>
             <button
               onClick={() => onFork(id)}
               className={`flex items-center gap-1.5 text-sm font-semibold px-4 py-2.5 rounded-lg transition-all ${isDark ? 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700' : 'bg-zinc-100 text-zinc-700 hover:bg-zinc-200'}`}
             >
-              <GitFork className="w-3.5 h-3.5" /> Fork
+              <GitFork className="w-3.5 h-3.5" /> {t('evolution.common.fork')}
             </button>
           </div>
         </div>
