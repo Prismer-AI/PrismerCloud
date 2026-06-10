@@ -414,19 +414,6 @@ export class MemorySearchService {
     } else {
       visFilter = null;
     }
-    const where = {
-      workspaceId: acl.workspaceId,
-      archivedAt: null,
-      deletedAt: null,
-      ...(input.pageType?.length ? { pageType: { in: input.pageType } } : {}),
-      ...(typeof stale === 'boolean' ? { stale } : {}),
-      ...(visFilter ?? visibilityWhere(acl)),
-      OR: queryTokens.flatMap((t: string) => [
-        { path: { contains: t } },
-        { title: { contains: t } },
-        { content: { contains: t } },
-      ]),
-    };
 
     type CandidateRow = {
       id: string;
@@ -439,21 +426,15 @@ export class MemorySearchService {
       stale: boolean;
       updatedAt: Date;
     };
-    const candidates: CandidateRow[] = await prisma.iMMemoryPage.findMany({
-      where,
-      orderBy: { updatedAt: 'desc' },
-      take: Math.min(limit * 5, 200),
-      select: {
-        id: true,
-        workspaceId: true,
-        path: true,
-        title: true,
-        content: true,
-        pageType: true,
-        visibility: true,
-        stale: true,
-        updatedAt: true,
-      },
+    const fetchTake = Math.min(limit * 5, 200);
+    const candidates: CandidateRow[] = await this.fetchPageCandidates({
+      workspaceId: acl.workspaceId,
+      queryTokens,
+      pageType: input.pageType,
+      stale,
+      visFilter,
+      acl,
+      take: fetchTake,
     });
     if (candidates.length === 0) return [];
 
@@ -512,37 +493,256 @@ export class MemorySearchService {
     queryTokens: string[],
     limit: number,
   ): Promise<FileSearchResult[]> {
-    type FileRow = {
-      id: string;
-      workspaceId: string;
-      path: string;
-      ownerId: string;
-      memoryType: string | null;
-      description: string | null;
-      content: string;
-      visibility: string;
-      updatedAt: Date;
-    };
+    // ACL (Wave 6 G5 decision — Option B): the canonical gate is the
+    // scope OR-clause, NOT a flat ownerId == caller filter. The legacy
+    // ownerId-only filter (used historically by /memory/files/:id) hid
+    // workspace-shared rows from search results because the sentinel
+    // ownerId='__shared__' could not match any caller. Now:
+    //   - scope='workspace-shared'  → all workspace members RW (ownerId
+    //                                  carries sentinel '__shared__', do
+    //                                  NOT predicate on it)
+    //   - scope='agent-private'     → caller must own the agent bucket
+    //                                  (agentImUserId == caller)
+    //
+    // This aligns memory-search with the model documented by migration 412
+    // + 418 and the WORKSPACE_SHARED_SENTINEL constant. Cross-agent agent-
+    // private isolation is preserved by the agentImUserId predicate.
+    const candidates = await this.fetchFileCandidates({
+      workspaceId: acl.workspaceId,
+      callerImUserId: acl.callerImUserId,
+      queryTokens,
+      acl,
+      take: limit,
+    });
 
-    // ACL: IMMemoryFile uses `ownerId` as the canonical author key (legacy
-    // surface predates IMMemoryPage's visibility-string design). The rest of
-    // the file API enforces `file.ownerId !== caller → 404` (see
-    // src/im/api/memory.ts GET /memory/files/:id), so search must do the
-    // same — visibility-class match alone would leak other agents' private
-    // files to delegated agents in the same workspace.
-    const candidates: FileRow[] = await prisma.iMMemoryFile.findMany({
+    return candidates.map((row) => ({
+      fileId: row.id,
+      workspaceId: row.workspaceId,
+      path: row.path,
+      ownerId: row.ownerId,
+      memoryType: row.memoryType,
+      description: row.description,
+      updatedAt: row.updatedAt.toISOString(),
+      snippet: buildSnippet(row.content, input.query),
+    }));
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // FULLTEXT primary path / LIKE-OR fallback (Wave 4-E6, re-merged in Wave 5)
+  //
+  // MySQL 8.0+ : MATCH(content) AGAINST(... IN BOOLEAN MODE) — primary.
+  // SQLite (dev/test) or any DB without the FT index — LIKE-OR fallback.
+  // The try/catch around the raw query lets the same code work everywhere
+  // (graceful degrade on ERROR 1191 when FT index absent).
+  // ─────────────────────────────────────────────────────────────────────────
+
+  private isMySQL(): boolean {
+    return (process.env.DATABASE_URL || '').startsWith('mysql://');
+  }
+
+  private booleanQueryFromTokens(tokens: string[]): string {
+    // Anchor the first 2 tokens as required (`+token*`), rest as boosters.
+    return tokens.map((t, i) => (i < 2 ? `+${t}*` : `${t}*`)).join(' ');
+  }
+
+  private async fetchPageCandidates(args: {
+    workspaceId: string;
+    queryTokens: string[];
+    pageType?: string[];
+    stale?: boolean;
+    visFilter: { visibility: string } | null;
+    acl: MemoryAclContext;
+    take: number;
+  }): Promise<{
+    id: string;
+    workspaceId: string;
+    path: string;
+    title: string | null;
+    content: string;
+    pageType: string;
+    visibility: string;
+    stale: boolean;
+    updatedAt: Date;
+  }[]> {
+    const { workspaceId, queryTokens, pageType, stale, visFilter, acl, take } = args;
+
+    // MySQL FULLTEXT primary path
+    if (this.isMySQL() && queryTokens.length > 0) {
+      const booleanQuery = this.booleanQueryFromTokens(queryTokens);
+      try {
+        // im_memory_pages may not exist in all dev DBs — guard with a try.
+        // We do FULLTEXT(content) since path/title FT index is not guaranteed.
+        const pageTypeFilter = pageType?.length ? pageType : null;
+        const visClause = visFilter
+          ? { sql: ' AND visibility = ?', val: [visFilter.visibility] as unknown[] }
+          : { sql: '', val: [] as unknown[] };
+        const rows = (await prisma.$queryRawUnsafe(
+          `SELECT id, workspaceId, path, title, content, pageType, visibility, stale, updatedAt
+           FROM im_memory_pages
+           WHERE workspaceId = ?
+             AND archivedAt IS NULL
+             AND deletedAt IS NULL
+             ${pageTypeFilter ? `AND pageType IN (${pageTypeFilter.map(() => '?').join(',')})` : ''}
+             ${typeof stale === 'boolean' ? 'AND stale = ?' : ''}
+             ${visClause.sql}
+             AND MATCH(content) AGAINST(? IN BOOLEAN MODE)
+           ORDER BY MATCH(content) AGAINST(? IN BOOLEAN MODE) DESC, updatedAt DESC
+           LIMIT ?`,
+          workspaceId,
+          ...(pageTypeFilter ?? []),
+          ...(typeof stale === 'boolean' ? [stale ? 1 : 0] : []),
+          ...visClause.val,
+          booleanQuery,
+          booleanQuery,
+          take,
+        )) as Array<{
+          id: string;
+          workspaceId: string;
+          path: string;
+          title: string | null;
+          content: string;
+          pageType: string;
+          visibility: string;
+          stale: number | boolean;
+          updatedAt: Date;
+        }>;
+        return rows.map((r) => ({ ...r, stale: Boolean(r.stale) }));
+      } catch (err) {
+        // FT index missing (ERROR 1191) or im_memory_pages doesn't exist —
+        // fall through to LIKE-OR fallback.
+        const msg = err instanceof Error ? err.message : '';
+        if (!msg.includes('1191') && !msg.includes('FULLTEXT') && !msg.includes("doesn't exist")) {
+          throw err;
+        }
+      }
+    }
+
+    // LIKE-OR fallback (SQLite + MySQL when FT absent)
+    const where = {
+      workspaceId,
+      archivedAt: null,
+      deletedAt: null,
+      ...(pageType?.length ? { pageType: { in: pageType } } : {}),
+      ...(typeof stale === 'boolean' ? { stale } : {}),
+      ...(visFilter ?? visibilityWhere(acl)),
+      OR: queryTokens.flatMap((t: string) => [
+        { path: { contains: t } },
+        { title: { contains: t } },
+        { content: { contains: t } },
+      ]),
+    };
+    return prisma.iMMemoryPage.findMany({
+      where,
+      orderBy: { updatedAt: 'desc' },
+      take,
+      select: {
+        id: true,
+        workspaceId: true,
+        path: true,
+        title: true,
+        content: true,
+        pageType: true,
+        visibility: true,
+        stale: true,
+        updatedAt: true,
+      },
+    });
+  }
+
+  private async fetchFileCandidates(args: {
+    workspaceId: string;
+    callerImUserId: string;
+    queryTokens: string[];
+    acl: MemoryAclContext;
+    take: number;
+  }): Promise<{
+    id: string;
+    workspaceId: string;
+    path: string;
+    ownerId: string;
+    memoryType: string | null;
+    description: string | null;
+    content: string;
+    visibility: string;
+    updatedAt: Date;
+  }[]> {
+    const { workspaceId, callerImUserId, queryTokens, acl, take } = args;
+
+    // v2.0 scope filter: workspace-shared OR (agent-private AND owned-by-caller)
+    // Built as Prisma `OR` for the fallback path, hand-built for FULLTEXT.
+
+    if (this.isMySQL() && queryTokens.length > 0) {
+      const booleanQuery = this.booleanQueryFromTokens(queryTokens);
+      try {
+        // Wave 6 G5 — Option B ACL: scope OR-clause is the gate.
+        // (Issue B / FULLTEXT BM25 tuning is documented in
+        // evidence/14-g5-search-design.md — not implemented here pending a
+        // larger benchmark run; the current dual MATCH OR plan is the F1
+        // baseline.)
+        const rows = (await prisma.$queryRawUnsafe(
+          `SELECT id, workspaceId, path, ownerId, memoryType, description, content, visibility, updatedAt
+           FROM im_memory_files
+           WHERE workspaceId = ?
+             AND (scope = 'workspace-shared' OR (scope = 'agent-private' AND agentImUserId = ?))
+             AND (
+               MATCH(path, description) AGAINST(? IN BOOLEAN MODE)
+               OR MATCH(content) AGAINST(? IN BOOLEAN MODE)
+             )
+           ORDER BY MATCH(content) AGAINST(? IN BOOLEAN MODE) DESC, updatedAt DESC
+           LIMIT ?`,
+          workspaceId,
+          callerImUserId,
+          booleanQuery,
+          booleanQuery,
+          booleanQuery,
+          take,
+        )) as Array<{
+          id: string;
+          workspaceId: string;
+          path: string;
+          ownerId: string;
+          memoryType: string | null;
+          description: string | null;
+          content: string;
+          visibility: string;
+          updatedAt: Date;
+        }>;
+        // ACL belt-and-braces: the AND-clause above already filters by scope,
+        // but if downstream queries pivot to other shapes, this re-checks.
+        return rows;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : '';
+        if (!msg.includes('1191') && !msg.includes('FULLTEXT')) {
+          throw err;
+        }
+        // Fall through to LIKE-OR
+      }
+    }
+
+    return prisma.iMMemoryFile.findMany({
       where: {
-        workspaceId: acl.workspaceId,
-        ownerId: acl.callerImUserId,
+        workspaceId,
         ...visibilityWhere(acl),
+        // Wave 6 G5 — Option B ACL: scope OR-clause is the canonical gate.
+        // No flat ownerId predicate here — that would hide workspace-shared
+        // rows (which carry sentinel ownerId='__shared__'). Cross-agent
+        // agent-private isolation is enforced by agentImUserId == caller.
+        AND: [
+          {
+            OR: [
+              { scope: 'workspace-shared' },
+              { AND: [{ scope: 'agent-private' }, { agentImUserId: callerImUserId }] },
+            ],
+          },
+        ],
         OR: queryTokens.flatMap((t: string) => [
           { path: { contains: t } },
           { description: { contains: t } },
           { content: { contains: t } },
         ]),
-      },
+      } as any,
       orderBy: { updatedAt: 'desc' },
-      take: limit,
+      take,
       select: {
         id: true,
         workspaceId: true,
@@ -555,16 +755,5 @@ export class MemorySearchService {
         updatedAt: true,
       },
     });
-
-    return candidates.map((row: FileRow) => ({
-      fileId: row.id,
-      workspaceId: row.workspaceId,
-      path: row.path,
-      ownerId: row.ownerId,
-      memoryType: row.memoryType,
-      description: row.description,
-      updatedAt: row.updatedAt.toISOString(),
-      snippet: buildSnippet(row.content, input.query),
-    }));
   }
 }
