@@ -13,6 +13,7 @@ import { useEffect, useId, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
+import { useI18n } from '@/contexts/i18n-context';
 import { renameConversation } from '../lib/mutations';
 
 interface RenameSessionDialogProps {
@@ -35,6 +36,7 @@ export function RenameSessionDialog({
   isDark,
   notify,
 }: RenameSessionDialogProps) {
+  const { t } = useI18n();
   const [value, setValue] = useState(currentTitle);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -59,10 +61,10 @@ export function RenameSessionDialog({
     setSubmitting(false);
     if (!res.ok) {
       setError(res.message);
-      notify(`Couldn't rename: ${res.message}`, 'error');
+      notify(t('workspace.renameSession.failed', { message: res.message }), 'error');
       return;
     }
-    notify(`Renamed to "${trimmed}".`, 'success');
+    notify(t('workspace.renameSession.success', { title: trimmed }), 'success');
     onRenamed(trimmed);
     onOpenChange(false);
   }
@@ -78,10 +80,10 @@ export function RenameSessionDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Rename session</DialogTitle>
+          <DialogTitle>{t('workspace.renameSession.title')}</DialogTitle>
         </DialogHeader>
         <label className="grid gap-1" htmlFor={inputId}>
-          <span className={labelClass}>Title</span>
+          <span className={labelClass}>{t('workspace.renameSession.fieldTitle')}</span>
           <input
             id={inputId}
             data-testid="rename-session-input"
@@ -94,7 +96,7 @@ export function RenameSessionDialog({
                 void handleSubmit();
               }
             }}
-            placeholder="Sprint planning"
+            placeholder={t('workspace.renameSession.placeholder')}
             maxLength={120}
             autoFocus
           />
@@ -106,11 +108,11 @@ export function RenameSessionDialog({
         ) : null}
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={submitting}>
-            Cancel
+            {t('common.cancel')}
           </Button>
           <Button data-testid="rename-session-submit" onClick={handleSubmit} disabled={!canSubmit}>
             {submitting ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" /> : null}
-            Rename
+            {t('workspace.renameSession.submit')}
           </Button>
         </DialogFooter>
       </DialogContent>
