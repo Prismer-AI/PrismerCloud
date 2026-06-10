@@ -26,41 +26,41 @@ import {
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { imFetch } from '../lib/im-api';
+import { PROJECT_FILTER_ALL, PROJECT_FILTER_UNSCOPED, readActiveProjectFromStorage } from '../lib/projects-api';
 import type { RuntimeInstallationDTO } from '../lib/types';
 
 interface K8sTemplate {
   id: string;
   label: string;
-  image: string;
+  /** When omitted the server resolves from Nacos CONTAINER_IMAGE. */
+  image?: string;
   description: string;
   recommendedFor: string;
+  /** When true, shown but not selectable. */
+  disabled?: boolean;
 }
 
-// Hard-coded for now — Cloud config-center hosting comes with W14. The image
-// strings match the dockerhub.services tags the controller already pulls in
-// test/prod. CUDA + devbox are listed but flagged so the operator knows the
-// EKS substrate must have GPU node-pools before they pick those.
+// Only the daemon sandbox is CI-built. CUDA/devbox are roadmap items.
 const TEMPLATES: K8sTemplate[] = [
   {
     id: 'sandbox-default',
-    label: 'Sandbox · default',
-    image: 'dockerhub.services/prismer/library/sandbox:daemon-v1.0',
+    label: 'Sandbox · daemon',
     description: 'Standard daemon-first sandbox. Hermes + adapters preinstalled.',
     recommendedFor: 'Most agent runtimes',
   },
   {
     id: 'sandbox-cuda',
     label: 'Sandbox · CUDA',
-    image: 'dockerhub.services/prismer/library/sandbox:cuda-v1.0',
     description: 'CUDA 12.4 base. Requires a GPU node-pool on the cluster.',
-    recommendedFor: 'Local model inference / training tasks',
+    recommendedFor: 'Coming soon',
+    disabled: true,
   },
   {
     id: 'sandbox-devbox',
     label: 'Sandbox · devbox',
-    image: 'dockerhub.services/prismer/library/sandbox:devbox-v1.0',
     description: 'Heavy devtools (gcc, python, node, rust). Larger image.',
-    recommendedFor: 'Dev tools + scripting agents',
+    recommendedFor: 'Coming soon',
+    disabled: true,
   },
 ];
 
@@ -136,18 +136,27 @@ export function K8sProvisionWizard({
     setProvisioning(true);
     setError(null);
     try {
+      // M448 (doc 20 Gap A) — inherit ProjectSwitcher's active project (when
+      // it's a real id, not the 'all' / '__unscoped' sentinels) so wizard-
+      // provisioned pods land scoped just like the simple-create path.
+      const activeProject = readActiveProjectFromStorage(workspaceId);
+      const scopedProjectId =
+        activeProject && activeProject !== PROJECT_FILTER_ALL && activeProject !== PROJECT_FILTER_UNSCOPED
+          ? activeProject
+          : undefined;
       const res = await imFetch<RuntimeInstallationDTO>('/api/workspace/runtime-installations', {
         method: 'POST',
         body: JSON.stringify({
           workspaceId,
           kind: 'k8s',
           template: template.id,
-          image: template.image,
           cpuRequest: cpu.cpuRequest,
           cpuLimit: cpu.cpuLimit,
           memoryRequest: mem.memoryRequest,
           memoryLimit: mem.memoryLimit,
           gpu: gpu.gpu,
+          ...(template.image ? { image: template.image } : {}),
+          ...(scopedProjectId ? { projectId: scopedProjectId } : {}),
         }),
       });
       if (!res.ok) {
@@ -211,37 +220,54 @@ export function K8sProvisionWizard({
 
         {step === 0 ? (
           <div data-testid="k8s-wizard-pane-template" className="space-y-2">
-            {TEMPLATES.map((t) => (
-              <button
-                type="button"
-                key={t.id}
-                data-testid={`k8s-wizard-template-${t.id}`}
-                data-selected={templateId === t.id ? 'true' : 'false'}
-                onClick={() => setTemplateId(t.id)}
-                className={cn(
-                  'w-full rounded-2xl border px-4 py-3 text-left transition-colors',
-                  templateId === t.id
-                    ? isDark
-                      ? 'border-cyan-400/40 bg-cyan-400/5'
-                      : 'border-cyan-300 bg-cyan-50/40'
-                    : isDark
-                      ? 'border-white/10 hover:bg-white/[0.03]'
-                      : 'border-zinc-200 hover:bg-zinc-50',
-                )}
-              >
-                <div className="flex items-center gap-2">
-                  <Layers className="h-4 w-4" />
-                  <span className="text-sm font-semibold">{t.label}</span>
-                  <span className={cn('ml-auto font-mono text-[10px]', isDark ? 'text-zinc-500' : 'text-zinc-500')}>
-                    {t.image}
-                  </span>
-                </div>
-                <p className={cn('mt-1 text-xs', isDark ? 'text-zinc-400' : 'text-zinc-600')}>{t.description}</p>
-                <p className={cn('mt-1 text-[10px]', isDark ? 'text-zinc-500' : 'text-zinc-500')}>
-                  Recommended for: {t.recommendedFor}
-                </p>
-              </button>
-            ))}
+            {TEMPLATES.map((t) => {
+              const disabled = t.disabled;
+              return (
+                <button
+                  type="button"
+                  key={t.id}
+                  disabled={disabled}
+                  data-testid={`k8s-wizard-template-${t.id}`}
+                  data-selected={templateId === t.id ? 'true' : 'false'}
+                  onClick={disabled ? undefined : () => setTemplateId(t.id)}
+                  className={cn(
+                    'w-full rounded-2xl border px-4 py-3 text-left transition-colors',
+                    disabled
+                      ? 'cursor-not-allowed opacity-40'
+                      : templateId === t.id
+                        ? isDark
+                          ? 'border-cyan-400/40 bg-cyan-400/5'
+                          : 'border-cyan-300 bg-cyan-50/40'
+                        : isDark
+                          ? 'border-white/10 hover:bg-white/[0.03]'
+                          : 'border-zinc-200 hover:bg-zinc-50',
+                  )}
+                >
+                  <div className="flex items-center gap-2">
+                    <Layers className="h-4 w-4" />
+                    <span className="text-sm font-semibold">{t.label}</span>
+                    <span
+                      className={cn(
+                        'ml-auto rounded-full border px-2 py-0.5 text-[9px] font-semibold',
+                        disabled
+                          ? isDark
+                            ? 'border-amber-400/30 text-amber-300'
+                            : 'border-amber-400 text-amber-600'
+                          : isDark
+                            ? 'border-white/10 text-zinc-500'
+                            : 'border-zinc-200 text-zinc-500',
+                      )}
+                    >
+                      {disabled ? 'Coming soon' : t.image}
+                    </span>
+                  </div>
+                  <p className={cn('mt-1 text-xs', isDark ? 'text-zinc-400' : 'text-zinc-600')}>{t.description}</p>
+                  <p className={cn('mt-1 text-[10px]', isDark ? 'text-zinc-500' : 'text-zinc-500')}>
+                    Recommended for: {t.recommendedFor}
+                  </p>
+                </button>
+              );
+            })}
           </div>
         ) : null}
 
