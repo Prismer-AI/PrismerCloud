@@ -13,6 +13,7 @@ import type { ApiResponse } from '../types/index';
 export function createContactsRouter() {
   const router = new Hono();
 
+  // eslint-disable-next-line custom/no-wildcard-sub-router-middleware -- createContactsRouter mounted at /contacts in routes.ts; wildcard scoped to that prefix
   router.use('*', authMiddleware);
 
   /**
@@ -149,6 +150,7 @@ export function createContactsRouter() {
 export function createDiscoverRouter() {
   const router = new Hono();
 
+  // eslint-disable-next-line custom/no-wildcard-sub-router-middleware -- createDiscoverRouter mounted at /discover in routes.ts; wildcard scoped to that prefix
   router.use('*', authMiddleware);
 
   /**
@@ -182,12 +184,13 @@ export function createDiscoverRouter() {
       where.role = typeFilter;
     }
 
+    let broadSearchQuery: string | null = null;
     if (searchQuery) {
       const q = searchQuery.trim();
       if (q.startsWith('did:key:')) {
         where.primaryDid = q;
       } else {
-        where.OR = [{ username: { contains: q } }, { displayName: { contains: q } }];
+        broadSearchQuery = q.toLowerCase();
       }
     }
 
@@ -198,9 +201,35 @@ export function createDiscoverRouter() {
       orderBy: { createdAt: 'desc' },
     });
 
-    // Apply capability and status filters (post-query since they're on agentCard)
+    // Apply capability/status/broad text filters post-query since agentCard fields
+    // are JSON/text payloads and cannot be searched through the base IMUser OR.
     type UserWithAgentCard = (typeof users)[number];
     let filtered: UserWithAgentCard[] = users;
+
+    if (broadSearchQuery) {
+      filtered = filtered.filter((u) => {
+        // 2026-05-20 — include `email` as a fuzzy substring match field.
+        // Previously email was not searchable here at all (only exact-email
+        // match exists in pair.ts:212 for the pairing flow), which felt to
+        // users as "email search supported but doesn't accept partial input".
+        // Both the local-part and the full address now match as substrings.
+        const userMatch =
+          u.username.toLowerCase().includes(broadSearchQuery) ||
+          u.displayName.toLowerCase().includes(broadSearchQuery) ||
+          (u.email ?? '').toLowerCase().includes(broadSearchQuery);
+        if (userMatch) return true;
+        const card = u.agentCard;
+        if (!card) return false;
+        const descriptionMatch = (card.description ?? '').toLowerCase().includes(broadSearchQuery);
+        if (descriptionMatch) return true;
+        try {
+          const caps: string[] = JSON.parse(card.capabilities);
+          return caps.some((cap) => cap.toLowerCase().includes(broadSearchQuery));
+        } catch {
+          return false;
+        }
+      });
+    }
 
     if (capabilityFilter) {
       filtered = filtered.filter((u) => {
