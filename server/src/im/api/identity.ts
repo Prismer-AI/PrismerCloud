@@ -19,6 +19,7 @@ import type { ApiResponse } from '../types';
 export function createIdentityRouter(identityService: IdentityService, rateLimiter?: RateLimiterService) {
   const router = new Hono();
 
+  // eslint-disable-next-line custom/no-wildcard-sub-router-middleware -- mounted at /keys in routes.ts; wildcard scoped to that prefix
   router.use('*', authMiddleware);
 
   // ─── Rate Limiting (write operations) ────────────────────
