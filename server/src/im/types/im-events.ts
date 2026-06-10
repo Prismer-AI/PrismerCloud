@@ -2,7 +2,7 @@
  * Prismer IM — v1.9.x WS protocol payload types (Track C)
  *
  * Adds 10 new ServerEvents types on top of the 1.8.2 baseline (`src/im/ws/events.ts`).
- * 9 daemon-protocol events + 1 workspace_file.changed (from 10-asset-network-drive.md §六).
+ * 9 daemon-protocol events + workspace/asset change broadcasts.
  * Plus `host.acked` — the cloud → daemon ACK reply for `agent.host.declare`.
  *
  * See [docs/refactor/03-ws-protocol.md] for the authoritative protocol spec.
@@ -21,9 +21,21 @@
  *   ✅ workspace.changed
  *   ✅ agent_profile.changed
  *   ✅ workspace_file.changed
+ *   ✅ asset.changed
  */
 
-import type { AgentStatus } from './index';
+// AgentStatus is duplicated here (instead of imported from './index') to avoid
+// a circular barrel cycle: index.ts does `export * from './im-events'` so any
+// import from index.ts in this file creates a self-loop that madge flags.
+// Keep this union in sync with the canonical definition in index.ts.
+type AgentStatus = 'online' | 'busy' | 'idle' | 'offline';
+
+// release201/25 §7 / release201/26 — typed L3 input contract (cloud-side
+// source of truth). `TaskDispatchRequestPayload.contextEnvelope` carries
+// this across the wire so adapters can render it natively. The mirror
+// `sdk/prismer-cloud/runtime/src/types/conversation-envelope.ts` MUST stay
+// in lockstep (same manual-sync convention as the daemon im-events mirror).
+import type { ConversationContextEnvelope } from './conversation-envelope';
 
 // ─── agent.host.declare (daemon → cloud) ─────────────────────
 
@@ -45,9 +57,28 @@ export interface AgentHostDeclarePayload {
   daemonVersion: string;
   platform: 'darwin' | 'linux' | 'win32';
   agents: HostedAgentDeclaration[];
+  /**
+   * v2.0 §4.8.2 R7 — optional human-readable label the daemon supplies for
+   * its physical device (e.g. "Mac Studio (Jason's office)"). When absent
+   * the cloud falls back to the daemon hostname (extracted from daemonId)
+   * or the literal string `daemonId`.
+   */
+  daemonLabel?: string;
+  /**
+   * v2.0 §4.8.2 R7 — daemon-declared device kind. When absent the cloud
+   * infers from im_containers.deviceType (k8s vs local) or defaults to
+   * `local`. Used so the UI Devices panel can badge the row correctly.
+   */
+  daemonKind?: 'k8s' | 'local' | 'edge';
 }
 
 // ─── host.acked (cloud → daemon, ACK reply) ──────────────────
+
+export interface RejectedHostedAgent {
+  imUserId: string;
+  reason: 'bound-to-other-daemon' | 'not-owned' | 'unknown';
+  ownerDaemonId?: string;
+}
 
 /**
  * Returned with `requestId` matching the originating `agent.host.declare`.
@@ -62,6 +93,17 @@ export interface HostAckedPayload {
     [key: string]: number;
   };
   profilesToSync: string[];
+  /** Profile IDs the daemon declared but that no longer exist on the cloud
+   *  (soft-deleted). The daemon should remove these from its local store so
+   *  it stops trying to dispatch tasks to dead profiles. */
+  profilesToDelete: string[];
+  /** Agents this daemon is accepted to host after this ACK. */
+  acceptedAgents?: string[];
+  /**
+   * Agents this daemon declared but cloud refused. New runtimes must stop
+   * declaring these ids until they are explicitly installed/reassigned again.
+   */
+  rejectedAgents?: RejectedHostedAgent[];
 }
 
 // ─── agent.status.changed (bidirectional) ────────────────────
@@ -102,8 +144,33 @@ export interface TaskDispatchContextEntry {
    * `payload.assetRefs` carries the full hydrated list across the
    * conversation; this per-entry list lets the prompt explain WHICH message
    * an asset arrived with.
+   *
+   * 2026-05-31 release201/30 P0 — kept for backwards compatibility. New
+   * cloud builds also populate `attachedAssets` with full metadata; older
+   * cloud builds without enrichment still send id-only here and the daemon
+   * falls back to id-only rendering inside `<attached_assets>`.
    */
   attachedAssetIds?: string[];
+  /**
+   * 2026-05-31 release201/30 §XML-context P0 — enriched metadata for the
+   * assets the human attached to this message. Composed cloud-side from
+   * `im_messages.attachments[]` (mime / filename / sizeBytes) plus legacy
+   * `metadata.attachments`. Daemon's `composeConversationContextXml`
+   * renders each entry as `<asset id="..." mime="..." filename="..."
+   * size_bytes="..."/>` inside a `<attached_assets>` child of
+   * `<prior_message>` / `<current_message>` so the agent sees prior-turn
+   * file attachments instead of getting a blank text body.
+   *
+   * Optional + forward-compatible: when missing the daemon emits id-only
+   * elements derived from `attachedAssetIds`. Empty array also renders no
+   * `<attached_assets>` element.
+   */
+  attachedAssets?: Array<{
+    id: string;
+    mime?: string;
+    filename?: string;
+    sizeBytes?: number;
+  }>;
 }
 
 /**
@@ -134,10 +201,38 @@ export interface AssetRef {
    *   - `context` → reserved for future use (e.g. references in agent memory)
    */
   role: 'attachment' | 'context';
+  /**
+   * Cloud-hosted URL for this asset, when known (IMAsset.cdnUrl). Adapters
+   * prefer this for image/file blocks over a daemon-resolved cache copy. The
+   * daemon's `resolveAssetRefs` also fills this from contentHash for assets
+   * the cloud didn't stamp; carrying it cloud-side is load-bearing for
+   * cross-turn image quote re-injection (release201/26 §13.4 P2) — the daemon
+   * never saw the quoted message's attachment, so it cannot resolve the url on
+   * its own.
+   */
+  cdnUrl?: string;
+  /** Optional human-readable filename (IMAsset.metadata.title / source name). */
+  filename?: string;
 }
 
 export interface TaskDispatchRequestPayload {
   taskId: string;
+  /**
+   * release202/09 §3.2 — structural run-vs-task signal.
+   *   - `'run'`  → chat-dispatch run (`taskId` here mirrors the run id). The
+   *     daemon injects `PRISMER_RUN_ID` (not `PRISMER_TASK_ID`); the platform
+   *     closes the turn from the agent's reply — no `cloud task` op needed.
+   *   - `'task'` → kanban task. The daemon injects `PRISMER_TASK_ID`.
+   * Optional + forward-compatible: missing → daemon falls back to id-shape
+   * (`run_` prefix) and then legacy probe-both. Promoted from the previous
+   * `metadata.kind='agent_run'` signal.
+   */
+  kind?: 'run' | 'task';
+  /**
+   * The run id when `kind === 'run'`. Carried explicitly so the daemon never
+   * has to treat the `taskId` field as a run id by convention.
+   */
+  runId?: string;
   /** Agent target for runtimeRoute='agent'. Shell dispatches do not use this. */
   agentImUserId?: string;
   /** Runtime/device target for runtimeRoute='shell'. */
@@ -188,6 +283,56 @@ export interface TaskDispatchRequestPayload {
    * Daemon must report back via `TaskDispatchReplyPayload.assetObservability`.
    */
   assetRefs?: AssetRef[];
+  /**
+   * release201/09 Phase 2 — task project scope. NULL = workspace-level
+   * (`_unscoped` sentinel on disk). Daemon uses this together with
+   * `agentImUserId` / `profile.workspaceId` to compose the per-task
+   * scratch path: `workspaces/<wid>/projects/<pid|_unscoped>/tasks/<tid>/`.
+   * Also forwarded into the spawned agent process as `PRISMER_ACTIVE_PROJECT_ID`
+   * (when non-null) so built-in skill --project flag defaults work.
+   */
+  projectId?: string | null;
+  /**
+   * release201/30 §7 Phase 3 — propagated trace id (originated at frontend
+   * via X-Prismer-Trace-Id, stamped onto task metadata by message.service /
+   * task.service). Daemon prefixes stderr lines with `[trace=<id>]` so a
+   * single grep ties cloud + daemon logs to the same user-facing action.
+   *
+   * Optional + forward-compatible: missing values cause daemon to mint a
+   * `daemon-fallback-*` id local to the run so the prefix is always present.
+   */
+  traceId?: string;
+  /**
+   * release201/30 — username of the chat sender that triggered this dispatch.
+   * Daemon uses this to label the <current_message author="..."> tag inside
+   * the XML-wrapped conversation context sessions-style adapters send.
+   *
+   * Optional: when missing, daemon falls back to the recipient's own
+   * username (still correct for single-author dispatch flows).
+   */
+  triggerSenderUsername?: string;
+  /**
+   * release201/30 — role of the trigger message sender. Mirrors
+   * `TaskDispatchContextEntry.senderRole` vocabulary.
+   */
+  triggerSenderRole?: 'human' | 'agent' | 'admin' | 'system';
+  /**
+   * release201/25 §7 / release201/26 envelope refactor — typed L3 input
+   * contract built cloud-side by `ConversationMemoryService.buildEnvelope`.
+   *
+   * Envelope-aware adapters consume via `renderContextEnvelope` (per-adapter
+   * `context-render.ts` modules under `sdk/.../adapters/<name>/`). Legacy
+   * fields above (`context`, `participants`, `triggerSenderUsername`,
+   * `triggerSenderRole`) are intentionally still populated for one release
+   * window so older daemons / adapters without envelope awareness keep
+   * working — they read the flat fields, envelope-aware paths prefer this
+   * one.
+   *
+   * Optional + forward-compatible: missing means the cloud build predates
+   * the envelope wiring or the flag is off; daemon falls through to the
+   * legacy XML composer / N-message path. See docs/release201/26 §7.
+   */
+  contextEnvelope?: ConversationContextEnvelope;
 }
 
 // ─── task.dispatch.progress (daemon → cloud) ─────────────────
@@ -238,6 +383,21 @@ export interface AssetDispatchObservation {
   error?: string;
 }
 
+/**
+ * P1-2 (2026-05-25): per-file outbox rejection record. Daemon's
+ * `outbox-watcher` quarantines files whose magic bytes don't match the
+ * file extension (e.g. agent writes `report.pdf` but the bytes are
+ * markdown) and reports them here so cloud can persist + re-inject into
+ * the next dispatch prompt.
+ */
+export interface OutboxRejectionRecord {
+  filename: string;
+  reason: string;
+  inferredMime: string;
+  detectedMime: string;
+  rejectedAt: string;
+}
+
 export interface TaskDispatchReplyPayload {
   taskId: string;
   ok: boolean;
@@ -248,6 +408,33 @@ export interface TaskDispatchReplyPayload {
   metrics?: { tokensUsed?: number; durationMs?: number };
   /** Wave-8 W1: how the daemon handled each `payload.assetRefs[i]`. */
   assetObservability?: AssetDispatchObservation[];
+  /**
+   * P1-2: files daemon's outbox-watcher rejected this turn for MIME ≠
+   * extension. Cloud persists at `IMTask.metadata.outboxRejections` and
+   * the next dispatch's prompt warns the agent up front.
+   */
+  outboxRejections?: OutboxRejectionRecord[];
+}
+
+// ─── task.dispatch.resume_failed (daemon → cloud) ────────────
+
+/**
+ * release201/26 §8 Phase 4 — daemon reports that an interrupted run could
+ * NOT be resumed from its local checkpoint (kill -9 / crash / corrupt
+ * checkpoint). Cloud writes `IMTaskRun.status='resume_failed'` and surfaces a
+ * "任务中断，点击重试" strip in the conversation timeline so the human can
+ * re-dispatch. Distinct from `task.dispatch.reply { ok:false }` (which is a
+ * normal terminal failure with an agent reply) — resume_failed means the run
+ * never got a chance to finish and there is no agent output.
+ *
+ * `runId` is the IMTaskRun.id (the daemon's local-run identity); `taskId` is
+ * the wire-level IMTask.id when one exists (may equal runId for run-style
+ * chat dispatches). Cloud resolves the run by `runId` first.
+ */
+export interface TaskDispatchResumeFailedPayload {
+  runId: string;
+  taskId?: string;
+  reason?: string;
 }
 
 // ─── task.cancel (cloud → daemon) ────────────────────────────
@@ -338,4 +525,100 @@ export interface WorkspaceFileChangedPayload {
   assetId?: string;
   contentHash?: string;
   version: number;
+}
+
+/**
+ * Emitted whenever an im_assets row is created, metadata-mutated, or
+ * soft-deleted. Daemon treats this as a prompt to pull `/api/im/assets/index`
+ * immediately, bypassing its periodic metadata throttle.
+ */
+export interface AssetChangedPayload {
+  workspaceId: string;
+  assetId: string;
+  operation: 'create' | 'update' | 'delete';
+  contentHash?: string;
+  assetIndexSeq?: number;
+  revision?: number;
+}
+
+// ─── approval.requested / approval.decided (ACP) ─────────────
+
+export interface ApprovalRequestedPayload {
+  approvalId: string;
+  workspaceId: string;
+  conversationId: string | null;
+  taskId: string | null;
+  requestedById: string;
+  category: string;
+  title: string;
+  status: 'pending';
+  createdAt: string;
+  expiresAt: string | null;
+}
+
+export interface ApprovalDecidedPayload {
+  approvalId: string;
+  workspaceId: string;
+  conversationId: string | null;
+  taskId: string | null;
+  requestedById: string;
+  decidedById: string;
+  status: 'approved' | 'rejected' | 'expired';
+  selectedValue: string | null;
+  decidedAt: string;
+}
+
+// ─── task.approval.resolve (cloud → daemon) ──────────────────
+//
+// release201/25 §16.4 A6 — cloud forwards a human approval decision to
+// the daemon hosting the assignee agent so the daemon can additionally
+// call hermes-native `POST /v1/runs/{runId}/approval` (api_server.py
+// _handle_run_approval). Cloud-side approval-card persists / audits as
+// before; this event is the SECOND write that keeps hermes-internal
+// state (session-level "always" cache, pending timer) consistent with
+// our redispatched task. Without it, choosing `session` or `always` on
+// the card has no effect on hermes — only `once` and `deny` are honored
+// via the redispatch path.
+//
+// daemon resolves runId by looking up the most recent run for `taskId`
+// in `local_run_sessions` (registered when /v1/runs returned run_id, or
+// when /api/sessions returned run_id mid-stream). If no row found
+// (sessions API never started, or row was GC'd) the daemon logs and
+// no-ops — the cloud-side redispatch still happens via the existing
+// approval.decided path.
+export interface TaskApprovalResolvePayload {
+  taskId: string;
+  approvalId: string;
+  agentImUserId: string;
+  /** Hermes-native choice. Maps to cloud-side ApprovalDTO.selectedValue. */
+  choice: 'once' | 'session' | 'always' | 'deny';
+  /** When true, hermes resolves every pending approval on the run, not just this one. */
+  resolveAll: boolean;
+}
+
+// ─── workspace.clear.daemon-cleanup (cloud → daemon) ──────────
+//
+// release201/09 §9.4b (2026-05-30) — final step of WorkspaceClearError
+// cascade. After cloud Prisma rows are gone, cloud fans out this event to
+// every daemon that hosted any agent in the cleared workspace so each
+// daemon wipes the local-only state cloud cannot see:
+//   - ~/.hermes/profiles/<n>/memories/MEMORY.md + USER.md (the actual
+//     contamination source from the 2026-05-30 incident)
+//   - ~/.hermes/profiles/<n>/sessions/state.db (per-session goal state)
+//   - ~/.hermes/profiles/<n>/SOUL.md (regenerated next spawn)
+//   - ~/.prismer/devices/<did>/agents/<aid>/memory/* (agent-private memory)
+// Skills/ stays intact — sha256-diff sync owns its lifecycle (§9.3.2).
+//
+// Wipe is best-effort; failures stderr-log but do not fail the cascade
+// (cloud-side rows are already gone). Cascade ordering: cloud-first,
+// daemon-second — guarantees cloud DB is consistent before daemon mutates
+// local FS, so a partial wipe degrades to "stale orphan files" rather than
+// "live profile pointing at dead cloud row".
+export interface WorkspaceClearDaemonCleanupPayload {
+  workspaceId: string;
+  /** Agent IM-user IDs from the cleared workspace; daemon enumerates local
+   * profiles matching these to find which on-disk profile names to wipe. */
+  agentImUserIds: string[];
+  /** ISO-8601 timestamp the cloud cascade completed. */
+  clearedAt: string;
 }
