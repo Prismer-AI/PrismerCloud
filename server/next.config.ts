@@ -5,15 +5,28 @@ const nextConfig: NextConfig = {
   reactCompiler: true,
   output: 'standalone', // Enable for Docker deployment
 
-  // Native Node addons that must not be bundled.
-  //
-  // pdfjs-dist and react-pdf reference DOMMatrix / Path2D at module top
-  // level; including them in the server chunk crashes the IM bootstrap
-  // on Node (no DOM polyfills, @napi-rs/canvas not installed). They are
-  // only used inside workspace-inspector-dialog which is loaded with
-  // dynamic({ ssr: false }), so externalize them — Next.js standalone
-  // will require() them lazily, and the server never hits the code.
-  serverExternalPackages: ['@resvg/resvg-js', 'pino', 'pino-pretty', 'pdfjs-dist', 'react-pdf'],
+  // Native Node addons that must not be bundled. Keep react-pdf bundled so
+  // its CSS imports from app/layout can be processed by Next/Turbopack.
+  // `@napi-rs/canvas` is a NATIVE module that pdfjs-dist/pdf-parse load
+  // DYNAMICALLY to obtain DOMMatrix/Path2D/ImageData in Node. Without it in
+  // serverExternalPackages the standalone trace dropped it → DOMMatrix undefined
+  // on prod pods → server-side PDF text extraction crashed (worked LOCALLY only
+  // because the transitive copy sat in node_modules). Keep it external + copied.
+  serverExternalPackages: ['@resvg/resvg-js', 'pino', 'pino-pretty', 'pdfjs-dist', '@napi-rs/canvas'],
+
+  // Asset blobs are runtime data, not deployable code. Excluding the shard
+  // directory keeps standalone output tracing from walking thousands of
+  // content-addressed files when src/im/api/assets.ts builds dynamic paths.
+  outputFileTracingExcludes: {
+    '*': ['./prisma/data/assets/**/*'],
+  },
+
+  // pdf-parse's pdfjs worker is loaded by a runtime PATH string (PDFParse.setWorker),
+  // not a static import, so the standalone trace never copies it. Force-include it
+  // (and the napi canvas binary) so server-side PDF text extraction works on the pods.
+  outputFileTracingIncludes: {
+    '*': ['./node_modules/pdf-parse/dist/worker/**', './node_modules/@napi-rs/canvas/**'],
+  },
 
   // Turbopack configuration (Next.js 16+)
   turbopack: {},
