@@ -439,11 +439,18 @@ export async function reloadNacosConfig(): Promise<boolean> {
  * Ensure Nacos config is loaded (for use in API routes).
  * This is a convenience function that initializes if needed.
  *
- * LOCAL_ONLY=1 (LAN dev): we still try Nacos best-effort because
- * `.env.local` rarely carries OAuth credentials and the dev cloud
- * /api/config/oauth needs them for browser-based Google/GitHub sign-in
- * (Wave-7 ζ regression: LOCAL_ONLY users saw "Google client ID is not
- * configured" because Nacos was hard-skipped). Existing env vars from
+ * C-6 (08 §5.7 同构纪律) — APP_ENV=local **explicitly skips Nacos entirely**.
+ * env is the only configuration source in local kind dev. This prevents
+ * the daily inner loop from accidentally hitting the prod Nacos namespace
+ * (which used to happen when APP_ENV was unset and NODE_ENV defaulted to
+ * production-ish behaviour). The skip is logged once at boot so dev users
+ * can see in stdout that no remote config call was attempted.
+ *
+ * LOCAL_ONLY=1 (LAN dev, distinct from APP_ENV=local): we still try Nacos
+ * best-effort because `.env.local` rarely carries OAuth credentials and the
+ * dev cloud /api/config/oauth needs them for browser-based Google/GitHub
+ * sign-in (Wave-7 ζ regression: LOCAL_ONLY users saw "Google client ID is
+ * not configured" because Nacos was hard-skipped). Existing env vars from
  * `.env.local` always win — see writeToEnv() `if (!(key in process.env))`
  * — so Nacos cannot accidentally redirect DATABASE_URL/REDIS_URL away
  * from the local docker stack.
@@ -452,28 +459,43 @@ export async function reloadNacosConfig(): Promise<boolean> {
  * the failure is swallowed so the dev boot still completes; OAuth UI
  * will fall back to "client id missing" until creds land in `.env.local`.
  */
+let _loggedLocalSkip = false;
+
 export async function ensureNacosConfig(): Promise<void> {
   // Self-host mode: skip Nacos entirely, use .env
   if (process.env.NACOS_DISABLED === 'true') {
     return;
   }
-  if (!_nacosLoader || !_nacosLoader.getStatus().initialized) {
-    try {
-      await initNacosConfig();
-    } catch (err) {
-      const isLocalDev = process.env.LOCAL_ONLY === '1' || process.env.NODE_ENV === 'development';
-      if (isLocalDev) {
-        // Best effort in LAN dev — do not break boot if Nacos is offline.
-        // Caller flows that need a specific Nacos-only key (e.g. OAuth)
-        // surface the missing-key UX themselves.
 
-        console.warn(
-          '[Nacos] LOCAL_ONLY best-effort load failed; continuing without remote config:',
-          (err as Error).message,
-        );
-        return;
-      }
-      throw err;
+  // C-6: APP_ENV=local short-circuit. Must come BEFORE the existing
+  // initialized check because we don't want even a no-op probe in local
+  // dev. The early return is also gate for §9.3 doctor item validating
+  // that `dev:full` boot does not produce '[Nacos] ✅' fetch logs.
+  if (process.env.APP_ENV === 'local') {
+    if (!_loggedLocalSkip) {
+      _loggedLocalSkip = true;
+      logger.info('APP_ENV=local — skipping Nacos config fetch (C-6 §5.7)');
     }
+    return;
+  }
+
+  if (_nacosLoader && _nacosLoader.getStatus().initialized) return;
+
+  const isLocalDev = process.env.LOCAL_ONLY === '1' && process.env.NODE_ENV !== 'production';
+  try {
+    await initNacosConfig();
+  } catch (err) {
+    if (isLocalDev) {
+      // Best effort in LAN dev — do not break boot if Nacos is offline.
+      // Caller flows that need a specific Nacos-only key (e.g. OAuth)
+      // surface the missing-key UX themselves.
+
+      console.warn(
+        '[Nacos] LOCAL_ONLY best-effort load failed; continuing without remote config:',
+        (err as Error).message,
+      );
+      return;
+    }
+    throw err;
   }
 }
