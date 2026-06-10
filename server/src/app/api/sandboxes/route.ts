@@ -21,16 +21,28 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import prisma from '@/lib/prisma';
 import { logger } from '@/lib/logger';
-import { K8sSandboxError, k8sSandbox, podNameForAgent } from '@/lib/k8s-sandbox';
+import { podNameForAgent } from '@/lib/k8s-sandbox';
 import { getK8sNamespace } from '@/lib/k8s-client';
 import { emitterForRow, recordProvisioningStep } from '@/lib/provisioning-progress';
+import { resolvePersistent } from '@/lib/sandbox/registry';
+import { getDaemonImage } from '@/lib/sandbox/image-pin';
+import { ProviderError, httpStatusForProviderError } from '@/lib/execution/errors';
+import { stampAgentCardDaemonBinding } from '@/lib/sandbox/agent-card-daemon-binding';
 import { authorizeWorkspace } from './_helpers';
 
 const CreateBody = z.object({
   workspaceId: z.string().min(1),
   agentImUserId: z.string().optional(),
   taskId: z.string().optional(),
+  apiKeyTtlSeconds: z.coerce.number().int().min(60).max(7200).optional(),
   image: z.string().optional(),
+  // Persistent agent-runtime daemon pods (no taskId/apiKeyTtlSeconds → no
+  // scoped-key mint) need a long-lived PRISMER_API_KEY injected so the daemon
+  // can authenticate to cloud. Passed through to provisionContainer as
+  // `environment.PRISMER_API_KEY`; the env merge keeps it because scopedEnv
+  // only sets PRISMER_API_KEY on the minting path. Admin/owner-gated via
+  // authorizeWorkspace above. (release202/05 — local k8s codex e2e.)
+  apiKey: z.string().regex(/^sk-prismer-/).optional(),
   cpuRequest: z.string().default('250m'),
   cpuLimit: z.string().default('2000m'),
   memoryRequest: z.string().default('2Gi'),
@@ -56,7 +68,11 @@ export async function POST(req: NextRequest): Promise<Response> {
   // tenantId is the workspace owner — Phase 1 mapping. Multi-tenant org
   // billing (one tenant, many workspaces) is a Phase 2 concern.
   const tenantId = auth.data.workspace.ownerImUserId;
-  const sandboxImage = parsed.data.image ?? process.env.SANDBOX_DEFAULT_IMAGE ?? 'prismer-sandbox:dev';
+  // T8 (08 §5.2) — canonical image via image-pin.yaml. provisionContainer
+  // also resolves the same fallback chain; we resolve here so the pre-row
+  // image column reflects what the pod will actually pull. CONTAINER_IMAGE
+  // env override is honored by getDaemonImage().
+  const sandboxImage = parsed.data.image ?? getDaemonImage();
 
   // Pre-create the row so the workspace UI can poll progress while
   // `provisionContainer` is still mid-flight (it blocks 2-3s waiting on the
@@ -98,14 +114,21 @@ export async function POST(req: NextRequest): Promise<Response> {
       tenantId,
       agentImUserId: parsed.data.agentImUserId,
       taskId: parsed.data.taskId,
+      apiKeyTtlSeconds: parsed.data.apiKeyTtlSeconds,
       image: sandboxImage,
+      ...(parsed.data.apiKey ? { environment: { PRISMER_API_KEY: parsed.data.apiKey } } : {}),
       cpuRequest: parsed.data.cpuRequest,
       cpuLimit: parsed.data.cpuLimit,
       memoryRequest: parsed.data.memoryRequest,
       memoryLimit: parsed.data.memoryLimit,
       onStep: emitterForRow(row.id),
     };
-    const ctlResp = await k8sSandbox.provisionContainer(createArgs);
+    // v200 §08 §4.5 — provider-agnostic call via registry. Create path
+    // hardcodes 'k8s' because request schema doesn't yet expose providerKind;
+    // the IMContainer row inherits DB DEFAULT 'k8s' (migration 336). When
+    // POST schema adds providerKind, switch to parsed.data.providerKind.
+    const provider = resolvePersistent('k8s');
+    const ctlResp = await provider.provisionContainer(createArgs);
 
     const updated = await prisma.iMContainer.update({
       where: { id: row.id },
@@ -114,8 +137,23 @@ export async function POST(req: NextRequest): Promise<Response> {
         gatewayUrl: ctlResp.container.gatewayUrl ?? null,
         startedAt: new Date(),
         provisioningStep: null,
+        // Release 200 §5.4 — persist cloud-minted daemonId. provisionContainer
+        // generates a UUID and threads it through pod env (PRISMER_DAEMON_ID);
+        // routes round-trip the value here so subsequent /healthz responses
+        // can be validated against the row.
+        daemonId: ctlResp.container.daemonId,
       },
     });
+
+    if (parsed.data.agentImUserId) {
+      await stampAgentCardDaemonBinding({
+        prisma,
+        logger,
+        workspaceId: parsed.data.workspaceId,
+        agentImUserId: parsed.data.agentImUserId,
+        daemonId: ctlResp.container.daemonId,
+      });
+    }
 
     // Terminal 'ready' marker — appended after provisioningStep is cleared so
     // the history snapshot reflects the full lifecycle.
@@ -125,16 +163,22 @@ export async function POST(req: NextRequest): Promise<Response> {
     return NextResponse.json({ container: updated }, { status: 201 });
   } catch (err) {
     // Mark pre-created row as errored so the UI can stop polling.
+    // F6 (2026-05-19) — errored is terminal; stamp stoppedAt so the UI device
+    // filter (`runtime-installations` GET excludes stopped/failing/errored)
+    // treats the row as dead instead of leaving it active in the device list.
     await prisma.iMContainer
       .update({
         where: { id: row.id },
-        data: { status: 'errored', provisioningStep: null },
+        data: { status: 'errored', provisioningStep: null, stoppedAt: new Date() },
       })
       .catch(() => {
         /* best-effort */
       });
-    if (err instanceof K8sSandboxError) {
-      return NextResponse.json({ error: 'controller_error', status: err.status, body: err.body }, { status: 502 });
+    if (err instanceof ProviderError) {
+      return NextResponse.json(
+        { error: err.code, message: err.message, retriable: err.retriable, providerRef: err.providerRef },
+        { status: httpStatusForProviderError(err) },
+      );
     }
     logger.error({ err }, 'sandbox create failed');
     return NextResponse.json({ error: 'internal_error' }, { status: 500 });
