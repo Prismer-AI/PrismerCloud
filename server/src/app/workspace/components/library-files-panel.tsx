@@ -1,31 +1,40 @@
 'use client';
 
-import { useEffect, useMemo, useState, type DragEvent, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type DragEvent } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Archive,
-  CheckCircle2,
+  ArrowDownUp,
+  ChevronDown,
+  ChevronRight,
   CloudDownload,
-  Edit3,
-  Eye,
-  FileCode2,
-  FileText,
   Folder,
+  FolderInput,
   FolderPlus,
   Home,
-  ImageIcon,
-  Loader2,
-  MoreVertical,
+  Layers,
   Plus,
   Search,
-  Table2,
   Trash2,
+  X,
 } from 'lucide-react';
 
 import { getWorkspaceToken, imFetch } from '../lib/im-api';
 import { radius, surface } from '../lib/design';
 import { useI18n } from '@/contexts/i18n-context';
 import { SurfaceHeader } from './surface-header';
+import { CardShelf, LayoutToggle, type CardLayoutMode } from './card-shelf';
+import {
+  AssetCard,
+  assetSource,
+  assetTitle,
+  assetTypeTone,
+  isCodeAsset,
+  isDataAsset,
+  isDocAsset,
+  isImageAsset,
+} from './asset-card';
+import { AssetFilterMenu, type AssetFilter, type AssetFilterOption } from './asset-filter-menu';
 import type { AssetDTO, WorkspaceFileDTO } from '../lib/types';
 import type { WorkspaceInspector } from './workspace-inspector-dialog';
 
@@ -48,17 +57,24 @@ interface LibraryFilesPanelProps {
 }
 
 /**
- * Wave-9 Phase 3 folder model.
+ * Folder model (release201/09 §9.4a.3 reorganization).
  *
  * folderPath is a free-form string column on im_assets (no folder table).
  * In the UI we encode "root" (folderPath IS NULL) as the sentinel
- * `__root__` so it can key into a Map. Two top-level branches are
- * auto-populated by the daemon side: `/tasks/{taskId}` for chat-mention
- * agent outputs and `/sandbox/{taskId}` for container artifacts. User
- * uploads default to NULL (root) per design review decision ③.
+ * `__root__` so it can key into a Map.
+ *
+ * 2026-05-26 (D17): the prior `/tasks` and `/sandbox` always-render
+ * "auto-managed" branches are RETIRED — task artifacts now live in the
+ * task drawer's Artifacts tab and surface in Library only via the explicit
+ * "Show task artifacts" toggle. Folders left in this UI are user-created
+ * named folders (logical grouping; no longer task-ID spam).
  */
 type FolderKey = string;
 const ROOT_FOLDER_KEY: FolderKey = '__root__';
+// Kept as constants only for the legacy folderPath bytes still in DB
+// (backfill writes them, PATCH-move-to is now rejected outside of
+// Promote ↑ in the task drawer). buildFolderTree no longer pins them
+// as always-render folders.
 const TASKS_FOLDER_KEY: FolderKey = '/tasks';
 const SANDBOX_FOLDER_KEY: FolderKey = '/sandbox';
 
@@ -74,9 +90,7 @@ interface FolderNode {
   pinned: boolean;
 }
 
-type AssetFilter = 'all' | 'images' | 'docs' | 'code' | 'data' | 'other';
-
-const FILTERS: Array<{ key: AssetFilter; label: string }> = [
+const FILTERS: AssetFilterOption[] = [
   { key: 'all', label: 'All' },
   { key: 'images', label: 'Images' },
   { key: 'docs', label: 'Docs' },
@@ -100,10 +114,19 @@ export function LibraryFilesPanel({
   const theme: 'dark' | 'light' = isDark ? 'dark' : 'light';
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<AssetFilter>('all');
+  const [groupBy, setGroupBy] = useState<GroupBy>('time');
+  const [sortBy, setSortBy] = useState<SortBy>('newest');
+  // Bulk selection — set of asset ids picked via the per-card checkbox.
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
+  // Folder picker open-state for the bulk move-to-folder control.
+  const [bulkMoveOpen, setBulkMoveOpen] = useState(false);
   const [downloadingAssetId, setDownloadingAssetId] = useState<string | null>(null);
   const [menuAssetId, setMenuAssetId] = useState<string | null>(null);
   const [busyAssetId, setBusyAssetId] = useState<string | null>(null);
   const [draggingFiles, setDraggingFiles] = useState(false);
+  const [isDraggingAsset, setIsDraggingAsset] = useState(false);
+  // CardShelf is controlled — the toggle UI lives in the filter row.
+  const [cardLayout, setCardLayout] = useState<CardLayoutMode>('grid');
 
   // Wave-9 Phase 3 state.
   //
@@ -121,6 +144,12 @@ export function LibraryFilesPanel({
   const [customFolders, setCustomFolders] = useState<string[]>([]);
   const [creatingFolder, setCreatingFolder] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
+  // release201/09 §9.4a.3 — opt-in toggle to surface task-bound assets in
+  // Library. Default off: Library is the "workspace 资料库" view, agents'
+  // task products live in the task drawer's Artifacts tab. Promote ↑
+  // (asset.PATCH boundKind='workspace-file') is the path for owner to
+  // copy a task product into the workspace catalog.
+  const [showTaskArtifacts, setShowTaskArtifacts] = useState(false);
 
   // Sync external folder selection (e.g. task drawer's "Open in Library" jump).
   useEffect(() => {
@@ -143,16 +172,38 @@ export function LibraryFilesPanel({
   }, [files]);
 
   /**
-   * Defense filter (Wave-9 Phase 3.0): hide kind='task-result' even if
-   * migration 310 was missed or a stale dev-cache compiled chunk
-   * accidentally writes them. Cloud no longer creates these (d3748d90),
-   * but the UI guarantees they don't surface regardless.
+   * Defense filter:
+   *   - `kind='task-result'` — Wave-9 Phase 3.0 legacy rows the cloud no
+   *     longer mints (d3748d90); UI hides them defensively.
+   *   - `kind='preview'` — server-side derivative thumbnails (e.g. PDF
+   *     first-page WebP). They're attached to the parent asset via its
+   *     `thumbnailUrl` / `previewUrls.medium`, so the parent card already
+   *     renders the preview inline. Surfacing the derivative as a
+   *     standalone asset would clutter the grid + leak into the image
+   *     gallery as a phantom image.
    */
-  const visibleAssets = useMemo(() => assets.filter((a) => a.kind !== 'task-result'), [assets]);
+  const visibleAssets = useMemo(() => assets.filter((a) => a.kind !== 'task-result' && a.kind !== 'preview'), [assets]);
+
+  // release201/09 §9.4a.3 — partition by boundKind. workspace-file is the
+  // default Library Root view; task-bound is opt-in via toggle. Legacy
+  // rows (boundKind NULL post-backfill should not exist, but defensively)
+  // fall under workspace-file so the user sees them in Root instead of
+  // losing them.
+  const workspaceFileAssets = useMemo(
+    () => visibleAssets.filter((a) => (a.boundKind ?? 'workspace-file') === 'workspace-file'),
+    [visibleAssets],
+  );
+  const taskBoundCount = useMemo(
+    () => visibleAssets.filter((a) => a.boundKind === 'task-bound').length,
+    [visibleAssets],
+  );
 
   const filteredAssets = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return visibleAssets.filter((asset) => {
+    // When toggle on, include task-bound assets too — otherwise stay on
+    // the default workspace-file subset.
+    const base = showTaskArtifacts ? visibleAssets : workspaceFileAssets;
+    return base.filter((asset) => {
       const title = assetTitle(asset, fileByAssetId.get(asset.id));
       const memoryText = (asset.memoryPages ?? []).map((page) => `${page.title ?? ''} ${page.path}`).join(' ');
       const matchesQuery =
@@ -164,11 +215,66 @@ export function LibraryFilesPanel({
         memoryText.toLowerCase().includes(q);
       return matchesQuery && matchesFilter(asset, filter) && matchesFolder(asset, currentFolder);
     });
-  }, [visibleAssets, fileByAssetId, filter, query, currentFolder]);
+  }, [visibleAssets, workspaceFileAssets, showTaskArtifacts, fileByAssetId, filter, query, currentFolder]);
 
-  const folderTree = useMemo(() => buildFolderTree(visibleAssets, customFolders), [visibleAssets, customFolders]);
+  // Folder tree builds from the workspace-file subset by default so the
+  // sidebar doesn't get spammed with task-ID prefix folders. Toggle on →
+  // include all rows for the tree too.
+  const folderTree = useMemo(
+    () => buildFolderTree(showTaskArtifacts ? visibleAssets : workspaceFileAssets, customFolders),
+    [visibleAssets, workspaceFileAssets, showTaskArtifacts, customFolders],
+  );
 
-  const grouped = useMemo(() => groupAssets(filteredAssets), [filteredAssets]);
+  // Sort BEFORE grouping so items stay ordered inside each section. The
+  // time-group buckets still bucket by createdAt, but within a bucket the
+  // chosen sort order is preserved.
+  const sortedAssets = useMemo(() => sortAssets(filteredAssets, sortBy, fileByAssetId), [filteredAssets, sortBy, fileByAssetId]);
+
+  const grouped = useMemo(() => groupAssets(sortedAssets, groupBy), [sortedAssets, groupBy]);
+
+  const toggleSelected = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+  const clearSelection = () => setSelectedIds(new Set());
+
+  async function bulkDelete() {
+    const ids = [...selectedIds];
+    if (ids.length === 0) return;
+    if (!window.confirm(t('assetUi.library.confirmBulkDelete', { count: ids.length }))) return;
+    const results = await Promise.all(
+      ids.map((id) => imFetch(`/assets/${encodeURIComponent(id)}`, { method: 'DELETE' })),
+    );
+    const failed = results.filter((r) => !r.ok).length;
+    clearSelection();
+    await onAssetsChanged?.();
+    if (failed > 0)
+      notify?.(
+        t('assetUi.library.bulkDeletePartial', { ok: ids.length - failed, failed }),
+        failed === ids.length ? 'error' : 'info',
+      );
+    else notify?.(t('assetUi.library.bulkDeleted', { count: ids.length }), 'success');
+  }
+
+  async function bulkMove(targetKey: FolderKey) {
+    const ids = [...selectedIds];
+    if (ids.length === 0) return;
+    setBulkMoveOpen(false);
+    const results = await Promise.all(ids.map((id) => moveAssetToFolder(id, targetKey)));
+    const failed = results.filter((r) => !r.ok).length;
+    clearSelection();
+    await onAssetsChanged?.();
+    if (failed > 0)
+      notify?.(
+        t('assetUi.library.bulkMovePartial', { ok: ids.length - failed, failed }),
+        failed === ids.length ? 'error' : 'info',
+      );
+    else notify?.(t('assetUi.library.bulkMoved', { count: ids.length }), 'success');
+  }
 
   async function downloadAsset(asset: AssetDTO) {
     const token = getWorkspaceToken();
@@ -179,7 +285,7 @@ export function LibraryFilesPanel({
         headers: { Authorization: `Bearer ${token}` },
       });
       if (!res.ok) {
-        notify?.('Download failed.', 'error');
+        notify?.(t('assetUi.library.downloadFailed'), 'error');
         return;
       }
       const blob = await res.blob();
@@ -197,7 +303,7 @@ export function LibraryFilesPanel({
   async function renameAsset(asset: AssetDTO) {
     setMenuAssetId(null);
     const currentTitle = assetTitle(asset, fileByAssetId.get(asset.id));
-    const nextTitle = window.prompt('Rename asset', currentTitle)?.trim();
+    const nextTitle = window.prompt(t('assetUi.library.renamePrompt'), currentTitle)?.trim();
     if (!nextTitle || nextTitle === currentTitle) return;
     setBusyAssetId(asset.id);
     try {
@@ -206,11 +312,11 @@ export function LibraryFilesPanel({
         body: JSON.stringify({ filename: nextTitle }),
       });
       if (!res.ok) {
-        notify?.(`Rename failed: ${res.message}`, 'error');
+        notify?.(t('assetUi.library.renameFailed', { message: res.message }), 'error');
         return;
       }
       await onAssetsChanged?.();
-      notify?.(`Renamed to "${nextTitle}".`, 'success');
+      notify?.(t('assetUi.library.renamed', { name: nextTitle }), 'success');
     } finally {
       setBusyAssetId(null);
     }
@@ -219,26 +325,34 @@ export function LibraryFilesPanel({
   async function deleteAsset(asset: AssetDTO) {
     setMenuAssetId(null);
     const title = assetTitle(asset, fileByAssetId.get(asset.id));
-    if (!window.confirm(`Delete "${title}"?`)) return;
+    if (!window.confirm(t('assetUi.library.confirmDelete', { name: title }))) return;
     setBusyAssetId(asset.id);
     try {
       const res = await imFetch(`/assets/${encodeURIComponent(asset.id)}`, { method: 'DELETE' });
       if (!res.ok) {
-        notify?.(`Delete failed: ${res.message}`, 'error');
+        notify?.(t('assetUi.library.deleteFailed', { message: res.message }), 'error');
         return;
       }
       await onAssetsChanged?.();
-      notify?.(`Deleted "${title}".`, 'success');
+      notify?.(t('assetUi.library.deleted', { name: title }), 'success');
     } finally {
       setBusyAssetId(null);
     }
   }
 
   function handleDragOver(event: DragEvent<HTMLElement>) {
-    if (!onUploadFiles || !hasFileDrag(event)) return;
-    event.preventDefault();
-    event.dataTransfer.dropEffect = 'copy';
-    setDraggingFiles(true);
+    if (onUploadFiles && hasFileDrag(event)) {
+      event.preventDefault();
+      event.dataTransfer.dropEffect = 'copy';
+      setDraggingFiles(true);
+      return;
+    }
+    // Accept asset card drags: allow dropping on the grid / empty area to
+    // move the dragged asset to the currently-viewed folder (or root).
+    if (hasAssetDrag(event)) {
+      event.preventDefault();
+      event.dataTransfer.dropEffect = 'move';
+    }
   }
 
   function handleDragLeave(event: DragEvent<HTMLElement>) {
@@ -248,16 +362,43 @@ export function LibraryFilesPanel({
   }
 
   async function handleDrop(event: DragEvent<HTMLElement>) {
-    if (!onUploadFiles) return;
-    const files = Array.from(event.dataTransfer.files ?? []);
-    if (files.length === 0) return;
-    event.preventDefault();
-    setDraggingFiles(false);
-    await onUploadFiles(files);
+    // File upload drop (from OS)
+    if (onUploadFiles) {
+      const files = Array.from(event.dataTransfer.files ?? []);
+      if (files.length > 0) {
+        event.preventDefault();
+        setDraggingFiles(false);
+        await onUploadFiles(files);
+        return;
+      }
+    }
+    // Asset card drop on grid area → move to current folder (or root if "All")
+    const draggedAssetId = readDraggedAssetId(event);
+    if (draggedAssetId) {
+      event.preventDefault();
+      try {
+        const targetKey = currentFolder ?? ROOT_FOLDER_KEY;
+        setMovingAssetId(draggedAssetId);
+        const res = await moveAssetToFolder(draggedAssetId, targetKey);
+        setMovingAssetId(null);
+        if (!res.ok) {
+          notify?.(t('assetUi.library.moveFailed', { message: res.message }), 'error');
+          return;
+        }
+        notify?.(t('assetUi.library.moved'), 'success');
+        await onAssetsChanged?.();
+      } catch {
+        /* ignore malformed payload */
+      } finally {
+        setIsDraggingAsset(false);
+        setDraggingFiles(false);
+      }
+    }
   }
 
   return (
     <section
+      data-launch-tour-anchor="library-panel"
       className="relative flex min-h-0 flex-1 flex-col"
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
@@ -270,7 +411,7 @@ export function LibraryFilesPanel({
         actions={
           <>
             <label
-              className={`flex h-9 min-w-[220px] flex-1 items-center gap-2 rounded-2xl border px-3 xl:max-w-sm ${
+              className={`flex h-9 w-[220px] items-center gap-2 rounded-2xl border px-3 ${
                 isDark ? 'border-white/[0.08] bg-white/[0.03] text-zinc-300' : 'border-zinc-200 bg-white text-zinc-700'
               }`}
             >
@@ -282,6 +423,109 @@ export function LibraryFilesPanel({
                 className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-zinc-400"
               />
             </label>
+            <AssetFilterMenu isDark={isDark} value={filter} options={FILTERS} onChange={setFilter} />
+            {/*
+              release201/09 §9.4a.3 — "Show task artifacts (N)" toggle.
+              Default OFF. ON-state surfaces task-bound IMAsset rows in
+              the Library view so reviewers can audit all per-task
+              products without opening every task drawer. Count comes
+              from the un-filtered workspace asset list (not the search-
+              narrowed set) so the number stays stable while the user
+              types.
+            */}
+            <button
+              type="button"
+              onClick={() => setShowTaskArtifacts((s) => !s)}
+              data-testid="library-show-task-artifacts-toggle"
+              title={t('assetUi.library.toggleArtifactsTitle')}
+              className={`inline-flex h-9 items-center gap-1.5 rounded-2xl px-3 text-xs font-medium ${
+                showTaskArtifacts
+                  ? isDark
+                    ? 'bg-violet-500/20 text-violet-200'
+                    : 'bg-violet-100 text-violet-700'
+                  : isDark
+                    ? 'border border-white/[0.08] text-zinc-300 hover:bg-white/[0.04]'
+                    : 'border border-zinc-200 text-zinc-700 hover:bg-zinc-100'
+              }`}
+            >
+              {showTaskArtifacts
+                ? t('assetUi.library.hideArtifacts', { count: taskBoundCount })
+                : t('assetUi.library.showArtifacts', { count: taskBoundCount })}
+            </button>
+            {/* Group-by dimension — switch how the grid is sectioned so assets
+                aren't all dumped in one undifferentiated "Today" pile. */}
+            <div
+              className={`inline-flex h-9 items-center gap-0.5 rounded-2xl border p-0.5 ${
+                isDark ? 'border-white/[0.08]' : 'border-zinc-200'
+              }`}
+              title={t('assetUi.library.groupByTitle')}
+            >
+              <Layers className={`ml-1.5 mr-0.5 h-3.5 w-3.5 ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`} />
+              {(['time', 'type', 'source'] as GroupBy[]).map((g) => (
+                <button
+                  key={g}
+                  type="button"
+                  onClick={() => setGroupBy(g)}
+                  data-testid={`library-groupby-${g}`}
+                  className={`inline-flex h-7 items-center rounded-xl px-2.5 text-xs font-medium ${
+                    groupBy === g
+                      ? isDark
+                        ? 'bg-violet-500/20 text-violet-200'
+                        : 'bg-violet-100 text-violet-700'
+                      : isDark
+                        ? 'text-zinc-400 hover:bg-white/[0.04]'
+                        : 'text-zinc-500 hover:bg-zinc-100'
+                  }`}
+                >
+                  {g === 'time'
+                    ? t('assetUi.library.groupTime')
+                    : g === 'type'
+                      ? t('assetUi.library.groupType')
+                      : t('assetUi.library.groupSource')}
+                </button>
+              ))}
+            </div>
+            {/* Sort dimension — order assets before grouping so each section
+                stays internally sorted. */}
+            <div
+              className={`inline-flex h-9 items-center gap-0.5 rounded-2xl border p-0.5 ${
+                isDark ? 'border-white/[0.08]' : 'border-zinc-200'
+              }`}
+              title={t('assetUi.library.sortByTitle')}
+            >
+              <ArrowDownUp className={`ml-1.5 mr-0.5 h-3.5 w-3.5 ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`} />
+              {(['newest', 'oldest', 'name', 'size'] as SortBy[]).map((s) => (
+                <button
+                  key={s}
+                  type="button"
+                  onClick={() => setSortBy(s)}
+                  data-testid={`library-sort-${s}`}
+                  className={`inline-flex h-7 items-center rounded-xl px-2.5 text-xs font-medium ${
+                    sortBy === s
+                      ? isDark
+                        ? 'bg-violet-500/20 text-violet-200'
+                        : 'bg-violet-100 text-violet-700'
+                      : isDark
+                        ? 'text-zinc-400 hover:bg-white/[0.04]'
+                        : 'text-zinc-500 hover:bg-zinc-100'
+                  }`}
+                >
+                  {s === 'newest'
+                    ? t('assetUi.library.sortNewest')
+                    : s === 'oldest'
+                      ? t('assetUi.library.sortOldest')
+                      : s === 'name'
+                        ? t('assetUi.library.sortName')
+                        : t('assetUi.library.sortSize')}
+                </button>
+              ))}
+            </div>
+            <LayoutToggle
+              isDark={isDark}
+              layout={cardLayout}
+              onChange={setCardLayout}
+              availableLayouts={['list', 'grid']}
+            />
             <button
               type="button"
               onClick={onUploadAsset}
@@ -294,31 +538,7 @@ export function LibraryFilesPanel({
             </button>
           </>
         }
-      >
-        <div className="flex gap-2 overflow-x-auto pb-1">
-          {FILTERS.map((item) => {
-            const active = filter === item.key;
-            return (
-              <button
-                key={item.key}
-                type="button"
-                onClick={() => setFilter(item.key)}
-                className={`shrink-0 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors ${
-                  active
-                    ? isDark
-                      ? 'border-violet-400/30 bg-violet-500/20 text-violet-100'
-                      : 'border-violet-200 bg-violet-100 text-violet-800'
-                    : isDark
-                      ? 'border-white/[0.07] text-zinc-400 hover:bg-white/[0.04]'
-                      : 'border-zinc-200 text-zinc-600 hover:bg-zinc-100'
-                }`}
-              >
-                {item.label}
-              </button>
-            );
-          })}
-        </div>
-      </SurfaceHeader>
+      />
 
       <div className="flex min-h-0 flex-1">
         <FolderSidebar
@@ -326,6 +546,7 @@ export function LibraryFilesPanel({
           tree={folderTree}
           current={currentFolder}
           dragOverFolder={dragOverFolder}
+          isDraggingAsset={isDraggingAsset}
           onSelect={(key) => setCurrentFolder(key)}
           onDragOverFolder={(key) => setDragOverFolder(key)}
           onDragLeaveFolder={() => setDragOverFolder(null)}
@@ -335,10 +556,10 @@ export function LibraryFilesPanel({
             const res = await moveAssetToFolder(assetId, key);
             setMovingAssetId(null);
             if (!res.ok) {
-              notify?.(`Move failed: ${res.message}`, 'error');
+              notify?.(t('assetUi.library.moveFailed', { message: res.message }), 'error');
               return;
             }
-            notify?.('Moved.', 'success');
+            notify?.(t('assetUi.library.moved'), 'success');
             await onAssetsChanged?.();
           }}
           onCreateFolder={() => {
@@ -347,6 +568,177 @@ export function LibraryFilesPanel({
           }}
         />
         <div className="min-h-0 flex-1 overflow-y-auto p-5">
+          {/* Breadcrumb / drop-to-move bar */}
+          {isDraggingAsset && currentFolder !== null ? (
+            <div
+              onDragOver={(event) => {
+                if (hasAssetDrag(event)) {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  event.dataTransfer.dropEffect = 'move';
+                }
+              }}
+              onDrop={async (event) => {
+                const draggedAssetId = readDraggedAssetId(event);
+                if (!draggedAssetId) return;
+                event.preventDefault();
+                event.stopPropagation();
+                try {
+                  setMovingAssetId(draggedAssetId);
+                  const targetKey = currentFolder;
+                  const res = await moveAssetToFolder(draggedAssetId, targetKey);
+                  setMovingAssetId(null);
+                  if (!res.ok) {
+                    notify?.(t('assetUi.library.moveFailed', { message: res.message }), 'error');
+                    return;
+                  }
+                  notify?.(t('assetUi.library.moved'), 'success');
+                  await onAssetsChanged?.();
+                } catch {
+                  /* ignore */
+                } finally {
+                  setIsDraggingAsset(false);
+                }
+              }}
+              className={`mb-3 rounded-xl border border-dashed px-3 py-2 text-center text-xs font-medium transition-colors ${
+                isDark
+                  ? 'border-violet-400/30 bg-violet-500/10 text-violet-200'
+                  : 'border-violet-300 bg-violet-50 text-violet-700'
+              }`}
+            >
+              {t('assetUi.library.dropToMove')}{' '}
+              <span className="font-semibold">
+                {currentFolder === ROOT_FOLDER_KEY ? t('assetUi.library.rootFolder') : currentFolder}
+              </span>
+            </div>
+          ) : isDraggingAsset ? (
+            <div
+              onDragOver={(event) => {
+                if (hasAssetDrag(event)) {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  event.dataTransfer.dropEffect = 'move';
+                }
+              }}
+              onDrop={async (event) => {
+                const draggedAssetId = readDraggedAssetId(event);
+                if (!draggedAssetId) return;
+                event.preventDefault();
+                event.stopPropagation();
+                try {
+                  setMovingAssetId(draggedAssetId);
+                  const res = await moveAssetToFolder(draggedAssetId, ROOT_FOLDER_KEY);
+                  setMovingAssetId(null);
+                  if (!res.ok) {
+                    notify?.(t('assetUi.library.moveFailed', { message: res.message }), 'error');
+                    return;
+                  }
+                  notify?.(t('assetUi.library.moved'), 'success');
+                  await onAssetsChanged?.();
+                } catch {
+                  /* ignore */
+                } finally {
+                  setIsDraggingAsset(false);
+                }
+              }}
+              className={`mb-3 rounded-xl border border-dashed px-3 py-2 text-center text-xs font-medium transition-colors ${
+                isDark
+                  ? 'border-violet-400/30 bg-violet-500/10 text-violet-200'
+                  : 'border-violet-300 bg-violet-50 text-violet-700'
+              }`}
+            >
+              {t('assetUi.library.dropToMove')}{' '}
+              <span className="font-semibold">{t('assetUi.library.allFolder')}</span>
+            </div>
+          ) : null}
+          {selectedIds.size > 0 ? (
+            <div
+              className={`sticky top-0 z-10 mb-3 flex items-center gap-2 border px-3 py-2 ${radius.card} ${
+                isDark
+                  ? 'border-violet-400/25 bg-violet-500/12 text-violet-100 backdrop-blur'
+                  : 'border-violet-200 bg-violet-50/95 text-violet-800 backdrop-blur'
+              }`}
+            >
+              <span className="text-xs font-semibold">{t('assetUi.library.selected', { count: selectedIds.size })}</span>
+              <div className="ml-auto flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => void bulkDelete()}
+                  data-testid="library-bulk-delete"
+                  className={`inline-flex h-8 items-center gap-1.5 rounded-xl px-3 text-xs font-medium ${
+                    isDark
+                      ? 'text-red-200 hover:bg-red-500/15'
+                      : 'text-red-600 hover:bg-red-50'
+                  }`}
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                  {t('assetUi.library.delete')}
+                </button>
+                <div className="relative">
+                  <button
+                    type="button"
+                    onClick={() => setBulkMoveOpen((o) => !o)}
+                    data-testid="library-bulk-move"
+                    className={`inline-flex h-8 items-center gap-1.5 rounded-xl px-3 text-xs font-medium ${
+                      isDark ? 'text-zinc-100 hover:bg-white/[0.08]' : 'text-zinc-700 hover:bg-white'
+                    }`}
+                  >
+                    <FolderInput className="h-3.5 w-3.5" />
+                    {t('assetUi.library.moveToFolder')}
+                    <ChevronDown className="h-3 w-3 opacity-60" />
+                  </button>
+                  {bulkMoveOpen ? (
+                    <>
+                      <div className="fixed inset-0 z-10" onClick={() => setBulkMoveOpen(false)} aria-hidden />
+                      <div
+                        className={`absolute right-0 top-9 z-20 max-h-72 w-52 overflow-y-auto rounded-2xl border p-1 shadow-2xl ${
+                          isDark ? 'border-white/[0.08] bg-zinc-950 text-zinc-100' : 'border-zinc-200 bg-white text-zinc-900'
+                        }`}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => void bulkMove(ROOT_FOLDER_KEY)}
+                          className={`flex h-8 w-full items-center gap-2 rounded-xl px-2.5 text-left text-xs font-medium ${
+                            isDark ? 'text-zinc-200 hover:bg-white/[0.06]' : 'text-zinc-700 hover:bg-zinc-100'
+                          }`}
+                        >
+                          <Home className="h-3.5 w-3.5 opacity-70" />
+                          {t('assetUi.library.rootFolder')}
+                        </button>
+                        {folderTree
+                          .filter((node) => node.key !== ROOT_FOLDER_KEY)
+                          .map((node) => (
+                            <button
+                              key={node.key}
+                              type="button"
+                              onClick={() => void bulkMove(node.key)}
+                              style={{ paddingLeft: `${10 + node.depth * 12}px` }}
+                              className={`flex h-8 w-full items-center gap-2 rounded-xl pr-2.5 text-left text-xs font-medium ${
+                                isDark ? 'text-zinc-200 hover:bg-white/[0.06]' : 'text-zinc-700 hover:bg-zinc-100'
+                              }`}
+                            >
+                              <Folder className="h-3.5 w-3.5 opacity-70" />
+                              <span className="truncate">{node.label}</span>
+                            </button>
+                          ))}
+                      </div>
+                    </>
+                  ) : null}
+                </div>
+                <button
+                  type="button"
+                  onClick={clearSelection}
+                  data-testid="library-bulk-clear"
+                  className={`inline-flex h-8 items-center gap-1.5 rounded-xl px-3 text-xs font-medium ${
+                    isDark ? 'text-zinc-300 hover:bg-white/[0.08]' : 'text-zinc-600 hover:bg-white'
+                  }`}
+                >
+                  <X className="h-3.5 w-3.5" />
+                  {t('assetUi.library.clear')}
+                </button>
+              </div>
+            </div>
+          ) : null}
           {filteredAssets.length === 0 ? (
             <div
               className={`flex min-h-[320px] flex-col items-center justify-center border border-dashed text-center ${radius.pane} ${surface.pane[theme]}`}
@@ -367,141 +759,50 @@ export function LibraryFilesPanel({
               </button>
             </div>
           ) : (
-            <div className="space-y-6">
-              {grouped.map((group) => (
-                <section key={group.label}>
-                  <h3
-                    className={`mb-2 text-[10px] font-bold uppercase tracking-wider ${isDark ? 'text-zinc-500' : 'text-zinc-500'}`}
-                  >
-                    {group.label}
-                  </h3>
-                  <div className="grid grid-cols-1 gap-3 xl:grid-cols-2 2xl:grid-cols-3">
-                    {group.items.map((asset, index) => {
-                      const file = fileByAssetId.get(asset.id);
-                      return (
-                        <motion.div
-                          key={asset.id}
-                          draggable
-                          onDragStartCapture={(event: DragEvent<HTMLDivElement>) => {
-                            const payload = {
-                              id: asset.id,
-                              title: assetTitle(asset, file),
-                              kind: asset.kind,
-                              mime: asset.mime,
-                              sizeBytes: asset.sizeBytes,
-                              contentHash: asset.contentHash,
-                            };
-                            event.dataTransfer.effectAllowed = 'copy';
-                            event.dataTransfer.setData('application/x-prismer-asset', JSON.stringify(payload));
-                            event.dataTransfer.setData('text/plain', `asset:${asset.id}`);
-                          }}
-                          initial={{ opacity: 0, y: 8 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          transition={{ type: 'spring', stiffness: 320, damping: 28, delay: index * 0.03 }}
-                          className={`group relative flex min-h-[136px] cursor-grab flex-col justify-between border p-3 transition-colors active:cursor-grabbing ${radius.card} ${surface.card[theme]} ${
-                            isDark ? 'hover:bg-white/[0.055]' : 'hover:bg-white'
-                          }`}
-                        >
-                          <button
-                            type="button"
-                            onClick={() => onOpenInspector({ kind: 'asset', assetId: asset.id })}
-                            className="flex min-w-0 flex-1 items-start gap-3 text-left"
-                          >
-                            <AssetThumb asset={asset} isDark={isDark} />
-                            <span className="min-w-0 flex-1">
-                              <span
-                                className={`block truncate text-sm font-semibold ${isDark ? 'text-zinc-100' : 'text-zinc-900'}`}
-                              >
-                                {assetTitle(asset, file)}
-                              </span>
-                              <span
-                                className={`mt-0.5 block truncate text-xs ${isDark ? 'text-zinc-500' : 'text-zinc-500'}`}
-                              >
-                                {assetMeta(asset)} · {new Date(asset.createdAt).toLocaleString()}
-                              </span>
-                              {asset.description && asset.description.trim().length > 0 ? (
-                                <span
-                                  data-testid={`library-files-asset-description-${asset.id}`}
-                                  className={`mt-1 block text-[11px] leading-snug ${isDark ? 'text-zinc-300' : 'text-zinc-700'}`}
-                                  // Two-line clamp keeps card height predictable when descriptions
-                                  // approach the 500-char limit.
-                                  style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}
-                                >
-                                  {asset.description}
-                                </span>
-                              ) : null}
-                              <span className="mt-2 flex flex-wrap gap-1.5">
-                                <StatusBadge status={asset.ingestStatus ?? 'synced'} isDark={isDark} />
-                                {(asset.memoryPages?.length ?? 0) > 0 ? (
-                                  <span
-                                    className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[10px] font-medium ${
-                                      isDark
-                                        ? 'border-cyan-400/20 bg-cyan-500/10 text-cyan-100'
-                                        : 'border-cyan-200 bg-cyan-50 text-cyan-700'
-                                    }`}
-                                  >
-                                    <FileText className="h-3 w-3" />
-                                    {asset.memoryPages!.length} memory page{asset.memoryPages!.length === 1 ? '' : 's'}
-                                  </span>
-                                ) : null}
-                              </span>
-                            </span>
-                          </button>
-                          <div className="mt-3 flex items-center justify-between gap-2">
-                            <span
-                              className={`truncate font-mono text-[10px] ${isDark ? 'text-zinc-600' : 'text-zinc-400'}`}
-                            >
-                              {asset.contentHash.slice(0, 12)}
-                            </span>
-                            <div className="flex shrink-0 items-center gap-1">
-                              <AssetIconButton
-                                isDark={isDark}
-                                title="Download"
-                                disabled={downloadingAssetId === asset.id || busyAssetId === asset.id}
-                                onClick={() => void downloadAsset(asset)}
-                              >
-                                {downloadingAssetId === asset.id ? (
-                                  <Loader2 className="h-4 w-4 animate-spin" />
-                                ) : (
-                                  <CloudDownload className="h-4 w-4" />
-                                )}
-                              </AssetIconButton>
-                              <AssetIconButton
-                                isDark={isDark}
-                                title="Asset actions"
-                                disabled={busyAssetId === asset.id}
-                                onClick={() => setMenuAssetId((current) => (current === asset.id ? null : asset.id))}
-                              >
-                                {busyAssetId === asset.id ? (
-                                  <Loader2 className="h-4 w-4 animate-spin" />
-                                ) : (
-                                  <MoreVertical className="h-4 w-4" />
-                                )}
-                              </AssetIconButton>
-                            </div>
-                          </div>
-                          {menuAssetId === asset.id ? (
-                            <AssetCardMenu
-                              isDark={isDark}
-                              onOpen={() => {
-                                setMenuAssetId(null);
-                                onOpenInspector({ kind: 'asset', assetId: asset.id });
-                              }}
-                              onRename={() => void renameAsset(asset)}
-                              onDownload={() => {
-                                setMenuAssetId(null);
-                                void downloadAsset(asset);
-                              }}
-                              onDelete={() => void deleteAsset(asset)}
-                            />
-                          ) : null}
-                        </motion.div>
-                      );
-                    })}
-                  </div>
-                </section>
-              ))}
-            </div>
+            <CardShelf<AssetDTO>
+              isDark={isDark}
+              data={grouped}
+              getId={(asset) => asset.id}
+              layout={cardLayout}
+              availableLayouts={['list', 'grid']}
+              containerClassName={{
+                grid: 'grid grid-cols-1 gap-3 xl:grid-cols-2 2xl:grid-cols-3',
+              }}
+              renderCard={({ item: asset, layout }) => (
+                <AssetCard
+                  isDark={isDark}
+                  layout={layout}
+                  asset={asset}
+                  file={fileByAssetId.get(asset.id)}
+                  busy={busyAssetId === asset.id}
+                  downloading={downloadingAssetId === asset.id}
+                  menuOpen={menuAssetId === asset.id}
+                  selected={selectedIds.has(asset.id)}
+                  onToggleSelect={() => toggleSelected(asset.id)}
+                  onOpen={() => onOpenInspector({ kind: 'asset', assetId: asset.id })}
+                  onDownload={() => void downloadAsset(asset)}
+                  onDelete={() => void deleteAsset(asset)}
+                  onRename={() => void renameAsset(asset)}
+                  onToggleMenu={() => setMenuAssetId((current) => (current === asset.id ? null : asset.id))}
+                  onDragStart={(event) => {
+                    const payload = {
+                      id: asset.id,
+                      title: assetTitle(asset, fileByAssetId.get(asset.id)),
+                      kind: asset.kind,
+                      mime: asset.mime,
+                      sizeBytes: asset.sizeBytes,
+                      contentHash: asset.contentHash,
+                      folderPath: asset.folderPath ?? null,
+                    };
+                    event.dataTransfer.effectAllowed = 'copyMove';
+                    event.dataTransfer.setData('application/x-prismer-asset', JSON.stringify(payload));
+                    event.dataTransfer.setData('text/plain', `asset:${asset.id}`);
+                    setIsDraggingAsset(true);
+                  }}
+                  onDragEnd={() => setIsDraggingAsset(false)}
+                />
+              )}
+            />
           )}
         </div>
       </div>
@@ -515,14 +816,14 @@ export function LibraryFilesPanel({
             onConfirm={() => {
               const trimmed = newFolderName.trim().replace(/^\/+|\/+$/g, '');
               if (!trimmed) {
-                notify?.('Folder name cannot be empty.', 'error');
+                notify?.(t('assetUi.library.folderNameEmpty'), 'error');
                 return;
               }
               if (trimmed.startsWith('tasks') || trimmed.startsWith('sandbox')) {
-                notify?.('`tasks` and `sandbox` are reserved for daemon-managed folders.', 'error');
+                notify?.(t('assetUi.library.folderNameReserved'), 'error');
                 return;
               }
-              const path = `/${trimmed}`;
+              const path = normalizeFolderPath(`/${trimmed}`);
               setCustomFolders((prev) => (prev.includes(path) ? prev : [...prev, path]));
               setCurrentFolder(path);
               setCreatingFolder(false);
@@ -568,6 +869,7 @@ function FolderSidebar({
   tree,
   current,
   dragOverFolder,
+  isDraggingAsset,
   onSelect,
   onDragOverFolder,
   onDragLeaveFolder,
@@ -578,12 +880,53 @@ function FolderSidebar({
   tree: FolderNode[];
   current: FolderKey | null;
   dragOverFolder: FolderKey | null;
+  isDraggingAsset: boolean;
   onSelect: (key: FolderKey | null) => void;
   onDragOverFolder: (key: FolderKey) => void;
   onDragLeaveFolder: () => void;
   onDropAsset: (key: FolderKey, assetId: string) => void | Promise<void>;
   onCreateFolder: () => void;
 }) {
+  const { t } = useI18n();
+  // 2026-05-20 — Collapsible tree. Previously the sidebar rendered every
+  // node as a flat list (indented by `node.depth`), so a workspace with
+  // many `/tasks/<id>` or `/sandbox/<run>` branches produced an
+  // un-scrollable wall. The buildFolderTree output preserves key prefixes
+  // (`/tasks` is the parent of `/tasks/abc`), so we can derive parent
+  // relationships purely from the `key` string + sort order. Default
+  // state: all expanded — the prior behavior — but each top-level branch
+  // (or any node with descendants) now has a chevron toggle.
+  const [collapsed, setCollapsed] = useState<Set<FolderKey>>(() => new Set());
+  // Compute `hasChildren` per node: is there any later node whose key
+  // starts with `<this.key>/` AND has depth = this.depth + 1?
+  const hasChildren = useMemo(() => {
+    const result = new Map<FolderKey, boolean>();
+    for (const node of tree) {
+      const prefix = node.key === ROOT_FOLDER_KEY ? null : `${node.key}/`;
+      result.set(node.key, prefix !== null && tree.some((other) => other !== node && other.key.startsWith(prefix)));
+    }
+    return result;
+  }, [tree]);
+  // A node should be rendered iff NONE of its ancestor keys are in `collapsed`.
+  // Walk up the path-prefix chain: `/tasks/abc/def` → check `/tasks/abc`, `/tasks`.
+  const isHidden = (key: FolderKey): boolean => {
+    if (key === ROOT_FOLDER_KEY || !key.startsWith('/')) return false;
+    let cursor = key.lastIndexOf('/');
+    while (cursor > 0) {
+      const ancestor = key.slice(0, cursor);
+      if (collapsed.has(ancestor)) return true;
+      cursor = ancestor.lastIndexOf('/');
+    }
+    return false;
+  };
+  const toggle = (key: FolderKey) => {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
   return (
     <aside
       className={`hidden w-[200px] shrink-0 overflow-y-auto border-r p-3 lg:block ${
@@ -594,12 +937,12 @@ function FolderSidebar({
         <span
           className={`text-[10px] font-bold uppercase tracking-wider ${isDark ? 'text-zinc-500' : 'text-zinc-500'}`}
         >
-          Folders
+          {t('assetUi.library.folders')}
         </span>
         <button
           type="button"
           onClick={onCreateFolder}
-          title="New folder"
+          title={t('assetUi.library.newFolderAria')}
           className={`inline-flex h-6 w-6 items-center justify-center rounded-lg ${
             isDark
               ? 'text-zinc-400 hover:bg-white/[0.05] hover:text-zinc-100'
@@ -623,20 +966,24 @@ function FolderSidebar({
         }`}
       >
         <Archive className="h-3.5 w-3.5 opacity-70" />
-        <span className="flex-1 truncate">All</span>
+        <span className="flex-1 truncate">{t('assetUi.library.allFolder')}</span>
       </button>
       {tree.map((node) => {
+        if (isHidden(node.key)) return null;
         const active = current === node.key;
         const dropTarget = dragOverFolder === node.key;
         const Icon = node.key === ROOT_FOLDER_KEY ? Home : Folder;
+        const expandable = hasChildren.get(node.key) === true;
+        const isCollapsed = collapsed.has(node.key);
         return (
           <button
             key={node.key}
             type="button"
             onClick={() => onSelect(node.key)}
             onDragOver={(event) => {
-              if (event.dataTransfer.types.includes('application/x-prismer-asset')) {
+              if (hasAssetDrag(event)) {
                 event.preventDefault();
+                event.stopPropagation();
                 event.dataTransfer.dropEffect = 'move';
                 onDragOverFolder(node.key);
               }
@@ -645,18 +992,14 @@ function FolderSidebar({
               if (dragOverFolder === node.key) onDragLeaveFolder();
             }}
             onDrop={(event) => {
-              const raw = event.dataTransfer.getData('application/x-prismer-asset');
-              if (!raw) return;
+              const draggedAssetId = readDraggedAssetId(event);
+              if (!draggedAssetId) return;
               event.preventDefault();
-              try {
-                const parsed = JSON.parse(raw) as { id?: string };
-                if (parsed?.id) void onDropAsset(node.key, parsed.id);
-              } catch {
-                /* ignore malformed payload */
-              }
+              event.stopPropagation();
+              void onDropAsset(node.key, draggedAssetId);
             }}
             style={{ paddingLeft: `${8 + node.depth * 12}px` }}
-            className={`mb-0.5 flex w-full items-center gap-2 rounded-xl py-1.5 pr-2 text-left text-xs transition-colors ${
+            className={`mb-0.5 flex w-full items-center gap-2 rounded-xl py-1.5 pr-2 text-left text-xs transition-all ${
               active
                 ? isDark
                   ? 'bg-violet-500/20 text-violet-100'
@@ -665,13 +1008,40 @@ function FolderSidebar({
                   ? isDark
                     ? 'bg-emerald-500/20 text-emerald-100 ring-1 ring-emerald-400/40'
                     : 'bg-emerald-100 text-emerald-800 ring-1 ring-emerald-300'
-                  : isDark
-                    ? 'text-zinc-300 hover:bg-white/[0.04]'
-                    : 'text-zinc-700 hover:bg-zinc-100'
+                  : isDraggingAsset
+                    ? isDark
+                      ? 'text-zinc-200 ring-1 ring-white/[0.06]'
+                      : 'text-zinc-700 ring-1 ring-zinc-200/60'
+                    : isDark
+                      ? 'text-zinc-300 hover:bg-white/[0.04]'
+                      : 'text-zinc-700 hover:bg-zinc-100'
             }`}
           >
+            {expandable ? (
+              // Plain span (not <button role>) — nesting `<button>` inside
+              // the outer folder `<button>` is invalid HTML. Click only;
+              // keyboard expand isn't required because the outer button is
+              // the primary affordance (Enter on the folder still selects;
+              // the chevron is a discoverability + mouse helper).
+              <span
+                onClick={(event) => {
+                  event.stopPropagation();
+                  toggle(node.key);
+                }}
+                aria-label={isCollapsed ? t('assetUi.library.expandFolder') : t('assetUi.library.collapseFolder')}
+                className={`-ml-1 inline-flex h-4 w-4 shrink-0 cursor-pointer items-center justify-center rounded ${
+                  isDark ? 'text-zinc-400 hover:bg-white/[0.06]' : 'text-zinc-500 hover:bg-zinc-200/60'
+                }`}
+              >
+                {isCollapsed ? <ChevronRight className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+              </span>
+            ) : (
+              <span className="-ml-1 inline-block h-4 w-4 shrink-0" aria-hidden="true" />
+            )}
             <Icon className="h-3.5 w-3.5 opacity-70" />
-            <span className="flex-1 truncate">{node.label}</span>
+            <span className="flex-1 truncate">
+              {node.key === ROOT_FOLDER_KEY ? t('assetUi.library.rootFolder') : node.label}
+            </span>
             {node.count > 0 ? (
               <span className={`text-[10px] ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>{node.count}</span>
             ) : null}
@@ -704,6 +1074,7 @@ function NewFolderDialog({
   onCancel: () => void;
   onConfirm: () => void;
 }) {
+  const { t } = useI18n();
   return (
     <motion.div
       initial={{ opacity: 0 }}
@@ -721,9 +1092,11 @@ function NewFolderDialog({
           isDark ? 'border-white/[0.08] bg-zinc-900' : 'border-zinc-200 bg-white'
         }`}
       >
-        <h3 className={`text-sm font-semibold ${isDark ? 'text-zinc-100' : 'text-zinc-900'}`}>New folder</h3>
+        <h3 className={`text-sm font-semibold ${isDark ? 'text-zinc-100' : 'text-zinc-900'}`}>
+          {t('assetUi.library.newFolderTitle')}
+        </h3>
         <p className={`mt-1 text-[11px] ${isDark ? 'text-zinc-500' : 'text-zinc-500'}`}>
-          Free-form path. Leading slash optional. `tasks` and `sandbox` are reserved.
+          {t('assetUi.library.newFolderHint')}
         </p>
         <input
           autoFocus
@@ -733,7 +1106,7 @@ function NewFolderDialog({
             if (event.key === 'Enter') onConfirm();
             if (event.key === 'Escape') onCancel();
           }}
-          placeholder="my-references"
+          placeholder={t('assetUi.library.newFolderPlaceholder')}
           className={`mt-3 w-full rounded-xl border px-3 py-2 text-sm outline-none ${
             isDark
               ? 'border-white/[0.08] bg-white/[0.03] text-zinc-100 placeholder:text-zinc-500'
@@ -748,7 +1121,7 @@ function NewFolderDialog({
               isDark ? 'text-zinc-400 hover:bg-white/[0.05]' : 'text-zinc-600 hover:bg-zinc-100'
             }`}
           >
-            Cancel
+            {t('assetUi.library.cancel')}
           </button>
           <button
             type="button"
@@ -757,7 +1130,7 @@ function NewFolderDialog({
               isDark ? 'bg-violet-500 hover:bg-violet-400' : 'bg-violet-600 hover:bg-violet-700'
             }`}
           >
-            Create
+            {t('assetUi.library.createFolder')}
           </button>
         </div>
       </motion.div>
@@ -769,199 +1142,24 @@ function hasFileDrag(event: DragEvent<HTMLElement>) {
   return Array.from(event.dataTransfer.types ?? []).includes('Files');
 }
 
-function AssetIconButton({
-  isDark,
-  title,
-  disabled,
-  onClick,
-  children,
-}: {
-  isDark: boolean;
-  title: string;
-  disabled?: boolean;
-  onClick: () => void;
-  children: ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={(event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        onClick();
-      }}
-      disabled={disabled}
-      title={title}
-      className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl disabled:cursor-not-allowed disabled:opacity-50 ${
-        isDark
-          ? 'text-zinc-400 hover:bg-white/[0.05] hover:text-zinc-100'
-          : 'text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900'
-      }`}
-    >
-      {children}
-    </button>
-  );
+function hasAssetDrag(event: DragEvent<HTMLElement>) {
+  const types = Array.from(event.dataTransfer.types ?? []);
+  return types.includes('application/x-prismer-asset') || types.includes('text/plain');
 }
 
-function AssetCardMenu({
-  isDark,
-  onOpen,
-  onRename,
-  onDownload,
-  onDelete,
-}: {
-  isDark: boolean;
-  onOpen: () => void;
-  onRename: () => void;
-  onDownload: () => void;
-  onDelete: () => void;
-}) {
-  return (
-    <div
-      className={`absolute bottom-12 right-3 z-30 w-44 overflow-hidden rounded-2xl border p-1 shadow-2xl ${
-        isDark ? 'border-white/[0.08] bg-zinc-950 text-zinc-100' : 'border-zinc-200 bg-white text-zinc-900'
-      }`}
-      onClick={(event) => event.stopPropagation()}
-    >
-      <AssetMenuItem isDark={isDark} icon={<Eye className="h-3.5 w-3.5" />} label="Open" onClick={onOpen} />
-      <AssetMenuItem isDark={isDark} icon={<Edit3 className="h-3.5 w-3.5" />} label="Rename" onClick={onRename} />
-      <AssetMenuItem
-        isDark={isDark}
-        icon={<CloudDownload className="h-3.5 w-3.5" />}
-        label="Download"
-        onClick={onDownload}
-      />
-      <div className={`my-1 h-px ${isDark ? 'bg-white/[0.07]' : 'bg-zinc-100'}`} />
-      <AssetMenuItem
-        isDark={isDark}
-        danger
-        icon={<Trash2 className="h-3.5 w-3.5" />}
-        label="Delete"
-        onClick={onDelete}
-      />
-    </div>
-  );
-}
-
-function AssetMenuItem({
-  isDark,
-  danger,
-  icon,
-  label,
-  onClick,
-}: {
-  isDark: boolean;
-  danger?: boolean;
-  icon: ReactNode;
-  label: string;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={(event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        onClick();
-      }}
-      className={`flex h-9 w-full items-center gap-2 rounded-xl px-2.5 text-left text-xs font-medium ${
-        danger
-          ? isDark
-            ? 'text-red-200 hover:bg-red-500/10'
-            : 'text-red-700 hover:bg-red-50'
-          : isDark
-            ? 'text-zinc-200 hover:bg-white/[0.06]'
-            : 'text-zinc-700 hover:bg-zinc-100'
-      }`}
-    >
-      {icon}
-      <span>{label}</span>
-    </button>
-  );
-}
-
-function AssetThumb({ asset, isDark }: { asset: AssetDTO; isDark: boolean }) {
-  return (
-    <span
-      className={`flex h-[60px] w-[60px] shrink-0 items-center justify-center rounded-2xl ${
-        isDark ? 'bg-violet-500/12 text-violet-200' : 'bg-violet-50 text-violet-700'
-      }`}
-    >
-      {renderAssetIcon(asset)}
-    </span>
-  );
-}
-
-function StatusBadge({ status, isDark }: { status: string; isDark: boolean }) {
-  const normalized = status || 'synced';
-  const ready = normalized === 'memory-ready' || normalized === 'indexed' || normalized === 'synced';
-  const failed = normalized === 'failed';
-  const className = failed
-    ? isDark
-      ? 'border-red-400/20 bg-red-500/10 text-red-200'
-      : 'border-red-200 bg-red-50 text-red-700'
-    : ready
-      ? isDark
-        ? 'border-emerald-400/20 bg-emerald-500/10 text-emerald-200'
-        : 'border-emerald-200 bg-emerald-50 text-emerald-700'
-      : isDark
-        ? 'border-amber-400/20 bg-amber-500/10 text-amber-100'
-        : 'border-amber-200 bg-amber-50 text-amber-700';
-  return (
-    <span
-      className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[10px] font-medium ${className}`}
-    >
-      <CheckCircle2 className="h-3 w-3" />
-      {statusLabel(normalized)}
-    </span>
-  );
-}
-
-function statusLabel(status: string) {
-  switch (status) {
-    case 'memory-ready':
-      return 'Memory ready';
-    case 'asset-only':
-      return 'Asset only';
-    case 'pending':
-      return 'Pending ingest';
-    case 'failed':
-      return 'Ingest failed';
-    case 'indexed':
-      return 'Indexed';
-    default:
-      return 'Synced';
+function readDraggedAssetId(event: DragEvent<HTMLElement>): string | null {
+  const raw = event.dataTransfer.getData('application/x-prismer-asset');
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw) as { id?: unknown };
+      if (typeof parsed.id === 'string' && parsed.id.trim()) return parsed.id.trim();
+    } catch {
+      /* fall through to text/plain */
+    }
   }
-}
-
-function renderAssetIcon(asset: AssetDTO): ReactNode {
-  const mime = asset.mime ?? '';
-  if (isImageAsset(asset)) return <ImageIcon className="h-6 w-6" />;
-  if (isDataAsset(asset)) return <Table2 className="h-6 w-6" />;
-  if (isCodeAsset(asset)) return <FileCode2 className="h-6 w-6" />;
-  if (mime) return <FileText className="h-6 w-6" />;
-  return <Archive className="h-6 w-6" />;
-}
-
-function isImageAsset(asset: AssetDTO): boolean {
-  return (asset.mime ?? '').startsWith('image/');
-}
-
-function isDocAsset(asset: AssetDTO): boolean {
-  const mime = asset.mime ?? '';
-  return mime.includes('pdf') || mime.includes('text') || asset.kind.includes('document');
-}
-
-function isCodeAsset(asset: AssetDTO): boolean {
-  const mime = asset.mime ?? '';
-  return (
-    mime.includes('javascript') || mime.includes('typescript') || mime.includes('python') || asset.kind.includes('code')
-  );
-}
-
-function isDataAsset(asset: AssetDTO): boolean {
-  const mime = asset.mime ?? '';
-  return mime.includes('json') || mime.includes('csv') || asset.kind.includes('dataset');
+  const text = event.dataTransfer.getData('text/plain');
+  const match = /^asset:(.+)$/.exec(text.trim());
+  return match?.[1] ? match[1].trim() : null;
 }
 
 function matchesFilter(asset: AssetDTO, filter: AssetFilter): boolean {
@@ -1070,40 +1268,17 @@ function buildFolderTree(assets: AssetDTO[], customFolders: string[]): FolderNod
     count: directCount.get(ROOT_FOLDER_KEY) ?? 0,
     pinned: true,
   });
-  // /tasks branch.
-  nodes.push({
-    key: TASKS_FOLDER_KEY,
-    label: 'Tasks',
-    depth: 0,
-    count: directCount.get(TASKS_FOLDER_KEY) ?? 0,
-    pinned: true,
-  });
-  for (const child of [...taskChildren].sort()) {
-    nodes.push({
-      key: child,
-      label: child.slice(TASKS_FOLDER_KEY.length + 1),
-      depth: 1,
-      count: directCount.get(child) ?? 0,
-      pinned: false,
-    });
-  }
-  // /sandbox branch.
-  nodes.push({
-    key: SANDBOX_FOLDER_KEY,
-    label: 'Sandbox',
-    depth: 0,
-    count: directCount.get(SANDBOX_FOLDER_KEY) ?? 0,
-    pinned: true,
-  });
-  for (const child of [...sandboxChildren].sort()) {
-    nodes.push({
-      key: child,
-      label: child.slice(SANDBOX_FOLDER_KEY.length + 1),
-      depth: 1,
-      count: directCount.get(child) ?? 0,
-      pinned: false,
-    });
-  }
+  // release201/09 §9.4a.3 — `Tasks/` and `Sandbox/` always-render
+  // fixed folders are retired. They previously surfaced one folder per
+  // task ID (cmp***) and spammed CEO with workspace artifact noise.
+  // Task products now live in task drawer's Artifacts tab; if a user
+  // toggles "Show task artifacts" we still build any `/tasks/<id>`
+  // children below from existing rows (folderPath bytes are unchanged
+  // — only the tree projection differs).
+  void TASKS_FOLDER_KEY;
+  void SANDBOX_FOLDER_KEY;
+  void taskChildren;
+  void sandboxChildren;
   // User-defined top-levels (alphabetical).
   for (const top of [...userTopLevels].sort()) {
     nodes.push({
@@ -1148,7 +1323,7 @@ async function moveAssetToFolder(
       message: `${targetKey} is auto-managed by the daemon — pick a sub-folder or a user-created folder`,
     };
   }
-  const folderPath = targetKey === ROOT_FOLDER_KEY ? null : targetKey;
+  const folderPath = targetKey === ROOT_FOLDER_KEY ? null : normalizeFolderPath(targetKey);
   const token = getWorkspaceToken();
   if (!token) return { ok: false, message: 'Not authenticated' };
   const res = await fetch(`/api/im/assets/${encodeURIComponent(assetId)}`, {
@@ -1164,7 +1339,92 @@ async function moveAssetToFolder(
   return { ok: true };
 }
 
-function groupAssets(assets: AssetDTO[]) {
+function normalizeFolderPath(raw: string): string {
+  const segments = raw
+    .split('/')
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+  return segments.length > 0 ? `/${segments.join('/')}` : ROOT_FOLDER_KEY;
+}
+
+type GroupBy = 'time' | 'type' | 'source';
+type SortBy = 'newest' | 'oldest' | 'name' | 'size';
+
+/**
+ * Sort the asset list before grouping so each section is internally ordered.
+ *
+ * newest/oldest → createdAt (Date.parse; unparseable sorts last)
+ * name          → assetTitle localeCompare (uses the filename map for the
+ *                 same title the card shows)
+ * size          → sizeBytes desc (null treated as 0)
+ */
+function sortAssets(
+  assets: AssetDTO[],
+  sortBy: SortBy,
+  fileByAssetId: Map<string, WorkspaceFileDTO>,
+): AssetDTO[] {
+  const next = [...assets];
+  const ts = (a: AssetDTO) => {
+    const v = Date.parse(a.createdAt);
+    return Number.isFinite(v) ? v : Number.NEGATIVE_INFINITY;
+  };
+  switch (sortBy) {
+    case 'newest':
+      next.sort((a, b) => ts(b) - ts(a));
+      break;
+    case 'oldest':
+      next.sort((a, b) => ts(a) - ts(b));
+      break;
+    case 'name':
+      next.sort((a, b) =>
+        assetTitle(a, fileByAssetId.get(a.id)).localeCompare(assetTitle(b, fileByAssetId.get(b.id))),
+      );
+      break;
+    case 'size':
+      next.sort((a, b) => (b.sizeBytes ?? 0) - (a.sizeBytes ?? 0));
+      break;
+  }
+  return next;
+}
+
+/** Build sections + per-section counts, dropping empties, preserving the
+ *  declared bucket order. */
+function bucketize(assets: AssetDTO[], order: string[], keyOf: (a: AssetDTO) => string) {
+  const byKey = new Map<string, AssetDTO[]>(order.map((k) => [k, []]));
+  for (const asset of assets) {
+    const key = keyOf(asset);
+    (byKey.get(key) ?? byKey.set(key, []).get(key)!).push(asset);
+  }
+  return order
+    .map((label) => ({ label: `${label} · ${byKey.get(label)?.length ?? 0}`, items: byKey.get(label) ?? [] }))
+    .filter((group) => group.items.length > 0);
+}
+
+function groupAssets(assets: AssetDTO[], groupBy: GroupBy) {
+  if (groupBy === 'type') {
+    const TYPE_LABEL: Record<string, string> = {
+      image: 'Images',
+      doc: 'Documents',
+      pdf: 'PDFs',
+      data: 'Data',
+      code: 'Code',
+      other: 'Other',
+    };
+    return bucketize(
+      assets,
+      ['Images', 'Documents', 'PDFs', 'Data', 'Code', 'Other'],
+      (a) => TYPE_LABEL[assetTypeTone(a)] ?? 'Other',
+    );
+  }
+  if (groupBy === 'source') {
+    const SOURCE_LABEL: Record<string, string> = {
+      task: 'From tasks',
+      agent: 'Agent output',
+      upload: 'Uploaded',
+    };
+    return bucketize(assets, ['Uploaded', 'From tasks', 'Agent output'], (a) => SOURCE_LABEL[assetSource(a).tone]);
+  }
+  // time (default)
   const now = Date.now();
   const groups = [
     { label: 'Today', items: [] as AssetDTO[] },
@@ -1180,26 +1440,7 @@ function groupAssets(assets: AssetDTO[]) {
     else if (age < 7 * 86_400_000) groups[2].items.push(asset);
     else groups[3].items.push(asset);
   }
-  return groups.filter((group) => group.items.length > 0);
-}
-
-function assetTitle(asset: AssetDTO, file?: WorkspaceFileDTO) {
-  if (asset.filename) return asset.filename;
-  const title = asset.metadata?.title;
-  if (typeof title === 'string' && title.trim()) return title;
-  if (file?.path) return file.path;
-  return asset.contentHash.slice(0, 16);
-}
-
-function assetMeta(asset: AssetDTO) {
-  const derived = asset.derivationKind ? `${asset.derivationKind}` : null;
-  const parts = [derived ?? asset.kind, asset.mime ?? 'unknown', formatBytes(asset.sizeBytes)];
-  return parts.join(' · ');
-}
-
-function formatBytes(bytes: number | null) {
-  if (bytes == null) return 'unknown';
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  return groups
+    .filter((group) => group.items.length > 0)
+    .map((group) => ({ label: `${group.label} · ${group.items.length}`, items: group.items }));
 }
