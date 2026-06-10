@@ -1,0 +1,26 @@
+# content-scrub.txt — forbidden content patterns (grep -E, one per line).
+# Any staged file matching one of these BLOCKS `sync-server.sh apply`
+# until the file is manually fixed in state/stage/ (or apply is run with --force
+# after explicit human review). Lines starting with # are comments.
+
+# live API keys / secrets
+sk-prismer-[A-Za-z0-9]{20,}
+sk-ant-[A-Za-z0-9_-]{20,}
+sk_live_[A-Za-z0-9]{16,}
+pk_live_[A-Za-z0-9]{16,}
+whsec_[A-Za-z0-9]{16,}
+AKIA[0-9A-Z]{16}
+-----BEGIN( [A-Z]+)? PRIVATE KEY-----
+ghp_[A-Za-z0-9]{30,}
+glpat-[A-Za-z0-9_-]{20,}
+
+# internal infrastructure identifiers (prod/test/dev environments)
+bd5fb394-7492-440a-9626-9f8a261c500f
+a1ce57f2-0405-45c3-a8b1-35953d1e9aaf
+a49fb6f9-e461-4b2a-aa66-3cccde46126c
+nacos\.prismer\.app
+prismer123
+databaes-2
+c6tm6c0ik291
+34\.207\.64\.245
+gitlab\.app

@@ -1,0 +1,48 @@
+# blacklist.txt — paths the sync must NEVER touch, in either direction.
+# Self-host versions of these files are maintained directly in this repo;
+# upstream changes to them are intentionally ignored, and new upstream files
+# matching these patterns are never imported.
+# Matching: trailing '/' = recursive directory prefix; '*' = shell glob; else exact path.
+
+# self-host curated docs & meta (rewritten for the open repo)
+README.md
+CLAUDE.md
+CONTRIBUTING.md
+AGENTS.md
+CHANGELOG.md
+docs/
+
+# closed-source internal tooling / CI / agent runtime
+.gitlab-ci.yml
+.ralphrc
+.claude/
+.hermes/
+.gstack/
+data/
+benchmark/
+cookbook/
+e2e-playwright/
+evidence/
+infra/
+installer/
+eslint-rules/
+packages/
+tests/
+stress-5.json
+stress-report.json
+vitest.config.ts
+vitest.integration.config.ts
+playwright.config.ts
+VERSION
+
+# SDK trees: top-level sdk/ in the open repo is synced by sdk/build/sync.sh
+# (whole-directory rsync); server/sdk/ is a hand-curated self-host copy.
+sdk/
+
+# self-host only assets (exist only in the open repo; listed defensively)
+docker/
+docker-compose.yml
+.github/
+.devcontainer/
+.gitignore
+prisma/data/assets/
