@@ -29,7 +29,8 @@
 
 import type { NextRequest } from 'next/server';
 import { logger } from '@/lib/logger';
-import { K8sSandboxError, k8sSandbox } from '@/lib/k8s-sandbox';
+import { resolvePersistent } from '@/lib/sandbox/registry';
+import { ProviderError } from '@/lib/execution/errors';
 import { authorizeContainer } from '../../_helpers';
 
 export const dynamic = 'force-dynamic';
@@ -40,7 +41,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
   if (!auth.ok) return auth.response;
 
   const { container } = auth.data;
-  return streamPodLogs(req, container.podName);
+  return streamPodLogs(req, container.podName, container.providerKind ?? 'k8s');
 }
 
 /**
@@ -56,7 +57,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
  *      reschedule — otherwise a K8s outage produces a duplicate-error flood
  *      every 1s)
  */
-function streamPodLogs(req: NextRequest, podName: string): Response {
+function streamPodLogs(req: NextRequest, podName: string, providerKind: string): Response {
   const abortSignal = req.signal;
   const encoder = new TextEncoder();
   let lastLength = 0;
@@ -103,7 +104,8 @@ function streamPodLogs(req: NextRequest, podName: string): Response {
           // this, `readNamespacedPodLog` returns the entire pod history on
           // each call — N polls × full-history-bytes/sec wasted bandwidth.
           // `lastLength` still drives line-level dedupe across polls.
-          const text = await k8sSandbox.getContainerLogs(podName, { tail: 1000 });
+          const provider = resolvePersistent(providerKind);
+          const text = await provider.getLogs(podName, { tailLines: 1000 });
           if (text.length > lastLength) {
             const delta = text.slice(lastLength);
             lastLength = text.length;
@@ -122,7 +124,7 @@ function streamPodLogs(req: NextRequest, podName: string): Response {
             timer = setTimeout(poll, 1000);
           }
         } catch (err) {
-          if (err instanceof K8sSandboxError && err.code === 'CONTAINER_NOT_FOUND') {
+          if (err instanceof ProviderError && err.code === 'not_found') {
             safeEnqueue(encoder.encode(`event: error\ndata: not_found\n\n`));
             cleanup();
             return;
