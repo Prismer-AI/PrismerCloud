@@ -8,16 +8,25 @@
  */
 
 import prisma from '../db';
-import type { PrismerGene, GeneCategory, GeneVisibility, SignalTag } from '../types/index';
+import type { PrismerGene, GeneCategory, SignalTag } from '../types/index';
 import type { CreditService } from './credit.service';
 import type { AchievementService } from './achievement.service';
-import { invalidatePublicGenesCache } from './evolution-public';
-import { readFileSync } from 'fs';
-import { resolve } from 'path';
+import { invalidatePublicGenesCache } from './evolution-public-cache';
 import { normalizeSignals, tagCoverageScore } from './evolution-signals';
-import { generateTitle } from './evolution-selector';
+import {
+  dbGeneToModel,
+  loadSeedGenes,
+  isCanaryVisibleToAgent,
+  checkCircuitBreakerData,
+  generateTitle,
+} from './evolution-shared';
 import { bumpGeneOnSuccess, decayGeneOnFailure } from './quality-score.service';
 import { createModuleLogger } from '../../lib/logger';
+
+// Re-export the helpers we moved to evolution-shared.ts so external callers
+// (evolution.service.ts, evolution-selector.ts) keep their existing import
+// paths and back-compat is preserved.
+export { dbGeneToModel, loadSeedGenes, isCanaryVisibleToAgent, checkCircuitBreakerData };
 
 const log = createModuleLogger('Evolution');
 
@@ -28,44 +37,10 @@ const log = createModuleLogger('Evolution');
 const SYSTEM_SEED_WORKSPACE = 'system';
 
 // ===== Gene Store (uses im_genes table) =====
-
-/** Convert DB row to PrismerGene interface */
-export function dbGeneToModel(r: any): PrismerGene {
-  // Parse signals_match: prefer signalTags JSON (v0.3.0), fall back to signalId string (compat)
-  const signals_match: SignalTag[] = (r.signalLinks ?? []).map((l: any) => {
-    if (l.signalTags) {
-      try {
-        const parsed = typeof l.signalTags === 'string' ? JSON.parse(l.signalTags) : l.signalTags;
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed[0] as SignalTag;
-      } catch {
-        /* fall through */
-      }
-    }
-    // Backward compat: signalId is the signal type string
-    return { type: l.signalId } as SignalTag;
-  });
-
-  return {
-    type: 'Gene',
-    id: r.id,
-    category: r.category as GeneCategory,
-    title: r.title || undefined,
-    description: r.description || undefined,
-    visibility: r.visibility as GeneVisibility,
-    signals_match,
-    preconditions: JSON.parse(r.preconditions || '[]'),
-    strategy: JSON.parse(r.strategySteps || '[]'),
-    constraints: JSON.parse(r.constraints || '{}'),
-    success_count: r.successCount ?? 0,
-    failure_count: r.failureCount ?? 0,
-    last_used_at: r.lastUsedAt?.toISOString() ?? null,
-    created_by: r.ownerAgentId,
-    parentGeneId: r.parentId ?? null,
-    forkCount: r.forkCount ?? 0,
-    generation: r.generation ?? 1,
-    qualityScore: r.qualityScore ?? 0.01,
-  };
-}
+//
+// `dbGeneToModel` was extracted to `./evolution-shared.ts` to break the
+// lifecycle ↔ selector / lifecycle ↔ public circular imports. Still
+// re-exported at the top of this module for back-compat.
 
 /**
  * Load all genes owned by an agent from im_genes table.
@@ -537,19 +512,11 @@ export async function checkGeneDemotion(geneId: string): Promise<{ demote: boole
   return { demote: false, reason: 'healthy' };
 }
 
-/**
- * Check if a canary gene is visible to a specific agent.
- * Creator always sees it. 5% of other agents see it (hash-based).
- */
-export function isCanaryVisibleToAgent(geneOwnerAgentId: string, viewerAgentId: string): boolean {
-  if (geneOwnerAgentId === viewerAgentId) return true;
-  // Deterministic 5% sample: hash agentId and check modulo
-  let hash = 0;
-  for (let i = 0; i < viewerAgentId.length; i++) {
-    hash = ((hash << 5) - hash + viewerAgentId.charCodeAt(i)) | 0;
-  }
-  return Math.abs(hash % 20) === 0; // 5% = 1/20
-}
+// `isCanaryVisibleToAgent` and `checkCircuitBreakerData` were moved to
+// `./evolution-shared.ts` (and re-exported at the top of this module) to
+// break the lifecycle ↔ selector circular import. Constants below stay here
+// because they are consumed by `updateCircuitBreaker` (DB-writing path that
+// must remain in this module).
 
 // ─── Circuit Breaker (per-Gene, DB-persisted — multi-pod safe) ───
 //
@@ -560,28 +527,6 @@ export function isCanaryVisibleToAgent(geneOwnerAgentId: string, viewerAgentId: 
 const BREAKER_FAILURE_THRESHOLD = 5;
 const BREAKER_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
 const BREAKER_COOLDOWN_MS = 60 * 1000; // 1 minute
-
-/**
- * Pure state-check using already-loaded DB fields (no DB query).
- * Called by selectGene() which passes data from the pre-fetched gene rows.
- */
-export function checkCircuitBreakerData(
-  breakerState: string,
-  breakerStateAt: Date | null,
-): { allowed: boolean; state: string } {
-  if (!breakerState || breakerState === 'closed') {
-    return { allowed: true, state: 'closed' };
-  }
-  if (breakerState === 'open') {
-    // Cooldown elapsed → treat as half_open (allow one probe)
-    if (Date.now() - (breakerStateAt?.getTime() ?? 0) > BREAKER_COOLDOWN_MS) {
-      return { allowed: true, state: 'half_open' };
-    }
-    return { allowed: false, state: 'open' };
-  }
-  // half_open: allow one probe
-  return { allowed: true, state: 'half_open' };
-}
 
 /**
  * Update circuit breaker state in DB after a gene execution outcome.
@@ -777,41 +722,9 @@ export function isProviderFrozen(provider: string): boolean {
 }
 
 // ===== Seed Gene Initialization =====
-
-/** Load seed genes from JSON files (cached) */
-let _seedGenesCache: PrismerGene[] | null = null;
-export function loadSeedGenes(): PrismerGene[] {
-  if (_seedGenesCache) return _seedGenesCache;
-  try {
-    // Use process.cwd() because __dirname may be wrong in Next.js compiled context
-    const dataDir = resolve(process.cwd(), 'src/im/data');
-    const seedPath = resolve(dataDir, 'seed-genes.json');
-    const extPath = resolve(dataDir, 'seed-genes-external.json');
-    const seeds: PrismerGene[] = JSON.parse(readFileSync(seedPath, 'utf-8'));
-    let externals: PrismerGene[] = [];
-    try {
-      externals = JSON.parse(readFileSync(extPath, 'utf-8'));
-    } catch {
-      /* optional */
-    }
-    _seedGenesCache = [...seeds, ...externals].map((g) => ({
-      ...g,
-      type: 'Gene' as const,
-      // v0.3.0: normalize signals_match from string[] (JSON) to SignalTag[]
-      signals_match: normalizeSignals((g.signals_match || []) as string[] | SignalTag[]),
-      preconditions: g.preconditions || [],
-      constraints: g.constraints || { max_credits: 10, max_retries: 3, required_capabilities: [] },
-      success_count: g.success_count || 0,
-      failure_count: g.failure_count || 0,
-      last_used_at: g.last_used_at || null,
-    }));
-    log.info(`Loaded ${_seedGenesCache.length} seed genes`);
-    return _seedGenesCache;
-  } catch (err) {
-    log.error({ err }, 'Failed to load seed genes');
-    return [];
-  }
-}
+//
+// `loadSeedGenes` was moved to `./evolution-shared.ts` (and re-exported from
+// the top of this module) to break the lifecycle ↔ public circular import.
 
 /**
  * Ensure seed genes exist in im_genes table (global, visibility='seed').
