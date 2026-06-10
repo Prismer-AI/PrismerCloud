@@ -27,28 +27,36 @@ export function TemplatePane({
     <div data-testid="pro-tile-device-pane-template" className="grid gap-2">
       {TEMPLATES.map((t) => {
         const active = templateId === t.id;
+        const disabled = t.disabled;
         return (
           <button
             type="button"
             key={t.id}
+            disabled={disabled}
             data-testid={`pro-tile-device-template-${t.id}`}
             data-selected={active ? 'true' : 'false'}
-            onClick={() => onSelect(t.id)}
+            onClick={disabled ? undefined : () => onSelect(t.id)}
             className={`w-full border px-4 py-3 text-left transition-colors ${radius.card} ${
-              active
-                ? isDark
-                  ? 'border-violet-400/40 bg-violet-400/5'
-                  : 'border-violet-300 bg-violet-50/40'
-                : isDark
-                  ? 'border-white/10 hover:bg-white/[0.03]'
-                  : 'border-zinc-200 hover:bg-zinc-50'
-            }`}
+              disabled
+                ? 'cursor-not-allowed opacity-40'
+                : active
+                  ? isDark
+                    ? 'border-violet-400/40 bg-violet-400/5'
+                    : 'border-violet-300 bg-violet-50/40'
+                  : isDark
+                    ? 'border-white/10 hover:bg-white/[0.03]'
+                    : 'border-zinc-200 hover:bg-zinc-50'
+            } ${disabled ? (isDark ? 'border-white/[0.04]' : 'border-zinc-100') : ''}`}
           >
             <div className="flex items-center gap-2">
               <Layers className="h-4 w-4" />
               <span className="text-sm font-semibold">{t.label}</span>
-              <span className={`ml-auto font-mono text-[10px] ${isDark ? 'text-zinc-500' : 'text-zinc-500'}`}>
-                {t.image}
+              <span className={`ml-auto rounded-full border px-2 py-0.5 text-[9px] font-semibold ${
+                disabled
+                  ? isDark ? 'border-amber-400/30 text-amber-300' : 'border-amber-400 text-amber-600'
+                  : isDark ? 'border-white/10 text-zinc-500' : 'border-zinc-200 text-zinc-500'
+              }`}>
+                {disabled ? 'Coming soon' : t.image}
               </span>
             </div>
             <p className={`mt-1 text-xs ${isDark ? 'text-zinc-400' : 'text-zinc-600'}`}>{t.description}</p>
@@ -144,8 +152,12 @@ export function ConfirmPane({
     >
       <dt className="font-semibold">Template</dt>
       <dd>{template.label}</dd>
-      <dt className="font-semibold">Image</dt>
-      <dd className="truncate font-mono text-[11px]">{template.image}</dd>
+      {template.image ? (
+        <>
+          <dt className="font-semibold">Image</dt>
+          <dd className="truncate font-mono text-[11px]">{template.image}</dd>
+        </>
+      ) : null}
       <dt className="font-semibold">CPU</dt>
       <dd>
         {cpu.label} (request {cpu.cpuRequest}, limit {cpu.cpuLimit})
