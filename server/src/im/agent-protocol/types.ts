@@ -46,11 +46,14 @@ export interface AgentDiscoveryQuery {
   capability?: string;
   /** Only online agents */
   onlineOnly?: boolean;
+  /** Restrict discovery to agents registered in this workspace */
+  workspaceId?: string;
 }
 
 export interface AgentInfo {
   agentId: string;
   userId: string;
+  username?: string;
   name: string;
   description: string;
   agentType: AgentType;
