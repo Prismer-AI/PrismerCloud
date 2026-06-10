@@ -16,7 +16,7 @@ import { Cpu, Gpu, Loader2, MemoryStick } from 'lucide-react';
 import { radius } from '../../../lib/design';
 import { imFetch } from '../../../lib/im-api';
 import type { RuntimeInstallationDTO } from '../../../lib/types';
-import type { UnifiedCreationEvent } from '../UnifiedCreationModal';
+import type { UnifiedCreationEvent } from '../context';
 import { CPU_CHOICES, GPU_CHOICES, MEM_CHOICES, TEMPLATES } from './device-catalog';
 import { ConfirmPane, ResourceRow, TemplatePane } from './DeviceStepPanes';
 import { PanelHeader } from './parts';
@@ -58,12 +58,12 @@ export function ProTileDevice({ isDark, workspaceId, onSuccess, onBack }: ProTil
           workspaceId,
           kind: 'k8s',
           template: template.id,
-          image: template.image,
           cpuRequest: cpu.cpuRequest,
           cpuLimit: cpu.cpuLimit,
           memoryRequest: mem.memoryRequest,
           memoryLimit: mem.memoryLimit,
           gpu: gpu.gpu,
+          ...(template.image ? { image: template.image } : {}),
         }),
       });
       if (!res.ok) {
@@ -80,8 +80,8 @@ export function ProTileDevice({ isDark, workspaceId, onSuccess, onBack }: ProTil
     <div data-testid="pro-tile-device" className="grid gap-3">
       <PanelHeader
         isDark={isDark}
-        title="Provision K8s device"
-        subtitle="Pick a template + resource shape; the controller schedules an isolated pod."
+        title="Set up a cloud computer"
+        subtitle="Pick a type and size — we'll get an isolated computer ready in a few seconds."
       />
 
       <ol className="flex items-center gap-2 text-[11px] font-semibold">
@@ -185,7 +185,7 @@ export function ProTileDevice({ isDark, workspaceId, onSuccess, onBack }: ProTil
             } disabled:cursor-wait disabled:opacity-70`}
           >
             {provisioning ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}
-            {provisioning ? 'Provisioning…' : 'Provision'}
+            {provisioning ? 'Setting up…' : 'Create'}
           </button>
         )}
       </footer>
