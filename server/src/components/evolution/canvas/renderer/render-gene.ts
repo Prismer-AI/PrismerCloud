@@ -29,6 +29,13 @@ const CATEGORY_ACCENT: Record<string, string> = {
   diagnostic: '#fb7185', // rose-400
 };
 
+export interface GeneNodeLabels {
+  successPct: (value: number) => string;
+  pqi: (value: number) => string;
+  runsAgents: (runs: number, agents: number) => string;
+  runsAgentsPqi: (runs: number, agents: number, pqi: number) => string;
+}
+
 export function drawGeneNode(
   ctx: CanvasRenderingContext2D,
   node: GeneNode,
@@ -39,6 +46,7 @@ export function drawGeneNode(
   isDark: boolean,
   time: number,
   flashColor?: string | null,
+  labels?: GeneNodeLabels,
 ) {
   ctx.save();
 
@@ -205,18 +213,23 @@ export function drawGeneNode(
       // Stats row 1
       ctx.font = `600 ${10 * s}px -apple-system, sans-serif`;
       ctx.fillStyle = isDark ? '#e4e4e7' : '#18181b';
-      ctx.fillText(`${Math.round(pctVal * 100)}% success`, padL, yy);
+      ctx.fillText(labels?.successPct(Math.round(pctVal * 100)) ?? `${Math.round(pctVal * 100)}% success`, padL, yy);
       ctx.textAlign = 'right';
       ctx.fillStyle = isDark ? '#a1a1aa' : '#71717a';
       ctx.font = `${10 * s}px -apple-system, sans-serif`;
-      ctx.fillText(`PQI ${node.pqi}`, cardX + cardW - 10 * s, yy);
+      ctx.fillText(labels?.pqi(node.pqi) ?? `PQI ${node.pqi}`, cardX + cardW - 10 * s, yy);
       yy += 14 * s;
 
       // Stats row 2
       ctx.textAlign = 'left';
       ctx.fillStyle = isDark ? '#71717a' : '#a1a1aa';
       ctx.font = `${9 * s}px -apple-system, sans-serif`;
-      ctx.fillText(`${node.totalExecutions} runs · ${node.agentCount} agents`, padL, yy);
+      ctx.fillText(
+        labels?.runsAgents(node.totalExecutions, node.agentCount) ??
+          `${node.totalExecutions} runs · ${node.agentCount} agents`,
+        padL,
+        yy,
+      );
       yy += 13 * s;
 
       // Category badge
@@ -229,8 +242,11 @@ export function drawGeneNode(
       ctx.fillText(node.category, padL + 5 * s, yy + 7 * s);
     } else if (isHovered && zoomLevel === 2) {
       // L2: compact stats tooltip (keep simple)
-      const pct = `${Math.round(node.successRate * 100)}% success`;
-      const detail = `${node.totalExecutions} runs \u00B7 ${node.agentCount} agents \u00B7 PQI ${node.pqi}`;
+      const pct =
+        labels?.successPct(Math.round(node.successRate * 100)) ?? `${Math.round(node.successRate * 100)}% success`;
+      const detail =
+        labels?.runsAgentsPqi(node.totalExecutions, node.agentCount, node.pqi) ??
+        `${node.totalExecutions} runs \u00B7 ${node.agentCount} agents \u00B7 PQI ${node.pqi}`;
       const detailFont = 8 * s;
       ctx.font = `${detailFont}px -apple-system, sans-serif`;
       const detailW = Math.max(ctx.measureText(pct).width, ctx.measureText(detail).width) + 14 * s;
