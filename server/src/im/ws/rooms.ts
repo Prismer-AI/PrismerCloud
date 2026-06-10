@@ -6,6 +6,11 @@
  *
  * With Redis: local delivery + publish to channel → other Pods deliver locally.
  * Without Redis: pure in-memory (single-instance mode).
+ *
+ * Wave-4 E3 (§4.5): cross-Pod unicast routes via `Backplane.sendToPod`
+ * instead of fan-out pub/sub. `im:user:<userId>:pods` Redis SET tracks
+ * which Pods a user is connected to; sendToUser queries it and dispatches
+ * via backplane to each remote Pod (or local-only if user is on this Pod).
  */
 
 import crypto from 'node:crypto';
@@ -13,6 +18,8 @@ import type Redis from 'ioredis';
 import type { Transport } from './transport';
 import type { WSMessage } from '../types/index';
 import type { AckTracker } from './ack-tracker';
+import type { Backplane } from '../backplane';
+import { getPodId, userPodsKey } from '../backplane';
 
 const CHANNEL = 'im:broadcast';
 
@@ -39,9 +46,15 @@ export class RoomManager {
 
   /** Unique ID for this process instance (used to skip own Redis messages) */
   private instanceId = crypto.randomUUID();
+  /** Per-Pod ID (env POD_ID / HOSTNAME). Used by §4.5 cross-Pod unicast. */
+  private podId = getPodId();
   private redis?: Redis;
   private subscriber?: Redis;
   private ackTracker?: AckTracker;
+  /** §4.5 Backplane — cross-Pod unicast via per-Pod streams. */
+  private backplane?: Backplane;
+  /** Hook fired on local sendToUser — wired by handler.ts for persistent ack. */
+  private onLocalSendToUser?: (userId: string, event: WSMessage) => void;
 
   constructor(redis?: Redis) {
     if (!redis) return;
@@ -75,6 +88,87 @@ export class RoomManager {
    */
   setAckTracker(tracker: AckTracker): void {
     this.ackTracker = tracker;
+  }
+
+  /**
+   * §4.5 — attach the Backplane for cross-Pod unicast. When set,
+   * `sendToUser` queries `im:user:<userId>:pods` and forwards via
+   * `backplane.sendToPod` to remote Pods. Required for multi-instance
+   * deployments; optional for single-Pod dev (memory-backplane fallback).
+   */
+  setBackplane(backplane: Backplane): void {
+    this.backplane = backplane;
+  }
+
+  /**
+   * Get this Pod's ID — used by handler.ts to record SADD on connect
+   * and SREM on disconnect via {@link onClientConnected} / {@link onClientDisconnected}.
+   */
+  getPodId(): string {
+    return this.podId;
+  }
+
+  /**
+   * Hook for handler.ts — called on every local (this-Pod) sendToUser
+   * dispatch, BEFORE serialization. Used by the WS handler to mirror
+   * high-priority events into the persistent ack DB. Pure side-channel —
+   * does not affect delivery.
+   */
+  setLocalSendHook(hook: (userId: string, event: WSMessage) => void): void {
+    this.onLocalSendToUser = hook;
+  }
+
+  /**
+   * §4.5 — record this Pod in the user's pod-membership set. Idempotent
+   * SADD; safe to call on every WS authenticate.
+   */
+  async onClientConnected(userId: string): Promise<void> {
+    if (!this.redis || this.redis.status !== 'ready') return;
+    try {
+      await this.redis.sadd(userPodsKey(userId), this.podId);
+      // Optional TTL refresh — 1h is plenty since we re-SADD on every auth.
+      await this.redis.expire(userPodsKey(userId), 3600);
+    } catch (err) {
+      // Non-fatal — local delivery still works.
+      console.warn('[RoomManager] onClientConnected SADD failed:', (err as Error).message);
+    }
+  }
+
+  /**
+   * §4.5 — remove this Pod from the user's pod-membership set, but only
+   * if this was the user's LAST connection on this Pod. Caller (handler.ts)
+   * must check `isOnline(userId)` AFTER removeClient and pass the result.
+   */
+  async onClientDisconnected(userId: string, wasLastConn: boolean): Promise<void> {
+    if (!wasLastConn) return;
+    if (!this.redis || this.redis.status !== 'ready') return;
+    try {
+      await this.redis.srem(userPodsKey(userId), this.podId);
+    } catch (err) {
+      console.warn('[RoomManager] onClientDisconnected SREM failed:', (err as Error).message);
+    }
+  }
+
+  /**
+   * §4.5 — register this Pod's inbound channel handler. Called once at
+   * startup by server.ts. Incoming payloads are JSON
+   * `{targetUserId: string, event: WSMessage}` and get delivered locally
+   * (the sending Pod has already verified the user is NOT on its own Pod
+   * before unicasting).
+   */
+  async registerPodChannel(): Promise<void> {
+    if (!this.backplane) return;
+    await this.backplane.registerPodChannel(this.podId, (raw) => {
+      try {
+        const { targetUserId, event } = JSON.parse(raw) as { targetUserId: string; event: WSMessage };
+        if (!targetUserId || !event) return;
+        // Deliver to local connections only; never re-publish.
+        this.localSendToUser(targetUserId, event, { skipBackplane: true });
+      } catch (err) {
+        console.warn('[RoomManager] pod-channel inbound parse error:', (err as Error).message);
+      }
+    });
+    console.log(`[RoomManager] pod channel registered: pod=${this.podId}`);
   }
 
   // ─── Client management (unchanged) ─────────────────────────
@@ -163,10 +257,52 @@ export class RoomManager {
 
   /**
    * Send an event to a specific user's connections (local + cross-Pod).
+   *
+   * §4.5: cross-Pod fan-out is unicast via the Backplane when available.
+   * Falls back to legacy Redis pub/sub if no backplane is wired (transition
+   * period — eventually pub/sub can be removed once all Pods are E3-aware).
    */
   sendToUser(userId: string, event: WSMessage): void {
     this.localSendToUser(userId, event);
-    this.publish({ scope: 'user', target: userId, event });
+
+    if (this.backplane && this.redis && this.redis.status === 'ready') {
+      // Async — never block the caller; deliver out-of-band via per-Pod streams.
+      void this.crossPodSendToUser(userId, event).catch((err) =>
+        console.warn('[RoomManager] crossPodSendToUser failed:', (err as Error).message),
+      );
+    } else {
+      // Legacy path: broadcast pub/sub. Every Pod receives + filters by userId.
+      this.publish({ scope: 'user', target: userId, event });
+    }
+  }
+
+  /**
+   * §4.5 unicast fan-out via Backplane streams.
+   * Reads `im:user:<userId>:pods` (SET maintained by onClientConnected /
+   * onClientDisconnected) and posts to each remote Pod's queue.
+   *
+   * Skips ME — we already delivered locally above.
+   */
+  private async crossPodSendToUser(userId: string, event: WSMessage): Promise<void> {
+    if (!this.backplane || !this.redis) return;
+    let pods: string[] = [];
+    try {
+      pods = await this.redis.smembers(userPodsKey(userId));
+    } catch (err) {
+      console.warn('[RoomManager] SMEMBERS failed:', (err as Error).message);
+      return;
+    }
+    const remote = pods.filter((p) => p && p !== this.podId);
+    if (remote.length === 0) return;
+
+    const payload = JSON.stringify({ targetUserId: userId, event });
+    await Promise.all(
+      remote.map((p) =>
+        this.backplane!.sendToPod(p, payload).catch((err) =>
+          console.warn(`[RoomManager] sendToPod ${p} failed:`, (err as Error).message),
+        ),
+      ),
+    );
   }
 
   /**
@@ -205,17 +341,34 @@ export class RoomManager {
     }
   }
 
-  private localSendToUser(userId: string, event: WSMessage): void {
+  private localSendToUser(userId: string, event: WSMessage, opts?: { skipBackplane?: boolean }): void {
     const connections = this.clients.get(userId);
     if (!connections) return;
 
     // If ACK tracker is attached, wrap the event with an ackId
     let payload: string;
+    let trackedEvent: WSMessage = event;
     if (this.ackTracker) {
       const ackId = this.ackTracker.track(userId, event as unknown as Record<string, unknown>);
-      payload = ackId ? JSON.stringify({ ...event, ackId }) : JSON.stringify(event);
+      if (ackId) {
+        trackedEvent = { ...event, ackId } as WSMessage;
+        payload = JSON.stringify(trackedEvent);
+      } else {
+        payload = JSON.stringify(event);
+      }
     } else {
       payload = JSON.stringify(event);
+    }
+
+    // Persistent-ack mirror hook (handler.ts wires this on startup).
+    // skipBackplane=true → we're delivering an inbound forward from another
+    // Pod; the originating Pod already persisted. Avoid double-write.
+    if (this.onLocalSendToUser && !opts?.skipBackplane) {
+      try {
+        this.onLocalSendToUser(userId, trackedEvent);
+      } catch (err) {
+        console.warn('[RoomManager] onLocalSendToUser hook error:', (err as Error).message);
+      }
     }
 
     for (const client of connections) {
@@ -244,7 +397,9 @@ export class RoomManager {
         this.localBroadcastToRoom(msg.target!, msg.event, msg.exclude);
         break;
       case 'user':
-        this.localSendToUser(msg.target!, msg.event);
+        // Inbound from legacy pub/sub — originating Pod already mirrored
+        // the event to im_ws_acks, skip the local hook.
+        this.localSendToUser(msg.target!, msg.event, { skipBackplane: true });
         break;
       case 'global':
         this.localBroadcastGlobal(msg.event);
