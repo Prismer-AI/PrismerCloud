@@ -13,6 +13,7 @@ import { CredentialService } from '../services/credential.service';
 
 export function createCredentialsRouter(credentialService: CredentialService): Hono {
   const router = new Hono();
+  // eslint-disable-next-line custom/no-wildcard-sub-router-middleware -- mounted at /credentials in routes.ts; wildcard scoped to that prefix
   router.use('*', authMiddleware);
 
   // List my credentials
