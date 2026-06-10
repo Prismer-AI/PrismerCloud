@@ -6,6 +6,7 @@
  * Wave-8 W9: this module is the canonical writer for the workspace Bell
  * drawer. The schema's `reference_type` column carries the **kind** —
  * `task_status`, `task_assigned`, `task_approval_requested`,
+ * `approval_requested`,
  * `contact_request`, `contact_accepted`, `contact_blocked`,
  * `runtime_degraded`, `runtime_install_verified`, `runtime_install_failed`,
  * `runtime_agent_declared` — and `reference_id` carries the kind-specific
@@ -31,6 +32,7 @@ export type NotificationKind =
   | 'task_status'
   | 'task_assigned'
   | 'task_approval_requested'
+  | 'approval_requested'
   | 'contact_request'
   | 'contact_accepted'
   | 'contact_blocked'
@@ -128,7 +130,12 @@ export async function createNotification(input: CreateNotificationInput): Promis
  * The kinds the workspace Bell groups into its three tabs. We keep the
  * source-of-truth here so route + UI stay in lockstep.
  */
-export const TASK_KINDS: readonly string[] = ['task_status', 'task_assigned', 'task_approval_requested'];
+export const TASK_KINDS: readonly string[] = [
+  'task_status',
+  'task_assigned',
+  'task_approval_requested',
+  'approval_requested',
+];
 export const CONTACT_KINDS: readonly string[] = ['contact_request', 'contact_accepted', 'contact_blocked', 'contact'];
 export const RUNTIME_KINDS: readonly string[] = [
   'runtime_degraded',
