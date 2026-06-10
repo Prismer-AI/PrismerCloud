@@ -19,6 +19,7 @@
 import * as React from 'react';
 import { useEffect, useState } from 'react';
 import { cn } from '@/lib/utils';
+import { getWorkspaceToken } from '@/app/workspace/lib/im-api';
 import type { ProvisioningStep, ProvisioningHistoryEntry } from '@/app/workspace/lib/types';
 
 interface Progress {
@@ -28,12 +29,12 @@ interface Progress {
 }
 
 const STEP_LABELS: Array<{ step: ProvisioningStep; label: string }> = [
-  { step: 'container_create', label: '创建容器' },
-  { step: 'container_running', label: '容器就绪' },
-  { step: 'daemon_healthy', label: 'Daemon 健康' },
-  { step: 'ws_connected', label: '云端握手' },
-  { step: 'host_declared', label: '注册 Host' },
-  { step: 'adapter_installed', label: 'Adapter 安装' },
+  { step: 'container_create', label: '准备计算机' },
+  { step: 'container_running', label: '计算机启动' },
+  { step: 'daemon_healthy', label: '设备就绪' },
+  { step: 'ws_connected', label: '连接云端' },
+  { step: 'host_declared', label: '注册设备' },
+  { step: 'adapter_installed', label: '安装运行环境' },
   { step: 'ready', label: '完成' },
 ];
 
@@ -55,7 +56,15 @@ export function ProvisioningProgressStrip({
 
     async function tick(): Promise<void> {
       try {
-        const res = await fetch(`/api/sandboxes/${encodeURIComponent(installationId)}/progress`, { cache: 'no-store' });
+        // `/api/sandboxes/:id/progress` is session-bound (authorizeContainer
+        // → requireAuthIdentity). Without Authorization Bearer the server
+        // returns 401 and progress never updates. Match the auth pattern used
+        // by sibling workspace fetches (runtime-manager.tsx line 188 etc.).
+        const token = getWorkspaceToken();
+        const res = await fetch(`/api/sandboxes/${encodeURIComponent(installationId)}/progress`, {
+          cache: 'no-store',
+          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = (await res.json()) as Progress;
         if (cancelled) return;
