@@ -41,6 +41,14 @@ export interface AuthInfo {
   authHeader: string;
   /** IM JWT generated from API Key (for Hono IM app) */
   imToken?: string;
+  /**
+   * Bug Z2 fix — IM user id carried separately from `userId` so the IM proxy
+   * route + middleware can resolve IMUser directly by cuid sub, while legacy
+   * `userId = numericId` is preserved for FF_API_KEYS_LOCAL paths
+   * (`/api/keys` does `Number(guard.auth.userId)`). Populated only when the
+   * JWT's `sub` matches the IMUser.id cuid shape (`/^cmp[a-z0-9]{20,}$/`).
+   */
+  imUserSub?: string;
 }
 
 export interface GuardResult {
@@ -216,7 +224,27 @@ async function validateApiKey(apiKey: string, authHeader: string): Promise<AuthI
 /**
  * Decode JWT payload locally (no signature verification).
  * Same logic as existing auth-utils.ts getUserFromJwt.
+ *
+ * TODO(release202/12 P2, beta-deferred): this trusts an UNVERIFIED JWT payload
+ * on a spend-bearing path — a forged `{numericId}` impersonates any user. Not
+ * fixed during beta (a blanket verify would lock out OAuth/Google/GitHub tokens
+ * signed with third-party keys). Before enabling: confirm whether an edge
+ * gateway already verifies, and split local-issued (`local-auth.ts::issueToken`,
+ * HS256 via getJWTSecret) vs OAuth tokens so each is verified appropriately.
  */
+/**
+ * IMUser.id cuid shape — Prisma `@default(cuid())` produces 25-char strings
+ * starting with `cmp` (we narrow `c` to `cmp` to avoid false positives like
+ * email addresses). Bug Z2: when the JWT sub matches this shape, it IS the
+ * IMUser.id — downstream proxies / middleware must NOT re-translate via
+ * numericId, which would mint a phantom IMUser. The looser shorter form
+ * (9-char `generateUserId()` output) is not detected here because we can't
+ * disambiguate it from a numeric short string without DB lookup; the
+ * conservative cuid-only check covers the Z2-impacted production rows
+ * (legacy `cmp...` users like the invite-accept failure).
+ */
+const IM_CUID_RE = /^cmp[a-z0-9]{20,}$/;
+
 async function validateJwt(token: string, authHeader: string): Promise<AuthInfo | null> {
   try {
     const parts = token.split('.');
@@ -236,11 +264,19 @@ async function validateJwt(token: string, authHeader: string): Promise<AuthInfo 
         : payload.sub || payload.user_id || payload.id;
     if (resolvedUserId === undefined || resolvedUserId === null || resolvedUserId === '') return null;
 
+    // Bug Z2 — preserve the IMUser.id (cuid sub) alongside numericId. The IM
+    // proxy route + IM auth middleware use this to resolve the existing
+    // IMUser by id, avoiding the api_key_proxy translation that previously
+    // minted phantom IMUsers on invite accept.
+    const subValue = typeof payload.sub === 'string' ? payload.sub : undefined;
+    const imUserSub = subValue && IM_CUID_RE.test(subValue) ? subValue : undefined;
+
     return {
       userId: String(resolvedUserId),
       email: payload.email || '',
       authType: 'jwt',
       authHeader,
+      ...(imUserSub ? { imUserSub } : {}),
     };
   } catch {
     return null;
@@ -346,6 +382,21 @@ function generateIMToken(userId: string, email?: string): string {
  */
 export function generateIMTokenForUser(userId: string, email?: string): string {
   return generateIMToken(userId, email);
+}
+
+/**
+ * Bug Z2 — generate a direct IM JWT (NOT api_key_proxy) when the upstream
+ * JWT's sub is already an IMUser.id cuid. The IM authMiddleware sees a token
+ * without `type: 'api_key_proxy'` and treats sub as imUserId directly,
+ * skipping `ensureIMUser` (which would mint a phantom IMUser on a
+ * numeric-id miss). Used by the IM proxy route when `auth.imUserSub` is set.
+ */
+export function generateIMTokenForImUser(imUserId: string, email?: string): string {
+  return jwt.sign(
+    { sub: imUserId, username: imUserId, role: 'human' as const, ...(email && { email }) },
+    getJWTSecret(),
+    { expiresIn: '1h' },
+  );
 }
 
 // ============================================================================
