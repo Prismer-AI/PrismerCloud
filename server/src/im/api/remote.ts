@@ -23,6 +23,7 @@ import { isDaemonForgotten } from '../services/runtime-binding.service';
 
 export function createRemoteRouter() {
   const router = new Hono();
+  // eslint-disable-next-line custom/no-wildcard-sub-router-middleware -- mounted at /remote in routes.ts; wildcard scoped to that prefix
   router.use('*', authMiddleware);
 
   router.get('/bindings', async (c) => {
