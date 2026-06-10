@@ -28,6 +28,8 @@ import type { RateLimiterService } from '../services/rate-limiter.service';
 import { createRateLimitMiddleware } from '../middleware/rate-limit';
 import type { ApiResponse, MessageType } from '../types/index';
 import { resolveTargetUser } from '../utils/resolve-user';
+import { requireAgentToolAllowed, resolveConversationWorkspaceId } from '../security/mcp-allowlist';
+import { resolveDirectWorkspaceId } from './conversations';
 
 export function createDirectRouter(
   messageService: MessageService,
@@ -39,6 +41,7 @@ export function createDirectRouter(
 ) {
   const router = new Hono();
 
+  // eslint-disable-next-line custom/no-wildcard-sub-router-middleware -- mounted at /direct in routes.ts; wildcard scoped to that prefix
   router.use('*', authMiddleware);
 
   /**
@@ -54,12 +57,22 @@ export function createDirectRouter(
       },
     });
 
-    if (existing) return existing.id;
+    const workspaceId = await resolveDirectWorkspaceId(userId1, userId2);
+    if (existing) {
+      if (workspaceId && !existing.workspaceId) {
+        await prisma.iMConversation.update({
+          where: { id: existing.id },
+          data: { workspaceId },
+        });
+      }
+      return existing.id;
+    }
 
     // Create via ConversationService (writes sync events)
     const conv = await conversationService.createDirect({
       createdBy: userId1,
       otherUserId: userId2,
+      workspaceId,
       metadata: { autoCreated: true },
     });
 
@@ -89,6 +102,7 @@ export function createDirectRouter(
       type,
       content,
       metadata,
+      attachments,
       secVersion,
       senderKeyId,
       senderDid,
@@ -100,7 +114,8 @@ export function createDirectRouter(
       timestamp,
     } = body;
 
-    if (!content && type !== 'system_event') {
+    const hasAttachments = Array.isArray(attachments) && attachments.length > 0;
+    if (!content && !hasAttachments && type !== 'system_event') {
       return c.json<ApiResponse>({ ok: false, error: 'content is required' }, 400);
     }
 
@@ -123,6 +138,12 @@ export function createDirectRouter(
 
     // Get or create direct conversation (needed for signing verification)
     const conversationId = await getOrCreateDirectConversation(user.imUserId, targetImUserId);
+    const denied = await requireAgentToolAllowed(
+      c,
+      'prismer.message.send',
+      await resolveConversationWorkspaceId(conversationId),
+    );
+    if (denied) return denied;
 
     // E2E Signing verification (Layer 2) — must happen BEFORE credit deduction
     // Accept both full signing (senderKeyId) and lite signing (senderDid only)
@@ -189,6 +210,7 @@ export function createDirectRouter(
         type: (type as MessageType) ?? 'text',
         content: content ?? '',
         metadata: enrichedMetadata,
+        attachments,
         ...(isSigned
           ? {
               secVersion,
@@ -233,6 +255,7 @@ export function createDirectRouter(
       type: msg.type as any,
       content: msg.content,
       metadata: messageMetadata,
+      attachments: msg.attachments ?? undefined,
       parentId: msg.parentId ?? undefined,
       createdAt: msg.createdAt instanceof Date ? msg.createdAt.toISOString() : String(msg.createdAt),
     });
