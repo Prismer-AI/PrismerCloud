@@ -9,6 +9,7 @@ public/
 sql/
 scripts/sql/
 sdk/prismer-cloud/built-in-skills/
+packages/
 scripts/*.ts
 scripts/*.js
 scripts/*.mjs

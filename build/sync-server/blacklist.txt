@@ -26,7 +26,6 @@ evidence/
 infra/
 installer/
 eslint-rules/
-packages/
 tests/
 stress-5.json
 stress-report.json
