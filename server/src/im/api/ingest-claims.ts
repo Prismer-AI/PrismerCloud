@@ -108,6 +108,7 @@ async function loadWorkspaceForAssetAccess(workspaceId: string, callerImUserId: 
 export function createIngestClaimsRouter() {
   const router = new Hono();
 
+  // eslint-disable-next-line custom/no-wildcard-sub-router-middleware -- mounted at /ingest in routes.ts; wildcard scoped to that prefix
   router.use('*', authMiddleware);
 
   /**
