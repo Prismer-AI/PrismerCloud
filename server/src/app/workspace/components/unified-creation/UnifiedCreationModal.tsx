@@ -35,6 +35,8 @@ import { Dialog as DialogPrimitive } from 'radix-ui';
 import { AnimatePresence, motion, useReducedMotion, type Transition } from 'framer-motion';
 import { X } from 'lucide-react';
 
+import { useI18n } from '@/contexts/i18n-context';
+
 import { radius, s, springHeavy, springSnap, springSoft } from '../../lib/design';
 import {
   loadPreferredCreationMode,
@@ -42,43 +44,41 @@ import {
   suggestUsernameSeed,
   type CreationMode,
 } from '../../lib/mutations';
-import { renderTemplate } from '../../lib/templates/render';
+import { getAvailableRoles, renderTemplate } from '../../lib/templates/render';
 import type { IndustryKey, RenderedRole, SizeKey } from '../../lib/templates/types';
-import type { AgentDTO, AgentProfileDTO, RuntimeInstallationDTO } from '../../lib/types';
-import { imFetch } from '../../lib/im-api';
+import type { AgentDTO, AgentProfileDTO, AssetDTO, RuntimeInstallationDTO } from '../../lib/types';
+import { imFetch, getWorkspaceToken } from '../../lib/im-api';
+import { createProject } from '../../lib/projects-api';
 import { FooterButton, ModeToggle, StepDots } from './parts';
 import { ProModeFlow } from './ProModeFlow';
 import { SimpleStep1Industry } from './SimpleStep1Industry';
 import { SimpleStep2Team } from './SimpleStep2Team';
 import { SimpleStep3Launch } from './SimpleStep3Launch';
+import { SimpleStepUpload } from './SimpleStepUpload';
 import { useSimpleProvisioning, type SimpleProvisioningPlan } from './use-simple-provisioning';
+import { DEFAULT_MODEL } from './pro/profile-config';
+import { getDefaultModelForProvider, type ProviderChainDefault } from '../../lib/model-defaults';
+import type { ProxyProvider } from '../proxy-provider-select';
 
 // ───────────────────────── Public types ─────────────────────────
 
-/**
- * Discriminated union per B0 audit (docs/54release/30-b0-dialog-audit.md
- * "Cross-component shared state"). Parents demux by `kind`.
- *
- * NOTE the spec for B3.1 narrows the shape to the names listed below
- * (`workspace`, `device`, `agent`, `conversation`, `task`, `simple-team`)
- * — the audit's earlier shape used `channel` instead of `conversation`
- * and didn't have `simple-team`. We follow the task spec because Simple
- * mode's atomic outcome is a 3-agent team + a group chat, not 5 separate
- * created entities.
- */
-export type UnifiedCreationEvent =
-  | { kind: 'workspace'; id: string }
-  | { kind: 'device'; id: string }
-  | { kind: 'agent'; ids: string[] }
-  | { kind: 'conversation'; id: string }
-  | { kind: 'task'; id: string }
-  | { kind: 'simple-team'; agentIds: string[]; conversationId: string };
+// Discriminated union + context hooks are defined in `./context.ts` so child
+// step components can import them without forming a circular dependency with
+// this parent module. We re-export the public names here for back-compat.
+export { type UnifiedCreationEvent, useDeviceSelector, useWorkspaceId } from './context';
+import { DeviceSelCtx, WsCtx, type UnifiedCreationEvent } from './context';
 
 export interface UnifiedCreationModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   isDark: boolean;
   workspaceId: string;
+  /**
+   * Existing organization name on this workspace (workspace ↔ organization
+   * is 1:1). When non-empty, Simple-mode Step 1 surfaces it as a read-only
+   * badge instead of asking the user to retype.
+   */
+  existingOrganizationName?: string | null;
   /** Shared state for child flows (Pro Conversation / Pro Task). */
   agents: AgentDTO[];
   /** Shared state for child flows (Pro Task). */
@@ -87,6 +87,47 @@ export interface UnifiedCreationModalProps {
   onCreated: (event: UnifiedCreationEvent) => void;
   /** Defaults to 'simple'. Persisted preference (if any) wins on open. */
   initialMode?: CreationMode;
+  /**
+   * release201 v2.0.8 F-bug — project 抽象引导. 当前 ProjectSwitcher 选中
+   * 的项目 id (null / 'all' / '__unscoped' 都视为 workspace 级别), 用于在
+   * 创建流程顶部显示 "正在为项目 X 创建" 上下文条; null/sentinel 时显示
+   * "未归入项目" + "先创建项目" inline link.
+   */
+  activeProjectId?: string | null;
+  /** 当前 active project 的 name (id 命中真实项目时传入). */
+  activeProjectName?: string | null;
+  /** 用户点击 "先创建项目" 时触发 — 通常打开 ProjectSwitcher 的 new-project flow. */
+  onCreateProject?: () => void;
+  /**
+   * 2026-05-29 — full project list (active only) for the inline picker
+   * shown in the banner. When omitted the banner falls back to the
+   * label-only mode that was here before.
+   */
+  projects?: Array<{ id: string; name: string }>;
+  /**
+   * 2026-05-29 — setter for the modal's active project context. Called
+   * with the project id (or null for unscoped) when the user picks a
+   * different project mid-flow. Omitting it locks the banner to
+   * label-only.
+   */
+  onActiveProjectIdChange?: (id: string | null) => void;
+  /**
+   * 2026-05-29 — reload trigger for the project list. Called after the
+   * inline-create flow successfully mints a new project so the parent's
+   * useProjects() hook re-fetches and the new row shows up in the
+   * picker without forcing the user to reopen the modal.
+   */
+  onReloadProjects?: () => Promise<void> | void;
+}
+
+function deriveProjectSlug(name: string): string {
+  return name
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .replace(/-+/g, '-')
+    .slice(0, 64);
 }
 
 // ───────────────────────── Inner motion presets ─────────────────────────
@@ -101,7 +142,9 @@ const REDUCED: Transition = { duration: 0.12, ease: 'easeOut' };
  * `im_containers.maxAgents` so the UX is consistent with the eventual ceiling
  * the user would hit if they did provision a device here.
  */
-const FALLBACK_DEVICE_MAX_AGENTS = 3;
+// Bumped from 3 → 10 (2026-05-19) — base subscription policy update, see
+// migration 340 + register.ts fallback.
+const FALLBACK_DEVICE_MAX_AGENTS = 10;
 
 /**
  * P3-7 — selected reuse target + capacity for the Simple flow. `installation`
@@ -121,24 +164,98 @@ export function UnifiedCreationModal({
   onOpenChange,
   isDark,
   workspaceId,
+  existingOrganizationName,
   agents,
   profiles,
   onCreated,
   initialMode = 'simple',
+  activeProjectId,
+  activeProjectName,
+  onCreateProject,
+  projects,
+  onActiveProjectIdChange,
+  onReloadProjects,
 }: UnifiedCreationModalProps) {
   const theme = isDark ? 'dark' : 'light';
   const reduce = useReducedMotion() ?? false;
   const tHeavy: Transition = reduce ? REDUCED : springHeavy;
   const tSnap: Transition = reduce ? REDUCED : springSnap;
   const tSoft: Transition = reduce ? REDUCED : springSoft;
+  const { t } = useI18n();
+
+  // release201 v2.0.8 F-bug — project 抽象引导. activeProjectId 是 ProjectSwitcher
+  // 选中的 id (null / 'all' / '__unscoped' 都视为 workspace 级别). 创建出来的资源
+  // 会按 use-simple-provisioning §M448 / Pro mode 各自的逻辑落到当前 project,
+  // 因此用户必须先感知到 scope. 见 release201/20 Gap B (创建逻辑接 project 抽象).
+  const isProjectScoped = Boolean(activeProjectId && activeProjectId !== 'all' && activeProjectId !== '__unscoped');
+
+  // 2026-05-29 — inline project create. When the user picks "+ 先创建项目"
+  // from the picker, switch the banner into a tiny inline form (name input
+  // + create/cancel buttons) instead of bouncing to ProjectSwitcher behind
+  // the modal. createProject() then runs in-place; success calls
+  // onReloadProjects() so the new id shows up next time the picker reads
+  // its list, and we eagerly setActiveProjectIdChange(newId) so the user
+  // immediately sees the new scope in the banner.
+  const [inlineCreatingProject, setInlineCreatingProject] = useState(false);
+  const [newProjectName, setNewProjectName] = useState('');
+  const [creatingProject, setCreatingProject] = useState(false);
+  const [createProjectError, setCreateProjectError] = useState<string | null>(null);
+
+  const handleInlineCreateProject = useCallback(async () => {
+    if (!workspaceId) return;
+    const name = newProjectName.trim();
+    if (!name) {
+      setCreateProjectError(t('workspace.project.nameRequired'));
+      return;
+    }
+    const slug = deriveProjectSlug(name);
+    if (!slug) {
+      setCreateProjectError(t('workspace.project.nameNeedsLetter'));
+      return;
+    }
+    setCreatingProject(true);
+    setCreateProjectError(null);
+    try {
+      const res = await createProject({ workspaceId, slug, name });
+      if (res.ok && res.data) {
+        const newId = res.data.id;
+        await onReloadProjects?.();
+        onActiveProjectIdChange?.(newId);
+        setInlineCreatingProject(false);
+        setNewProjectName('');
+      } else if (!res.ok) {
+        setCreateProjectError(res.message || t('workspace.project.createFailed'));
+      }
+    } catch (err) {
+      setCreateProjectError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setCreatingProject(false);
+    }
+  }, [workspaceId, newProjectName, onReloadProjects, onActiveProjectIdChange, t]);
 
   // Mode + step state. Mode persists; step resets on close/mode-change.
+  //
+  // Task 42 — simple-mode is now 4 steps: 0 Industry → 1 Team → 2 Upload → 3 Launch.
   const [mode, setMode] = useState<CreationMode>(initialMode);
-  const [simpleStep, setSimpleStep] = useState<0 | 1 | 2>(0);
+  const [simpleStep, setSimpleStep] = useState<0 | 1 | 2 | 3>(0);
 
   // Simple-mode flow state (industry + size + selected role slugs). These
   // live on the shell so the back-button can survive remounts of the inner
   // step components, and so they reset when the modal closes.
+  const [simpleOrganizationName, setSimpleOrganizationName] = useState('');
+  const [simpleModel, setSimpleModel] = useState(DEFAULT_MODEL);
+  // 2026-05-30 — per-agent LLM proxy provider for every Hermes profile minted
+  // in this Simple-mode run. Lives on the shell (not Step 1 local state) so
+  // it survives Back/Next navigation and feeds into `simplePlan.proxyProvider`
+  // for `use-simple-provisioning` to write into every AgentProfile's config.
+  // Default `newapi` matches the daemon-side zod default in
+  // HermesProfileConfigSchema.proxyProvider.
+  const [simpleProxyProvider, setSimpleProxyProvider] = useState<ProxyProvider>('newapi');
+  // release202/12 C1 — fetched provider-chain list (each carries
+  // `primaryDefaultModel`). Feeds `getDefaultModelForProvider` so switching to
+  // a CUSTOM chain resets the model to that chain's real default instead of
+  // `undefined`. Built-in defaults still apply before this resolves.
+  const [providerChains, setProviderChains] = useState<ProviderChainDefault[]>([]);
   const [simpleIndustry, setSimpleIndustry] = useState<IndustryKey | null>(null);
   const [simpleSize, setSimpleSize] = useState<SizeKey | null>(null);
   const [simpleSelectedSlugs, setSimpleSelectedSlugs] = useState<Set<string>>(() => new Set());
@@ -153,6 +270,15 @@ export function UnifiedCreationModal({
   const [simpleSlugDrafts, setSimpleSlugDrafts] = useState<Record<string, string>>({});
   const [simpleSlugErrors, setSimpleSlugErrors] = useState<Record<string, string | null>>({});
   const [simpleSlugConflict, setSimpleSlugConflict] = useState<{ roleSlug: string; message: string } | null>(null);
+  const [simpleBrowserRoles, setSimpleBrowserRoles] = useState<RenderedRole[]>([]);
+
+  // Task 42 — company-materials upload step state. `simpleUploadedAssets` is the
+  // full AssetDTO list (used by post-provisioning to compose an attachment
+  // message); `simpleUploadedAssetIds` is the parallel string[] surfaced to
+  // the page.tsx `simple-team` event for downstream wiring. They are kept in
+  // lockstep — see the `onAssetUploaded` / `onAssetRemoved` handlers below.
+  const [simpleUploadedAssets, setSimpleUploadedAssets] = useState<AssetDTO[]>([]);
+  const [simpleUploadedAssetIds, setSimpleUploadedAssetIds] = useState<string[]>([]);
 
   // P3-7 — device capacity probe. Resolved on Step 2 entry (idempotent — keyed
   // on `workspaceId + open` so it runs once per modal session). Null while the
@@ -161,6 +287,11 @@ export function UnifiedCreationModal({
   // candidate exists. Step 2's counter and Step 3's reuse logic both read off
   // this so the two surfaces never disagree.
   const [deviceCapacity, setDeviceCapacity] = useState<DeviceCapacityProbe | null>(null);
+
+  // Stable callback for DeviceSelCtx — prevents re-render churn in consumers.
+  const handleDeviceSelected = useCallback((deviceId: string, daemonId: string, maxAgents: number) => {
+    setDeviceCapacity({ installation: { id: deviceId, daemonId, used: 0, maxAgents }, maxAgents });
+  }, []);
 
   // P3-7 — server-side CAPACITY_EXCEEDED surfaced from Step 3's register call.
   // The user can't fix this by editing handles, so we don't route back to
@@ -181,7 +312,7 @@ export function UnifiedCreationModal({
   // template lookup (external system) to React state; `seededFor` is the
   // guard preventing the loop the linter is concerned about.
   const seededFor = useRef<string | null>(null);
-  /* eslint-disable react-hooks/set-state-in-effect */
+
   useEffect(() => {
     if (!simpleIndustry || !simpleSize) return;
     const key = `${simpleIndustry}:${simpleSize}`;
@@ -204,7 +335,6 @@ export function UnifiedCreationModal({
       /* unknown industry/size pair — leave selection alone */
     }
   }, [simpleIndustry, simpleSize]);
-  /* eslint-enable react-hooks/set-state-in-effect */
 
   // P3-7 — device capacity probe. Fires once per modal session when the user
   // first reaches Step 2 (or earlier if simpleStep is hoisted). Keyed on
@@ -301,17 +431,23 @@ export function UnifiedCreationModal({
   // setState in effects in general, but this pattern doesn't loop —
   // `hydratedFor` is the guard, and the reset only runs when `open` flips.
   const hydratedFor = useRef<boolean>(false);
-  /* eslint-disable react-hooks/set-state-in-effect */
+
   useEffect(() => {
     if (!open) {
       hydratedFor.current = false;
       setSimpleStep(0);
+      setSimpleOrganizationName('');
+      setSimpleModel(DEFAULT_MODEL);
+      setSimpleProxyProvider('newapi');
       setSimpleIndustry(null);
       setSimpleSize(null);
       setSimpleSelectedSlugs(new Set());
       setSimpleSlugDrafts({});
       setSimpleSlugErrors({});
       setSimpleSlugConflict(null);
+      setSimpleBrowserRoles([]);
+      setSimpleUploadedAssets([]);
+      setSimpleUploadedAssetIds([]);
       setDeviceCapacity(null);
       setSimpleCapacityError(null);
       seededFor.current = null;
@@ -323,7 +459,48 @@ export function UnifiedCreationModal({
     const stored = loadPreferredCreationMode();
     setMode(stored ?? initialMode);
   }, [open, initialMode]);
-  /* eslint-enable react-hooks/set-state-in-effect */
+
+  // release202/12 C1 — fetch the configured chain list once the modal opens so
+  // `getDefaultModelForProvider` can resolve a CUSTOM chain's real default model
+  // (each chain carries `primaryDefaultModel`). Mirrors the fetch in
+  // ProxyProviderSelect; tolerant of failure (built-in defaults still apply).
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    const token = getWorkspaceToken();
+    fetch('/api/provider-chains', { headers: token ? { Authorization: `Bearer ${token}` } : undefined })
+      .then((res) => (res.ok ? res.json() : Promise.reject(String(res.status))))
+      .then((body: { chains?: ProviderChainDefault[] }) => {
+        if (cancelled) return;
+        if (Array.isArray(body.chains)) setProviderChains(body.chains);
+      })
+      .catch(() => {
+        /* keep built-in defaults */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
+
+  // 2026-05-30 — proxyProvider × model 紧耦合. Simple wizard 切 proxyProvider
+  // (Step 1 AdvancedProxyAccordion) 时 model 自动 reset 到该 provider 漏斗的
+  // default. prev-value ref 保证只在「真切换」时触发, 不把 open reset / 初次
+  // mount 已经设过的 model 又冲掉一次. 模态关闭后 ref 归位, 下次开始重新比.
+  // 2026-06-06 (C1) — 传 providerChains 让自定义 chain 也拿到真实 default。
+  const prevSimpleProxyProviderRef = useRef<ProxyProvider | null>(null);
+  useEffect(() => {
+    if (!open) {
+      prevSimpleProxyProviderRef.current = null;
+      return;
+    }
+    if (prevSimpleProxyProviderRef.current === null) {
+      prevSimpleProxyProviderRef.current = simpleProxyProvider;
+      return;
+    }
+    if (prevSimpleProxyProviderRef.current === simpleProxyProvider) return;
+    prevSimpleProxyProviderRef.current = simpleProxyProvider;
+    setSimpleModel(getDefaultModelForProvider(simpleProxyProvider, providerChains));
+  }, [open, simpleProxyProvider, providerChains]);
 
   // Persist on toggle (fire-and-forget — the local cache update is what
   // matters for UX; the server write is best-effort).
@@ -342,12 +519,15 @@ export function UnifiedCreationModal({
 
   // Step 0 → 1 transition is gated on both industry + size selected.
   // Step 1 → 2 transition is gated on at least one role selected.
-  // Step 2 owns its own UI (provisioning loader); the footer hides there.
+  // Step 2 (Upload, Task 42) renders its own continue/skip buttons inside the
+  // content area — the shell footer is hidden on Step 2+.
+  // Step 3 owns its own UI (provisioning loader); the footer hides there too.
   const canAdvance = useMemo(() => {
-    if (simpleStep === 0) return simpleIndustry !== null && simpleSize !== null;
+    if (simpleStep === 0)
+      return simpleOrganizationName.trim().length > 0 && simpleIndustry !== null && simpleSize !== null;
     if (simpleStep === 1) return simpleSelectedSlugs.size > 0;
     return false;
-  }, [simpleStep, simpleIndustry, simpleSize, simpleSelectedSlugs]);
+  }, [simpleStep, simpleOrganizationName, simpleIndustry, simpleSize, simpleSelectedSlugs]);
 
   // Footer primary action — routes by mode + step. Pro mode's submit is
   // owned by each sub-panel (B3.5), so the shell-level button is a no-op
@@ -356,7 +536,7 @@ export function UnifiedCreationModal({
     if (mode !== 'simple') return;
     if (!canAdvance) return;
     if (simpleStep < 2) {
-      setSimpleStep((p) => (p + 1) as 0 | 1 | 2);
+      setSimpleStep((p) => (p + 1) as 0 | 1 | 2 | 3);
     }
   }, [mode, simpleStep, canAdvance]);
 
@@ -364,11 +544,20 @@ export function UnifiedCreationModal({
   // are all set. The renderTemplate call resolves the rendered roles in
   // the order CEO-first, matching the use-simple-provisioning contract.
   const simplePlan = useMemo<SimpleProvisioningPlan | null>(() => {
+    const organizationName = simpleOrganizationName.trim();
+    if (!organizationName) return null;
     if (!simpleIndustry || !simpleSize) return null;
     if (simpleSelectedSlugs.size === 0) return null;
     try {
-      const rendered = renderTemplate(simpleIndustry, simpleSize, 'zh');
-      const roles: RenderedRole[] = rendered.filter((r) => simpleSelectedSlugs.has(r.slug));
+      const recommended = renderTemplate(simpleIndustry, simpleSize, 'zh');
+      const localAvailable = getAvailableRoles(simpleIndustry, simpleSize, 'zh');
+      const seen = new Set<string>();
+      const catalog = [...recommended, ...localAvailable, ...simpleBrowserRoles].filter((role) => {
+        if (seen.has(role.slug)) return false;
+        seen.add(role.slug);
+        return true;
+      });
+      const roles: RenderedRole[] = catalog.filter((r) => simpleSelectedSlugs.has(r.slug));
       if (roles.length === 0) return null;
       // Build the username map from the user's drafts (Step 2). Fallback to
       // the seed of displayName, then to role.slug verbatim — never mint a
@@ -380,6 +569,12 @@ export function UnifiedCreationModal({
       }
       return {
         workspaceId,
+        organizationName,
+        model: simpleModel.trim() || DEFAULT_MODEL,
+        // 2026-05-30 — Simple wizard 的 proxyProvider 高级选项 (Step 1
+        // AdvancedProxyAccordion)。透给 use-simple-provisioning 后,
+        // `buildSimpleProfileConfig` 写进每条 AgentProfile.config.
+        proxyProvider: simpleProxyProvider,
         roles,
         usernames,
         conversationTitle: '团队会议',
@@ -389,18 +584,43 @@ export function UnifiedCreationModal({
         // server-side capacity guard fires against the right row); when null
         // the hook falls back to a live list query or fresh provision.
         preferredInstallation: deviceCapacity?.installation ?? null,
+        // Task 42 — drive the new "attach materials" provisioning step. The
+        // hook reads this through `planRef`, so edits between Step 2 (upload)
+        // and Step 3 (launch) don't churn the steps array. Empty list → step
+        // is a no-op (silently skipped, no message posted).
+        uploadedAssets: simpleUploadedAssets,
       };
     } catch {
       return null;
     }
-  }, [simpleIndustry, simpleSize, simpleSelectedSlugs, simpleSlugDrafts, workspaceId, deviceCapacity]);
+  }, [
+    simpleOrganizationName,
+    simpleModel,
+    simpleProxyProvider,
+    simpleIndustry,
+    simpleSize,
+    simpleSelectedSlugs,
+    simpleSlugDrafts,
+    simpleBrowserRoles,
+    workspaceId,
+    deviceCapacity,
+    simpleUploadedAssets,
+  ]);
 
   const handleStep3Success = useCallback(
     (res: { conversationId: string; agentIds: string[] }) => {
-      onCreated({ kind: 'simple-team', agentIds: res.agentIds, conversationId: res.conversationId });
+      onCreated({
+        kind: 'simple-team',
+        agentIds: res.agentIds,
+        conversationId: res.conversationId,
+        organizationName: simpleOrganizationName.trim() || undefined,
+        // Task 42 — empty array stays empty (no `undefined`) so downstream
+        // consumers can rely on `Array.isArray(uploadedAssetIds)`.
+        uploadedAssetIds: simpleUploadedAssetIds,
+      });
       onOpenChange(false);
     },
-    [onCreated, onOpenChange],
+    [onCreated, onOpenChange, simpleOrganizationName, simpleUploadedAssetIds],
   );
 
   const handleStep3Cancel = useCallback(() => {
@@ -547,57 +767,260 @@ export function UnifiedCreationModal({
                       ) : null}
                     </AnimatePresence>
 
+                    {/* ── Project context strip (release201 v2.0.8 F-bug) ──
+                        让用户在 Simple / Pro 两种 flow 都先感知到自己正在为
+                        哪个 project 创建.
+
+                        release201 v2.0.8 follow-up — Simple mode 现在会在
+                        runFrom() 启动时自动 POST /projects 创建 "{org} 主项目",
+                        因此 unscoped 文案改成 "将自动创建主项目", 不再露出
+                        "先创建项目 →" inline link (那是 simple mode 的反语义).
+                        Pro mode 维持现行 explicit-link 行为, 让 power user
+                        显式选 / 建 project. 见 docs/release201/20 §F-bug. */}
+                    <div
+                      data-testid="unified-creation-project-context"
+                      data-project-scope={isProjectScoped ? 'project' : 'workspace'}
+                      data-mode={mode}
+                      className={`shrink-0 border-b px-5 py-2 text-xs ${
+                        isProjectScoped
+                          ? isDark
+                            ? 'border-white/[0.04] bg-violet-500/[0.08] text-violet-200'
+                            : 'border-zinc-200 bg-violet-50/60 text-violet-800'
+                          : isDark
+                            ? 'border-white/[0.04] bg-white/[0.02] text-zinc-400'
+                            : 'border-zinc-200 bg-zinc-50/60 text-zinc-600'
+                      }`}
+                    >
+                      {/* 2026-05-29 — inline project picker (release201/20 Gap B).
+                          Previously this banner was a label-only "正在为项目 X
+                          创建" surface; users had no way to change scope mid
+                          flow without leaving the modal. When `projects` +
+                          `onActiveProjectIdChange` are supplied, we render a
+                          real picker that lists every active project + an
+                          unscoped option + an inline "新建项目" trigger.
+                          Falls back to the legacy label when the parent
+                          didn't wire the new props. */}
+                      {projects && onActiveProjectIdChange ? (
+                        inlineCreatingProject ? (
+                          // Inline create form — runs createProject in-place
+                          // so the user never leaves the modal.
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="shrink-0">
+                              {t('workspace.unifiedCreation.projectContext.pickerLabel')}
+                            </span>
+                            <input
+                              data-testid="unified-creation-project-inline-name"
+                              autoFocus
+                              type="text"
+                              value={newProjectName}
+                              onChange={(e) => {
+                                setNewProjectName(e.target.value);
+                                if (createProjectError) setCreateProjectError(null);
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter' && !creatingProject) {
+                                  e.preventDefault();
+                                  void handleInlineCreateProject();
+                                } else if (e.key === 'Escape') {
+                                  setInlineCreatingProject(false);
+                                  setNewProjectName('');
+                                  setCreateProjectError(null);
+                                }
+                              }}
+                              placeholder={t('workspace.project.namePlaceholder')}
+                              disabled={creatingProject}
+                              className={`h-7 flex-1 min-w-[160px] rounded-md border px-2 text-xs outline-none disabled:opacity-50 ${
+                                isDark
+                                  ? 'border-white/[0.08] bg-zinc-900/40 text-zinc-200'
+                                  : 'border-zinc-200 bg-white/80 text-zinc-700'
+                              }`}
+                            />
+                            <button
+                              type="button"
+                              data-testid="unified-creation-project-inline-confirm"
+                              onClick={() => void handleInlineCreateProject()}
+                              disabled={creatingProject || !newProjectName.trim()}
+                              className={`h-7 rounded-md px-2 text-xs font-medium disabled:opacity-50 ${
+                                isDark
+                                  ? 'bg-violet-500/30 text-violet-100 hover:bg-violet-500/40'
+                                  : 'bg-violet-600 text-white hover:bg-violet-700'
+                              }`}
+                            >
+                              {creatingProject ? t('workspace.project.creating') : t('workspace.project.create')}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setInlineCreatingProject(false);
+                                setNewProjectName('');
+                                setCreateProjectError(null);
+                              }}
+                              disabled={creatingProject}
+                              className={`h-7 rounded-md px-2 text-xs disabled:opacity-50 ${
+                                isDark ? 'text-zinc-400 hover:text-zinc-200' : 'text-zinc-500 hover:text-zinc-700'
+                              }`}
+                            >
+                              {t('common.cancel')}
+                            </button>
+                            {createProjectError ? (
+                              <span className={`text-[11px] ${isDark ? 'text-rose-300' : 'text-rose-600'}`}>
+                                {createProjectError}
+                              </span>
+                            ) : null}
+                          </div>
+                        ) : (
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="shrink-0">
+                              {t('workspace.unifiedCreation.projectContext.pickerLabel')}
+                            </span>
+                            <select
+                              data-testid="unified-creation-project-picker"
+                              value={
+                                activeProjectId && activeProjectId !== 'all' && activeProjectId !== '__unscoped'
+                                  ? activeProjectId
+                                  : '__unscoped'
+                              }
+                              onChange={(e) => {
+                                const v = e.target.value;
+                                if (v === '__new__') {
+                                  setInlineCreatingProject(true);
+                                  return;
+                                }
+                                onActiveProjectIdChange(v === '__unscoped' ? null : v);
+                              }}
+                              className={`h-7 rounded-md border px-2 text-xs ${
+                                isDark
+                                  ? 'border-white/[0.08] bg-zinc-900/40 text-zinc-200'
+                                  : 'border-zinc-200 bg-white/80 text-zinc-700'
+                              }`}
+                            >
+                              <option value="__unscoped">
+                                {t('workspace.unifiedCreation.projectContext.unscopedOption')}
+                              </option>
+                              {projects.map((p) => (
+                                <option key={p.id} value={p.id}>
+                                  {p.name}
+                                </option>
+                              ))}
+                              <option value="__new__">
+                                + {t('workspace.unifiedCreation.projectContext.createCta')}
+                              </option>
+                            </select>
+                            {!isProjectScoped && mode === 'simple' ? (
+                              <span
+                                data-testid="unified-creation-project-context-simple-auto"
+                                className={`opacity-75 ${isDark ? 'text-zinc-500' : 'text-zinc-500'}`}
+                              >
+                                · {t('workspace.unifiedCreation.projectContext.simpleAuto')}
+                              </span>
+                            ) : null}
+                          </div>
+                        )
+                      ) : isProjectScoped ? (
+                        <span>
+                          {t('workspace.unifiedCreation.projectContext.scoped', {
+                            projectName: activeProjectName ?? '...',
+                          })}
+                        </span>
+                      ) : mode === 'simple' ? (
+                        <span data-testid="unified-creation-project-context-simple-auto">
+                          {t('workspace.unifiedCreation.projectContext.simpleAuto')}
+                        </span>
+                      ) : (
+                        <span>
+                          {t('workspace.unifiedCreation.projectContext.unscoped')}
+                          {onCreateProject ? (
+                            <button
+                              type="button"
+                              onClick={onCreateProject}
+                              data-testid="unified-creation-project-context-create"
+                              className={`ml-1 underline-offset-2 hover:underline ${
+                                isDark ? 'text-violet-300' : 'text-violet-700'
+                              }`}
+                            >
+                              {t('workspace.unifiedCreation.projectContext.createCta')} →
+                            </button>
+                          ) : null}
+                        </span>
+                      )}
+                    </div>
+
                     {/* ── Content area (flex-1, overflow-y-auto) ─ */}
                     <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4">
-                      <AnimatePresence mode="wait" initial={false}>
-                        <motion.div
-                          key={mode}
-                          initial={{ opacity: 0, y: 8 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          exit={{ opacity: 0, y: -8 }}
-                          transition={tSoft}
-                          data-testid={`unified-creation-content-${mode}`}
-                        >
-                          {mode === 'simple' ? (
-                            <SimpleFlowSwitch
-                              isDark={isDark}
-                              step={simpleStep}
-                              industry={simpleIndustry}
-                              size={simpleSize}
-                              onIndustrySizeChange={(nextIndustry, nextSize) => {
-                                setSimpleIndustry(nextIndustry);
-                                setSimpleSize(nextSize);
-                              }}
-                              selectedSlugs={simpleSelectedSlugs}
-                              onSelectionChange={setSimpleSelectedSlugs}
-                              slugDrafts={simpleSlugDrafts}
-                              slugErrors={simpleSlugErrors}
-                              onSlugChange={handleSlugChange}
-                              deviceMaxAgents={deviceCapacity?.maxAgents ?? FALLBACK_DEVICE_MAX_AGENTS}
-                              plan={simplePlan}
-                              provisioning={provisioning}
-                              slugConflict={simpleSlugConflict}
-                              capacityError={simpleCapacityError}
-                              onStep3Success={handleStep3Success}
-                              onStep3Cancel={handleStep3Cancel}
-                              onStep3SlugConflict={handleSlugConflict}
-                              onStep3CapacityExceeded={handleCapacityExceeded}
-                              onStep3Back={handleStep3Back}
-                            />
-                          ) : (
-                            <ProModeFlow
-                              isDark={isDark}
-                              workspaceId={workspaceId}
-                              agents={agents}
-                              profiles={profiles}
-                              onCreated={(event) => {
-                                onCreated(event);
-                                onOpenChange(false);
-                              }}
-                            />
-                          )}
-                        </motion.div>
-                      </AnimatePresence>
+                      <WsCtx.Provider value={workspaceId}>
+                        <DeviceSelCtx.Provider value={handleDeviceSelected}>
+                          <AnimatePresence mode="wait" initial={false}>
+                            <motion.div
+                              key={mode}
+                              initial={{ opacity: 0, y: 8 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              exit={{ opacity: 0, y: -8 }}
+                              transition={tSoft}
+                              data-testid={`unified-creation-content-${mode}`}
+                            >
+                              {mode === 'simple' ? (
+                                <SimpleFlowSwitch
+                                  isDark={isDark}
+                                  step={simpleStep}
+                                  workspaceId={workspaceId}
+                                  organizationName={simpleOrganizationName}
+                                  lockedOrganizationName={existingOrganizationName ?? null}
+                                  industry={simpleIndustry}
+                                  size={simpleSize}
+                                  model={simpleModel}
+                                  proxyProvider={simpleProxyProvider}
+                                  onOrganizationNameChange={setSimpleOrganizationName}
+                                  onModelChange={setSimpleModel}
+                                  onProxyProviderChange={setSimpleProxyProvider}
+                                  onIndustrySizeChange={(nextIndustry, nextSize) => {
+                                    setSimpleIndustry(nextIndustry);
+                                    setSimpleSize(nextSize);
+                                    setSimpleBrowserRoles([]);
+                                  }}
+                                  selectedSlugs={simpleSelectedSlugs}
+                                  onSelectionChange={setSimpleSelectedSlugs}
+                                  onRoleCatalogChange={setSimpleBrowserRoles}
+                                  slugDrafts={simpleSlugDrafts}
+                                  slugErrors={simpleSlugErrors}
+                                  onSlugChange={handleSlugChange}
+                                  deviceMaxAgents={deviceCapacity?.maxAgents ?? FALLBACK_DEVICE_MAX_AGENTS}
+                                  plan={simplePlan}
+                                  provisioning={provisioning}
+                                  slugConflict={simpleSlugConflict}
+                                  capacityError={simpleCapacityError}
+                                  uploadedAssetIds={simpleUploadedAssetIds}
+                                  onAssetUploaded={(asset) => {
+                                    setSimpleUploadedAssets((prev) => [...prev, asset]);
+                                    setSimpleUploadedAssetIds((prev) => [...prev, asset.id]);
+                                  }}
+                                  onAssetRemoved={(id) => {
+                                    setSimpleUploadedAssets((prev) => prev.filter((a) => a.id !== id));
+                                    setSimpleUploadedAssetIds((prev) => prev.filter((aid) => aid !== id));
+                                  }}
+                                  onUploadSkip={() => setSimpleStep(3)}
+                                  onUploadContinue={() => setSimpleStep(3)}
+                                  onStep3Success={handleStep3Success}
+                                  onStep3Cancel={handleStep3Cancel}
+                                  onStep3SlugConflict={handleSlugConflict}
+                                  onStep3CapacityExceeded={handleCapacityExceeded}
+                                  onStep3Back={handleStep3Back}
+                                />
+                              ) : (
+                                <ProModeFlow
+                                  isDark={isDark}
+                                  workspaceId={workspaceId}
+                                  agents={agents}
+                                  profiles={profiles}
+                                  onCreated={(event) => {
+                                    onCreated(event);
+                                    onOpenChange(false);
+                                  }}
+                                />
+                              )}
+                            </motion.div>
+                          </AnimatePresence>
+                        </DeviceSelCtx.Provider>
+                      </WsCtx.Provider>
                     </div>
 
                     {/* ── Footer (sticky bottom, ~h-72) ──────────
@@ -616,7 +1039,7 @@ export function UnifiedCreationModal({
                           <FooterButton
                             isDark={isDark}
                             variant="ghost"
-                            onClick={() => setSimpleStep((p) => (p > 0 ? ((p - 1) as 0 | 1 | 2) : p))}
+                            onClick={() => setSimpleStep((p) => (p > 0 ? ((p - 1) as 0 | 1 | 2 | 3) : p))}
                             data-testid="unified-creation-back"
                           >
                             Back
@@ -658,11 +1081,20 @@ export default UnifiedCreationModal;
 function SimpleFlowSwitch({
   isDark,
   step,
+  workspaceId,
+  organizationName,
+  lockedOrganizationName,
   industry,
   size,
+  model,
+  proxyProvider,
+  onOrganizationNameChange,
+  onModelChange,
+  onProxyProviderChange,
   onIndustrySizeChange,
   selectedSlugs,
   onSelectionChange,
+  onRoleCatalogChange,
   slugDrafts,
   slugErrors,
   onSlugChange,
@@ -671,6 +1103,11 @@ function SimpleFlowSwitch({
   provisioning,
   slugConflict,
   capacityError,
+  uploadedAssetIds,
+  onAssetUploaded,
+  onAssetRemoved,
+  onUploadSkip,
+  onUploadContinue,
   onStep3Success,
   onStep3Cancel,
   onStep3SlugConflict,
@@ -678,12 +1115,21 @@ function SimpleFlowSwitch({
   onStep3Back,
 }: {
   isDark: boolean;
-  step: 0 | 1 | 2;
+  step: 0 | 1 | 2 | 3;
+  workspaceId: string;
+  organizationName: string;
+  lockedOrganizationName: string | null;
   industry: IndustryKey | null;
   size: SizeKey | null;
+  model: string;
+  proxyProvider: ProxyProvider;
+  onOrganizationNameChange: (name: string) => void;
+  onModelChange: (model: string) => void;
+  onProxyProviderChange: (value: ProxyProvider) => void;
   onIndustrySizeChange: (industry: IndustryKey | null, size: SizeKey | null) => void;
   selectedSlugs: Set<string>;
   onSelectionChange: (slugs: Set<string>) => void;
+  onRoleCatalogChange: (roles: RenderedRole[]) => void;
   slugDrafts: Record<string, string>;
   slugErrors: Record<string, string | null>;
   onSlugChange: (roleSlug: string, next: string) => void;
@@ -692,6 +1138,11 @@ function SimpleFlowSwitch({
   provisioning: ReturnType<typeof useSimpleProvisioning>;
   slugConflict: { roleSlug: string; message: string } | null;
   capacityError: { used: number; max: number; message: string } | null;
+  uploadedAssetIds: string[];
+  onAssetUploaded: (asset: AssetDTO) => void;
+  onAssetRemoved: (assetId: string) => void;
+  onUploadSkip: () => void;
+  onUploadContinue: () => void;
   onStep3Success: (result: { conversationId: string; agentIds: string[] }) => void;
   onStep3Cancel: () => void;
   onStep3SlugConflict: (roleSlug: string, message: string) => void;
@@ -702,8 +1153,15 @@ function SimpleFlowSwitch({
     return (
       <SimpleStep1Industry
         isDark={isDark}
+        initialOrganizationName={organizationName}
+        lockedOrganizationName={lockedOrganizationName}
         initialIndustry={industry ?? undefined}
         initialSize={size ?? undefined}
+        model={model}
+        proxyProvider={proxyProvider}
+        onOrganizationNameChange={onOrganizationNameChange}
+        onModelChange={onModelChange}
+        onProxyProviderChange={onProxyProviderChange}
         onSelectionChange={onIndustrySizeChange}
       />
     );
@@ -718,6 +1176,7 @@ function SimpleFlowSwitch({
         size={size}
         selectedSlugs={selectedSlugs}
         onSelectionChange={onSelectionChange}
+        onRoleCatalogChange={onRoleCatalogChange}
         slugDrafts={slugDrafts}
         slugErrors={slugErrors}
         onSlugChange={onSlugChange}
@@ -725,7 +1184,21 @@ function SimpleFlowSwitch({
       />
     );
   }
-  // step === 2 — provisioning loader. Plan must be ready here; if it isn't
+  if (step === 2) {
+    // Task 42 — company materials upload step (optional).
+    return (
+      <SimpleStepUpload
+        isDark={isDark}
+        workspaceId={workspaceId}
+        uploadedAssetIds={uploadedAssetIds}
+        onAssetUploaded={onAssetUploaded}
+        onAssetRemoved={onAssetRemoved}
+        onSkip={onUploadSkip}
+        onContinue={onUploadContinue}
+      />
+    );
+  }
+  // step === 3 — provisioning loader. Plan must be ready here; if it isn't
   // (race condition / unknown industry pair) fall back to cancel.
   if (!plan) {
     return (
