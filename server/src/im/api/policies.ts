@@ -56,6 +56,7 @@ async function verifyPolicyAdmin(
 export function createPoliciesRouter(conversationService: ConversationService) {
   const router = new Hono();
 
+  // eslint-disable-next-line custom/no-wildcard-sub-router-middleware -- createPoliciesRouter mounted at /conversations in routes.ts; wildcard scoped to that prefix
   router.use('*', authMiddleware);
 
   /**
