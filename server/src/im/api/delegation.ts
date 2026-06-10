@@ -13,6 +13,7 @@ import { DelegationService, DelegationError } from '../services/delegation.servi
 
 export function createDelegationRouter(delegationService: DelegationService): Hono {
   const router = new Hono();
+  // eslint-disable-next-line custom/no-wildcard-sub-router-middleware -- mounted at /delegation in routes.ts; wildcard scoped to that prefix
   router.use('*', authMiddleware);
 
   // Issue a Verifiable Delegation (server-signed on behalf of caller)
