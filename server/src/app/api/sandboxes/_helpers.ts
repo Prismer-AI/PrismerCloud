@@ -37,6 +37,17 @@ export interface IMContainerRow {
    * Default surfaced by the DTO is 3.
    */
   maxAgents?: number | null;
+  /** §26 B5 — daemonId column. */
+  daemonId?: string | null;
+  /**
+   * Migration 336 (08 §6.1) — provider abstraction. Optional so partial-select
+   * Prisma reads and legacy rows (pre-336) stay readable; routes fall back to
+   * 'k8s' via `?? 'k8s'`.
+   */
+  providerKind?: string | null;
+  /** Migration 336 (08 §5.4) — reconciler daemon /healthz state. */
+  daemonHealthMisses?: number | null;
+  lastDaemonHealthAt?: Date | null;
   cpuRequest: string;
   cpuLimit: string;
   memoryRequest: string;
