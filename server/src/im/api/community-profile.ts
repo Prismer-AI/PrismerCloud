@@ -13,6 +13,7 @@ import type { CommunityProfileService } from '../services/community-profile.serv
 import type { CommunityDraftService } from '../services/community-draft.service';
 import type { CommunityFollowService } from '../services/community-follow.service';
 import type { RateLimiterService } from '../services/rate-limiter.service';
+import { requireAgentToolAllowed } from '../security/mcp-allowlist';
 
 export function createCommunityProfileRouter(
   profileService: CommunityProfileService,
@@ -30,10 +31,7 @@ export function createCommunityProfileRouter(
       const enriched = await profileService.getEnrichedProfile(userId);
       return c.json<ApiResponse>({ ok: true, data: enriched });
     } catch (err: any) {
-      return c.json<ApiResponse>(
-        { ok: false, error: err.message },
-        500,
-      );
+      return c.json<ApiResponse>({ ok: false, error: err.message }, 500);
     }
   });
 
@@ -44,10 +42,7 @@ export function createCommunityProfileRouter(
       const heatmap = await profileService.getActivityHeatmap(userId, weeks);
       return c.json<ApiResponse>({ ok: true, data: heatmap });
     } catch (err: any) {
-      return c.json<ApiResponse>(
-        { ok: false, error: err.message },
-        500,
-      );
+      return c.json<ApiResponse>({ ok: false, error: err.message }, 500);
     }
   });
 
@@ -59,10 +54,7 @@ export function createCommunityProfileRouter(
       const profile = await profileService.getOrCreate(user.imUserId);
       return c.json<ApiResponse>({ ok: true, data: profile });
     } catch (err: any) {
-      return c.json<ApiResponse>(
-        { ok: false, error: err.message },
-        500,
-      );
+      return c.json<ApiResponse>({ ok: false, error: err.message }, 500);
     }
   });
 
@@ -76,16 +68,15 @@ export function createCommunityProfileRouter(
       });
       return c.json<ApiResponse>({ ok: true, data: updated });
     } catch (err: any) {
-      return c.json<ApiResponse>(
-        { ok: false, error: err.message },
-        500,
-      );
+      return c.json<ApiResponse>({ ok: false, error: err.message }, 500);
     }
   });
 
   // ─── Follow ────────────────────────────────────────────────
 
   router.post('/follow', authMiddleware, async (c) => {
+    const denied = await requireAgentToolAllowed(c, 'prismer.community.follow', null);
+    if (denied) return denied;
     try {
       const user = c.get('user') as any;
       const { followingId, followingType } = await c.req.json();
@@ -115,10 +106,7 @@ export function createCommunityProfileRouter(
 
       return c.json<ApiResponse>({ ok: true, data: result });
     } catch (err: any) {
-      return c.json<ApiResponse>(
-        { ok: false, error: err.message },
-        500,
-      );
+      return c.json<ApiResponse>({ ok: false, error: err.message }, 500);
     }
   });
 
@@ -129,10 +117,7 @@ export function createCommunityProfileRouter(
       const following = await followService.getFollowing(user.imUserId, type);
       return c.json<ApiResponse>({ ok: true, data: following });
     } catch (err: any) {
-      return c.json<ApiResponse>(
-        { ok: false, error: err.message },
-        500,
-      );
+      return c.json<ApiResponse>({ ok: false, error: err.message }, 500);
     }
   });
 
@@ -142,10 +127,7 @@ export function createCommunityProfileRouter(
       const followers = await followService.getFollowers(userId);
       return c.json<ApiResponse>({ ok: true, data: followers });
     } catch (err: any) {
-      return c.json<ApiResponse>(
-        { ok: false, error: err.message },
-        500,
-      );
+      return c.json<ApiResponse>({ ok: false, error: err.message }, 500);
     }
   });
 
@@ -157,10 +139,7 @@ export function createCommunityProfileRouter(
       const isFollowing = await followService.isFollowing(user.imUserId, followingId, type);
       return c.json<ApiResponse>({ ok: true, data: { isFollowing } });
     } catch (err: any) {
-      return c.json<ApiResponse>(
-        { ok: false, error: err.message },
-        500,
-      );
+      return c.json<ApiResponse>({ ok: false, error: err.message }, 500);
     }
   });
 
@@ -170,18 +149,19 @@ export function createCommunityProfileRouter(
     try {
       const user = c.get('user') as any;
       const body = await c.req.json();
-      const draft = await draftService.saveDraft(user.imUserId, {
-        boardSlug: body.boardSlug,
-        title: body.title,
-        contentJson: body.contentJson,
-        content: body.content,
-      }, body.draftId);
+      const draft = await draftService.saveDraft(
+        user.imUserId,
+        {
+          boardSlug: body.boardSlug,
+          title: body.title,
+          contentJson: body.contentJson,
+          content: body.content,
+        },
+        body.draftId,
+      );
       return c.json<ApiResponse>({ ok: true, data: draft });
     } catch (err: any) {
-      return c.json<ApiResponse>(
-        { ok: false, error: err.message },
-        500,
-      );
+      return c.json<ApiResponse>({ ok: false, error: err.message }, 500);
     }
   });
 
@@ -191,10 +171,7 @@ export function createCommunityProfileRouter(
       const drafts = await draftService.listDrafts(user.imUserId);
       return c.json<ApiResponse>({ ok: true, data: drafts });
     } catch (err: any) {
-      return c.json<ApiResponse>(
-        { ok: false, error: err.message },
-        500,
-      );
+      return c.json<ApiResponse>({ ok: false, error: err.message }, 500);
     }
   });
 
@@ -208,10 +185,7 @@ export function createCommunityProfileRouter(
       }
       return c.json<ApiResponse>({ ok: true, data: draft });
     } catch (err: any) {
-      return c.json<ApiResponse>(
-        { ok: false, error: err.message },
-        500,
-      );
+      return c.json<ApiResponse>({ ok: false, error: err.message }, 500);
     }
   });
 
@@ -225,10 +199,7 @@ export function createCommunityProfileRouter(
       }
       return c.json<ApiResponse>({ ok: true, data: { deleted: true } });
     } catch (err: any) {
-      return c.json<ApiResponse>(
-        { ok: false, error: err.message },
-        500,
-      );
+      return c.json<ApiResponse>({ ok: false, error: err.message }, 500);
     }
   });
 
