@@ -35,9 +35,11 @@ vitest.integration.config.ts
 playwright.config.ts
 VERSION
 
-# SDK trees: top-level sdk/ in the open repo is synced by sdk/build/sync.sh
-# (whole-directory rsync); server/sdk/ is a hand-curated self-host copy.
-sdk/
+# SDK trees are NOT blacklisted as a whole: server/sdk/ (hand-curated
+# self-host copy) survives because it has no base/upstream counterpart, and
+# upstream sdk/ source never matches the whitelist. The only sdk path the
+# whitelist imports is sdk/prismer-cloud/built-in-skills/ — a runtime
+# resource pool read by BuiltInSkillService and COPY'd by the Dockerfile.
 
 # self-host only assets (exist only in the open repo; listed defensively)
 docker/

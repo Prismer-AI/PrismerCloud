@@ -8,6 +8,7 @@ prisma/
 public/
 sql/
 scripts/sql/
+sdk/prismer-cloud/built-in-skills/
 scripts/*.ts
 scripts/*.js
 scripts/*.mjs
