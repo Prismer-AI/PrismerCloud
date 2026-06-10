@@ -122,10 +122,17 @@ export class MentionService {
     // Create lookup maps
     const byUsername = new Map<string, (typeof participants)[0]>();
     const byDisplayName = new Map<string, (typeof participants)[0]>();
+    // byUserId — agents frequently @-mention the raw userId (e.g.
+    // `@cr63a27t3hk`) because `prismer.conversation.listAgents` surfaces both
+    // `id` and `username`, and the LLM grabs `id`. userIds are unique random
+    // strings → ~zero false-positive risk, and matching them makes routing
+    // robust no matter which field the agent picked.
+    const byUserId = new Map<string, (typeof participants)[0]>();
 
     for (const p of participants) {
       byUsername.set(p.imUser.username.toLowerCase(), p);
       byDisplayName.set(p.imUser.displayName.toLowerCase(), p);
+      byUserId.set(p.imUser.id.toLowerCase(), p);
     }
 
     // Resolve each mention
@@ -133,8 +140,9 @@ export class MentionService {
     for (const mention of mentions) {
       const lowerUsername = mention.username.toLowerCase();
 
-      // Try to find by username first, then display name
-      const participant = byUsername.get(lowerUsername) || byDisplayName.get(lowerUsername);
+      // Try username first (preferred), then raw userId, then display name.
+      const participant =
+        byUsername.get(lowerUsername) || byUserId.get(lowerUsername) || byDisplayName.get(lowerUsername);
 
       if (participant) {
         resolved.push({
@@ -397,17 +405,24 @@ export class MentionService {
    * Get route targets by user IDs.
    */
   private async getRouteTargets(userIds: string[]): Promise<RouteTarget[]> {
-    const users = await prisma.iMUser.findMany({
-      where: { id: { in: userIds } },
-    });
+    const orderedIds = [...new Set(userIds.filter(Boolean))];
+    if (orderedIds.length === 0) return [];
 
-    return users.map((u: (typeof users)[number]) => ({
-      userId: u.id,
-      username: u.username,
-      displayName: u.displayName,
-      role: u.role,
-      agentType: u.agentType ?? undefined,
-    }));
+    const users = await prisma.iMUser.findMany({
+      where: { id: { in: orderedIds } },
+    });
+    const byId = new Map(users.map((u: (typeof users)[number]) => [u.id, u]));
+
+    return orderedIds
+      .map((id) => byId.get(id))
+      .filter((u): u is (typeof users)[number] => Boolean(u))
+      .map((u) => ({
+        userId: u.id,
+        username: u.username,
+        displayName: u.displayName,
+        role: u.role,
+        agentType: u.agentType ?? undefined,
+      }));
   }
 
   /**
