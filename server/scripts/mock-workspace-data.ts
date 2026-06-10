@@ -406,11 +406,21 @@ async function main() {
 
   for (const m of memoryFiles) {
     const contentHash = require('crypto').createHash('sha256').update(m.content).digest('hex');
+    const scope = 'agent-private';
     await prisma.iMMemoryFile.upsert({
-      where: { workspaceId_path: { workspaceId: WORKSPACE_ID, path: m.path } },
+      where: {
+        workspaceId_scope_ownerType_ownerId_path: {
+          workspaceId: WORKSPACE_ID,
+          scope,
+          ownerType: 'agent',
+          ownerId: AGENT_ID,
+          path: m.path,
+        },
+      },
       update: {
         ownerId: AGENT_ID,
         ownerType: 'agent',
+        scope,
         content: m.content,
         memoryType: m.memoryType,
         description: m.description,
@@ -421,6 +431,7 @@ async function main() {
       create: {
         ownerId: AGENT_ID,
         ownerType: 'agent',
+        scope,
         workspaceId: WORKSPACE_ID,
         ...m,
         stale: (m as any).stale || false,
