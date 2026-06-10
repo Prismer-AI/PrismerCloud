@@ -1,5 +1,6 @@
 @import 'tailwindcss';
 @import 'tw-animate-css';
+@import 'video.js/dist/video-js.css';
 
 @custom-variant dark (&:is(.dark *));
 
@@ -22,6 +23,8 @@
   --prismer-gradient-from: #4830c5;
   --prismer-gradient-to: #c87ce3;
   --prismer-gradient-accent: #b4aaf0;
+  --grad-from: var(--prismer-gradient-from);
+  --grad-to: var(--prismer-gradient-to);
 
   /* Background Colors - Light */
   --background: #ffffff;
@@ -157,6 +160,8 @@
   --prismer-gradient-from: #41086d;
   --prismer-gradient-to: #5622e5;
   --prismer-gradient-accent: #724cff;
+  --grad-from: var(--prismer-gradient-from);
+  --grad-to: var(--prismer-gradient-to);
 
   /* Background Colors - Dark */
   --background: #0a0a0a;
@@ -840,4 +845,158 @@ input[type='range'].credit-slider::-moz-range-thumb {
 .asset-pptx-viewer svg,
 .asset-pptx-viewer img {
   max-width: 100%;
+}
+
+/*
+ * Agent "working" pulse — applied by <AgentWorkingIndicator/> while the
+ * wrapped agent has an in-flight task (status ∈ {assigned, running,
+ * dispatched}). The wrapper itself is `position: relative; display: inline-flex`,
+ * and the first child is whichever avatar element is being decorated.
+ *
+ * Effect: a soft emerald breathing ring around the avatar — paired with the
+ * absolute-positioned `animate-ping` dot in the wrapper, this surfaces "agent
+ * is thinking" without competing with the chat row's existing status dot.
+ *
+ * `box-shadow` (not `outline`) so the ring sits OUTSIDE the avatar's border
+ * radius and doesn't get clipped by parent `overflow-hidden` contexts
+ * (chat-row wrappers commonly clip overflow to keep avatars circular).
+ *
+ * 1.6s ease-in-out matches the natural "breath" tempo and stays subtle
+ * enough not to fight with the avatar's own hover-scale motion in
+ * RuntimeAgentAvatar.
+ */
+.agent-working-pulse > :first-child {
+  animation: prismer-agent-pulse 1.6s ease-in-out infinite;
+  border-radius: 0.75rem; /* match Avatar's rounded-xl so the ring traces the icon */
+}
+
+@keyframes prismer-agent-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.5);
+  }
+  50% {
+    box-shadow: 0 0 0 4px rgba(16, 185, 129, 0);
+  }
+}
+
+/* ─── S44 / release201/12 §8.8.6.1 — spatial-grammar motion keyframes ─ */
+
+/**
+ * Idle breathing — ambient pulse on idle surfaces.
+ * Used by: Profile siri-orb idle, empty Authoring bench, empty
+ * Installed belt, generic idle hint surfaces.
+ * Duration: 4s ease-in-out infinite (gentle, non-distracting).
+ */
+@keyframes idle-breathing {
+  0%,
+  100% {
+    opacity: 0.85;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.03);
+  }
+}
+
+/**
+ * Trace draw — line / path drawing animation.
+ * Used by: Evolution garden edge draw-in, Metrics timeseries new-point
+ * trace, sparkline initial render.
+ * Requires `--len` CSS var (path length) set inline or via JS.
+ *   Usage: `<path style={{ '--len': totalLen }} className="animate-trace-draw" />`
+ * Pair with `stroke-dasharray: var(--len)`.
+ */
+@keyframes trace-draw {
+  from {
+    stroke-dashoffset: var(--len, 1000);
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+.animate-idle-breathing {
+  animation: idle-breathing 4s ease-in-out infinite;
+}
+
+.animate-trace-draw {
+  stroke-dasharray: var(--len, 1000);
+  animation: trace-draw 0.6s ease-out forwards;
+}
+
+/**
+ * S42 — Pipeline draft-ball flow keyframe (release201/13 §3.3 Lifecycle).
+ * The active sub-stage capsule pulses a soft glow that "drips" downward,
+ * reinforcing the "draft ball flowing down the pipeline" metaphor.
+ *
+ * Glow colour is parameterised via `--prismer-glow` (set inline from
+ * `grammarAccentClasses.cyan.glow` in design.ts).
+ *   Usage: `<div className="animate-prismer-flow-down" style={{ '--prismer-glow': '...' }} />`
+ */
+@keyframes prismer-flow-down {
+  0% {
+    transform: translateY(-12%);
+    opacity: 0.4;
+    box-shadow: 0 0 0 0 var(--prismer-glow, rgba(34, 211, 238, 0.6));
+  }
+  50% {
+    opacity: 0.85;
+    box-shadow: 0 0 18px 4px var(--prismer-glow, rgba(34, 211, 238, 0.4));
+  }
+  100% {
+    transform: translateY(0);
+    opacity: 1;
+    box-shadow: 0 0 0 0 var(--prismer-glow, rgba(34, 211, 238, 0));
+  }
+}
+
+/**
+ * S42 — Evolution gene-node pulse keyframe (release201/13 §3.6 Evolution).
+ * Each gene node in the force-layout breathes at a different phase so the
+ * garden feels alive without being noisy.
+ *
+ * Glow colour parameterised via `--prismer-glow` (default: emerald).
+ */
+@keyframes prismer-gene-pulse {
+  0%,
+  100% {
+    opacity: 0.7;
+    transform: scale(1);
+    box-shadow: 0 0 0 0 var(--prismer-glow, rgba(52, 211, 153, 0));
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.05);
+    box-shadow: 0 0 14px 3px var(--prismer-glow, rgba(52, 211, 153, 0.5));
+  }
+}
+
+.animate-prismer-flow-down {
+  animation: prismer-flow-down 1.6s ease-in-out infinite;
+}
+
+.animate-prismer-gene-pulse {
+  animation: prismer-gene-pulse 3s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-working-pulse > :first-child {
+    animation: none;
+  }
+  /* S44 — keyframes 在 reduced-motion 下停止 (WCAG 2.3.3) */
+  .animate-idle-breathing {
+    animation: none;
+  }
+  .animate-trace-draw {
+    animation: none;
+    /* keep path fully drawn so content remains visible */
+    stroke-dashoffset: 0;
+  }
+  /* S42 — spatial-grammar keyframes 在 reduced-motion 下停止 */
+  .animate-prismer-flow-down,
+  .animate-prismer-gene-pulse {
+    animation: none;
+  }
 }
