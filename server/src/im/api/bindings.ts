@@ -15,6 +15,7 @@ import type { ApiResponse, CreateBindingInput } from "../types/index";
 export function createBindingsRouter(bindingService: BindingService) {
   const router = new Hono();
 
+  // eslint-disable-next-line custom/no-wildcard-sub-router-middleware -- mounted at /bindings in routes.ts; wildcard scoped to that prefix
   router.use("*", authMiddleware);
 
   /**
