@@ -37,10 +37,12 @@
  *     subsequent steps cancelled, caller closes modal).
  *
  * KNOWN LEAK (deferred to §30 B4 cleanup task):
- *   On cancel after partial agent register, agent IMUsers persist in DB.
- *   We don't roll back because the user might still want them. The
- *   cleanup hook should be a one-shot "cancel my abandoned creation"
- *   endpoint that DELETEs agents whose conversations don't exist.
+ *   On cancel after fully completed agent steps but before conversation,
+ *   agent IMUsers persist in DB. We don't roll back because the user might
+ *   still want them. Profile-creation failures inside an agent step are
+ *   recoverable in-place: retry reuses the already registered agent and
+ *   resumes profile setup instead of registering a second agent or hitting
+ *   a username conflict.
  *
  * Determinism: the hook is plain async/await over fetch — no react-query,
  * no SWR. State is consumed by SimpleStep3Launch which is the only
@@ -49,22 +51,48 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
+import type { ProxyProvider } from '../proxy-provider-select';
 import { imFetch } from '../../lib/im-api';
 import {
+  createProject,
+  PROJECT_FILTER_ALL,
+  PROJECT_FILTER_UNSCOPED,
+  readActiveProjectFromStorage,
+  writeActiveProjectToStorage,
+} from '../../lib/projects-api';
+import {
   createAgent,
+  createAgentProfile,
   createGroupConversation,
   sendMessage,
   suggestUsernameSeed,
   type AgentTypeEnum,
+  type MessageAttachmentDTO,
   type RegisterAgentResult,
 } from '../../lib/mutations';
 import type { RenderedRole } from '../../lib/templates/types';
-import type { RuntimeInstallationDTO } from '../../lib/types';
+import type { AssetDTO, RuntimeInstallationDTO } from '../../lib/types';
+import {
+  buildWorkspaceRoleTemplateSnapshot,
+  buildWorkspaceKickoffMessage,
+  buildWorkspaceSystemPrompt,
+} from '@/lib/role-runtime-policy';
 
 // ───────────────────────── Public types ─────────────────────────
 
 export interface SimpleProvisioningPlan {
   workspaceId: string;
+  /** Organization context entered in Simple mode Step 1. */
+  organizationName: string;
+  /** Model applied to every Hermes profile created by this simple-flow run. */
+  model?: string;
+  /**
+   * 2026-05-30 — per-agent LLM proxy provider for every Hermes profile
+   * created by this run. Defaults to `'newapi'` when omitted. Mirrors the Pro
+   * mode's `ProfileConfigFields.proxyProvider` so Simple + Pro write the same
+   * config-blob shape.
+   */
+  proxyProvider?: ProxyProvider;
   /** CEO must be first (primary:true); specialists follow. */
   roles: readonly RenderedRole[];
   /**
@@ -92,6 +120,18 @@ export interface SimpleProvisioningPlan {
     maxAgents: number;
     used: number;
   } | null;
+  /**
+   * Task 42 — Materials uploaded during the Simple-mode "Upload" step. When
+   * non-empty, the orchestration appends a trailing "attach materials" step
+   * after Welcome that posts a markdown message into the group conversation
+   * with the assets as attachments, so the CEO/team see them as context from
+   * the very first turn. Empty / undefined skips the step silently.
+   *
+   * Read through `planRef` so edits between Step 2 (upload) and Step 3
+   * (launch) don't churn the steps array — the step is appended only at
+   * `buildInitialSteps` time but the actual attachment data is resolved live.
+   */
+  uploadedAssets?: readonly AssetDTO[];
 }
 
 /**
@@ -182,6 +222,14 @@ export type ProvisioningStep =
       durationMs?: number;
       error?: string;
       messageId?: string;
+    }
+  | {
+      kind: 'attach-materials';
+      status: ProvisioningStepStatus;
+      durationMs?: number;
+      error?: string;
+      messageId?: string;
+      assetCount?: number;
     };
 
 export interface SimpleProvisioningResult {
@@ -232,6 +280,11 @@ function buildInitialSteps(plan: SimpleProvisioningPlan): ProvisioningStep[] {
   }
   out.push({ kind: 'conversation', status: 'pending' });
   out.push({ kind: 'welcome', status: 'pending' });
+  // Task 42 — only append the materials-attach step when the user actually
+  // uploaded files. Keeps the checklist short for the 0-file path.
+  if ((plan.uploadedAssets?.length ?? 0) > 0) {
+    out.push({ kind: 'attach-materials', status: 'pending', assetCount: plan.uploadedAssets?.length ?? 0 });
+  }
   return out;
 }
 
@@ -269,6 +322,226 @@ function agentTypeFromRole(role: RenderedRole): AgentTypeEnum {
   return 'specialist';
 }
 
+// v2.0 — orchestrator authority is reserved for CEO only. Other primary
+// roles (coo / operations / pm) default to executor under the new
+// "one orchestrator + N specialists" model. See
+// docs/release200/evidence/v20-acceptance/06-ceo-orchestrator-discipline-2026-05-22.md.
+function isOrchestratorRole(role: RenderedRole): boolean {
+  return role.slug === 'ceo';
+}
+
+export function buildSimpleProfileConfig(
+  role: RenderedRole,
+  username: string,
+  organizationName: string,
+  model = 'us-kimi-k2.6',
+  proxyProvider: ProxyProvider = 'newapi',
+): Record<string, unknown> {
+  const authority = isOrchestratorRole(role) ? 'orchestrator' : 'executor';
+  const roleTemplate = buildWorkspaceRoleTemplateSnapshot({
+    slug: role.slug,
+    displayName: role.displayName,
+    rationale: role.rationale,
+    organizationName,
+    authority,
+  });
+  return {
+    hermesProfileName: username,
+    apiKey: generateSimpleHermesApiKey(username),
+    autoStart: true,
+    startupTimeoutMs: 30_000,
+    configurePrismerProvider: true,
+    model,
+    // 2026-05-30 — per-agent proxy provider, parallels the Pro mode
+    // `buildLongRunningProfileConfig` hermes branch. zod default on the daemon
+    // side (HermesProfileConfigSchema) makes the field optional on the wire
+    // but we always emit it from Simple mode to keep the config blob
+    // self-documenting.
+    proxyProvider,
+    prismerProviderName: 'prismer',
+    systemPrompt: buildWorkspaceSystemPrompt({
+      displayName: role.displayName,
+      rationale: role.rationale,
+      organizationName,
+    }),
+    organizationName,
+    roleTemplate,
+    mcpAllowlist: (roleTemplate.mcpServers as Array<{ toolsAllowlist?: string[] }>)[0]?.toolsAllowlist,
+    taskAuthority: roleTemplate.taskAuthority,
+    approvalPolicy: roleTemplate.approvalPolicy,
+    operatingPrinciples: roleTemplate.operatingPrinciples,
+  };
+}
+
+async function persistSimpleOrganizationName(workspaceId: string, organizationName: string, signal: AbortSignal) {
+  const existing = await imFetch<{ metadata?: Record<string, unknown> }>(
+    `/workspaces/${encodeURIComponent(workspaceId)}`,
+    { signal },
+  );
+  if (!existing.ok) {
+    throw new Error(existing.message || 'Load workspace failed');
+  }
+  const metadata = {
+    ...(existing.data?.metadata ?? {}),
+    organizationName,
+    simpleModeOrganizationName: organizationName,
+  };
+  const updated = await imFetch(`/workspaces/${encodeURIComponent(workspaceId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ name: organizationName, metadata }),
+    signal,
+  });
+  if (!updated.ok) {
+    throw new Error(updated.message || 'Update workspace organization failed');
+  }
+}
+
+/**
+ * Mark workspace metadata.onboardingComplete=true so page.tsx's
+ * auto-open-simple-modal gate (line ~1679) stops re-triggering on F5.
+ *
+ * Fires at the top of `runFrom` — user clicking Launch is the intent signal,
+ * independent of whether the device step succeeds. Without this, a failed
+ * device (e.g. test EKS pod stuck in Pending) traps every fresh F5 inside
+ * the wizard modal because all three other gates (no connected device, no
+ * recent attempt after 24h, autoOpenedSimple resets on F5) fall through.
+ *
+ * Best-effort: PATCH failure is logged but never blocks the wizard flow.
+ */
+async function markWorkspaceOnboardingComplete(workspaceId: string, signal: AbortSignal): Promise<void> {
+  try {
+    const existing = await imFetch<{ metadata?: Record<string, unknown> }>(
+      `/workspaces/${encodeURIComponent(workspaceId)}`,
+      { signal },
+    );
+    if (!existing.ok) return;
+    const prevMeta = (existing.data?.metadata ?? {}) as Record<string, unknown>;
+    if (prevMeta.onboardingComplete === true) return;
+    const metadata = {
+      ...prevMeta,
+      onboardingComplete: true,
+      onboardingCompletedAt: new Date().toISOString(),
+    };
+    await imFetch(`/workspaces/${encodeURIComponent(workspaceId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ metadata }),
+      signal,
+    });
+  } catch {
+    /* best-effort — never block wizard flow on metadata write */
+  }
+}
+
+/**
+ * release201 v2.0.8 F-bug follow-up — auto-create a default "main" project on
+ * first Simple-mode launch so the user never has to leave the wizard to set
+ * up project scope.
+ *
+ * Spec: Simple mode = "one click, sensible defaults". Before this helper, the
+ * Simple flow left ProjectSwitcher in 'all' / '__unscoped' state and forced
+ * the user to mid-flow click "先创建项目 →" and bounce out to the switcher
+ * dropdown — which violates simple-mode semantics.
+ *
+ * Guard: if the workspace already has an active project sentinel that points
+ * at a real project id (not 'all' / '__unscoped'), we DO NOT recreate. This
+ * keeps the helper idempotent across re-entries (e.g. user closes modal
+ * mid-flow, reopens, re-launches) and avoids stomping on a project the user
+ * created via ProjectSwitcher between runs.
+ *
+ * Best-effort: failure (network / 409 on slug conflict / etc.) is logged via
+ * console.warn but never throws. Downstream device step's
+ * `readActiveProjectFromStorage` still works (falls back to sentinel →
+ * workspace-level scope) so the wizard continues even if project creation
+ * fails.
+ */
+export async function ensureSimpleModeProject(
+  workspaceId: string,
+  organizationName: string,
+  signal: AbortSignal,
+  createProjectFn: typeof createProject = createProject,
+): Promise<void> {
+  const existingActive = readActiveProjectFromStorage(workspaceId);
+  if (existingActive && existingActive !== PROJECT_FILTER_ALL && existingActive !== PROJECT_FILTER_UNSCOPED) {
+    // User already has a real project selected — respect it.
+    return;
+  }
+  try {
+    const trimmedOrg = organizationName.trim();
+    const projectName = trimmedOrg ? `${trimmedOrg} 主项目` : '主项目';
+    const resp = await createProjectFn({
+      workspaceId,
+      slug: 'main',
+      name: projectName,
+      description: '自动创建于 Simple mode 引导流程',
+      metadata: { createdBy: 'simple-mode-bootstrap' },
+    });
+    if (signal.aborted) return;
+    if (resp.ok && resp.data?.id) {
+      writeActiveProjectToStorage(workspaceId, resp.data.id);
+    } else if (!resp.ok) {
+      console.warn('[useSimpleProvisioning] auto-create main project failed:', resp.message ?? resp.error);
+    }
+  } catch (err) {
+    if ((err as DOMException)?.name === 'AbortError') return;
+    console.warn('[useSimpleProvisioning] auto-create main project threw:', err);
+  }
+}
+
+function generateSimpleHermesApiKey(username: string): string {
+  const safe = username.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 24) || 'agent';
+  const bytes = new Uint8Array(12);
+  if (globalThis.crypto?.getRandomValues) {
+    globalThis.crypto.getRandomValues(bytes);
+    return `hermes-${safe}-${Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('')}`;
+  }
+  return `hermes-${safe}-${Math.random().toString(36).slice(2, 14)}`;
+}
+
+export async function registerOrReuseSimpleProvisioningAgent(
+  input: {
+    role: RenderedRole;
+    username: string;
+    workspaceId: string;
+    daemonId: string | null;
+    pendingAgent?: RegisterAgentResult | { agent: RegisterAgentResult; profileCreated: boolean };
+  },
+  create: typeof createAgent = createAgent,
+): Promise<{ agent: RegisterAgentResult; reusedPending: boolean }> {
+  if (input.pendingAgent) {
+    const agent = 'agent' in input.pendingAgent ? input.pendingAgent.agent : input.pendingAgent;
+    return { agent, reusedPending: true };
+  }
+
+  const res = await create({
+    username: input.username,
+    displayName: input.role.displayName,
+    agentType: agentTypeFromRole(input.role),
+    workspaceId: input.workspaceId,
+    capabilities: [...input.role.capabilities],
+    description: input.role.rationale,
+    ...(input.daemonId ? { daemonId: input.daemonId } : {}),
+  });
+  if (!res.ok) {
+    const rawEnvelope =
+      (res as { raw?: { error?: { code?: string }; meta?: { used?: number; max?: number } } }).raw ?? null;
+    const errCode = res.error;
+    const isCapacity = errCode === 'CAPACITY_EXCEEDED' || rawEnvelope?.error?.code === 'CAPACITY_EXCEEDED';
+    if (isCapacity) {
+      const used = rawEnvelope?.meta?.used ?? 0;
+      const max = rawEnvelope?.meta?.max ?? 3;
+      throw new CapacityExceededError(used, max, input.daemonId, res.message || 'Device capacity exceeded');
+    }
+    const conflictPhrase = /username.*already taken/i;
+    const looksLikeConflict = conflictPhrase.test(res.message ?? '') || conflictPhrase.test(res.error ?? '');
+    if (looksLikeConflict) {
+      throw new SlugConflictError(input.role.slug, input.username, res.message || 'Username already taken');
+    }
+    throw new Error(res.message || `Register agent failed: ${input.role.displayName}`);
+  }
+
+  return { agent: res.data, reusedPending: false };
+}
+
 // ───────────────────────── Hook ─────────────────────────
 
 export function useSimpleProvisioning(
@@ -303,8 +576,9 @@ export function useSimpleProvisioning(
   const persistentRef = useRef<{
     installation?: { id: string; daemonId: string | null; reused: boolean };
     agentResults: Map<string, RegisterAgentResult>; // keyed by roleSlug
+    profilePendingAgentResults: Map<string, { agent: RegisterAgentResult; profileCreated: boolean }>; // register succeeded; profile/preinstall still needs retry
     conversationId?: string;
-  }>({ agentResults: new Map() });
+  }>({ agentResults: new Map(), profilePendingAgentResults: new Map() });
 
   // Live mirror of `steps` so the run loop can peek without setState-in-promise
   // shenanigans. Updated synchronously inside patchStep + state effects.
@@ -323,9 +597,15 @@ export function useSimpleProvisioning(
 
   // Reset trigger keyed on role-set identity, NOT the whole plan object.
   // Edits to `usernames` flow via planRef without resetting persistent state.
+  //
+  // Task 42 — also include the asset-count slice of identity so the steps
+  // array picks up / drops the "attach-materials" entry when the user toggles
+  // their upload set on Step 2 before launching. Identity of which specific
+  // assets they are flows live via planRef, so swapping one asset for another
+  // (same count) doesn't churn the steps array.
   const roleSetKey = useMemo(() => {
     if (!plan) return null;
-    return plan.roles.map((r) => r.slug).join('|');
+    return `${plan.roles.map((r) => r.slug).join('|')}::assets=${plan.uploadedAssets?.length ?? 0}`;
   }, [plan]);
 
   useEffect(() => {
@@ -335,7 +615,7 @@ export function useSimpleProvisioning(
       setCurrentStepIndex(null);
       setError(null);
       setResult(null);
-      persistentRef.current = { agentResults: new Map() };
+      persistentRef.current = { agentResults: new Map(), profilePendingAgentResults: new Map() };
       return;
     }
     const initial = buildInitialSteps(plan);
@@ -345,7 +625,7 @@ export function useSimpleProvisioning(
     setError(null);
     setResult(null);
     setTotalDurationMs(0);
-    persistentRef.current = { agentResults: new Map() };
+    persistentRef.current = { agentResults: new Map(), profilePendingAgentResults: new Map() };
     // The plan-level deps that warrant a hard reset are: presence + role set.
     // Username edits are intentionally NOT in the dep list.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -392,6 +672,9 @@ export function useSimpleProvisioning(
       }
 
       // 1. List existing installations — reuse if any has spare capacity.
+      await persistSimpleOrganizationName(plan.workspaceId, plan.organizationName, signal);
+
+      // 2. List existing installations — reuse if any has spare capacity.
       // P3-7: when the modal supplied a `preferredInstallation` (from the
       // Step 1→2 capacity probe), trust that decision verbatim — the modal
       // already enforced `used + roles.length <= maxAgents` against the same
@@ -443,8 +726,18 @@ export function useSimpleProvisioning(
         return;
       }
 
-      // 2. Provision new k8s installation. Defaults match the K8sProvisionWizard
+      // 3. Provision new k8s installation. Defaults match the K8sProvisionWizard
       //    "sandbox-default + medium + medium + none" preset.
+      //
+      // M448 (doc 20 Gap A) — when the workspace has an active ProjectSwitcher
+      // selection that's a real project id (not the 'all' / '__unscoped'
+      // sentinels), thread it through so the new device lands inside that
+      // project's scope. Sentinels collapse to workspace-level (NULL).
+      const activeProject = readActiveProjectFromStorage(plan.workspaceId);
+      const scopedProjectId =
+        activeProject && activeProject !== PROJECT_FILTER_ALL && activeProject !== PROJECT_FILTER_UNSCOPED
+          ? activeProject
+          : undefined;
       const provisionRes = await imFetch<RuntimeInstallationDTO>('/api/workspace/runtime-installations', {
         method: 'POST',
         body: JSON.stringify({
@@ -457,6 +750,7 @@ export function useSimpleProvisioning(
           memoryRequest: '2Gi',
           memoryLimit: '4Gi',
           gpu: 0,
+          ...(scopedProjectId ? { projectId: scopedProjectId } : {}),
         }),
         signal,
       });
@@ -512,50 +806,67 @@ export function useSimpleProvisioning(
       // POST response (fresh provision); when both are null the server-side
       // check silently no-ops (no device row → nothing to enforce).
       const daemonId = persistentRef.current.installation?.daemonId ?? null;
-      const res = await createAgent({
+
+      const pendingAgent = persistentRef.current.profilePendingAgentResults.get(role.slug);
+      const { agent, reusedPending } = await registerOrReuseSimpleProvisioningAgent({
+        role,
         username,
-        displayName: role.displayName,
-        agentType: agentTypeFromRole(role),
         workspaceId: livePlan.workspaceId,
-        capabilities: [...role.capabilities],
-        description: role.rationale,
-        ...(daemonId ? { daemonId } : {}),
+        daemonId,
+        pendingAgent,
       });
       // createAgent doesn't accept an abort signal in its current signature;
       // but we keep the check post-completion so a cancel during the call
       // bubbles up before we patch state.
       if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
-      if (!res.ok) {
-        // P3-7: capacity 409 is its own class — distinct UX from slug-conflict
-        // 409 (edit handle) because the resolution is "upgrade / delete an
-        // existing agent". Check the error.code first; the `raw` envelope
-        // surfaces it as `{ error: { code: 'CAPACITY_EXCEEDED' }, meta: { used, max } }`.
-        const rawEnvelope =
-          (res as { raw?: { error?: { code?: string }; meta?: { used?: number; max?: number } } }).raw ?? null;
-        const errCode = res.error;
-        const isCapacity = errCode === 'CAPACITY_EXCEEDED' || rawEnvelope?.error?.code === 'CAPACITY_EXCEEDED';
-        if (isCapacity) {
-          const used = rawEnvelope?.meta?.used ?? 0;
-          const max = rawEnvelope?.meta?.max ?? 3;
-          throw new CapacityExceededError(used, max, daemonId, res.message || 'Device capacity exceeded');
-        }
-        // Detect 409 username-conflict → SlugConflictError so the run loop
-        // can route the user back to Step 2 to edit the @handle. Server
-        // phrasing varies: `/register` returns `Username '<x>' is already
-        // taken`, `/agents` returns `Username already taken`. Anchor on the
-        // phrase only — bare `status === 409` would now overlap with
-        // CAPACITY_EXCEEDED above, which has different UX.
-        const conflictPhrase = /username.*already taken/i;
-        const looksLikeConflict = conflictPhrase.test(res.message ?? '') || conflictPhrase.test(res.error ?? '');
-        if (looksLikeConflict) {
-          throw new SlugConflictError(role.slug, username, res.message || 'Username already taken');
-        }
-        throw new Error(res.message || `Register agent failed: ${role.displayName}`);
+      if (!reusedPending) {
+        persistentRef.current.profilePendingAgentResults.set(role.slug, { agent, profileCreated: false });
       }
-      persistentRef.current.agentResults.set(role.slug, res.data);
+
+      const pending = persistentRef.current.profilePendingAgentResults.get(role.slug);
+      if (!pending?.profileCreated) {
+        const profile = await createAgentProfile({
+          workspaceId: livePlan.workspaceId,
+          agentImUserId: agent.imUserId,
+          adapterName: 'hermes',
+          name: 'default',
+          config: buildSimpleProfileConfig(
+            role,
+            username,
+            livePlan.organizationName,
+            livePlan.model,
+            livePlan.proxyProvider,
+          ),
+        });
+        if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
+        if (!profile.ok) {
+          const profileAlreadyExists =
+            profile.status === 409 && /profile.*already exists/i.test(`${profile.error} ${profile.message}`);
+          if (profileAlreadyExists) {
+            if (pending) pending.profileCreated = true;
+          } else {
+            throw new Error(
+              `Agent @${agent.username} was created, but profile setup failed: ${
+                profile.message || `Create agent profile failed: ${role.displayName}`
+              }. Retry will resume profile setup for this agent.`,
+            );
+          }
+        } else if (pending) {
+          pending.profileCreated = true;
+        }
+      }
+
+      // Simple mode uses local template snapshots embedded into the profile
+      // config above. Do not call cloud role-template preinstall here: test
+      // environments may not seed the matching server-side role template rows,
+      // and a 404 would be noisy while adding no capability beyond the embedded
+      // roleTemplate/mcpAllowlist already written to the AgentProfile.
+
+      persistentRef.current.profilePendingAgentResults.delete(role.slug);
+      persistentRef.current.agentResults.set(role.slug, agent);
       patchStep(idx, {
         status: 'done',
-        agentId: res.data.imUserId,
+        agentId: agent.imUserId,
         durationMs: Math.round(nowMs() - startedAt),
       });
       await dwellFloor(nowMs() - startedAt, signal);
@@ -620,10 +931,15 @@ export function useSimpleProvisioning(
       });
       const ceoHandle = ceoEntry?.username ?? plan.roles[0]?.slug ?? 'CEO';
 
+      // Kick the all-hands group off with a CEO-directed introduction.
+      // The @-mention dispatches to the CEO agent so the actual greeting
+      // ("大家认识一下") will land as the CEO's first message in the
+      // bubble feed, not as the human's voice. Wording is deliberately
+      // direct so the agent prompt picks up the intent verbatim.
       const res = await sendMessage({
         conversationId,
         type: 'text',
-        content: `CEO @${ceoHandle} 邀请大家入伙开始干活`,
+        content: buildWorkspaceKickoffMessage(ceoHandle),
         metadata: { source: 'simple_mode_welcome' },
       });
       if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
@@ -640,6 +956,92 @@ export function useSimpleProvisioning(
     [plan, patchStep],
   );
 
+  // Task 42 — Post-welcome step that attaches uploaded company materials to
+  // the new group conversation as a markdown message with `attachments` so
+  // teammates see them as first-turn context. Non-fatal on failure:
+  // the group + welcome already succeeded, so we log and mark the step
+  // as failed but the whole flow's result is unaffected.
+  const runAttachMaterialsStep = useCallback(
+    async (idx: number, signal: AbortSignal): Promise<void> => {
+      if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
+      const livePlan = planRef.current;
+      if (!livePlan) throw new Error('no_plan');
+      const conversationId = persistentRef.current.conversationId;
+      if (!conversationId) throw new Error('Missing conversation id for attach-materials step');
+
+      const assets = livePlan.uploadedAssets ?? [];
+      const startedAt = nowMs();
+      patchStep(idx, { status: 'running', assetCount: assets.length });
+
+      if (assets.length === 0) {
+        // Should not normally hit this — buildInitialSteps gates on length>0 —
+        // but if the user removed assets between mounts of the hook, treat as
+        // a no-op skip rather than an error.
+        patchStep(idx, { status: 'skipped', durationMs: Math.round(nowMs() - startedAt) });
+        await dwellFloor(nowMs() - startedAt, signal);
+        return;
+      }
+
+      // Build attachments + markdown body. Backend resolves attachments by
+      // `assetId`; the markdown body is a human-readable summary so the
+      // message renders nicely in non-rich clients too. We use filename-only
+      // links (no prismer:// URL) because contentHash isn't strictly needed —
+      // backend resolves via the `attachments[].assetId` array.
+      const attachments: MessageAttachmentDTO[] = assets.map((asset) => {
+        const m = (asset.mime ?? '').toLowerCase();
+        const kind: MessageAttachmentDTO['kind'] =
+          asset.kind === 'file' || asset.kind === 'image' || asset.kind === 'audio' || asset.kind === 'video'
+            ? asset.kind
+            : m.startsWith('image/')
+              ? 'image'
+              : m.startsWith('audio/')
+                ? 'audio'
+                : m.startsWith('video/')
+                  ? 'video'
+                  : 'file';
+        const title = asset.filename ?? asset.id;
+        return {
+          kind,
+          assetId: asset.id,
+          title,
+          filename: title,
+          mime: asset.mime ?? null,
+          sizeBytes: asset.sizeBytes ?? null,
+          contentHash: asset.contentHash ?? null,
+          thumbnailUrl: asset.thumbnailUrl ?? null,
+          revision: asset.revision ?? null,
+          role: 'context',
+        };
+      });
+
+      const lines = assets.map((a) => `- ${a.filename ?? a.id}`).join('\n');
+      const body = `📎 已附上企业材料供大家参考:\n\n${lines}`;
+
+      const res = await sendMessage({
+        conversationId,
+        type: 'markdown',
+        content: body,
+        attachments,
+        metadata: {
+          source: 'simple_mode_company_materials',
+          kind: 'workspace_asset_attachment',
+          assetIds: assets.map((a) => a.id),
+        },
+      });
+      if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
+      if (!res.ok) {
+        throw new Error(res.message || 'Attach materials message failed');
+      }
+      patchStep(idx, {
+        status: 'done',
+        messageId: res.data.message.id,
+        durationMs: Math.round(nowMs() - startedAt),
+      });
+      await dwellFloor(nowMs() - startedAt, signal);
+    },
+    [patchStep],
+  );
+
   // ─── Run loop ─────────────────────────────────────────────────
   const runFrom = useCallback(
     async (fromIdx: number) => {
@@ -651,6 +1053,19 @@ export function useSimpleProvisioning(
       abortRef.current?.abort();
       abortRef.current = controller;
       const signal = controller.signal;
+
+      // Mark onboarding complete the moment the user kicks the wizard off
+      // — independent of whether device step succeeds. See
+      // markWorkspaceOnboardingComplete docstring for the gate context.
+      // Fire-and-forget; never await so a slow PATCH doesn't delay step 0.
+      void markWorkspaceOnboardingComplete(plan.workspaceId, signal);
+
+      // release201 v2.0.8 F-bug follow-up — Simple mode auto-creates a
+      // default "main" project so the user never has to leave the wizard.
+      // Awaited (not fire-and-forget) because the device step downstream
+      // reads `readActiveProjectFromStorage` and we want the new project id
+      // visible before that runs. Idempotent + best-effort; see helper.
+      await ensureSimpleModeProject(plan.workspaceId, plan.organizationName, signal);
 
       const runStartedAt = nowMs();
       try {
@@ -688,6 +1103,15 @@ export function useSimpleProvisioning(
               continue;
             }
             await runWelcomeStep(i, signal);
+          } else if (step.kind === 'attach-materials') {
+            // Task 42 — non-critical: if conversation never got created, skip
+            // silently (nothing to attach to). Otherwise run the step; failure
+            // surfaces as a step error but doesn't sink the overall result.
+            if (!persistentRef.current.conversationId) {
+              patchStep(i, { status: 'skipped' });
+              continue;
+            }
+            await runAttachMaterialsStep(i, signal);
           }
         }
 
@@ -732,7 +1156,7 @@ export function useSimpleProvisioning(
         runningRef.current = false;
       }
     },
-    [plan, runDeviceStep, runAgentStep, runConversationStep, runWelcomeStep, patchStep],
+    [plan, runDeviceStep, runAgentStep, runConversationStep, runWelcomeStep, runAttachMaterialsStep, patchStep],
   );
 
   // ─── Public actions ─────────────────────────────────────────
