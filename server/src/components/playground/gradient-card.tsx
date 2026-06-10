@@ -21,15 +21,15 @@ export function GradientCard({
 }: GradientCardProps) {
   return (
     <div className={`group relative ${className}`}>
-      {/* Skewed gradient panels */}
+      {/* Skewed gradient panels — pointer-events-none so they don't block card UI */}
       <span
-        className={`absolute top-0 left-[20px] w-[50%] h-full rounded-2xl sm:rounded-3xl transform skew-x-[10deg] transition-all duration-500 ease-out group-hover:skew-x-0 group-hover:left-[8px] group-hover:w-[calc(100%-32px)] ${
+        className={`pointer-events-none absolute top-0 left-[20px] w-[50%] h-full rounded-2xl sm:rounded-3xl transform skew-x-[10deg] transition-all duration-500 ease-out group-hover:skew-x-0 group-hover:left-[8px] group-hover:w-[calc(100%-32px)] ${
           disabled ? 'opacity-30 group-hover:opacity-40' : 'opacity-60 group-hover:opacity-80'
         }`}
         style={{ background: `linear-gradient(135deg, ${gradientFrom}, ${gradientTo})` }}
       />
       <span
-        className={`absolute top-0 left-[20px] w-[50%] h-full rounded-2xl sm:rounded-3xl transform skew-x-[10deg] blur-[30px] transition-all duration-500 ease-out group-hover:skew-x-0 group-hover:left-[8px] group-hover:w-[calc(100%-32px)] ${
+        className={`pointer-events-none absolute top-0 left-[20px] w-[50%] h-full rounded-2xl sm:rounded-3xl transform skew-x-[10deg] blur-[30px] transition-all duration-500 ease-out group-hover:skew-x-0 group-hover:left-[8px] group-hover:w-[calc(100%-32px)] ${
           disabled ? 'opacity-15 group-hover:opacity-20' : 'opacity-25 group-hover:opacity-40'
         }`}
         style={{ background: `linear-gradient(135deg, ${gradientFrom}, ${gradientTo})` }}
