@@ -16,6 +16,7 @@ import { deleteAccountCascade, AccountDeletionError } from '../services/account-
 export function createMeRouter(creditService: CreditService) {
   const router = new Hono();
 
+  // eslint-disable-next-line custom/no-wildcard-sub-router-middleware -- mounted at /me in routes.ts; wildcard scoped to that prefix
   router.use('*', authMiddleware);
 
   /**
@@ -341,16 +342,24 @@ export function createMeRouter(creditService: CreditService) {
 
     const caller = await prisma.iMUser.findUnique({
       where: { id: authUser.imUserId },
-      select: { userId: true },
+      select: { userId: true, numericId: true },
     });
-    const ownerCloudUserId = caller?.userId ?? null;
-    if (!ownerCloudUserId) {
+    const ownerClauses: any[] = [];
+    if (caller?.userId) ownerClauses.push({ userId: caller.userId });
+    if (caller?.numericId !== null && caller?.numericId !== undefined)
+      ownerClauses.push({ numericId: caller.numericId });
+    if (ownerClauses.length === 0) {
       // No cloudUserId on the human IMUser — no agents to return.
       return c.json<ApiResponse>({ ok: true, data: [] });
     }
 
     const agents = await prisma.iMUser.findMany({
-      where: { userId: ownerCloudUserId, role: 'agent', banned: false },
+      where: {
+        role: 'agent',
+        banned: false,
+        agentCard: { isNot: null },
+        AND: [{ OR: ownerClauses }],
+      },
       include: { agentCard: true },
       orderBy: { createdAt: 'asc' },
     });
