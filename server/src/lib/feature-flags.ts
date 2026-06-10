@@ -129,6 +129,50 @@ export const FEATURE_FLAGS = {
   get LLM_PROXY_ENABLED(): boolean {
     return process.env.FF_LLM_PROXY_ENABLED === 'true';
   },
+
+  /**
+   * release201/25 §7 / release201/26 Phase 1 — Conversational Memory L3 envelope.
+   *
+   * When ON, `MessageService.dispatchToAgent` calls
+   * `ConversationMemoryService.buildEnvelope` and stamps the result on
+   * `task.metadata.contextEnvelope` (hoisted to the wire by
+   * `buildTaskDispatchRequest`). Adapter-aware paths (sessions-dispatcher's
+   * `renderContextEnvelope`) consume it. The legacy last-N context path
+   * stays in place as fallback for one release window.
+   *
+   * Defaults OFF so dispatch behaviour is byte-identical for envelope-naive
+   * call sites until the gradual rollout (5%/25%/100%) per release201/26 §13.
+   */
+  get CONTEXT_ENVELOPE_ENABLED(): boolean {
+    return process.env.FF_CONTEXT_ENVELOPE_ENABLED === 'true';
+  },
+
+  /**
+   * Evolution Studio v2 (release201/28).
+   * On (default) → /evolution?tab=studio renders the new `studio/v2/` shell;
+   * off → legacy `<StudioTab/>`. Defaults TRUE — opt-out via FF_STUDIO_V2=false.
+   *
+   * NOTE: this getter reads the SERVER-side env. The client reads the mirrored
+   * `NEXT_PUBLIC_FF_STUDIO_V2` via `src/app/evolution/components/studio/v2/flags.ts`
+   * (client components can't read non-public env). Keep both in sync if you flip
+   * the default; this server mirror exists so server code (page shells, RSC) can
+   * branch on the same flag.
+   */
+  get STUDIO_V2(): boolean {
+    return process.env.FF_STUDIO_V2 !== 'false';
+  },
+
+  /**
+   * Evolution Studio v2 mock data (release201/28).
+   * On (default) → surfaces render from `studio/v2/mock/` fixtures so the whole
+   * Skill Creator flow is point-through-able before the runtime authoring/eval
+   * wiring lands; off → live endpoints only. Defaults TRUE.
+   *
+   * Client mirror: `NEXT_PUBLIC_FF_STUDIO_MOCK` (see studio/v2/flags.ts).
+   */
+  get STUDIO_MOCK(): boolean {
+    return process.env.FF_STUDIO_MOCK !== 'false';
+  },
 };
 
 /**
