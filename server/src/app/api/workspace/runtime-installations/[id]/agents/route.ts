@@ -14,6 +14,7 @@ import {
   emitRuntimeInstallVerifiedNotification,
   emitRuntimeInstallFailedNotification,
 } from '@/lib/notification-emitter';
+import { stampAgentCardDaemonBinding } from '@/lib/sandbox/agent-card-daemon-binding';
 import { authorizeContainer } from '../../../../sandboxes/_helpers';
 
 export const dynamic = 'force-dynamic';
@@ -55,6 +56,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   if (!auth.ok) return auth.response;
 
   const { container, workspace } = auth.data;
+  const daemonId = resolveContainerDaemonId(container);
   if (container.taskId) {
     return NextResponse.json(
       {
@@ -124,7 +126,14 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     };
     const result = await k8sSandbox.installAgent(container.podName, installArgs);
 
-    await stampRuntimeInstallMetadata(agent.imUserId, container.agentImUserId ?? container.podName, container.id);
+    await stampAgentCardDaemonBinding({
+      prisma,
+      logger,
+      workspaceId: workspace.id,
+      agentImUserId: agent.imUserId,
+      daemonId,
+      runtimeInstallationId: container.id,
+    });
 
     logger.info(
       {
@@ -143,7 +152,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       ownerImUserId: workspace.ownerImUserId,
       workspaceId: workspace.id,
       runtimeInstallationId: container.id,
-      daemonId: container.agentImUserId ?? container.podName,
+      daemonId,
       podName: container.podName,
       agentImUserId: agent.imUserId,
       agentLabel: agent.imUser.displayName ?? agent.name,
@@ -176,7 +185,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
         ownerImUserId: workspace.ownerImUserId,
         workspaceId: workspace.id,
         runtimeInstallationId: container.id,
-        daemonId: container.agentImUserId ?? container.podName,
+        daemonId,
         podName: container.podName,
         agentLabel: agent.imUser.displayName ?? agent.name,
         reason: err.body || `controller_error_${err.status}`,
@@ -191,7 +200,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       ownerImUserId: workspace.ownerImUserId,
       workspaceId: workspace.id,
       runtimeInstallationId: container.id,
-      daemonId: container.agentImUserId ?? container.podName,
+      daemonId,
       podName: container.podName,
       agentLabel: agent.imUser.displayName ?? agent.name,
       reason: err instanceof Error ? err.message : 'Internal error',
@@ -251,28 +260,16 @@ async function resolveOrCreateProfile(input: {
   })) as ProfileRow;
 }
 
-async function stampRuntimeInstallMetadata(
-  agentImUserId: string,
-  runtimeInstanceId: string,
-  runtimeInstallationId: string,
-) {
-  const card = (await prisma.iMAgentCard.findUnique({
-    where: { imUserId: agentImUserId },
-    select: { metadata: true },
-  })) as { metadata: string | null } | null;
-  let metadata: Record<string, unknown> = {};
-  try {
-    metadata = card?.metadata ? (JSON.parse(card.metadata) as Record<string, unknown>) : {};
-  } catch {
-    metadata = {};
-  }
-  metadata.daemonId = runtimeInstanceId.startsWith('container:') ? runtimeInstanceId : `container:${runtimeInstanceId}`;
-  metadata.runtimeInstallationId = runtimeInstallationId;
-  metadata.runtimeInstalledAt = new Date().toISOString();
-  await prisma.iMAgentCard.updateMany({
-    where: { imUserId: agentImUserId },
-    data: { metadata: JSON.stringify(metadata) },
-  });
+function resolveContainerDaemonId(container: {
+  daemonId?: string | null;
+  agentImUserId?: string | null;
+  podName: string;
+}): string {
+  const persisted = container.daemonId?.trim();
+  if (persisted) return persisted;
+
+  const legacyRuntimeId = container.agentImUserId?.trim() || container.podName;
+  return legacyRuntimeId.startsWith('container:') ? legacyRuntimeId : `container:${legacyRuntimeId}`;
 }
 
 function parseCapabilities(raw: string | null): string[] {
