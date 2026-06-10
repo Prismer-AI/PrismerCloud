@@ -35,6 +35,7 @@ import {
   memoryWorkspaceErrorResponse,
   resolveMemoryWorkspaceIdForRequest,
 } from './workspace-resolver';
+import { requireAgentToolAllowed, resolveConversationWorkspaceId } from '../security/mcp-allowlist';
 
 /** Max content size for a single memory file (1MB) */
 const MAX_CONTENT_SIZE = 1024 * 1024;
@@ -106,7 +107,10 @@ export function createMemoryRouter(
     }
     return { acl };
   };
+  const requireMemoryWriteAllowed = (c: Context, workspaceId: string) =>
+    requireAgentToolAllowed(c, 'prismer.memory.write', workspaceId);
 
+  // eslint-disable-next-line custom/no-wildcard-sub-router-middleware -- mounted at /memory in routes.ts; wildcard scoped to that prefix
   router.use('*', authMiddleware);
 
   // ─── Rate Limiting (write operations) ────────────────────
@@ -143,9 +147,13 @@ export function createMemoryRouter(
     try {
       const resolved = await resolveWorkspace(c, body.workspaceId);
       if (resolved.response) return resolved.response;
+      const denied = await requireMemoryWriteAllowed(c, resolved.workspaceId!);
+      if (denied) return denied;
 
       const existing = await memoryService.readMemoryFile(c.req.param('id'), resolved.workspaceId!);
-      if (existing.ownerId !== user.imUserId) {
+      // v2.0.7.1 hotfix (B11): allow workspace-shared sentinel rows; ownership
+      // upstream (resolveWorkspace) already gated this caller to the workspace.
+      if (!memoryService.isFileReadableByCaller(existing, user.imUserId)) {
         return c.json<ApiResponse>({ ok: false, error: 'Not found' }, 404);
       }
 
@@ -343,6 +351,8 @@ export function createMemoryRouter(
       const body = await c.req.json();
       const resolved = await resolveAcl(c, body.workspaceId);
       if ('response' in resolved) return resolved.response;
+      const denied = await requireMemoryWriteAllowed(c, resolved.acl.workspaceId);
+      if (denied) return denied;
       const created = await memoryWriteService.createPage({
         acl: resolved.acl,
         path: body.path,
@@ -366,6 +376,8 @@ export function createMemoryRouter(
       const body = await c.req.json().catch(() => ({}));
       const resolved = await resolveAcl(c, body.workspaceId ?? c.req.query('workspaceId'));
       if ('response' in resolved) return resolved.response;
+      const denied = await requireMemoryWriteAllowed(c, resolved.acl.workspaceId);
+      if (denied) return denied;
       const updated = await memoryWriteService.archive(resolved.acl, c.req.param('id'));
       return c.json<ApiResponse>({ ok: true, data: updated });
     } catch (err) {
@@ -378,6 +390,8 @@ export function createMemoryRouter(
       const body = await c.req.json().catch(() => ({}));
       const resolved = await resolveAcl(c, body.workspaceId ?? c.req.query('workspaceId'));
       if ('response' in resolved) return resolved.response;
+      const denied = await requireMemoryWriteAllowed(c, resolved.acl.workspaceId);
+      if (denied) return denied;
       const updated = await memoryWriteService.unarchive(resolved.acl, c.req.param('id'));
       return c.json<ApiResponse>({ ok: true, data: updated });
     } catch (err) {
@@ -389,6 +403,8 @@ export function createMemoryRouter(
     try {
       const resolved = await resolveAcl(c, c.req.query('workspaceId'));
       if ('response' in resolved) return resolved.response;
+      const denied = await requireMemoryWriteAllowed(c, resolved.acl.workspaceId);
+      if (denied) return denied;
       const result = await memoryWriteService.softDelete({ acl: resolved.acl, pageId: c.req.param('id') });
       return c.json<ApiResponse>({ ok: true, data: result });
     } catch (err) {
@@ -426,6 +442,8 @@ export function createMemoryRouter(
       const body = await c.req.json().catch(() => ({}));
       const resolved = await resolveAcl(c, body.workspaceId);
       if ('response' in resolved) return resolved.response;
+      const denied = await requireMemoryWriteAllowed(c, resolved.acl.workspaceId);
+      if (denied) return denied;
       const { runPageDream } = await import('../services/memory-page-dream.service');
       const sessionAgent = typeof body.sessionAgentId === 'string' ? body.sessionAgentId : null;
       const result = await runPageDream(resolved.acl.workspaceId, sessionAgent);
@@ -445,6 +463,8 @@ export function createMemoryRouter(
       const body = await c.req.json();
       const resolved = await resolveAcl(c, body.workspaceId ?? c.req.query('workspaceId'));
       if ('response' in resolved) return resolved.response;
+      const denied = await requireMemoryWriteAllowed(c, resolved.acl.workspaceId);
+      if (denied) return denied;
       if (typeof body.contentHtml !== 'string') {
         return c.json<ApiResponse>({ ok: false, error: 'contentHtml is required' }, 400);
       }
@@ -466,6 +486,8 @@ export function createMemoryRouter(
       const body = await c.req.json();
       const resolved = await resolveAcl(c, body.workspaceId);
       if ('response' in resolved) return resolved.response;
+      const denied = await requireMemoryWriteAllowed(c, resolved.acl.workspaceId);
+      if (denied) return denied;
       const updated = await memoryWriteService.changeVisibility({
         acl: resolved.acl,
         pageId: c.req.param('id'),
@@ -485,6 +507,8 @@ export function createMemoryRouter(
       const body = await c.req.json().catch(() => ({}));
       const resolved = await resolveAcl(c, body.workspaceId ?? c.req.query('workspaceId'));
       if ('response' in resolved) return resolved.response;
+      const denied = await requireMemoryWriteAllowed(c, resolved.acl.workspaceId);
+      if (denied) return denied;
       const updated = await memoryWriteService.promote(resolved.acl, c.req.param('id'), c.req.header('If-Match'));
       c.header('ETag', `W/"${updated.version}"`);
       return c.json<ApiResponse>({ ok: true, data: updated });
@@ -498,6 +522,8 @@ export function createMemoryRouter(
       const body = await c.req.json();
       const resolved = await resolveAcl(c, body.workspaceId);
       if ('response' in resolved) return resolved.response;
+      const denied = await requireMemoryWriteAllowed(c, resolved.acl.workspaceId);
+      if (denied) return denied;
       const updated = await memoryWriteService.setStale(
         resolved.acl,
         c.req.param('id'),
@@ -543,6 +569,8 @@ export function createMemoryRouter(
       const body = await c.req.json();
       const resolved = await resolveAcl(c, body.workspaceId);
       if ('response' in resolved) return resolved.response;
+      const denied = await requireMemoryWriteAllowed(c, resolved.acl.workspaceId);
+      if (denied) return denied;
       const result = await memoryWriteService.recordFeedback({
         acl: resolved.acl,
         workspaceId: resolved.acl.workspaceId,
@@ -565,6 +593,8 @@ export function createMemoryRouter(
       const body = await c.req.json();
       const resolved = await resolveAcl(c, body.workspaceId);
       if ('response' in resolved) return resolved.response;
+      const denied = await requireMemoryWriteAllowed(c, resolved.acl.workspaceId);
+      if (denied) return denied;
       const created = await memoryProposalService.create({
         acl: resolved.acl,
         pagePath: body.pagePath,
@@ -605,6 +635,8 @@ export function createMemoryRouter(
       const body = await c.req.json();
       const resolved = await resolveAcl(c, body.workspaceId);
       if ('response' in resolved) return resolved.response;
+      const denied = await requireMemoryWriteAllowed(c, resolved.acl.workspaceId);
+      if (denied) return denied;
       const data = await memoryProposalService.bulkApprove({
         acl: resolved.acl,
         sessionId: body.sessionId,
@@ -621,6 +653,8 @@ export function createMemoryRouter(
       const body = await c.req.json().catch(() => ({}));
       const resolved = await resolveAcl(c, body.workspaceId ?? c.req.query('workspaceId'));
       if ('response' in resolved) return resolved.response;
+      const denied = await requireMemoryWriteAllowed(c, resolved.acl.workspaceId);
+      if (denied) return denied;
       const data = await memoryProposalService.approve(resolved.acl, c.req.param('id'));
       return c.json<ApiResponse>({ ok: true, data });
     } catch (err) {
@@ -633,6 +667,8 @@ export function createMemoryRouter(
       const body = await c.req.json();
       const resolved = await resolveAcl(c, body.workspaceId);
       if ('response' in resolved) return resolved.response;
+      const denied = await requireMemoryWriteAllowed(c, resolved.acl.workspaceId);
+      if (denied) return denied;
       const data = await memoryProposalService.reject(resolved.acl, c.req.param('id'), body.reason);
       return c.json<ApiResponse>({ ok: true, data });
     } catch (err) {
@@ -711,6 +747,8 @@ export function createMemoryRouter(
 
     const resolved = await resolveWorkspace(c, body.workspaceId);
     if (resolved.response) return resolved.response;
+    const denied = await requireMemoryWriteAllowed(c, resolved.workspaceId!);
+    if (denied) return denied;
 
     const result = await memoryService.writeMemoryFile(
       resolved.workspaceId!,
@@ -784,7 +822,10 @@ export function createMemoryRouter(
       if (resolved.response) return resolved.response;
       const file = await memoryService.readMemoryFile(c.req.param('id')!, resolved.workspaceId!);
       const user = c.get('user');
-      if (file.ownerId !== user.imUserId) {
+      // v2.0.7.1 hotfix (B11): workspace-shared rows carry the `__shared__`
+      // sentinel ownerId; the strict ownerId-equality check below hid them
+      // from every caller, including the writer.
+      if (!memoryService.isFileReadableByCaller(file, user.imUserId)) {
         return c.json<ApiResponse>({ ok: false, error: 'Not found' }, 404);
       }
 
@@ -838,10 +879,16 @@ export function createMemoryRouter(
     try {
       const resolved = await resolveWorkspace(c, body.workspaceId);
       if (resolved.response) return resolved.response;
+      const denied = await requireMemoryWriteAllowed(c, resolved.workspaceId!);
+      if (denied) return denied;
 
-      // Pre-check ownership
-      const existing = await memoryService.readMemoryFile(c.req.param('id')!, resolved.workspaceId!);
-      if (existing.ownerId !== user.imUserId) {
+      // Pre-check ownership.
+      // v2.0.7.1 hotfix (B11): workspace-shared rows live under the
+      // `__shared__` sentinel; any workspace caller (already gated by the
+      // resolver) may PATCH them. Strict ownerId-equality previously locked
+      // out the writer themselves.
+      const existing = await memoryService.readMemoryFile(c.req.param('id'), resolved.workspaceId!);
+      if (!memoryService.isFileReadableByCaller(existing, user.imUserId)) {
         return c.json<ApiResponse>({ ok: false, error: 'Not found' }, 404);
       }
 
@@ -878,8 +925,13 @@ export function createMemoryRouter(
     try {
       const resolved = await resolveWorkspace(c, c.req.query('workspaceId'));
       if (resolved.response) return resolved.response;
-      const existing = await memoryService.readMemoryFile(c.req.param('id')!, resolved.workspaceId!);
-      if (existing.ownerId !== user.imUserId) {
+      const denied = await requireMemoryWriteAllowed(c, resolved.workspaceId!);
+      if (denied) return denied;
+
+      const existing = await memoryService.readMemoryFile(c.req.param('id'), resolved.workspaceId!);
+      // v2.0.7.1 hotfix (B11): workspace-shared rows are deletable by any
+      // workspace caller (resolver-gated upstream). See isFileReadableByCaller.
+      if (!memoryService.isFileReadableByCaller(existing, user.imUserId)) {
         return c.json<ApiResponse>({ ok: false, error: 'Not found' }, 404);
       }
 
@@ -921,6 +973,12 @@ export function createMemoryRouter(
         return c.json<ApiResponse>({ ok: false, error: 'Not a participant of this conversation' }, 403);
       }
     }
+    const denied = await requireAgentToolAllowed(
+      c,
+      'prismer.memory.write',
+      await resolveConversationWorkspaceId(conversationId),
+    );
+    if (denied) return denied;
 
     const result = await memoryService.compact(conversationId, summary, messageRangeStart, messageRangeEnd);
 
@@ -1047,6 +1105,8 @@ export function createMemoryRouter(
     const scope = c.req.query('scope') ?? 'global';
     const resolved = await resolveWorkspace(c, body.workspaceId ?? c.req.query('workspaceId'));
     if (resolved.response) return resolved.response;
+    const denied = await requireMemoryWriteAllowed(c, resolved.workspaceId!);
+    if (denied) return denied;
     const result = await runDream(user.imUserId, resolved.workspaceId!, scope);
     return c.json<ApiResponse>({ ok: true, data: result });
   });
@@ -1069,6 +1129,8 @@ export function createMemoryRouter(
 
     const resolved = await resolveWorkspace(c, body.workspaceId);
     if (resolved.response) return resolved.response;
+    const denied = await requireMemoryWriteAllowed(c, resolved.workspaceId!);
+    if (denied) return denied;
 
     const result = await extractMemories(memoryService, {
       workspaceId: resolved.workspaceId!,
