@@ -17,7 +17,7 @@
  */
 
 import type { MouseEvent, ReactNode } from 'react';
-import { Play, Pause, Check, X, RotateCcw, User, FolderOpen } from 'lucide-react';
+import { Play, Pause, Check, X, RotateCcw, User, FolderOpen, PlayCircle, Undo2 } from 'lucide-react';
 
 export interface TaskCardActionsProps {
   task: { id: string; status: string; assigneeId: string | null };
@@ -30,11 +30,15 @@ export interface TaskCardActionsProps {
   onReassign?: () => void; // opens picker (different label from assign)
   onViewOutput?: () => void; // for Done column
   onCancel?: () => void; // moved here so it's also accessible inline if needed
+  /** P6: BLOCKED → running (assignee / creator / orchestrator). */
+  onUnblock?: () => void;
+  /** P6: cancelled → pending (restore from recycle bin). */
+  onRestore?: () => void;
   disabled?: boolean; // global disable (e.g. during mutation in-flight)
   className?: string;
 }
 
-type ColumnBucket = 'backlog' | 'todo' | 'in_progress' | 'review' | 'done' | 'cancelled' | 'unknown';
+type ColumnBucket = 'backlog' | 'todo' | 'in_progress' | 'review' | 'blocked' | 'done' | 'cancelled' | 'unknown';
 
 type ActionButtonSpec = {
   key: string;
@@ -48,6 +52,7 @@ function deriveBucket(status: string, assigneeId: string | null): ColumnBucket {
   if ((status === 'pending' || status === 'assigned') && assigneeId) return 'todo';
   if (status === 'running' || status === 'in_progress') return 'in_progress';
   if (status === 'review') return 'review';
+  if (status === 'blocked') return 'blocked';
   if (status === 'completed' || status === 'failed') return 'done';
   if (status === 'cancelled') return 'cancelled';
   return 'unknown';
@@ -117,6 +122,8 @@ export function TaskCardActions({
   onAssign,
   onReassign,
   onViewOutput,
+  onUnblock,
+  onRestore,
   // onCancel is intentionally not rendered inline — lives in the overflow menu.
   // Still accepted in props so callers don't get a type error if they pass it.
 
@@ -179,6 +186,25 @@ export function TaskCardActions({
         handler: onReject,
       };
       break;
+    case 'blocked':
+      // P6 BLOCKED column — first-class actions: 继续 (Unblock, blocked→running)
+      // and 改派 (Reassign, hands the task off without unblocking). Cancel
+      // stays in the overflow menu.
+      primary = {
+        key: 'unblock',
+        label: '继续',
+        icon: <PlayCircle className={iconClass} />,
+        handler: onUnblock,
+      };
+      if (!disabled) {
+        secondary = {
+          key: 'reassign',
+          label: '改派',
+          icon: <User className={iconClass} />,
+          handler: onReassign,
+        };
+      }
+      break;
     case 'done':
       primary = {
         key: 'view-output',
@@ -194,11 +220,16 @@ export function TaskCardActions({
       };
       break;
     case 'cancelled':
+      // P6 CANCELLED — primary action is 还原 (cancelled→pending). The
+      // server enforces creator/owner/admin/orchestrator per the
+      // TRANSITIONS matrix; we let the call go through and surface the
+      // forbidden error via describeTransitionError if the actor is below
+      // that tier.
       primary = {
-        key: 'reopen',
-        label: '重启',
-        icon: <RotateCcw className={iconClass} />,
-        handler: onReopen,
+        key: 'restore',
+        label: '还原',
+        icon: <Undo2 className={iconClass} />,
+        handler: onRestore,
       };
       break;
     case 'unknown':
