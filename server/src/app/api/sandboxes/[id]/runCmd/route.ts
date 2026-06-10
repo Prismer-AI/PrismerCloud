@@ -9,7 +9,8 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { z } from 'zod';
 import { logger } from '@/lib/logger';
-import { K8sSandboxError, k8sSandbox } from '@/lib/k8s-sandbox';
+import { resolvePersistent } from '@/lib/sandbox/registry';
+import { ProviderError, httpStatusForProviderError } from '@/lib/execution/errors';
 import { authorizeContainer } from '../../_helpers';
 
 const RunCmdBody = z.object({
@@ -31,11 +32,15 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   const { container } = auth.data;
 
   try {
-    const result = await k8sSandbox.runCmd(container.podName, parsed.data);
+    const provider = resolvePersistent(container.providerKind ?? 'k8s');
+    const result = await provider.runCommand(container.podName, parsed.data);
     return NextResponse.json(result);
   } catch (err) {
-    if (err instanceof K8sSandboxError) {
-      return NextResponse.json({ error: 'controller_error', status: err.status, body: err.body }, { status: 502 });
+    if (err instanceof ProviderError) {
+      return NextResponse.json(
+        { error: err.code, message: err.message, retriable: err.retriable, providerRef: err.providerRef },
+        { status: httpStatusForProviderError(err) },
+      );
     }
     logger.error({ err, id, podName: container.podName }, 'sandbox runCmd failed');
     return NextResponse.json({ error: 'internal_error' }, { status: 500 });
