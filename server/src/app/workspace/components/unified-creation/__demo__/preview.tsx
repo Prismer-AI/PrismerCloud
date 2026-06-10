@@ -29,6 +29,7 @@ import { SimpleStep3Launch } from '../SimpleStep3Launch';
 import type { SimpleProvisioningPlan, SimpleProvisioningResult } from '../use-simple-provisioning';
 import { renderTemplate } from '../../../lib/templates/render';
 import type { IndustryKey, RenderedRole, SizeKey } from '../../../lib/templates/types';
+import type { ProxyProvider } from '../../proxy-provider-select';
 
 export function UnifiedCreationPreview() {
   const [open, setOpen] = useState(false);
@@ -37,7 +38,10 @@ export function UnifiedCreationPreview() {
   const [lastEvent, setLastEvent] = useState<UnifiedCreationEvent | null>(null);
   const [industry, setIndustry] = useState<IndustryKey | null>(null);
   const [size, setSize] = useState<SizeKey | null>(null);
+  const [organizationName, setOrganizationName] = useState('Demo Organization');
   const [step2Slugs, setStep2Slugs] = useState<Set<string>>(new Set());
+  const [model, setModel] = useState('us-kimi-k2.6');
+  const [proxyProvider, setProxyProvider] = useState<ProxyProvider>('newapi');
 
   function handleCreated(event: UnifiedCreationEvent) {
     setLastEvent(event);
@@ -94,8 +98,8 @@ export function UnifiedCreationPreview() {
         <section className="space-y-3">
           <h2 className="text-lg font-semibold">Step 1 — standalone</h2>
           <p className="text-xs opacity-60">
-            Selected: <span className="font-mono">{industry ?? '—'}</span> /{' '}
-            <span className="font-mono">{size ?? '—'}</span>
+            Organization: <span className="font-mono">{organizationName || '—'}</span> · Selected:{' '}
+            <span className="font-mono">{industry ?? '—'}</span> / <span className="font-mono">{size ?? '—'}</span>
           </p>
           <div
             className={`rounded-2xl border p-5 ${
@@ -104,8 +108,14 @@ export function UnifiedCreationPreview() {
           >
             <SimpleStep1Industry
               isDark={isDark}
+              initialOrganizationName={organizationName}
               initialIndustry={industry ?? undefined}
               initialSize={size ?? undefined}
+              model={model}
+              proxyProvider={proxyProvider}
+              onOrganizationNameChange={setOrganizationName}
+              onModelChange={setModel}
+              onProxyProviderChange={setProxyProvider}
               onSelectionChange={handleStep1Change}
             />
           </div>
@@ -251,6 +261,8 @@ function Step3PreviewBlock({
     const roles: RenderedRole[] = rendered.filter((r) => slugs.has(r.slug));
     return {
       workspaceId: 'demo-workspace-id',
+      organizationName: 'Demo Organization',
+      model: 'us-kimi-k2.6',
       roles,
       conversationTitle: '团队会议',
       usernames: {} as Record<string, string>,
