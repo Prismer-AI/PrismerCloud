@@ -77,6 +77,59 @@ export type ArtifactType = 'pdf' | 'code' | 'document' | 'dataset' | 'chart' | '
 
 export type MessageStatus = 'sending' | 'sent' | 'delivered' | 'read' | 'failed';
 
+export type AssetAttachmentKind = 'file' | 'image' | 'audio' | 'video' | 'asset';
+
+export interface AssetPreviewUrls {
+  small?: string;
+  medium?: string;
+  large?: string;
+}
+
+export interface AssetAttachment {
+  kind: AssetAttachmentKind;
+  assetId: string;
+  title?: string;
+  filename?: string;
+  mime?: string | null;
+  sizeBytes?: number | null;
+  contentHash?: string | null;
+  thumbnailUrl?: string | null;
+  previewUrls?: AssetPreviewUrls | null;
+  /** release202/13 §3b① — base64 thumbHash for an instant blurred placeholder. */
+  blurHash?: string | null;
+  /** release202/13 §L1 — short text excerpt for the card (small md/txt only). */
+  previewText?: string | null;
+  revision?: number | null;
+  role?: 'attachment' | 'context' | 'output';
+}
+
+export interface IMAssetRevision {
+  id: string;
+  assetId: string;
+  workspaceId: string;
+  revision: number;
+  contentHash: string;
+  sizeBytes: number | null;
+  mime: string | null;
+  kind: string;
+  filename: string | null;
+  folderPath: string | null;
+  sourceRef: string | null;
+  sourceKind: string | null;
+  ingestStatus: string;
+  ingestVersion: number;
+  deletedAt: string | null;
+  createdByImUserId: string | null;
+  reason: string | null;
+  createdAt: string;
+}
+
+export interface IMAssetRevisionList {
+  assetId: string;
+  currentRevision: number;
+  items: IMAssetRevision[];
+}
+
 export interface Message {
   id: string;
   conversationId: string;
@@ -84,6 +137,7 @@ export interface Message {
   type: MessageType;
   content: string;
   metadata: MessageMetadata;
+  attachments?: AssetAttachment[] | null;
   parentId?: string; // For threading
   status: MessageStatus;
   createdAt: Date;
@@ -140,6 +194,8 @@ export interface MessageMetadata {
   streamId?: string;
   /** Thinking step details */
   thinkingStep?: number;
+  /** Backward-compatible attachment mirror; canonical field is IMMessage.attachments. */
+  attachments?: AssetAttachment[];
   /** Arbitrary extension data */
   [key: string]: unknown;
 }
@@ -224,13 +280,28 @@ export type WSServerEventType =
   | 'agent.status.changed' // bidirectional: daemon emits, cloud broadcasts
   | 'task.dispatch.request' // cloud dispatches a task to a daemon
   | 'task.cancel' // cloud asks daemon to cancel a running task
+  | 'approval.requested'
+  | 'approval.decided'
+  | 'task.approval.resolve' // release201/25 §16.4 A6 — cloud forwards user approval choice to daemon for hermes-native /v1/runs/{id}/approval
   // ─── v1.9.x schema-derived broadcasts (Track C / Track A) ───
   | 'agent.changed' // PATCH /agents/:id rename; cloud → user broadcast
   | 'workspace.changed' // im_workspaces row change; cloud → user broadcast
   | 'agent_profile.changed' // im_agent_profiles row change; cloud → user broadcast
   | 'workspace_file.changed' // im_workspace_files create/update/delete; cloud → user broadcast
+  | 'asset.changed' // im_assets create/update/delete; cloud → user broadcast
   // ─── v5.4 memory layer (Memory Line A · A3) ───
-  | 'memory.invalidate'; // page soft-delete / visibility change; daemon refreshes its mirror
+  | 'memory.invalidate' // page soft-delete / visibility change; daemon refreshes its mirror
+  // ─── v2.0.8 P0 (doc 21 §5) — chat dispatch in-flight lifecycle ───
+  // Non-persistent fan-out signalling so AgentStateStrip can render the
+  // active agent count in real time. Independent of the persisted task
+  // step stream (im_task_run_steps) — those carry phase/tool granularity;
+  // this carries just the coarse received → started → completed/failed
+  // transitions a chat UI cares about.
+  | 'dispatch.lifecycle'
+  // ─── release201/09 §9.4b (2026-05-30) — workspace clear cascade ───
+  // Final cascade step: cloud → daemon fan-out so daemon wipes local hermes
+  // profile memories + per-agent memory dir cloud can't see.
+  | 'workspace.clear.daemon-cleanup';
 
 export interface WSMessage<T = unknown> {
   type: WSClientEventType | WSServerEventType;
@@ -325,6 +396,20 @@ export interface ApiResponse<T = unknown> {
   data?: T;
   error?: string | ApiErrorObject;
   meta?: Record<string, unknown>;
+  /**
+   * v2.0 release 200 P8 — non-blocking deprecation notice. Present on
+   * legacy task action endpoints (start / complete / approve / reject /
+   * cancel) and on PATCH /tasks/:id when deprecated body fields are
+   * supplied. Callers should switch to POST /tasks/:id/transition. See
+   * docs/migrations/v2.0/tasks-endpoint-migration.md.
+   */
+  _deprecation?: {
+    endpoint: string;
+    successor: string;
+    sunset: string;
+    note: string;
+    fields?: string[];
+  };
 }
 
 // ─── Registration ───────────────────────────────────────────
@@ -516,7 +601,28 @@ export interface FileQuota {
 
 // ─── v1.7.2: Task Orchestration ─────────────────────────────
 
-export type TaskStatus = 'pending' | 'assigned' | 'running' | 'review' | 'completed' | 'failed' | 'cancelled';
+// v2.0 (release 200) §5.1: 9 statuses, 'blocked' between running and failed,
+// 'awaiting_approval' for runs suspended on a human-approval gate.
+//   pending → assigned → running → review → completed | failed | cancelled
+//                              ↘ blocked ↗                ↑
+//                              ↘ awaiting_approval ↗
+//   blocked: agent self-reports stuck, needs human/orchestrator intervention.
+//   awaiting_approval (2026-05-22, doc 12): agent invoked
+//     `prismer.approval.request_human_approval` and the daemon-side reaper
+//     would otherwise mark the run failed. The run is parked here until
+//     the human decides; cloud then redispatches via `approval.decided`
+//     (task.service.ts `applyApprovalDecisionAndRedispatch`) and the
+//     status returns to running on the next dispatch.
+export type TaskStatus =
+  | 'pending'
+  | 'assigned'
+  | 'running'
+  | 'review'
+  | 'blocked'
+  | 'awaiting_approval'
+  | 'completed'
+  | 'failed'
+  | 'cancelled';
 export type ScheduleType = 'once' | 'interval' | 'cron';
 export type TaskDelivery = 'message' | 'webhook' | 'none';
 export type SessionTarget = 'main' | 'isolated';
@@ -567,6 +673,11 @@ export interface CreateTaskInput {
    *   - 'shell'   (reserved): direct shell exec, no sandbox
    */
   runtimeRoute?: 'agent' | 'sandbox' | 'shell';
+  /**
+   * release201/09 §4.1 — Project scope (Phase 2). Opt-in; NULL = workspace-
+   * level task. Must reference an active IMProject in the same workspace.
+   */
+  projectId?: string | null;
 }
 
 export interface TaskInfo {
@@ -579,6 +690,8 @@ export interface TaskInfo {
   creatorId: string;
   assigneeId: string | null;
   workspaceId: string | null; // v1.9.x; replaces scope (column dropped in m3 phase 2)
+  /** release201/09 Phase 2 — project scope. NULL = workspace-level. */
+  projectId?: string | null;
   conversationId: string | null; // v1.8.2
   status: TaskStatus;
   progress: number | null; // v1.8.2: 0.0-1.0
@@ -604,6 +717,12 @@ export interface TaskInfo {
   metadata: TaskMetadata;
   createdAt: Date;
   updatedAt: Date;
+  // release201/10 — acceptance rolled-up summary (server-computed by
+  // TaskAcceptanceService.recomputeStatus). 'none' when the task carries
+  // no criteria.
+  acceptanceStatus?: 'none' | 'pending' | 'partial' | 'passed' | 'failed';
+  acceptanceCompletedCount?: number;
+  acceptanceTotalCount?: number;
 }
 
 export interface TaskLogEntry {
@@ -614,6 +733,42 @@ export interface TaskLogEntry {
   message: string | null;
   metadata: Record<string, unknown>;
   createdAt: Date;
+}
+
+// ─── Approval Types (ACP) ───────────────────────────────────
+export type ApprovalStatus = 'pending' | 'approved' | 'rejected' | 'expired';
+
+export interface ApprovalOption {
+  value: string;
+  label: string;
+  hint?: string;
+}
+
+export interface ApprovalInfo {
+  id: string;
+  workspaceId: string;
+  conversationId: string | null;
+  taskId: string | null;
+  requestedById: string;
+  decidedById: string | null;
+  category: string;
+  /**
+   * v2.0 §4.4.8.3 — server-side intent dedup hash. Computed at create-time
+   * as sha256(workspace + conv + category + metadata.taskId + 1h-bucket).
+   * `null` for legacy rows minted before migration 411. C3 UI groups
+   * adjacent rows sharing the same `intentHash` under "Similar to above —
+   * dedup proposed".
+   */
+  intentHash: string | null;
+  title: string;
+  context: string | null;
+  options: ApprovalOption[];
+  status: ApprovalStatus;
+  selectedValue: string | null;
+  metadata: Record<string, unknown>;
+  createdAt: Date;
+  decidedAt: Date | null;
+  expiresAt: Date | null;
 }
 
 export interface TaskProgressInput {
@@ -629,6 +784,7 @@ export interface TaskCompleteInput {
 
 export interface TaskFailInput {
   error: string;
+  result?: unknown;
   metadata?: Record<string, unknown>;
 }
 
@@ -644,6 +800,19 @@ export interface TaskListQuery {
   scope?: string;
   conversationId?: string; // v1.8.2
   scheduleType?: ScheduleType;
+  /**
+   * release201/09 §4.2 — Project scope filter. Accepts:
+   *   - `undefined` / empty / `'all'`  → no filter (default; same as Phase 1)
+   *   - `'__unscoped'`                → projectId IS NULL
+   *   - `'<id>'`                      → exact match
+   *   - `'<id1>,<id2>,...'`           → IN list (multi-select chip)
+   */
+  projectId?: string;
+  /**
+   * Internal service hint from API auth middleware. When present, concrete
+   * project filters are intersected with the actor's project membership.
+   */
+  requesterId?: string;
   limit?: number;
   cursor?: string;
 }
@@ -702,7 +871,7 @@ export interface ReplayWindow {
 
 // ─── v1.7.2: Memory Layer ───────────────────────────────────
 
-export type MemoryOwnerType = 'user' | 'agent';
+export type MemoryOwnerType = 'user' | 'agent' | 'workspace';
 export type MemoryFileOperation = 'append' | 'replace' | 'replace_section';
 
 export interface MemoryFileInfo {
@@ -710,6 +879,7 @@ export interface MemoryFileInfo {
   workspaceId: string;
   ownerId: string;
   ownerType: MemoryOwnerType;
+  scope: string;
   path: string;
   version: number;
   contentLength: number;
@@ -734,7 +904,7 @@ export interface MemoryFileDetail extends MemoryFileInfo {
 export interface CreateMemoryFileInput {
   path: string;
   content: string;
-  /** @deprecated v1.9.2 dropped im_memory_files.scope; param ignored. */
+  /** v2.0: storage bucket; 'global' is accepted as workspace-shared alias. */
   scope?: string;
   ownerType?: MemoryOwnerType;
 }
@@ -1068,3 +1238,6 @@ export interface MessageReadPayload {
 
 // ─── v1.9.x event payload types (Track C) ────────────────────
 export * from './im-events';
+
+// ─── Conversation context envelope (release201/26 Phase 1) ───
+export * from './conversation-envelope';
