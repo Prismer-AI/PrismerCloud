@@ -140,7 +140,19 @@ export const statusAccent: Record<string, { dot: string; bg: string; text: strin
     text: 'text-violet-200',
     ring: 'ring-violet-400/40',
   },
+  blocked: {
+    dot: 'bg-orange-400',
+    bg: 'bg-orange-500/10 border-orange-500/20',
+    text: 'text-orange-200',
+    ring: 'ring-orange-400/40',
+  },
   done: {
+    dot: 'bg-emerald-400',
+    bg: 'bg-emerald-500/10 border-emerald-500/20',
+    text: 'text-emerald-200',
+    ring: 'ring-emerald-400/40',
+  },
+  completed: {
     dot: 'bg-emerald-400',
     bg: 'bg-emerald-500/10 border-emerald-500/20',
     text: 'text-emerald-200',
@@ -246,3 +258,390 @@ export const stagger = (delay = 0): Transition => ({
   ...springSoft,
   delay,
 });
+
+// ─── Wave-13 / S44 — Motion vocab for spatial grammar ───────────────
+//
+// release201/12 §8.8.6 + release201/13 §3.11 anchor: 5 motion preset
+// + 7 spatial grammar token + lifecycleAccent + projectAccent.
+// 引用语境见 doc 13 §3.2-§3.8 各 view storyboard。
+
+/**
+ * 液态流动 — pipeline 中 draft 球沿阶段移动 / cascade 展开 evidence。
+ * 比 springHeavy 更慢更软，给"流体"感。
+ * Doc 13 §3.3 Lifecycle pipeline / §3.2 source-bench → workshop 流入。
+ */
+export const springLiquid: Transition = {
+  type: 'spring',
+  stiffness: 180,
+  damping: 30,
+  mass: 1.2,
+};
+
+/**
+ * 翻转 — chip / 卡片 3D flip。
+ * Doc 13 §3.4 Installed chip configure (rotateY 0 → 180).
+ */
+export const springFlip: Transition = {
+  type: 'spring',
+  stiffness: 420,
+  damping: 32,
+  mass: 0.6,
+};
+
+/**
+ * Splat — celebration。distill 完成 / publish 通过 / acceptance 全 passed。
+ * 低 damping + 低 mass 让"炸开"感最强，有 1-2 次回弹。
+ * Doc 13 §3.6 Evolution distill ring splash / §3.3 publish capsule.
+ */
+export const springSplat: Transition = {
+  type: 'spring',
+  stiffness: 600,
+  damping: 18,
+  mass: 0.4,
+};
+
+// ─── Spatial grammar tokens (release201/12 §8.8.6.5) ────────────────
+//
+// 每个 view 必须 quote 一个 grammar key。同 grammar 的两个 view 必须
+// 有可见差异（详 doc 13 §3.11.1 反同质化判据）。
+
+export type SpatialGrammarKey =
+  | 'workshop'
+  | 'pipeline'
+  | 'shelf'
+  | 'identityCard'
+  | 'garden'
+  | 'controlTower'
+  | 'map'
+  | 'vault'
+  | 'atelier';
+
+/**
+ * Per-grammar accent palette. Each view must paint its primary affordance
+ * with this color family so users get a chromatic "you are in X" signal
+ * when they switch sub-tab. See doc 13 §3.11.1 anti-同质化 anchor.
+ */
+export type GrammarAccent = 'amber' | 'cyan' | 'violet' | 'rose' | 'emerald' | 'sky' | 'indigo';
+
+export interface SpatialGrammarSpec {
+  /** Tailwind layout class for the outer container. */
+  layout: string;
+  /** Human-readable description of each region. */
+  regions: Record<string, string>;
+  /**
+   * Chromatic anchor (doc 13 §3.11 table). Used by view headers / accent
+   * rings / chip borders so each view paints a different family.
+   */
+  accentColor: GrammarAccent;
+  /** One-liner primary metaphor — surfaces in dev-tools + visual audit. */
+  primaryMetaphor: string;
+}
+
+export const spatialGrammar: Record<SpatialGrammarKey, SpatialGrammarSpec> = {
+  /** Workshop — 3 列工作流 (input → process → reference). doc 13 §3.2 Authoring.
+   *
+   * v2.0.8 X1 fix: middle track uses `minmax(0,1fr)` instead of `1fr` so long
+   * content in the centre pane wraps/truncates inside its own column instead of
+   * overflowing into the reference column. Grid item default `min-width: auto`
+   * lets content force the track wider than `1fr` would otherwise allow. */
+  workshop: {
+    layout: 'grid grid-cols-1 lg:grid-cols-[280px_minmax(0,1fr)_320px] gap-4',
+    regions: {
+      leftPane: 'source-bench (vertical card stack of input sources)',
+      centerPane: 'active artifact (manifest tree + monaco editor)',
+      rightPane: 'reference panel (stacked fetched cards)',
+    },
+    accentColor: 'amber',
+    primaryMetaphor: 'source-bench → active-draft → reference-panel',
+  },
+  /** Pipeline — 横向 / 纵向 流 + 移动的 draft 球. doc 13 §3.3 Lifecycle. */
+  pipeline: {
+    layout: 'flex flex-col gap-6',
+    regions: {
+      railPane: '11 sub-stage rail with draft ball indicator (flowing)',
+      detailPane: 'evidence cascade below the active capsule',
+    },
+    accentColor: 'cyan',
+    primaryMetaphor: 'flowing-draft-ball',
+  },
+  /** Shelf — agent row × skill chip array (横向 rows). doc 13 §3.4 Installed. */
+  shelf: {
+    layout: 'flex flex-col gap-4',
+    regions: {
+      agentRow: 'one row per agent (avatar + skill chip array)',
+      beltPane: 'chip strip per row, hover/configure flips chip',
+    },
+    accentColor: 'violet',
+    primaryMetaphor: 'agent-row × skill-chip-array',
+  },
+  /** Identity card — siri-orb + 卡片堆叠. doc 13 §3.5 Profile. */
+  identityCard: {
+    layout: 'grid grid-cols-1 lg:grid-cols-[40%_60%] gap-8',
+    regions: {
+      portraitPane: 'siri-orb avatar (large, state-driven)',
+      bioPane: 'principles card stack + memberships narrative',
+    },
+    accentColor: 'rose',
+    primaryMetaphor: 'siri-orb + card-stack',
+  },
+  /** Garden — force-layout 节点图 + sparkline. doc 13 §3.6 Evolution. */
+  garden: {
+    layout: 'relative w-full h-full',
+    regions: {
+      canvas: 'force-layout svg with gene-node clusters',
+      timeline: 'bottom sparkline showing capsule velocity',
+    },
+    accentColor: 'emerald',
+    primaryMetaphor: 'gene-node-cluster + sparkline',
+  },
+  /** Control tower — widget grid. doc 13 §3.7 Metrics. */
+  controlTower: {
+    layout: 'grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4',
+    regions: {
+      widgets: 'counter / sparkline / timeseries / bar / table / status-grid',
+    },
+    accentColor: 'sky',
+    primaryMetaphor: 'widget-grid',
+  },
+  /** Map — 6 区块画布 + 浮动 avatar. doc 13 §3.8 Overview. */
+  map: {
+    layout: 'relative w-full h-full',
+    regions: {
+      canvas: '6-zone canvas (tasks / projects / skills / agents / latency / activity)',
+      avatars: 'agent avatars float on the most-recent zone',
+    },
+    accentColor: 'indigo',
+    primaryMetaphor: '6-zone-canvas + floating-avatars',
+  },
+  /** Vault — agent 版本化还原点沿时间轴排列。Snapshots 用。doc 28 §4.5/§5.3. */
+  vault: {
+    layout: 'flex flex-col gap-6',
+    regions: {
+      timeline: 'horizontal axis with draggable scrubber + restore-point dots',
+      cardPane: 'selected restore-point card (definition + skills + memory + size)',
+    },
+    accentColor: 'sky',
+    primaryMetaphor: 'time machine — scrub history, restore or clone a point',
+  },
+  /** Atelier — role template 蓝图卡墙，stamp 到 agent。Templates 用。doc 28 §4.6/§5.3. */
+  atelier: {
+    layout: 'grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4',
+    regions: {
+      wall: 'blueprint cards (role portrait + curated badge + skillset + mcp)',
+      stampTarget: 'top agent chip — drag a blueprint onto it to apply',
+    },
+    accentColor: 'indigo',
+    primaryMetaphor: 'blueprint workshop — stamp a role onto an agent',
+  },
+};
+
+/**
+ * Per-accent Tailwind class bundle. Centralises the "amber view" vs
+ * "cyan view" vs ... chromatic identity so the 7 views can each grep
+ * their accent without copy-pasting class strings.
+ *
+ * `text`  — primary text accent (header label / active chip text).
+ * `ring`  — focus / selected ring.
+ * `bg`    — soft surface tint (panes, chip backgrounds).
+ * `dot`   — small status dot.
+ * `glow`  — radial glow / pulse colour (CSS `--prismer-glow` var, used by
+ *           prismer-flow-down + prismer-gene-pulse keyframes).
+ */
+export const grammarAccentClasses: Record<
+  GrammarAccent,
+  { text: string; ring: string; bg: string; dot: string; glow: string }
+> = {
+  amber: {
+    text: 'text-amber-300',
+    ring: 'ring-amber-400/40',
+    bg: 'bg-amber-500/10 border-amber-500/20',
+    dot: 'bg-amber-400',
+    glow: 'rgba(251,191,36,0.6)',
+  },
+  cyan: {
+    text: 'text-cyan-300',
+    ring: 'ring-cyan-400/40',
+    bg: 'bg-cyan-500/10 border-cyan-500/20',
+    dot: 'bg-cyan-400',
+    glow: 'rgba(34,211,238,0.6)',
+  },
+  violet: {
+    text: 'text-violet-300',
+    ring: 'ring-violet-400/40',
+    bg: 'bg-violet-500/10 border-violet-500/20',
+    dot: 'bg-violet-400',
+    glow: 'rgba(167,139,250,0.6)',
+  },
+  rose: {
+    text: 'text-rose-300',
+    ring: 'ring-rose-400/40',
+    bg: 'bg-rose-500/10 border-rose-500/20',
+    dot: 'bg-rose-400',
+    glow: 'rgba(251,113,133,0.6)',
+  },
+  emerald: {
+    text: 'text-emerald-300',
+    ring: 'ring-emerald-400/40',
+    bg: 'bg-emerald-500/10 border-emerald-500/20',
+    dot: 'bg-emerald-400',
+    glow: 'rgba(52,211,153,0.6)',
+  },
+  sky: {
+    text: 'text-sky-300',
+    ring: 'ring-sky-400/40',
+    bg: 'bg-sky-500/10 border-sky-500/20',
+    dot: 'bg-sky-400',
+    glow: 'rgba(56,189,248,0.6)',
+  },
+  indigo: {
+    text: 'text-indigo-300',
+    ring: 'ring-indigo-400/40',
+    bg: 'bg-indigo-500/10 border-indigo-500/20',
+    dot: 'bg-indigo-400',
+    glow: 'rgba(129,140,248,0.6)',
+  },
+};
+
+/**
+ * S42 — per-grammar named motion presets (doc 13 §3.11.2).
+ *
+ * Each preset bundles `initial` + `animate` + `transition` for a single
+ * named affordance. Views import the preset by name (`slideFromBench`,
+ * `flowDownPipeline` …) so the chromatic + motion contract is greppable.
+ *
+ * Pair with `useReducedMotion()`:
+ *
+ *   const m = useReducedMotion() ? motionReduced : motionPreset.slideFromBench;
+ */
+export interface MotionPreset {
+  initial: Record<string, number>;
+  animate: Record<string, number>;
+  transition: Transition;
+}
+
+export const motionPreset = {
+  /** Authoring — source card slides into the workshop centre. */
+  slideFromBench: {
+    initial: { x: -40, opacity: 0 },
+    animate: { x: 0, opacity: 1 },
+    transition: springLiquid,
+  },
+  /** Lifecycle — draft ball flows down the pipeline. */
+  flowDownPipeline: {
+    initial: { y: -20, opacity: 0.6 },
+    animate: { y: 0, opacity: 1 },
+    transition: springLiquid,
+  },
+  /** Installed — chip lifted off the shelf. */
+  pickFromShelf: {
+    initial: { scale: 0.9, y: 4 },
+    animate: { scale: 1, y: 0 },
+    transition: springSnap,
+  },
+  /** Profile / Installed — card / chip flips on configure. */
+  cardFlip: {
+    initial: { rotateY: 90 },
+    animate: { rotateY: 0 },
+    transition: springFlip,
+  },
+  /** Evolution — gene node grows into the garden. */
+  growInGarden: {
+    initial: { scale: 0, opacity: 0 },
+    animate: { scale: 1, opacity: 1 },
+    transition: springSoft,
+  },
+  /**
+   * Control tower — counter value springs from 0 to target.
+   * Doc 13 §3.7 Metrics. Actual interpolation happens via framer-motion
+   * `useSpring()` inside `<SpringCounter>` (see studio/spring-counter.tsx);
+   * this preset's `transition` is the spring config (`springSplat`) used
+   * by the hook.
+   */
+  springCounter: {
+    initial: { opacity: 0 },
+    animate: { opacity: 1 },
+    transition: springSplat,
+  },
+} as const satisfies Record<string, MotionPreset>;
+
+/** Zero-duration fallback for `prefers-reduced-motion: reduce`. */
+export const motionReduced: MotionPreset = {
+  initial: { opacity: 1 },
+  animate: { opacity: 1 },
+  transition: { duration: 0 },
+};
+
+// ─── Lifecycle accent map (release201/08 §9.6) ──────────────────────
+//
+// Skill lifecycle stage badge 色彩。复用 statusAccent 既有 entries 而非
+// 自定义颜色——5 stage 与 5 task status 语义对齐：
+//   draft     → backlog   (灰)
+//   eval      → todo      (蓝)
+//   review    → review    (紫)
+//   published → done      (绿)
+//   archived  → cancelled (浅灰)
+
+export type SkillLifecycleStage = 'draft' | 'eval' | 'review' | 'published' | 'archived';
+
+export const lifecycleAccent: Record<SkillLifecycleStage, (typeof statusAccent)[string]> = {
+  draft: statusAccent.backlog,
+  eval: statusAccent.todo,
+  review: statusAccent.review,
+  published: statusAccent.done,
+  archived: statusAccent.cancelled,
+};
+
+// ─── Project accent map (release201/09 §8.8) ────────────────────────
+//
+// 5 色循环 — projects.metadata.color ∈ 1..5。映射到 --chart-1..5 CSS
+// vars，确保 dashboard 配色 (12 doc Insights) 与 task-board project
+// chip 配色一致（用户从 dashboard 跳到 task-board 时颜色记忆延续）。
+
+export type ProjectColor = 1 | 2 | 3 | 4 | 5;
+
+export interface ProjectAccentSpec {
+  dot: string;
+  chip: string;
+  ring: string;
+}
+
+export const projectAccent: Record<ProjectColor, ProjectAccentSpec> = {
+  1: {
+    dot: 'bg-[var(--chart-1)]',
+    chip: 'bg-[var(--chart-1)]/10 text-[var(--chart-1)] border-[var(--chart-1)]/20',
+    ring: 'ring-[var(--chart-1)]/30',
+  },
+  2: {
+    dot: 'bg-[var(--chart-2)]',
+    chip: 'bg-[var(--chart-2)]/10 text-[var(--chart-2)] border-[var(--chart-2)]/20',
+    ring: 'ring-[var(--chart-2)]/30',
+  },
+  3: {
+    dot: 'bg-[var(--chart-3)]',
+    chip: 'bg-[var(--chart-3)]/10 text-[var(--chart-3)] border-[var(--chart-3)]/20',
+    ring: 'ring-[var(--chart-3)]/30',
+  },
+  4: {
+    dot: 'bg-[var(--chart-4)]',
+    chip: 'bg-[var(--chart-4)]/10 text-[var(--chart-4)] border-[var(--chart-4)]/20',
+    ring: 'ring-[var(--chart-4)]/30',
+  },
+  5: {
+    dot: 'bg-[var(--chart-5)]',
+    chip: 'bg-[var(--chart-5)]/10 text-[var(--chart-5)] border-[var(--chart-5)]/20',
+    ring: 'ring-[var(--chart-5)]/30',
+  },
+};
+
+/**
+ * 新建 project 时若 user 未选色，按 hash(project.id) % 5 + 1 自动分配。
+ * 同 id 必返同色（hash 稳定）。与 avatarGradient 同型实现（同一 polynomial
+ * hash），但取 1..5 因为 project 是 1-indexed。
+ */
+export function projectColorFromId(projectId: string): ProjectColor {
+  let h = 0;
+  for (let i = 0; i < projectId.length; i++) {
+    h = (h * 31 + projectId.charCodeAt(i)) >>> 0;
+  }
+  return ((h % 5) + 1) as ProjectColor;
+}
