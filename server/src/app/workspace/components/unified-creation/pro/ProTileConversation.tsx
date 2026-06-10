@@ -17,7 +17,7 @@ import { radius, s } from '../../../lib/design';
 import { createDirectConversation, createGroupConversation } from '../../../lib/mutations';
 import { imFetch } from '../../../lib/im-api';
 import type { AgentDTO } from '../../../lib/types';
-import type { UnifiedCreationEvent } from '../UnifiedCreationModal';
+import type { UnifiedCreationEvent } from '../context';
 import { ConversationModeTabs, GroupAddByUsername } from './GroupAddByUsername';
 import type { ContactStatusInfo, ConversationMode } from './GroupAddByUsername';
 import { MemberListRow, type MemberRow } from './MemberListRow';
