@@ -11,6 +11,7 @@ interface MemoryRowProps {
   file: WorkspaceMemoryFile;
   scope: string;
   isDark: boolean;
+  onDelete?: (fileId: string) => void;
 }
 
 const TYPE_BADGE: Record<string, { label: string; dark: string; light: string }> = {
@@ -30,7 +31,7 @@ const TYPE_BADGE: Record<string, { label: string; dark: string; light: string }>
   insight: { label: 'Insight', dark: 'bg-rose-500/15 text-rose-300', light: 'bg-rose-50 text-rose-600' },
 };
 
-export function MemoryRow({ file, scope, isDark }: MemoryRowProps) {
+export function MemoryRow({ file, scope, isDark, onDelete }: MemoryRowProps) {
   const [expanded, setExpanded] = useState(false);
   const [content, setContent] = useState<string | null>(file.content ?? null);
   const [editing, setEditing] = useState(false);
@@ -175,6 +176,7 @@ export function MemoryRow({ file, scope, isDark }: MemoryRowProps) {
                       Edit
                     </button>
                     <button
+                      onClick={() => onDelete?.(file.path)}
                       className={`flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors ${isDark ? 'text-red-400 hover:bg-red-500/10' : 'text-red-500 hover:bg-red-50'}`}
                     >
                       <Trash2 className="w-3.5 h-3.5" /> Delete
