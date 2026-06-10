@@ -30,14 +30,12 @@ export function Footer() {
               </div>
               <span className={`font-bold text-lg ${isDark ? 'text-white' : 'text-zinc-900'}`}>Prismer Cloud</span>
             </div>
-            <p className={`text-sm ${isDark ? 'text-zinc-500' : 'text-zinc-600'}`}>
-              The Knowledge Drive for AI Agents.
-            </p>
+            <p className={`text-sm ${isDark ? 'text-zinc-500' : 'text-zinc-600'}`}>{t('footer.tagline')}</p>
           </div>
 
           {/* Product */}
           <div>
-            <h4 className={`font-bold mb-4 ${isDark ? 'text-white' : 'text-zinc-900'}`}>Product</h4>
+            <h4 className={`font-bold mb-4 ${isDark ? 'text-white' : 'text-zinc-900'}`}>{t('footer.product')}</h4>
             <ul className={`space-y-2 text-sm ${isDark ? 'text-zinc-400' : 'text-zinc-600'}`}>
               <li>
                 <Link
@@ -52,7 +50,7 @@ export function Footer() {
                   href="/docs"
                   className={`transition-colors ${isDark ? 'hover:text-white' : 'hover:text-zinc-900'}`}
                 >
-                  Documentation
+                  {t('footer.documentation')}
                 </Link>
               </li>
               <li>
@@ -76,14 +74,14 @@ export function Footer() {
 
           {/* Resources */}
           <div>
-            <h4 className={`font-bold mb-4 ${isDark ? 'text-white' : 'text-zinc-900'}`}>Resources</h4>
+            <h4 className={`font-bold mb-4 ${isDark ? 'text-white' : 'text-zinc-900'}`}>{t('footer.resources')}</h4>
             <ul className={`space-y-2 text-sm ${isDark ? 'text-zinc-400' : 'text-zinc-600'}`}>
               <li>
                 <Link
                   href="/docs"
                   className={`transition-colors ${isDark ? 'hover:text-white' : 'hover:text-zinc-900'}`}
                 >
-                  API Reference
+                  {t('footer.apiReference')}
                 </Link>
               </li>
               <li>
@@ -91,7 +89,7 @@ export function Footer() {
                   href="/evolution"
                   className={`transition-colors ${isDark ? 'hover:text-white' : 'hover:text-zinc-900'}`}
                 >
-                  Evolution
+                  {t('nav.evolution')}
                 </Link>
               </li>
               <li>
@@ -99,7 +97,7 @@ export function Footer() {
                   href="/leaderboard"
                   className={`transition-colors ${isDark ? 'hover:text-white' : 'hover:text-zinc-900'}`}
                 >
-                  Leaderboard
+                  {t('footer.leaderboard')}
                 </Link>
               </li>
               <li>
@@ -117,14 +115,14 @@ export function Footer() {
 
           {/* Company */}
           <div>
-            <h4 className={`font-bold mb-4 ${isDark ? 'text-white' : 'text-zinc-900'}`}>Company</h4>
+            <h4 className={`font-bold mb-4 ${isDark ? 'text-white' : 'text-zinc-900'}`}>{t('footer.company')}</h4>
             <ul className={`space-y-2 text-sm ${isDark ? 'text-zinc-400' : 'text-zinc-600'}`}>
               <li>
                 <Link
                   href="/about"
                   className={`transition-colors ${isDark ? 'hover:text-white' : 'hover:text-zinc-900'}`}
                 >
-                  About
+                  {t('footer.about')}
                 </Link>
               </li>
               <li>
@@ -132,7 +130,7 @@ export function Footer() {
                   href="/contact"
                   className={`transition-colors ${isDark ? 'hover:text-white' : 'hover:text-zinc-900'}`}
                 >
-                  Contact
+                  {t('footer.contact')}
                 </Link>
               </li>
               <li>
@@ -140,7 +138,7 @@ export function Footer() {
                   href="/privacy"
                   className={`transition-colors ${isDark ? 'hover:text-white' : 'hover:text-zinc-900'}`}
                 >
-                  Privacy Policy
+                  {t('footer.privacy')}
                 </Link>
               </li>
               <li>
@@ -148,7 +146,7 @@ export function Footer() {
                   href="/terms"
                   className={`transition-colors ${isDark ? 'hover:text-white' : 'hover:text-zinc-900'}`}
                 >
-                  Terms of Service
+                  {t('footer.terms')}
                 </Link>
               </li>
             </ul>
@@ -161,7 +159,7 @@ export function Footer() {
           }`}
         >
           <p className={`text-sm ${isDark ? 'text-zinc-500' : 'text-zinc-600'}`}>
-            © {new Date().getFullYear()} Prismer Cloud. All rights reserved.
+            © {new Date().getFullYear()} Prismer Cloud. {t('footer.allRightsReserved')}
           </p>
           <div className="flex items-center gap-4">
             <a
