@@ -24,7 +24,7 @@ import { Dialog as DialogPrimitive } from 'radix-ui';
 import { AnimatePresence, motion, useReducedMotion, type Transition } from 'framer-motion';
 import { Check, Crown, X } from 'lucide-react';
 
-import { radius, s, springSnap } from '../../lib/design';
+import { radius, s, springHeavy, springSnap } from '../../lib/design';
 
 export interface CeoAuthorizationModalProps {
   open: boolean;
@@ -46,19 +46,6 @@ export interface CeoAuthorizationModalProps {
 
 const REDUCED: Transition = { duration: 0.12, ease: 'easeOut' };
 
-/**
- * Hero scale 0 → 1.1 → 1: framer-motion `spring` only supports 2 keyframes,
- * so we drive the 3-frame overshoot via tween + easeOut and shape the
- * curve manually. Total duration tuned to roughly match `springHeavy`
- * settle time (~480ms) so it feels of-a-piece with the rest of /workspace.
- */
-const HERO_KEYFRAMES: Transition = {
-  type: 'tween',
-  duration: 0.48,
-  ease: 'easeOut',
-  times: [0, 0.6, 1],
-};
-
 const PERMISSIONS = ['在现有 Device 容量内创建新的团队角色', '可派任务给团队中其他 agent'] as const;
 
 export function CeoAuthorizationModal({
@@ -70,9 +57,7 @@ export function CeoAuthorizationModal({
 }: CeoAuthorizationModalProps) {
   const theme = isDark ? 'dark' : 'light';
   const reduce = useReducedMotion() ?? false;
-  // Hero entrance uses tween (spring can't 3-keyframe). Other surfaces
-  // stay on the regular spring presets.
-  const tHero: Transition = reduce ? REDUCED : HERO_KEYFRAMES;
+  const tHero: Transition = reduce ? REDUCED : springHeavy;
   const tSnap: Transition = reduce ? REDUCED : springSnap;
 
   // The hero avatar uses an explicit violet → fuchsia → cyan gradient per
@@ -128,12 +113,12 @@ export function CeoAuthorizationModal({
                       </button>
                     </DialogPrimitive.Close>
 
-                    {/* Hero CEO avatar — violet → fuchsia → cyan, scale 0 → 1.1 → 1 */}
+                    {/* Hero CEO avatar — violet → fuchsia → cyan */}
                     <div className="flex flex-col items-center pt-2 pb-1">
                       <motion.div
                         data-testid="ceo-auth-hero"
                         initial={{ scale: 0, opacity: 0 }}
-                        animate={{ scale: reduce ? 1 : [0, 1.1, 1], opacity: 1 }}
+                        animate={{ scale: 1, opacity: 1 }}
                         transition={tHero}
                         className="relative inline-flex h-16 w-16 items-center justify-center rounded-full text-white shadow-[0_18px_40px_-12px_rgba(124,58,237,0.6)]"
                         style={{
