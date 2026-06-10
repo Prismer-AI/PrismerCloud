@@ -9,7 +9,7 @@
  */
 
 import prisma from '../db';
-import { MemoryFileModel } from '../models/memory-file';
+import { MemoryFileModel, type MemoryScope } from '../models/memory-file';
 import { CompactionModel } from '../models/compaction';
 import type {
   MemoryOwnerType,
@@ -18,6 +18,9 @@ import type {
   MemoryFileOperation,
   CompactionSummary,
 } from '../types';
+
+/** Sentinel ownerId for workspace-shared rows (per migration 412 §6.1 spec). */
+export const WORKSPACE_SHARED_SENTINEL = '__shared__';
 
 const LOG = '[MemoryService]';
 
@@ -54,6 +57,49 @@ export class MemoryNotFoundError extends Error {
   }
 }
 
+/**
+ * Raised when a caller tries to read or write a memory row scoped to a
+ * different agent's private bucket. See doc 13 §6.1 + doc 14 §4.7 Track-F.
+ */
+export class MemoryScopeForbiddenError extends Error {
+  scope: string;
+  ownerAgent: string | null;
+  caller: string;
+  constructor(opts: { scope: string; ownerAgent: string | null; caller: string }) {
+    super(
+      `Agent-scope ACL denied: scope='${opts.scope}', owner='${opts.ownerAgent ?? 'null'}', caller='${opts.caller}'`,
+    );
+    this.name = 'MemoryScopeForbiddenError';
+    this.scope = opts.scope;
+    this.ownerAgent = opts.ownerAgent;
+    this.caller = opts.caller;
+  }
+}
+
+interface ScopeBearingRecord {
+  scope?: string | null;
+  agentImUserId?: string | null;
+}
+
+/**
+ * Enforce agent-private ACL on a fetched record.
+ * Throws MemoryScopeForbiddenError if caller cannot read/write this row.
+ * Returns the record unchanged if access is allowed.
+ */
+export function enforceAgentScopeRecord<T extends ScopeBearingRecord>(record: T, callerImUserId: string | null): T {
+  const scope = (record.scope ?? 'workspace-shared') as MemoryScope;
+  if (scope === 'workspace-shared') return record;
+  // agent-private: caller must match agentImUserId
+  if (!callerImUserId || record.agentImUserId !== callerImUserId) {
+    throw new MemoryScopeForbiddenError({
+      scope,
+      ownerAgent: record.agentImUserId ?? null,
+      caller: callerImUserId ?? '<anonymous>',
+    });
+  }
+  return record;
+}
+
 // ─── Service ────────────────────────────────────────────────
 
 export class MemoryService {
@@ -66,8 +112,19 @@ export class MemoryService {
 
   /**
    * Create or upsert a memory file.
-   * If a file with same legacy (ownerId, path) exists, it updates.
-   * workspaceId is required and is the primary access boundary.
+   *
+   * The `scopeOrLegacy` slot accepts BOTH the legacy stringly-typed scope
+   * (e.g. `'global'`, kept for back-compat with older SDK clients) AND the
+   * v2.0 scope enum (`'workspace-shared'` | `'agent-private'`). Any value
+   * other than `'agent-private'` is treated as workspace-shared.
+   *
+   * Workspace-shared writes are stamped with the `__shared__` sentinel
+   * (ownerType='workspace', ownerId='__shared__') to satisfy the new
+   * UNIQUE(workspaceId, scope, ownerType, ownerId, path) — one shared path
+   * per workspace, regardless of which agent wrote it.
+   *
+   * Agent-private writes require `agentImUserId`. If missing, falls back to
+   * the caller `ownerId` (typically the agent's imUserId).
    */
   async writeMemoryFile(
     workspaceId: string,
@@ -75,33 +132,97 @@ export class MemoryService {
     ownerType: MemoryOwnerType,
     path: string,
     content: string,
-    _scope: string = 'global',
+    scopeOrLegacy: string = 'workspace-shared',
     memoryType?: string,
     description?: string,
+    agentImUserId?: string,
   ): Promise<MemoryFileDetail> {
-    void _scope;
+    const scope: MemoryScope = scopeOrLegacy === 'agent-private' ? 'agent-private' : 'workspace-shared';
+
+    let effOwnerType: MemoryOwnerType = ownerType;
+    let effOwnerId = ownerId;
+    let effAgentImUserId: string | null = null;
+
+    if (scope === 'workspace-shared') {
+      // Sentinel: one shared row per (workspace, path)
+      effOwnerType = 'workspace' as MemoryOwnerType;
+      effOwnerId = WORKSPACE_SHARED_SENTINEL;
+      effAgentImUserId = null;
+    } else {
+      // Agent-private: agentImUserId required; fall back to caller's imUserId
+      effAgentImUserId = (agentImUserId ?? ownerId) || null;
+      if (!effAgentImUserId) {
+        throw new MemoryScopeForbiddenError({
+          scope,
+          ownerAgent: null,
+          caller: ownerId,
+        });
+      }
+      // Preserve caller's identity in ownerId/ownerType (the writer's identity)
+    }
+
     const record = await this.memoryFileModel.upsert({
       workspaceId,
-      ownerId,
-      ownerType,
+      ownerId: effOwnerId,
+      ownerType: effOwnerType,
       path,
       content,
       memoryType,
       description,
+      scope,
+      agentImUserId: effAgentImUserId,
     });
 
-    console.log(`${LOG} Write: workspace=${workspaceId} ${ownerType}/${ownerId} → ${path} (v${record.version})`);
+    console.log(
+      `${LOG} Write: workspace=${workspaceId} scope=${scope} agent=${effAgentImUserId ?? '-'} → ${path} (v${record.version})`,
+    );
 
     return this.toDetail(record);
   }
 
   /**
    * Read a memory file by ID.
+   *
+   * v2.0 Wave 4-E6: when `callerImUserId` is provided, enforces agent-scope
+   * ACL — agent-private rows can only be read by the owning agent. Pass
+   * `null` (or omit) to bypass the check ONLY for trusted server-side
+   * background jobs (e.g. dream consolidation cron); user/agent-initiated
+   * reads MUST pass the caller's imUserId.
+   *
+   * v2.0.7.1 hotfix (B11): workspace-shared rows are stored with the
+   * `__shared__` sentinel ownerId; readers see them regardless of who wrote.
+   * Endpoint-layer ownerId-equality gates must therefore also accept
+   * sentinel rows — see `isReadableByCaller` for the canonical predicate.
    */
-  async readMemoryFile(id: string, workspaceId: string): Promise<MemoryFileDetail> {
+  async readMemoryFile(
+    id: string,
+    workspaceId: string,
+    callerImUserId: string | null = null,
+  ): Promise<MemoryFileDetail> {
     const record = await this.memoryFileModel.findById(id);
     if (!record || record.workspaceId !== workspaceId) throw new MemoryNotFoundError(id);
+    if (callerImUserId !== null) {
+      enforceAgentScopeRecord(record, callerImUserId);
+    }
     return this.toDetail(record);
+  }
+
+  /**
+   * v2.0.7.1 hotfix (B11) — single source of truth for "may this caller see
+   * this row?" checks in the /memory/files endpoint layer. Callers in
+   * `memory.ts` previously compared `existing.ownerId !== user.imUserId`,
+   * which hid every workspace-shared row (those carry the `__shared__`
+   * sentinel ownerId by design — migration 412 §6.1).
+   *
+   * Returns true when:
+   *   - caller owns the row (legacy agent-private + owner-written rows), or
+   *   - the row is the workspace-shared sentinel (ownerType='workspace',
+   *     ownerId='__shared__') — workspace-membership has already been
+   *     enforced by the resolver upstream.
+   */
+  isFileReadableByCaller(record: { ownerId: string; ownerType: string }, callerImUserId: string): boolean {
+    if (record.ownerId === callerImUserId) return true;
+    return record.ownerType === 'workspace' && record.ownerId === WORKSPACE_SHARED_SENTINEL;
   }
 
   /**
@@ -124,6 +245,15 @@ export class MemoryService {
    * List memory files for an owner (metadata only, no content).
    *
    * v1.9.2: scope param retained for caller / route back-compat — ignored for filtering.
+   *
+   * v2.0.7.1 hotfix (B11): when `ownerId` is a real caller imUserId, the
+   * caller should also see workspace-shared rows in the same workspace
+   * (those are stored under the `__shared__` sentinel). The endpoint layer
+   * has already enforced workspace membership upstream; this method
+   * delegates the OR to the model via `ownerIdsOr`.
+   *
+   * Pass `ownerId=undefined` for trusted background jobs that need the
+   * unfiltered workspace view (e.g. Dream consolidation cron).
    */
   async listMemoryFiles(
     workspaceId: string,
@@ -136,7 +266,13 @@ export class MemoryService {
     order?: 'asc' | 'desc',
   ): Promise<MemoryFileInfo[]> {
     void _scope;
-    const records = await this.memoryFileModel.list({ workspaceId, ownerId, path, memoryType, stale, sort, order });
+    const baseQuery = { workspaceId, path, memoryType, stale, sort, order };
+    const records = ownerId
+      ? await this.memoryFileModel.list({
+          ...baseQuery,
+          ownerIdsOr: [ownerId, WORKSPACE_SHARED_SENTINEL],
+        })
+      : await this.memoryFileModel.list(baseQuery);
     return records.map((r: any) => this.toInfo(r));
   }
 
@@ -903,6 +1039,7 @@ export class MemoryService {
     etag?: string | null;
     sourceKind?: string | null;
     sourceRef?: string | null;
+    scope?: string | null;
     createdAt: Date;
     updatedAt: Date;
   }): MemoryFileDetail {
@@ -911,6 +1048,7 @@ export class MemoryService {
       workspaceId: record.workspaceId,
       ownerId: record.ownerId,
       ownerType: record.ownerType as MemoryOwnerType,
+      scope: record.scope ?? 'workspace-shared',
       path: record.path,
       content: record.content,
       contentLength: record.content.length,
@@ -947,6 +1085,7 @@ export class MemoryService {
     etag?: string | null;
     sourceKind?: string | null;
     sourceRef?: string | null;
+    scope?: string | null;
     createdAt: Date;
     updatedAt: Date;
   }): MemoryFileInfo {
@@ -955,6 +1094,7 @@ export class MemoryService {
       workspaceId: record.workspaceId,
       ownerId: record.ownerId,
       ownerType: record.ownerType as MemoryOwnerType,
+      scope: record.scope ?? 'workspace-shared',
       path: record.path,
       contentLength: 0,
       version: record.version,
