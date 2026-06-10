@@ -20,6 +20,8 @@ const TIER_LIMITS: Record<number, Record<string, number>> = {
     'agent.register': 1,
     'file.upload': 2,
     'api.write': 20,
+    // release201/12 §7.5 — workspace insights read budget (60/min/user).
+    'insights.read': 60,
   },
   1: {
     'message.send': 60,
@@ -28,6 +30,7 @@ const TIER_LIMITS: Record<number, Record<string, number>> = {
     'agent.register': 5,
     'file.upload': 10,
     'api.write': 120,
+    'insights.read': 60,
   },
   2: {
     'message.send': 300,
@@ -36,6 +39,7 @@ const TIER_LIMITS: Record<number, Record<string, number>> = {
     'agent.register': 10,
     'file.upload': 30,
     'api.write': 600,
+    'insights.read': 120,
   },
   3: {
     'message.send': 1000,
@@ -44,6 +48,7 @@ const TIER_LIMITS: Record<number, Record<string, number>> = {
     'agent.register': 20,
     'file.upload': 100,
     'api.write': 2000,
+    'insights.read': 240,
   },
 };
 
