@@ -36,6 +36,7 @@
  */
 
 import { PassThrough } from 'node:stream';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { logger } from '@/lib/logger';
 import { createApiKey } from '@/lib/db-api-keys';
 import {
@@ -51,6 +52,8 @@ import {
   testK8sConnection,
 } from '@/lib/k8s-client';
 import prisma from '@/lib/prisma';
+import { SANDBOX_DAEMON_PORT, buildSandboxHostAliases } from '@/lib/sandbox/pod-spec';
+import { getDaemonImage } from '@/lib/sandbox/image-pin';
 
 // ============================================================
 // Result + verdict shapes (formerly re-exported from sandbox-client.ts;
@@ -97,8 +100,13 @@ export interface PodStatusVerdict {
 /**
  * Daemon-first migration (drift #4 closure, 2026-05-07):
  * Daemon binds local-server on :7878; healthz is `/healthz`.
+ *
+ * Release 200 §5.3 — single source of truth for the daemon port lives in
+ * `src/lib/sandbox/pod-spec.ts::SANDBOX_DAEMON_PORT`. Mirrored here so
+ * legacy code paths that already reference `DEFAULT_DAEMON_PORT` continue
+ * to compile; new code should import `SANDBOX_DAEMON_PORT` directly.
  */
-export const DEFAULT_DAEMON_PORT = 7878;
+export const DEFAULT_DAEMON_PORT = SANDBOX_DAEMON_PORT;
 export const POD_NAME_PREFIX = 'prismer-agent-';
 export const SERVICE_NAME_PREFIX = 'prismer-svc-';
 /** Container name inside the pod spec — daemon-first rename from `openclaw`. */
@@ -107,7 +115,23 @@ export const CONTAINER_NAME = 'daemon';
 const AGENT_LABEL_KEY = 'prismer.agent.id';
 const MANAGED_LABEL = 'prismer.managed';
 
-const DEFAULT_IMAGE = process.env.CONTAINER_IMAGE || 'dockerhub.services/prismer/library/sandbox:daemon-v1.0';
+/**
+ * T8 / 08 §5.2 — Resolve the daemon image ref via the image-pin service.
+ *
+ * Replaces the hardcoded `'dockerhub.services/prismer/library/sandbox:daemon-v1.0'`
+ * fallback. Priority (08 §5.2):
+ *   1. caller-provided `config.image` (passed through unchanged)
+ *   2. `CONTAINER_IMAGE` env (CI / operator override)
+ *   3. `infra/sandbox-image/image-pin.yaml` → `images.daemon.canonical`
+ *   4. throw — refuse to provision ("永远 reject 优于永远 ImagePullBackOff")
+ *
+ * We resolve lazily (each call) so test injection via CONTAINER_IMAGE works
+ * and so a typo in image-pin.yaml surfaces on the next create rather than at
+ * module load.
+ */
+function resolveDefaultImage(): string {
+  return getDaemonImage();
+}
 
 // ============================================================
 // Types
@@ -140,6 +164,15 @@ export interface ContainerCreateConfig {
     status: 'in_progress' | 'ok' | 'error',
     error?: string,
   ) => void | Promise<void>;
+  /**
+   * Release 200 §5.4 — expected daemonId. When set, the post-create
+   * `/healthz` probe will warn-only on `response.daemonId !== expectedDaemonId`.
+   * Set by `provisionContainer` (which mints the id + injects it via the
+   * `PRISMER_DAEMON_ID` env). Direct callers of `createContainer` from
+   * scoped-key-free paths may leave it undefined, in which case the daemon's
+   * self-reported id is logged but not validated.
+   */
+  expectedDaemonId?: string;
 }
 
 export interface RunCmdArgs {
@@ -192,6 +225,31 @@ export interface InstallAgentResult {
     profileId: string;
   };
   hostedAgents: Array<{ imUserId: string; name: string; adapterName: string }>;
+}
+
+export interface AgentStateManifestEntry {
+  path: string;
+  sha256: string;
+  sizeBytes: number;
+  mtime?: number;
+  rootKind?: string;
+  rootPath?: string;
+}
+
+export interface AgentStateDumpRoot {
+  kind: string;
+  rootPath: string;
+  exists: boolean;
+  error?: string;
+  files: AgentStateManifestEntry[];
+}
+
+export interface AgentStateDumpResult {
+  agentId: string;
+  adapterName?: string;
+  dumpedAt: string;
+  roots: AgentStateDumpRoot[];
+  files: AgentStateManifestEntry[];
 }
 
 export interface SnapshotArgs {
@@ -460,13 +518,33 @@ async function waitForRunning(podName: string, timeoutMs = 600_000): Promise<voi
   const api = await getCoreV1Api();
   const namespace = getK8sNamespace();
   const pollInterval = 5_000;
+  // Fast-bail on FailedScheduling: K8s scheduler retries every ~5-10s; if a
+  // PodScheduled=False condition (typically reason=Unschedulable) persists
+  // for SCHEDULING_FAIL_BAIL_MS, capacity is genuinely absent and the only
+  // outcome of waiting the full timeout is a 10-minute UX delay before the
+  // user sees the same error. Resource-fit failures don't self-heal without
+  // ops adding nodes or evicting workloads.
+  const SCHEDULING_FAIL_BAIL_MS = 60_000;
+  let firstUnschedulableSeen: number | undefined;
+
   const start = Date.now();
+  let lastPhase: string | undefined;
+  let lastWaitReason: string | undefined;
+  let lastWaitMessage: string | undefined;
+  let lastConditionReason: string | undefined;
+  let lastConditionMessage: string | undefined;
 
   while (Date.now() - start < timeoutMs) {
     try {
       const pod = (await api.readNamespacedPod({ name: podName, namespace })) as {
         status?: {
           phase?: string;
+          conditions?: Array<{
+            type?: string;
+            status?: string;
+            reason?: string;
+            message?: string;
+          }>;
           containerStatuses?: Array<{
             state?: {
               waiting?: { reason?: string; message?: string };
@@ -479,6 +557,33 @@ async function waitForRunning(podName: string, timeoutMs = 600_000): Promise<voi
 
       const phase = pod?.status?.phase;
       const containerState = pod?.status?.containerStatuses?.[0]?.state;
+      const blockingCondition = pod?.status?.conditions?.find(
+        (condition) =>
+          condition.status === 'False' &&
+          Boolean(condition.reason || condition.message) &&
+          ['PodScheduled', 'Ready', 'ContainersReady', 'Initialized'].includes(condition.type ?? ''),
+      );
+      const podScheduled = pod?.status?.conditions?.find((c) => c.type === 'PodScheduled');
+      const unschedulable =
+        podScheduled?.status === 'False' && (podScheduled.reason === 'Unschedulable' || !podScheduled.reason);
+      if (unschedulable) {
+        if (firstUnschedulableSeen === undefined) firstUnschedulableSeen = Date.now();
+        if (Date.now() - firstUnschedulableSeen > SCHEDULING_FAIL_BAIL_MS) {
+          throw new K8sSandboxError(
+            'CONTAINER_START_FAILED',
+            `Pod cannot be scheduled — cluster has no node that matches the agent pool requirements + resource requests. ` +
+              `reason=${podScheduled?.reason ?? 'Unschedulable'}; message=${podScheduled?.message ?? 'no available node'}`,
+            podName,
+          );
+        }
+      } else if (firstUnschedulableSeen !== undefined) {
+        // Cleared — pod got scheduled.
+        firstUnschedulableSeen = undefined;
+      }
+
+      lastPhase = phase;
+      if (blockingCondition?.reason) lastConditionReason = blockingCondition.reason;
+      if (blockingCondition?.message) lastConditionMessage = blockingCondition.message;
 
       if (phase === 'Running') {
         const elapsed = ((Date.now() - start) / 1000).toFixed(1);
@@ -491,15 +596,24 @@ async function waitForRunning(podName: string, timeoutMs = 600_000): Promise<voi
       }
 
       const waitReason = containerState?.waiting?.reason;
+      const waitMessage = containerState?.waiting?.message;
+      if (waitReason) lastWaitReason = waitReason;
+      if (waitMessage) lastWaitMessage = waitMessage;
       if (waitReason === 'ErrImagePull' || waitReason === 'ImagePullBackOff') {
-        const msg = containerState?.waiting?.message || waitReason;
+        const msg = waitMessage || waitReason;
         throw new K8sSandboxError('CONTAINER_START_FAILED', `Image pull failed: ${msg}`, podName);
       }
 
       const elapsed = Math.round((Date.now() - start) / 1000);
       if (elapsed % 30 === 0) {
         logger.info(
-          { podName, phase, waitReason: waitReason || 'pulling image', elapsedSeconds: elapsed },
+          {
+            podName,
+            phase,
+            waitReason: waitReason || blockingCondition?.reason || 'pulling image',
+            waitMessage: waitMessage || blockingCondition?.message,
+            elapsedSeconds: elapsed,
+          },
           '[K8sSandbox] Waiting for pod',
         );
       }
@@ -511,46 +625,478 @@ async function waitForRunning(podName: string, timeoutMs = 600_000): Promise<voi
     await new Promise((r) => setTimeout(r, pollInterval));
   }
 
+  // Timeout path — gather as much K8s-side context as possible so the
+  // provisioningHistory.error in DB carries actionable root cause instead
+  // of just "did not reach Running within 600s". Pre-fix forensic showed
+  // 4+ daemon image versions all timing out identically with zero
+  // diagnostic info, forcing kubectl describe to find the real cause
+  // (node scheduling, image pull secret, network policy, etc.).
+  //
+  // Best-effort: each sub-fetch is wrapped in try/catch so a permission
+  // gap on `events` doesn't lose the pod snapshot, and vice-versa.
+  let diagnostics: Record<string, unknown> = {};
+  try {
+    const finalPod = (await api.readNamespacedPod({ name: podName, namespace })) as {
+      status?: {
+        phase?: string;
+        conditions?: Array<{ type?: string; status?: string; reason?: string; message?: string }>;
+        containerStatuses?: Array<{
+          name?: string;
+          ready?: boolean;
+          restartCount?: number;
+          state?: {
+            waiting?: { reason?: string; message?: string };
+            terminated?: { reason?: string; exitCode?: number; message?: string };
+          };
+        }>;
+      };
+    };
+    diagnostics.phase = finalPod?.status?.phase;
+    diagnostics.conditions = (finalPod?.status?.conditions ?? []).map((c) => ({
+      type: c.type,
+      status: c.status,
+      reason: c.reason,
+      message: c.message,
+    }));
+    diagnostics.containerStatuses = (finalPod?.status?.containerStatuses ?? []).map((cs) => ({
+      name: cs.name,
+      ready: cs.ready,
+      restarts: cs.restartCount,
+      waiting: cs.state?.waiting,
+      terminated: cs.state?.terminated,
+    }));
+  } catch (err) {
+    diagnostics.podFetchError = err instanceof Error ? err.message : String(err);
+  }
+  try {
+    // K8s field selector: involvedObject.name = podName narrows events to
+    // just this pod's lifecycle. Take the most recent 10 to cover the
+    // scheduling → image-pull → start chain.
+    const events = (await api.listNamespacedEvent({
+      namespace,
+      fieldSelector: `involvedObject.name=${podName}`,
+      limit: 50,
+    })) as { items?: Array<{ reason?: string; message?: string; type?: string; lastTimestamp?: string; count?: number }> };
+    const items = events?.items ?? [];
+    diagnostics.events = items
+      .slice(-10)
+      .map((e) => ({ type: e.type, reason: e.reason, message: e.message, lastAt: e.lastTimestamp, count: e.count }));
+  } catch (err) {
+    diagnostics.eventsFetchError = err instanceof Error ? err.message : String(err);
+  }
+
+  const summary = [
+    `Pod did not reach Running state within ${timeoutMs / 1000}s`,
+    lastPhase ? `phase=${lastPhase}` : null,
+    lastWaitReason || lastConditionReason ? `reason=${lastWaitReason ?? lastConditionReason}` : null,
+    lastWaitMessage || lastConditionMessage ? `message=${lastWaitMessage ?? lastConditionMessage}` : null,
+  ]
+    .filter(Boolean)
+    .join('; ');
+
   throw new K8sSandboxError(
     'CONTAINER_START_FAILED',
-    `Pod did not reach Running state within ${timeoutMs / 1000}s`,
+    `${summary} | diag=${JSON.stringify(diagnostics).slice(0, 2000)}`,
     podName,
   );
 }
 
 /**
- * §26 B1 §8: explicit `GET /healthz` round-trip after pod Ready. Surfaces
- * "pod Ready but daemon dead" conditions at create-time.
+ * Daemon /healthz response shape (Release 200 §5.4).
+ *
+ * Schema upgraded from the legacy `{ status, daemonId, ... }` shape to add
+ * `daemonVersion / readyForDispatch / adapters / resources / uptime`.
+ *
+ * All Release-200 new fields are optional so cloud can graceful-degrade
+ * against pre-2.0.0 daemons: when `readyForDispatch` is `undefined`, cloud
+ * treats `status==='ok'` alone as healthy (see `provisionContainer`). When
+ * the daemon is upgraded, cloud will additionally require
+ * `readyForDispatch===true`.
  */
-async function probeHealthz(podName: string): Promise<void> {
+export interface HealthzResponse {
+  status: string;
+  daemonId?: string;
+  /** Release 200 §5.4 — new. */
+  daemonVersion?: string;
+  cloudBaseUrl?: string;
+  workspaceId?: string | null;
+  pid?: number;
+  startedAt?: number;
+  /** Release 200 §5.4 — new (seconds since startedAt). */
+  uptime?: number;
+  wsConnected?: boolean;
+  hostedAgents?: Array<{ imUserId: string; name: string; adapterName: string }>;
+  /** Release 200 §5.4 — new (per-adapter readiness). */
+  adapters?: Array<{ name: string; ready: boolean; version?: string }>;
+  /** Release 200 §5.4 — new (CPU/Mem snapshot; v200 returns placeholder zeros). */
+  resources?: {
+    cpu: { usagePct: number };
+    mem: { usedBytes: number; limitBytes: number };
+  };
+  /** Release 200 §5.4 — new (Ready-AND across adapters). */
+  readyForDispatch?: boolean;
+  memoryReady?: boolean;
+  assetReady?: boolean;
+  observability?: Record<string, unknown>;
+}
+
+const HEALTHZ_HTTP_TIMEOUT_MS = 5_000;
+const HEALTHZ_EXEC_TIMEOUT_MS = 5_000;
+
+/**
+ * §26 B1 §8 + Release 200 §5.4: probe daemon `/healthz`.
+ *
+ * Resolution strategy:
+ *   1. Resolve `gatewayUrl` and fetch `/healthz` via HTTP.
+ *   2. On any HTTP failure (no gateway URL / connection refused / non-2xx
+ *      / parse failure) fall back to a cluster-internal exec — open a
+ *      `curl` inside the pod against `127.0.0.1:7878/healthz`. This works
+ *      regardless of whether the cloud is in-cluster or out-of-cluster,
+ *      and removes the legacy D-8 `KUBERNETES_SERVICE_HOST` gate.
+ *
+ * Returns the parsed `HealthzResponse` on success; throws
+ * `K8sSandboxError('HEALTHZ_FAILED', ...)` only when both transports fail.
+ * Callers downstream of `K8sSandboxProvider` will see this surface as
+ * `ProviderError('daemon_unreachable', ...)`.
+ */
+async function probeHealthz(podName: string): Promise<HealthzResponse> {
+  const httpResult = await probeHealthzViaHttp(podName);
+  if (httpResult.ok) return httpResult.body;
+
+  logger.warn(
+    { podName, httpError: httpResult.reason },
+    '[K8sSandbox] /healthz HTTP probe failed, falling back to cluster-internal exec',
+  );
+
+  // Cluster-internal exec fallback.
+  return probeHealthzViaExec(podName);
+}
+
+async function probeHealthzViaHttp(
+  podName: string,
+): Promise<{ ok: true; body: HealthzResponse } | { ok: false; reason: string }> {
   const gatewayUrl = await resolveGatewayUrl(podName);
   if (!gatewayUrl) {
-    throw new K8sSandboxError(
-      'HEALTHZ_FAILED',
-      'Pod is Ready but no gateway URL resolvable (no NodeExternalIP, no Pod IP, no Service)',
-      podName,
-    );
+    return {
+      ok: false,
+      reason: 'no gateway URL resolvable (no NodeExternalIP, no Pod IP, no Service)',
+    };
   }
   const healthUrl = gatewayUrl.replace(/^ws:/, 'http:').replace(/^wss:/, 'https:') + '/healthz';
 
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 5_000);
+  const timeoutId = setTimeout(() => controller.abort(), HEALTHZ_HTTP_TIMEOUT_MS);
   try {
     const res = await fetch(healthUrl, { signal: controller.signal });
     if (!res.ok) {
-      throw new K8sSandboxError('HEALTHZ_FAILED', `/healthz returned HTTP ${res.status}`, podName);
+      return { ok: false, reason: `/healthz returned HTTP ${res.status}` };
+    }
+    const text = await res.text();
+    try {
+      return { ok: true, body: JSON.parse(text) as HealthzResponse };
+    } catch (parseErr) {
+      return {
+        ok: false,
+        reason: `/healthz body not JSON: ${parseErr instanceof Error ? parseErr.message : String(parseErr)}`,
+      };
     }
   } catch (err) {
-    if (err instanceof K8sSandboxError) throw err;
-    throw new K8sSandboxError(
-      'HEALTHZ_FAILED',
-      `/healthz probe failed: ${err instanceof Error ? err.message : String(err)}`,
-      podName,
-      err instanceof Error ? err : undefined,
-    );
+    return {
+      ok: false,
+      reason: `/healthz HTTP fetch failed: ${err instanceof Error ? err.message : String(err)}`,
+    };
   } finally {
     clearTimeout(timeoutId);
   }
+}
+
+/**
+ * Cluster-internal /healthz probe (Release 200 §5.4).
+ *
+ * When the cloud is out-of-cluster (dev kind cluster, separate-VPC control
+ * plane), pod IP `10.244.x.x:7878` is unroutable from the host network.
+ * Open a `curl` inside the pod itself via the K8s exec API and parse the
+ * JSON it prints to stdout — this needs only kube-apiserver reachability,
+ * not pod-network reachability, so the same code path works in dev kind
+ * and prod EKS.
+ *
+ * Throws `K8sSandboxError('HEALTHZ_FAILED', ...)` on any failure
+ * (exec API rejection, non-zero curl exit, JSON parse failure, timeout).
+ */
+async function probeHealthzViaExec(podName: string): Promise<HealthzResponse> {
+  let k8sExec: Awaited<ReturnType<typeof getK8sExec>>;
+  try {
+    k8sExec = await getK8sExec();
+  } catch (err) {
+    throw new K8sSandboxError(
+      'HEALTHZ_FAILED',
+      `exec client init failed: ${err instanceof Error ? err.message : String(err)}`,
+      podName,
+      err instanceof Error ? err : undefined,
+    );
+  }
+  const namespace = getK8sNamespace();
+
+  // curl flags: -s (silent) + --max-time (curl-side per-request timeout).
+  // The outer Promise.race below adds a JS-side hard cap in case curl
+  // itself hangs (e.g. exec stream stuck).
+  const command = ['curl', '-s', '--max-time', '3', `http://127.0.0.1:${SANDBOX_DAEMON_PORT}/healthz`];
+
+  return new Promise<HealthzResponse>((resolve, reject) => {
+    const stdoutChunks: Buffer[] = [];
+    const stderrChunks: Buffer[] = [];
+    const stdout = new PassThrough();
+    const stderr = new PassThrough();
+    const stdin = new PassThrough();
+    stdin.end();
+
+    stdout.on('data', (chunk: Buffer) => stdoutChunks.push(chunk));
+    stderr.on('data', (chunk: Buffer) => stderrChunks.push(chunk));
+
+    let settled = false;
+    const settleReject = (reason: K8sSandboxError) => {
+      if (settled) return;
+      settled = true;
+      reject(reason);
+    };
+    const settleResolve = (value: HealthzResponse) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+
+    const hardTimeout = setTimeout(() => {
+      settleReject(
+        new K8sSandboxError(
+          'HEALTHZ_FAILED',
+          `exec /healthz probe timed out after ${HEALTHZ_EXEC_TIMEOUT_MS}ms`,
+          podName,
+        ),
+      );
+    }, HEALTHZ_EXEC_TIMEOUT_MS);
+
+    const runPromise = k8sExec.exec(
+      namespace,
+      podName,
+      CONTAINER_NAME,
+      command,
+      stdout,
+      stderr,
+      stdin,
+      false, // tty
+      (status) => {
+        clearTimeout(hardTimeout);
+        const stdoutStr = Buffer.concat(stdoutChunks).toString('utf-8').trim();
+        const stderrStr = Buffer.concat(stderrChunks).toString('utf-8').trim();
+        const statusOk = (status as { status?: string })?.status === 'Success';
+
+        if (!statusOk) {
+          const msg = (status as { message?: string })?.message ?? stderrStr ?? 'exec failed';
+          settleReject(new K8sSandboxError('HEALTHZ_FAILED', `exec /healthz curl exited non-zero: ${msg}`, podName));
+          return;
+        }
+
+        if (!stdoutStr) {
+          settleReject(
+            new K8sSandboxError(
+              'HEALTHZ_FAILED',
+              `exec /healthz returned empty stdout (stderr=${stderrStr || 'empty'})`,
+              podName,
+            ),
+          );
+          return;
+        }
+
+        try {
+          const parsed = JSON.parse(stdoutStr) as HealthzResponse;
+          settleResolve(parsed);
+        } catch (err) {
+          settleReject(
+            new K8sSandboxError(
+              'HEALTHZ_FAILED',
+              `exec /healthz stdout not JSON: ${err instanceof Error ? err.message : String(err)}`,
+              podName,
+              err instanceof Error ? err : undefined,
+            ),
+          );
+        }
+      },
+    );
+
+    runPromise.catch((err: unknown) => {
+      clearTimeout(hardTimeout);
+      settleReject(
+        new K8sSandboxError(
+          'HEALTHZ_FAILED',
+          `exec /healthz failed: ${err instanceof Error ? err.message : String(err)}`,
+          podName,
+          err instanceof Error ? err : undefined,
+        ),
+      );
+    });
+  });
+}
+
+const DAEMON_RPC_EXEC_TIMEOUT_MS = 10_000;
+
+/**
+ * Cluster-internal POST RPC fallback for daemon endpoints. Used when the
+ * direct cloud → podIP HTTP request fails because cloud is running
+ * out-of-cluster (e.g. local dev: cloud on host, pod on kind 10.244.0.0/16
+ * which the host cannot reach). Same exec-via-kubeapi pattern as
+ * probeHealthzViaExec; differs in that it POSTs a JSON body through
+ * stdin to `curl --data-binary @-`.
+ *
+ * Generic helper — used by installAgent/daemonDispatch RPC paths. Caller
+ * passes the endpoint path (e.g. '/v1/agents/install') and the body
+ * object; we serialize to JSON, pipe to curl stdin in-pod, parse the
+ * response stdout back to JS object.
+ *
+ * Throws K8sSandboxError on:
+ *   - exec client init failure
+ *   - curl non-zero exit / non-2xx (best-effort exit code surfacing)
+ *   - exec hard timeout (DAEMON_RPC_EXEC_TIMEOUT_MS)
+ *   - JSON parse failure
+ */
+async function daemonRpcViaExec(podName: string, path: string, body: unknown): Promise<unknown> {
+  let k8sExec: Awaited<ReturnType<typeof getK8sExec>>;
+  try {
+    k8sExec = await getK8sExec();
+  } catch (err) {
+    throw new K8sSandboxError(
+      'DAEMON_UNREACHABLE',
+      `exec client init failed: ${err instanceof Error ? err.message : String(err)}`,
+      podName,
+      err instanceof Error ? err : undefined,
+    );
+  }
+  const namespace = getK8sNamespace();
+  const bodyJson = JSON.stringify(body);
+
+  // curl reads body from stdin via `--data-binary @-`. -w '\n%{http_code}'
+  // appends the status code to stdout on a new line so we can distinguish
+  // 2xx from 4xx/5xx without relying on -f (which discards body on error).
+  const command = [
+    'curl',
+    '-s',
+    '--max-time',
+    '8',
+    '-X',
+    'POST',
+    '-H',
+    'content-type: application/json',
+    '-w',
+    '\\n__HTTP_STATUS__:%{http_code}',
+    '--data-binary',
+    '@-',
+    `http://127.0.0.1:${SANDBOX_DAEMON_PORT}${path}`,
+  ];
+
+  return new Promise<unknown>((resolve, reject) => {
+    const stdoutChunks: Buffer[] = [];
+    const stderrChunks: Buffer[] = [];
+    const stdout = new PassThrough();
+    const stderr = new PassThrough();
+    const stdin = new PassThrough();
+    stdin.write(bodyJson);
+    stdin.end();
+
+    stdout.on('data', (chunk: Buffer) => stdoutChunks.push(chunk));
+    stderr.on('data', (chunk: Buffer) => stderrChunks.push(chunk));
+
+    let settled = false;
+    const settleReject = (reason: K8sSandboxError) => {
+      if (settled) return;
+      settled = true;
+      reject(reason);
+    };
+    const settleResolve = (value: unknown) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+
+    const hardTimeout = setTimeout(() => {
+      settleReject(
+        new K8sSandboxError(
+          'DAEMON_UNREACHABLE',
+          `exec ${path} RPC timed out after ${DAEMON_RPC_EXEC_TIMEOUT_MS}ms`,
+          podName,
+        ),
+      );
+    }, DAEMON_RPC_EXEC_TIMEOUT_MS);
+
+    const runPromise = k8sExec.exec(
+      namespace,
+      podName,
+      CONTAINER_NAME,
+      command,
+      stdout,
+      stderr,
+      stdin,
+      false,
+      (status) => {
+        clearTimeout(hardTimeout);
+        const stdoutStr = Buffer.concat(stdoutChunks).toString('utf-8');
+        const stderrStr = Buffer.concat(stderrChunks).toString('utf-8').trim();
+        const statusOk = (status as { status?: string })?.status === 'Success';
+
+        if (!statusOk) {
+          const msg = (status as { message?: string })?.message ?? stderrStr ?? 'exec failed';
+          settleReject(new K8sSandboxError('DAEMON_UNREACHABLE', `exec ${path} curl exited non-zero: ${msg}`, podName));
+          return;
+        }
+
+        // Parse trailing "__HTTP_STATUS__:NNN" marker added by curl -w.
+        const marker = stdoutStr.lastIndexOf('__HTTP_STATUS__:');
+        if (marker < 0) {
+          settleReject(
+            new K8sSandboxError('DAEMON_UNREACHABLE', `exec ${path} stdout missing HTTP status marker`, podName),
+          );
+          return;
+        }
+        const bodyText = stdoutStr.slice(0, marker).replace(/\n$/, '');
+        const httpStatus = parseInt(stdoutStr.slice(marker + '__HTTP_STATUS__:'.length).trim(), 10);
+
+        if (Number.isNaN(httpStatus) || httpStatus < 200 || httpStatus >= 300) {
+          settleReject(
+            new K8sSandboxError(
+              'DAEMON_UNREACHABLE',
+              `daemon ${path} returned HTTP ${httpStatus}: ${bodyText.slice(0, 256)}`,
+              podName,
+            ),
+          );
+          return;
+        }
+
+        try {
+          const parsed = bodyText ? JSON.parse(bodyText) : null;
+          settleResolve(parsed);
+        } catch (err) {
+          settleReject(
+            new K8sSandboxError(
+              'DAEMON_UNREACHABLE',
+              `exec ${path} response not JSON: ${err instanceof Error ? err.message : String(err)}`,
+              podName,
+              err instanceof Error ? err : undefined,
+            ),
+          );
+        }
+      },
+    );
+
+    runPromise.catch((err: unknown) => {
+      clearTimeout(hardTimeout);
+      settleReject(
+        new K8sSandboxError(
+          'DAEMON_UNREACHABLE',
+          `exec ${path} failed: ${err instanceof Error ? err.message : String(err)}`,
+          podName,
+          err instanceof Error ? err : undefined,
+        ),
+      );
+    });
+  });
 }
 
 // ============================================================
@@ -587,7 +1133,7 @@ async function createContainer(agentId: string, config: ContainerCreateConfig): 
     );
   }
 
-  const image = config.image || DEFAULT_IMAGE;
+  const image = config.image || resolveDefaultImage();
   const api = await getCoreV1Api();
   const namespace = getK8sNamespace();
   const podName = podNameForAgent(agentId);
@@ -610,6 +1156,26 @@ async function createContainer(agentId: string, config: ContainerCreateConfig): 
       envVars.push({ name: key, value });
     }
   }
+  if (!envVars.some((e) => e.name === 'DISPATCH_DAEMON_SECRET') && process.env.DISPATCH_DAEMON_SECRET?.trim()) {
+    envVars.push({ name: 'DISPATCH_DAEMON_SECRET', value: process.env.DISPATCH_DAEMON_SECRET.trim() });
+  }
+
+  // S6/T5 (2026-05-18) — local cookbook dev escape. v200 baseline POST /api/sandboxes
+  // path does NOT mint a sandbox-scoped PRISMER_API_KEY (scoped-key mint is gated
+  // on apiKeyTtlSeconds + taskId, only the task-dispatch path provides those).
+  // For local cookbook smoke against /api/sandboxes + /healthz + /runCmd, inject a
+  // dev-owned API key here when SANDBOX_DEV_INJECT_API_KEY is set in the cloud env.
+  // The injected value must be a real `sk-prismer-*` key registered in pc_api_keys
+  // (the WS auth path in src/im/ws/handler.ts validates it via validateApiKeyFromDb).
+  // Prod cloud will never set SANDBOX_DEV_INJECT_API_KEY.
+  const hasApiKey = envVars.some((e) => e.name === 'PRISMER_API_KEY');
+  if (!hasApiKey && process.env.SANDBOX_DEV_INJECT_API_KEY) {
+    envVars.push({ name: 'PRISMER_API_KEY', value: process.env.SANDBOX_DEV_INJECT_API_KEY });
+    logger.info(
+      { agentId, podName },
+      '[K8sSandbox] dev-injected PRISMER_API_KEY from SANDBOX_DEV_INJECT_API_KEY env (S6 cookbook escape)',
+    );
+  }
 
   // §26 B2 — caller-provided resource strings take precedence over the
   // legacy bytes-knob path. All four cloud callers pass strings; legacy
@@ -622,6 +1188,36 @@ async function createContainer(agentId: string, config: ContainerCreateConfig): 
     (config.memoryLimit ? `${Math.ceil(config.memoryLimit / (1024 * 1024 * 1024) / 2)}Gi` : '2Gi');
   const cpuRequest = config.cpuRequest ?? '250m';
   const cpuLimit = config.cpuLimit ?? '2000m';
+
+  // 2026-06-06 — Per-agent PVC REMOVED (was Cleanup-3, 2026-05-25). `~/.prismer`
+  // is now an ephemeral emptyDir (see `volumes` below). The PVC never actually
+  // protected anything: daemon_id is injected via the PRISMER_DAEMON_ID env and
+  // the entrypoint REWRITES config.toml from that env on every boot
+  // (daemon-entrypoint.sh:102), so the persisted config.toml was always
+  // overwritten. Everything else under ~/.prismer is cloud-recoverable — local.db
+  // is a rebuildable cache (re-synced on `host.acked`), in-flight tasks resume
+  // from cloud (`/api/im/tasks/in-flight?daemonId=`), task artifacts upload via
+  // the outbox/artifacts-watcher. The 64Mi cap was also nonsense because the
+  // agent's task workdir (`~/.prismer/workspaces/.../tasks/.../{artifacts,scratch}`)
+  // lives under this mount. DO NOT reintroduce a PVC here — daemon state belongs
+  // in the cloud, not on a node disk. See docs/release202/11.
+  //
+  // emptyDir sizeLimit caps how much node ephemeral disk ONE agent pod may use
+  // under ~/.prismer before the kubelet evicts it — protects the node from a
+  // runaway agent without affecting scheduling. Tunable via the Nacos config
+  // item `K8S_AGENT_SCRATCH_SIZE_LIMIT`, expressed in GiB. Default 20.
+  //
+  // IMPORTANT: a BARE number is interpreted as GiB (so Nacos `=20` → `20Gi`).
+  // K8s parses a unitless quantity as BYTES, so passing the raw `20` would mean
+  // a 20-BYTE volume → the pod is evicted the instant the daemon writes
+  // anything. We normalise here. A value that already carries a unit
+  // (`20Gi`/`50G`) is passed through as-is.
+  const rawScratchLimit = process.env.K8S_AGENT_SCRATCH_SIZE_LIMIT?.trim();
+  const scratchSizeLimit = !rawScratchLimit
+    ? '20Gi'
+    : /^\d+$/.test(rawScratchLimit)
+      ? `${rawScratchLimit}Gi`
+      : rawScratchLimit;
 
   const podBody = {
     metadata: {
@@ -657,10 +1253,42 @@ async function createContainer(agentId: string, config: ContainerCreateConfig): 
             periodSeconds: 30,
             timeoutSeconds: 5,
           },
+          // Ephemeral scratch for ~/.prismer (config.toml + daemon SQLite +
+          // task workdir/artifacts/scratch). Not persisted — daemon state is
+          // cloud-recoverable (see provisioning comment above).
+          volumeMounts: [
+            {
+              name: 'prismer-cfg',
+              mountPath: '/home/user/.prismer',
+            },
+          ],
+        },
+      ],
+      // emptyDir (node-backed ephemeral), replacing the removed per-pod PVC.
+      // sizeLimit (K8S_AGENT_SCRATCH_SIZE_LIMIT, default 20Gi) caps runaway task
+      // scratch/artifacts so a busy agent can't fill the node's ephemeral
+      // storage; artifacts are uploaded to cloud via the outbox before the pod
+      // goes away.
+      volumes: [
+        {
+          name: 'prismer-cfg',
+          emptyDir: { sizeLimit: scratchSizeLimit },
         },
       ],
       restartPolicy: 'Always',
+      // C-9 (08 §5.7) — pod spec ALWAYS carries imagePullSecrets so the
+      // manifest is byte-isomorphic with EKS test/prod. dev-up.sh creates
+      // an empty `regcred` secret in the sandbox namespace so the
+      // reference resolves; local registry (localhost:5001) does not
+      // require auth so the secret content is unused.
       imagePullSecrets: [{ name: getImagePullSecret() }],
+      // C-10 (08 §5.7) — Linux + APP_ENV=local injects hostAliases so pods
+      // can reach the host via `host.docker.internal`. macOS and prod/test
+      // return undefined and the field is omitted entirely.
+      ...((): { hostAliases?: Array<{ ip: string; hostnames: string[] }> } => {
+        const hostAliases = buildSandboxHostAliases();
+        return hostAliases ? { hostAliases } : {};
+      })(),
       ...(process.env.K8S_AGENT_NODE_SELECTOR ? { nodeSelector: JSON.parse(process.env.K8S_AGENT_NODE_SELECTOR) } : {}),
       ...(process.env.K8S_AGENT_TOLERATIONS ? { tolerations: JSON.parse(process.env.K8S_AGENT_TOLERATIONS) } : {}),
     },
@@ -745,23 +1373,57 @@ async function createContainer(agentId: string, config: ContainerCreateConfig): 
     );
     throw err;
   }
-  // /healthz probe — only when cloud is in-cluster (KUBERNETES_SERVICE_HOST
-  // is set by Kubernetes pod env). Skip for out-of-cluster callers.
-  if (process.env.KUBERNETES_SERVICE_HOST) {
-    await emit('daemon_healthy', 'in_progress');
-    try {
-      await probeHealthz(podName);
-      await emit('daemon_healthy', 'ok');
-    } catch (err) {
-      // Not fatal — pod is Running+Ready per kubelet; cloud-side /healthz is
-      // best-effort. Surface as 'ok' with a note rather than 'error' so the
-      // workspace UI doesn't show a failed step for a benign route issue.
-      await emit('daemon_healthy', 'ok');
-      logger.warn(
-        { podName, err: err instanceof Error ? err.message : String(err) },
-        '[K8sSandbox] in-cluster /healthz probe failed (kubelet readinessProbe was the authority)',
+  // Release 200 §5.4 (C-4 / D-8 closure) — /healthz probe always runs.
+  // The legacy `KUBERNETES_SERVICE_HOST` gate is removed; out-of-cluster
+  // callers fall back to a cluster-internal exec inside `probeHealthz`.
+  await emit('daemon_healthy', 'in_progress');
+  try {
+    const resp = await probeHealthz(podName);
+
+    // Graceful-degrade Ready judgment: pre-2.0.0 daemons that omit
+    // `readyForDispatch` are treated as healthy when `status==='ok'`. New
+    // daemons must also report `readyForDispatch===true`.
+    const healthOk = resp.status === 'ok' && (resp.readyForDispatch === undefined || resp.readyForDispatch === true);
+
+    if (!healthOk) {
+      throw new K8sSandboxError(
+        'HEALTHZ_FAILED',
+        `daemon /healthz reports not-ready (status=${resp.status} readyForDispatch=${String(resp.readyForDispatch)})`,
+        podName,
       );
     }
+
+    // Warn-only daemonId validation (Release 200 §5.4 — baseline policy,
+    // false-positives during rollout would be costly). v210 may upgrade
+    // this to a hard error once all daemons report the cloud-minted id.
+    if (config.expectedDaemonId && resp.daemonId && resp.daemonId !== config.expectedDaemonId) {
+      logger.warn(
+        { podName, expected: config.expectedDaemonId, actual: resp.daemonId },
+        '[K8sSandbox] daemonId mismatch on /healthz (warn-only baseline)',
+      );
+    }
+
+    await emit('daemon_healthy', 'ok');
+    logger.info(
+      {
+        podName,
+        daemonVersion: resp.daemonVersion ?? '(legacy)',
+        readyForDispatch: resp.readyForDispatch ?? '(legacy)',
+        adapterCount: resp.adapters?.length ?? 0,
+      },
+      '[K8sSandbox] /healthz ok',
+    );
+  } catch (err) {
+    // /healthz failure is non-fatal at create-time — pod is Running+Ready
+    // per kubelet, so the readiness probe (TCP-level) already cleared. The
+    // higher-level handshake (this fn) may still hit transient routes
+    // (gateway URL takes a beat to resolve, exec stream slow to open). The
+    // first dispatch will resurface the failure structurally.
+    await emit('daemon_healthy', 'ok');
+    logger.warn(
+      { podName, err: err instanceof Error ? err.message : String(err) },
+      '[K8sSandbox] /healthz probe failed (kubelet readinessProbe was the authority)',
+    );
   }
 
   const gatewayUrl = await resolveGatewayUrl(podName);
@@ -860,6 +1522,9 @@ async function removeContainer(podName: string, force = false): Promise<{ status
   } catch {
     // Service may not exist — fine.
   }
+
+  // No PVC to clean up — `~/.prismer` is an ephemeral emptyDir that dies with
+  // the pod (PVC removed 2026-06-06; see provisioning comment in createContainer).
 
   return { status: 'removed' };
 }
@@ -1089,89 +1754,197 @@ async function runCmd(podName: string, args: RunCmdArgs): Promise<RunCmdResult> 
 // ============================================================
 
 async function daemonDispatch(podName: string, payload: DaemonDispatchArgs): Promise<DaemonDispatchResult> {
+  // Mirror installAgent: try direct podIp HTTP first, fall back to
+  // cluster-internal exec for out-of-cluster cloud (local dev).
   const podIp = await getContainerIp(podName);
-  if (!podIp) {
-    throw new K8sSandboxError('POD_IP_UNAVAILABLE', `pod IP unavailable for ${podName}`, podName);
+
+  if (podIp) {
+    const daemonUrl = `http://${podIp}:${DEFAULT_DAEMON_PORT}/v1/runs`;
+    try {
+      const res = await fetch(daemonUrl, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(5_000),
+      });
+      const text = await res.text();
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        parsed = { raw: text };
+      }
+      if (!res.ok) {
+        logger.warn({ podName, status: res.status, payload: parsed }, '[K8sSandbox] daemon rejected dispatch');
+        throw new K8sSandboxError(
+          'DAEMON_UNREACHABLE',
+          `daemon returned HTTP ${res.status}: ${typeof parsed === 'string' ? parsed : JSON.stringify(parsed)}`,
+          podName,
+        );
+      }
+      return parsed as DaemonDispatchResult;
+    } catch (err) {
+      if (err instanceof K8sSandboxError) throw err;
+      logger.warn(
+        { podName, httpError: err instanceof Error ? err.message : String(err) },
+        '[K8sSandbox] daemonDispatch HTTP RPC failed, falling back to cluster-internal exec',
+      );
+    }
   }
 
-  const daemonUrl = `http://${podIp}:${DEFAULT_DAEMON_PORT}/v1/runs`;
-  let res: Response;
   try {
-    res = await fetch(daemonUrl, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
+    const parsed = (await daemonRpcViaExec(podName, '/v1/runs', payload)) as DaemonDispatchResult;
+    return parsed;
   } catch (err) {
+    if (err instanceof K8sSandboxError) throw err;
     throw new K8sSandboxError(
       'DAEMON_UNREACHABLE',
-      `daemon RPC unreachable: ${err instanceof Error ? err.message : String(err)}`,
+      `daemon dispatch RPC unreachable (both HTTP and exec): ${err instanceof Error ? err.message : String(err)}`,
       podName,
       err instanceof Error ? err : undefined,
     );
   }
-
-  const text = await res.text();
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    parsed = { raw: text };
-  }
-
-  if (!res.ok) {
-    logger.warn({ podName, status: res.status, payload: parsed }, '[K8sSandbox] daemon rejected dispatch');
-    throw new K8sSandboxError(
-      'DAEMON_UNREACHABLE',
-      `daemon returned HTTP ${res.status}: ${typeof parsed === 'string' ? parsed : JSON.stringify(parsed)}`,
-      podName,
-    );
-  }
-
-  return parsed as DaemonDispatchResult;
 }
 
 async function installAgent(podName: string, payload: InstallAgentArgs): Promise<InstallAgentResult> {
+  // Try direct podIp HTTP first — works when cloud runs in-cluster
+  // (production EKS); falls back to cluster-internal exec when cloud is
+  // out-of-cluster (local dev: kind 10.244.0.0/16 unreachable from host).
+  // Same dual-path pattern as probeHealthz (08 §5.4).
   const podIp = await getContainerIp(podName);
-  if (!podIp) {
-    throw new K8sSandboxError('POD_IP_UNAVAILABLE', `pod IP unavailable for ${podName}`, podName);
+
+  if (podIp) {
+    const daemonUrl = `http://${podIp}:${DEFAULT_DAEMON_PORT}/v1/agents/install`;
+    try {
+      const res = await fetch(daemonUrl, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(5_000),
+      });
+      const text = await res.text();
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        parsed = { raw: text };
+      }
+      if (!res.ok) {
+        logger.warn({ podName, status: res.status, payload: parsed }, '[K8sSandbox] daemon rejected installAgent');
+        throw new K8sSandboxError(
+          'DAEMON_UNREACHABLE',
+          `daemon installAgent returned HTTP ${res.status}: ${typeof parsed === 'string' ? parsed : JSON.stringify(parsed)}`,
+          podName,
+        );
+      }
+      return parsed as InstallAgentResult;
+    } catch (err) {
+      // HTTP-status errors above are K8sSandboxError already and re-thrown
+      // straight to caller (no fallback for "daemon rejected"). Only fall
+      // back on connection-level failure (fetch threw — DNS/timeout/refused).
+      if (err instanceof K8sSandboxError) throw err;
+      logger.warn(
+        { podName, httpError: err instanceof Error ? err.message : String(err) },
+        '[K8sSandbox] installAgent HTTP RPC failed, falling back to cluster-internal exec',
+      );
+    }
   }
 
-  const daemonUrl = `http://${podIp}:${DEFAULT_DAEMON_PORT}/v1/agents/install`;
-  let res: Response;
+  // Out-of-cluster fallback: exec curl POST inside the pod, body via stdin.
   try {
-    res = await fetch(daemonUrl, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
+    const parsed = (await daemonRpcViaExec(podName, '/v1/agents/install', payload)) as InstallAgentResult;
+    return parsed;
   } catch (err) {
+    if (err instanceof K8sSandboxError) throw err;
     throw new K8sSandboxError(
       'DAEMON_UNREACHABLE',
-      `daemon installAgent RPC unreachable: ${err instanceof Error ? err.message : String(err)}`,
+      `daemon installAgent RPC unreachable (both HTTP and exec): ${err instanceof Error ? err.message : String(err)}`,
       podName,
       err instanceof Error ? err : undefined,
     );
   }
+}
 
-  const text = await res.text();
-  let parsed: unknown;
+async function dumpAgentState(podName: string, agentId: string): Promise<AgentStateDumpResult> {
+  logger.info({ podName, agentId }, '[K8sSandbox] Starting agent dump-state via daemon');
+
+  const path = `/v1/agents/${encodeURIComponent(agentId)}/dump-state`;
+  const httpResult = await dumpAgentStateViaHttp(podName, path);
+  if (httpResult.ok) return httpResult.body;
+
+  logger.warn(
+    { podName, agentId, httpError: httpResult.reason },
+    '[K8sSandbox] agent dump-state HTTP path failed, falling back to cluster-internal exec',
+  );
+
   try {
-    parsed = JSON.parse(text);
-  } catch {
-    parsed = { raw: text };
-  }
-
-  if (!res.ok) {
-    logger.warn({ podName, status: res.status, payload: parsed }, '[K8sSandbox] daemon rejected installAgent');
+    return normalizeAgentStateDump(await daemonRpcViaExec(podName, path, {}));
+  } catch (err) {
+    if (err instanceof K8sSandboxError) {
+      throw new K8sSandboxError(
+        'SNAPSHOT_FAILED',
+        `agent dump-state failed: ${err.body || err.message}`,
+        podName,
+        err,
+      );
+    }
     throw new K8sSandboxError(
-      'DAEMON_UNREACHABLE',
-      `daemon installAgent returned HTTP ${res.status}: ${typeof parsed === 'string' ? parsed : JSON.stringify(parsed)}`,
+      'SNAPSHOT_FAILED',
+      `agent dump-state failed: ${err instanceof Error ? err.message : String(err)}`,
       podName,
+      err instanceof Error ? err : undefined,
     );
   }
+}
 
-  return parsed as InstallAgentResult;
+async function dumpAgentStateViaHttp(
+  podName: string,
+  path: string,
+): Promise<{ ok: true; body: AgentStateDumpResult } | { ok: false; reason: string }> {
+  const gatewayUrl = await resolveGatewayUrl(podName);
+  if (!gatewayUrl) {
+    return { ok: false, reason: 'no gateway URL resolvable' };
+  }
+  const endpoint = gatewayUrl.replace(/^ws:/, 'http:').replace(/^wss:/, 'https:') + path;
+  try {
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+      signal: AbortSignal.timeout(15_000),
+    });
+    const text = await res.text();
+    if (!res.ok) {
+      return { ok: false, reason: `${path} returned HTTP ${res.status}: ${text.slice(0, 256)}` };
+    }
+    try {
+      return { ok: true, body: normalizeAgentStateDump(JSON.parse(text)) };
+    } catch (parseErr) {
+      return {
+        ok: false,
+        reason: `${path} body not JSON: ${parseErr instanceof Error ? parseErr.message : String(parseErr)}`,
+      };
+    }
+  } catch (err) {
+    return {
+      ok: false,
+      reason: `${path} HTTP fetch failed: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
+function normalizeAgentStateDump(value: unknown): AgentStateDumpResult {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('agent dump-state body must be an object');
+  }
+  const record = value as Record<string, unknown>;
+  if (typeof record.agentId !== 'string' || !record.agentId) {
+    throw new Error('agent dump-state body missing agentId');
+  }
+  if (!Array.isArray(record.files) || !Array.isArray(record.roots)) {
+    throw new Error('agent dump-state body missing roots/files');
+  }
+  return record as unknown as AgentStateDumpResult;
 }
 
 // ============================================================
@@ -1203,7 +1976,7 @@ async function snapshot(podName: string, opts: SnapshotArgs = {}): Promise<{ sna
     const pod = (await api.readNamespacedPod({ name: podName, namespace })) as {
       spec?: { containers?: Array<{ image?: string }> };
     };
-    const baseImage = pod?.spec?.containers?.[0]?.image || DEFAULT_IMAGE;
+    const baseImage = pod?.spec?.containers?.[0]?.image || resolveDefaultImage();
 
     const dockerfile = [
       `FROM ${baseImage}`,
@@ -1357,6 +2130,277 @@ async function snapshot(podName: string, opts: SnapshotArgs = {}): Promise<{ sna
 }
 
 // ============================================================
+// Snapshot (daemon-first fs-manifest — T9)
+// ============================================================
+
+/**
+ * Release 200 T9 — fs-manifest snapshot via the in-pod daemon.
+ *
+ * Resolution strategy mirrors `probeHealthz` (HTTP first → cluster-internal
+ * `exec curl` fallback). The daemon walks `snapshotRoot` (default
+ * `/workspace`), hashes every file, and returns
+ * `{ rootPath, files: [{path, sha256, sizeBytes, mtime}] }`. The cloud
+ * computes `count` / `totalBytes` / `generatedAt` and persists the row in
+ * the route layer.
+ *
+ * Failure surfaces as `K8sSandboxError('SNAPSHOT_FAILED', ...)` which the
+ * provider boundary translates to `ProviderError('snapshot_failed')`.
+ *
+ * The request body is intentionally NOT forwarded today — the daemon
+ * (sdk/prismer-cloud/runtime/src/daemon/local-server.ts) currently
+ * ignores includeGlobs/excludeGlobs/root and always walks
+ * `opts.snapshotRoot ?? '/workspace'`. The contract accepts those fields
+ * (08 §4.4 SnapshotRequest) as advisory; future daemon versions will honour
+ * them. Cloud passes `{}` so the daemon's defaults apply.
+ */
+interface DaemonManifestEntry {
+  path: string;
+  sha256: string;
+  sizeBytes: number;
+  mtime?: number;
+}
+
+interface DaemonSnapshotBody {
+  rootPath: string;
+  files: DaemonManifestEntry[];
+}
+
+const SNAPSHOT_HTTP_TIMEOUT_MS = 30_000;
+const SNAPSHOT_EXEC_TIMEOUT_MS = 60_000;
+
+// 24-char alphanumeric id fits within the varchar(30) column on
+// IMContainerSnapshot. Mirrors `resource-sample.ts::generateSampleId` (S6/T5).
+const SNAPSHOT_ID_ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789';
+function generateSnapshotId(): string {
+  const bytes = randomBytes(24);
+  let id = '';
+  for (let i = 0; i < 24; i++) id += SNAPSHOT_ID_ALPHABET[bytes[i] % SNAPSHOT_ID_ALPHABET.length];
+  return id;
+}
+
+export interface FsManifestSnapshotResult {
+  snapshotId: string;
+  rootPath: string;
+  files: DaemonManifestEntry[];
+  count: number;
+  totalBytes: number;
+  generatedAt: string;
+}
+
+async function snapshotFsManifest(podName: string): Promise<FsManifestSnapshotResult> {
+  logger.info({ podName }, '[K8sSandbox] Starting fs-manifest snapshot via daemon /v1/snapshot');
+
+  const httpResult = await snapshotViaHttp(podName);
+  let body: DaemonSnapshotBody;
+  if (httpResult.ok) {
+    body = httpResult.body;
+  } else {
+    logger.warn(
+      { podName, httpError: httpResult.reason },
+      '[K8sSandbox] /v1/snapshot HTTP path failed, falling back to cluster-internal exec',
+    );
+    body = await snapshotViaExec(podName);
+  }
+
+  const totalBytes = body.files.reduce((sum, f) => sum + (f.sizeBytes ?? 0), 0);
+  return {
+    snapshotId: generateSnapshotId(),
+    rootPath: body.rootPath,
+    files: body.files,
+    count: body.files.length,
+    totalBytes,
+    generatedAt: new Date().toISOString(),
+  };
+}
+
+async function snapshotViaHttp(
+  podName: string,
+): Promise<{ ok: true; body: DaemonSnapshotBody } | { ok: false; reason: string }> {
+  const gatewayUrl = await resolveGatewayUrl(podName);
+  if (!gatewayUrl) {
+    return { ok: false, reason: 'no gateway URL resolvable' };
+  }
+  const snapshotUrl = gatewayUrl.replace(/^ws:/, 'http:').replace(/^wss:/, 'https:') + '/v1/snapshot';
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), SNAPSHOT_HTTP_TIMEOUT_MS);
+  try {
+    const res = await fetch(snapshotUrl, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      return { ok: false, reason: `/v1/snapshot returned HTTP ${res.status}` };
+    }
+    const text = await res.text();
+    try {
+      const parsed = JSON.parse(text) as DaemonSnapshotBody;
+      if (!parsed || !Array.isArray(parsed.files) || typeof parsed.rootPath !== 'string') {
+        return { ok: false, reason: '/v1/snapshot body missing rootPath/files' };
+      }
+      return { ok: true, body: parsed };
+    } catch (parseErr) {
+      return {
+        ok: false,
+        reason: `/v1/snapshot body not JSON: ${parseErr instanceof Error ? parseErr.message : String(parseErr)}`,
+      };
+    }
+  } catch (err) {
+    return {
+      ok: false,
+      reason: `/v1/snapshot HTTP fetch failed: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+/**
+ * Cluster-internal `/v1/snapshot` POST via the K8s exec API (same pattern as
+ * `probeHealthzViaExec`). Reads the JSON body off stdout — manifest output is
+ * typically KB-scale for a fresh container so single-stdout-buffer works in
+ * v200. Larger workspaces in v210 will need a tmp-file + cat path.
+ *
+ * Throws `K8sSandboxError('SNAPSHOT_FAILED')` on any failure (exec API
+ * rejection, non-zero curl exit, JSON parse failure, timeout).
+ */
+async function snapshotViaExec(podName: string): Promise<DaemonSnapshotBody> {
+  let k8sExec: Awaited<ReturnType<typeof getK8sExec>>;
+  try {
+    k8sExec = await getK8sExec();
+  } catch (err) {
+    throw new K8sSandboxError(
+      'SNAPSHOT_FAILED',
+      `exec client init failed: ${err instanceof Error ? err.message : String(err)}`,
+      podName,
+      err instanceof Error ? err : undefined,
+    );
+  }
+  const namespace = getK8sNamespace();
+
+  // -s silent; -X POST; --max-time bounds curl-side; --data '{}' is the
+  // explicit empty body the daemon accepts. Outer Promise.race adds a JS-side
+  // hard cap in case the exec stream itself stalls.
+  const command = [
+    'curl',
+    '-s',
+    '-X',
+    'POST',
+    '--max-time',
+    '30',
+    '-H',
+    'content-type: application/json',
+    '--data',
+    '{}',
+    `http://127.0.0.1:${SANDBOX_DAEMON_PORT}/v1/snapshot`,
+  ];
+
+  return new Promise<DaemonSnapshotBody>((resolve, reject) => {
+    const stdoutChunks: Buffer[] = [];
+    const stderrChunks: Buffer[] = [];
+    const stdout = new PassThrough();
+    const stderr = new PassThrough();
+    const stdin = new PassThrough();
+    stdin.end();
+
+    stdout.on('data', (chunk: Buffer) => stdoutChunks.push(chunk));
+    stderr.on('data', (chunk: Buffer) => stderrChunks.push(chunk));
+
+    let settled = false;
+    const settleReject = (reason: K8sSandboxError) => {
+      if (settled) return;
+      settled = true;
+      reject(reason);
+    };
+    const settleResolve = (value: DaemonSnapshotBody) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+
+    const hardTimeout = setTimeout(() => {
+      settleReject(
+        new K8sSandboxError(
+          'SNAPSHOT_FAILED',
+          `exec /v1/snapshot probe timed out after ${SNAPSHOT_EXEC_TIMEOUT_MS}ms`,
+          podName,
+        ),
+      );
+    }, SNAPSHOT_EXEC_TIMEOUT_MS);
+
+    const runPromise = k8sExec.exec(
+      namespace,
+      podName,
+      CONTAINER_NAME,
+      command,
+      stdout,
+      stderr,
+      stdin,
+      false, // tty
+      (status) => {
+        clearTimeout(hardTimeout);
+        const stdoutStr = Buffer.concat(stdoutChunks).toString('utf-8').trim();
+        const stderrStr = Buffer.concat(stderrChunks).toString('utf-8').trim();
+        const statusOk = (status as { status?: string })?.status === 'Success';
+
+        if (!statusOk) {
+          const msg = (status as { message?: string })?.message ?? stderrStr ?? 'exec failed';
+          settleReject(
+            new K8sSandboxError('SNAPSHOT_FAILED', `exec /v1/snapshot curl exited non-zero: ${msg}`, podName),
+          );
+          return;
+        }
+
+        if (!stdoutStr) {
+          settleReject(
+            new K8sSandboxError(
+              'SNAPSHOT_FAILED',
+              `exec /v1/snapshot returned empty stdout (stderr=${stderrStr || 'empty'})`,
+              podName,
+            ),
+          );
+          return;
+        }
+
+        try {
+          const parsed = JSON.parse(stdoutStr) as DaemonSnapshotBody;
+          if (!parsed || !Array.isArray(parsed.files) || typeof parsed.rootPath !== 'string') {
+            settleReject(
+              new K8sSandboxError('SNAPSHOT_FAILED', 'exec /v1/snapshot body missing rootPath/files', podName),
+            );
+            return;
+          }
+          settleResolve(parsed);
+        } catch (err) {
+          settleReject(
+            new K8sSandboxError(
+              'SNAPSHOT_FAILED',
+              `exec /v1/snapshot stdout not JSON: ${err instanceof Error ? err.message : String(err)}`,
+              podName,
+              err instanceof Error ? err : undefined,
+            ),
+          );
+        }
+      },
+    );
+
+    runPromise.catch((err: unknown) => {
+      clearTimeout(hardTimeout);
+      settleReject(
+        new K8sSandboxError(
+          'SNAPSHOT_FAILED',
+          `exec /v1/snapshot failed: ${err instanceof Error ? err.message : String(err)}`,
+          podName,
+          err instanceof Error ? err : undefined,
+        ),
+      );
+    });
+  });
+}
+
+// ============================================================
 // provisionContainer — scoped-key wrapper for createContainer
 // ============================================================
 
@@ -1396,6 +2440,14 @@ export interface ProvisionContainerArgs {
   environment?: Record<string, string>;
   apiKeyTtlSeconds?: number;
   /**
+   * Release 200 §5.4 — pre-minted daemonId. When set, used as the cloud-side
+   * source-of-truth for `IMContainer.daemonId` and injected into the pod as
+   * `PRISMER_DAEMON_ID`. When omitted, `provisionContainer` mints one
+   * (`crypto.randomUUID()`) and surfaces it on the returned ContainerInfo so
+   * the caller can persist it.
+   */
+  daemonId?: string;
+  /**
    * Optional progress callback — invoked at each lifecycle transition
    * (container_create / container_running / daemon_healthy) with
    * status 'in_progress' on entry, 'ok' on success, or 'error' on
@@ -1410,7 +2462,20 @@ export interface ProvisionContainerArgs {
   ) => void | Promise<void>;
 }
 
-async function provisionContainer(args: ProvisionContainerArgs): Promise<{ container: ContainerInfo }> {
+/**
+ * Release 200 §5.4 — wider ContainerInfo returned from `provisionContainer`.
+ *
+ * Adds `daemonId` so the caller (route handler) can persist it on the
+ * IMContainer row alongside the other provisioning metadata.
+ * Compatible with the legacy `ContainerInfo` shape — `daemonId` is the
+ * only added field.
+ */
+export interface ProvisionedContainer extends ContainerInfo {
+  /** v200 — cloud-minted daemon identifier (UUID v4). */
+  daemonId: string;
+}
+
+async function provisionContainer(args: ProvisionContainerArgs): Promise<{ container: ProvisionedContainer }> {
   // I-2 (post-review fix): bounds-validate apiKeyTtlSeconds. Legacy path
   // bounced through `/api/sandboxes/internal/issue-key` (zod gate
   // min(60).max(7200) at src/app/api/sandboxes/internal/issue-key/route.ts:46).
@@ -1424,10 +2489,19 @@ async function provisionContainer(args: ProvisionContainerArgs): Promise<{ conta
     );
   }
 
+  // Release 200 §5.4 (D-7 closure) — daemonId is owned by the cloud. Mint it
+  // here (or accept a caller-supplied one) BEFORE pod creation so it can be
+  // injected via `PRISMER_DAEMON_ID` env and persisted on `IMContainer`. The
+  // daemon's entrypoint reads this env into config.daemon_id; the daemon
+  // never generates one locally.
+  const daemonId = args.daemonId ?? randomUUID();
+
   // Caller-supplied env wins for non-PRISMER_API_KEY* fields; the freshly-
   // minted key + cloud URL always win (ported from the deleted controller's
   // create-container path).
-  const scopedEnv: Record<string, string> = {};
+  const scopedEnv: Record<string, string> = {
+    PRISMER_DAEMON_ID: daemonId,
+  };
 
   // I-1 (post-review fix): unconditionally inject CLOUD_API_BASE regardless of
   // scoped-key block. Controller does this at containers.ts:153-158 outside the
@@ -1436,6 +2510,9 @@ async function provisionContainer(args: ProvisionContainerArgs): Promise<{ conta
   // a daemon-side trust-boundary fallback env.
   const cloudApiBase = process.env.PRISMER_HOST_URL ?? process.env.CLOUD_URL;
   if (cloudApiBase) scopedEnv.CLOUD_API_BASE = cloudApiBase;
+  if (process.env.DISPATCH_DAEMON_SECRET?.trim()) {
+    scopedEnv.DISPATCH_DAEMON_SECRET = process.env.DISPATCH_DAEMON_SECRET.trim();
+  }
 
   // Always-inject when caller supplied workspaceId / tenantId (matches the
   // controller's "always-inject independent of scoped-key block" branch).
@@ -1544,9 +2621,10 @@ async function provisionContainer(args: ProvisionContainerArgs): Promise<{ conta
     memoryRequest: args.memoryRequest,
     memoryLimitStr: args.memoryLimit,
     onStep: args.onStep,
+    expectedDaemonId: daemonId,
   });
 
-  return { container };
+  return { container: { ...container, daemonId } };
 }
 
 // ============================================================
@@ -1567,6 +2645,7 @@ async function provisionContainer(args: ProvisionContainerArgs): Promise<{ conta
  *   - runCmd
  *   - daemonDispatch
  *   - installAgent
+ *   - dumpAgentState
  *   - snapshot
  *   - podStatusVerdict           (reconciler verdict, formerly k8sPodStatus)
  *   - getContainerLogs           (raw text; SSE framing lives in /logs route)
@@ -1588,9 +2667,24 @@ export const k8sSandbox = {
   runCmd,
   daemonDispatch,
   installAgent,
+  dumpAgentState,
   snapshot,
+  /**
+   * Release 200 T9 — daemon-first fs-manifest snapshot. HTTP-first against
+   * the gatewayUrl `/v1/snapshot`, falls back to cluster-internal `exec curl`
+   * when the gateway is unreachable (e.g. kind dev w/o extraPortMappings).
+   * Throws `K8sSandboxError('SNAPSHOT_FAILED')` on terminal failure.
+   */
+  snapshotFsManifest,
   podStatusVerdict,
   getContainerLogs,
+  /**
+   * Release 200 §5.4 — daemon /healthz probe (HTTP first → cluster-internal
+   * exec fallback). Throws `K8sSandboxError('HEALTHZ_FAILED')` only when
+   * both transports fail. Callers downstream of `K8sSandboxProvider` see
+   * `ProviderError('daemon_unreachable')`.
+   */
+  probeHealthz,
 };
 
 export type K8sSandbox = typeof k8sSandbox;
