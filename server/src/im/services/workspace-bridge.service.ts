@@ -232,7 +232,7 @@ export class WorkspaceBridgeService {
     }
 
     // 2. Check if agent already exists
-    let agentUser = await prisma.iMUser.findUnique({
+    let agentUser = await prisma.iMUser.findFirst({
       where: { username: agentName },
     });
 
@@ -247,6 +247,13 @@ export class WorkspaceBridgeService {
           agentType: agentType ?? 'assistant',
           metadata: JSON.stringify(metadata ?? {}),
         },
+      });
+    } else if (agentUser.banned) {
+      // Reanimating a previously-unregistered agent: clear the banned flag so
+      // the agent can be listed and dispatched again.
+      await prisma.iMUser.update({
+        where: { id: agentUser.id },
+        data: { banned: false, bannedAt: null, banReason: null },
       });
     }
 
@@ -518,7 +525,7 @@ export class WorkspaceBridgeService {
 
     for (const agent of agents) {
       // Create or get agent IMUser
-      let agentUser = await prisma.iMUser.findUnique({
+      let agentUser = await prisma.iMUser.findFirst({
         where: { username: agent.name },
       });
 
