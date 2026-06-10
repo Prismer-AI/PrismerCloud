@@ -13,15 +13,18 @@
  * agent that already exists. Config builder lives in ./profile-config.ts.
  */
 
-import { useId, useMemo, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 
 import { radius, s } from '../../../lib/design';
 import { createAgentProfile } from '../../../lib/mutations';
+import { getDefaultModelForProvider } from '../../../lib/model-defaults';
 import type { AgentDTO } from '../../../lib/types';
-import type { UnifiedCreationEvent } from '../UnifiedCreationModal';
+import type { UnifiedCreationEvent } from '../context';
 import { inputClass as makeInput, labelClass as makeLabel, PanelFooter, PanelHeader } from './parts';
 import { ModelPicker } from '../../model-picker';
 import { ADAPTERS, buildProfileConfig, type AdapterName } from './profile-config';
+import { AdvancedProxyAccordion } from './AdvancedProxyAccordion';
+import type { ProxyProvider } from '../../proxy-provider-select';
 
 export interface ProTileProfileProps {
   isDark: boolean;
@@ -42,9 +45,23 @@ export function ProTileProfile({ isDark, workspaceId, agents, onSuccess, onBack 
   const [hermesApiKey, setHermesApiKey] = useState('');
   const [openclawBaseUrl, setOpenclawBaseUrl] = useState('http://127.0.0.1:3000');
   const [systemPrompt, setSystemPrompt] = useState('');
-  const [model, setModel] = useState('us-kimi-k2.6');
+  const [model, setModel] = useState(getDefaultModelForProvider('newapi'));
+  const [proxyProvider, setProxyProvider] = useState<ProxyProvider>('newapi');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // 2026-05-30 — proxyProvider × model 紧耦合. 切 provider 时 model reset 到
+  // 该漏斗的 default. prev-value ref 避免初次 mount 把 useState seed 冲掉.
+  const prevProxyProviderRef = useRef<ProxyProvider | null>(null);
+  useEffect(() => {
+    if (prevProxyProviderRef.current === null) {
+      prevProxyProviderRef.current = proxyProvider;
+      return;
+    }
+    if (prevProxyProviderRef.current === proxyProvider) return;
+    prevProxyProviderRef.current = proxyProvider;
+    setModel(getDefaultModelForProvider(proxyProvider));
+  }, [proxyProvider]);
 
   const ids = {
     agent: useId(),
@@ -68,7 +85,14 @@ export function ProTileProfile({ isDark, workspaceId, agents, onSuccess, onBack 
   async function handleSubmit() {
     setSubmitting(true);
     setError(null);
-    const config = buildProfileConfig(adapterName, { hermesPort, hermesApiKey, openclawBaseUrl, systemPrompt, model });
+    const config = buildProfileConfig(adapterName, {
+      hermesPort,
+      hermesApiKey,
+      openclawBaseUrl,
+      systemPrompt,
+      model,
+      proxyProvider,
+    });
     const res = await createAgentProfile({
       workspaceId,
       agentImUserId,
@@ -195,8 +219,16 @@ export function ProTileProfile({ isDark, workspaceId, agents, onSuccess, onBack 
               </label>
               <label className="grid gap-1" htmlFor={ids.model}>
                 <span className={labelClass}>Model</span>
-                <ModelPicker value={model} onChange={setModel} />
+                <ModelPicker value={model} onChange={setModel} proxyProvider={proxyProvider} />
               </label>
+              <div className="sm:col-span-2">
+                <AdvancedProxyAccordion
+                  isDark={isDark}
+                  proxyProvider={proxyProvider}
+                  onProxyProviderChange={setProxyProvider}
+                  testIdPrefix="pro-tile-profile"
+                />
+              </div>
               {!hermesPortValid ? (
                 <p className="text-[10px] text-red-500 sm:col-span-2">Port must be between 1 and 65535.</p>
               ) : null}
