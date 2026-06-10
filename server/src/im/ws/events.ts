@@ -6,6 +6,7 @@
 
 import type {
   WSMessage,
+  AssetAttachment,
   WSClientEventType,
   WSServerEventType,
   MessageType,
@@ -26,6 +27,11 @@ import type {
   WorkspaceChangedPayload,
   AgentProfileChangedPayload,
   WorkspaceFileChangedPayload,
+  AssetChangedPayload,
+  ApprovalRequestedPayload,
+  ApprovalDecidedPayload,
+  TaskApprovalResolvePayload,
+  WorkspaceClearDaemonCleanupPayload,
 } from '../types/index';
 
 // ─── Helpers ─────────────────────────────────────────────────
@@ -52,6 +58,7 @@ export const ServerEvents = {
     type: MessageType;
     content: string;
     metadata: MessageMetadata;
+    attachments?: AssetAttachment[] | null;
     parentId?: string;
     createdAt: string;
   }) {
@@ -64,6 +71,11 @@ export const ServerEvents = {
     content?: string;
     metadata?: MessageMetadata;
     status?: string;
+    // release202/09 P5#3 (A2) — attach-to-existing-message rides this event so
+    // the client patches the new attachment in-place (im-channel.tsx handles
+    // `message.updated` identically to `message.edit`).
+    type?: MessageType;
+    attachments?: AssetAttachment[] | null;
   }) {
     return makeEvent('message.updated', msg);
   },
@@ -237,6 +249,37 @@ export const ServerEvents = {
     return makeEvent('task.cancel', data);
   },
 
+  approvalRequested(data: ApprovalRequestedPayload): WSMessage<ApprovalRequestedPayload> {
+    return makeEvent('approval.requested', data);
+  },
+
+  approvalDecided(data: ApprovalDecidedPayload): WSMessage<ApprovalDecidedPayload> {
+    return makeEvent('approval.decided', data);
+  },
+
+  /**
+   * Cloud → daemon: forward the user's approval choice so daemon can
+   * additionally call hermes-native POST /v1/runs/{runId}/approval and
+   * keep hermes-internal state in sync with the cloud-side decision.
+   * See release201/25 §16.4 A6 + TaskApprovalResolvePayload comment for
+   * the rationale.
+   */
+  taskApprovalResolve(data: TaskApprovalResolvePayload): WSMessage<TaskApprovalResolvePayload> {
+    return makeEvent('task.approval.resolve', data);
+  },
+
+  /**
+   * Cloud → daemon: final step of workspace clear cascade. After cloud
+   * Prisma rows are gone, cloud fans out to every daemon that hosted any
+   * agent in the cleared workspace so each daemon wipes the local hermes
+   * profile memories + per-agent memory dir (release201/09 §9.4b).
+   */
+  workspaceClearDaemonCleanup(
+    data: WorkspaceClearDaemonCleanupPayload,
+  ): WSMessage<WorkspaceClearDaemonCleanupPayload> {
+    return makeEvent('workspace.clear.daemon-cleanup', data);
+  },
+
   /**
    * Cloud → user: agent status change broadcast.
    * Sent after the cloud handler writes im_agent_cards.status, so other WS
@@ -283,6 +326,14 @@ export const ServerEvents = {
   },
 
   /**
+   * Cloud → user: emitted on im_assets create/update/delete. Daemon refreshes
+   * its asset metadata index via /api/im/assets/index.
+   */
+  assetChanged(data: AssetChangedPayload): WSMessage<AssetChangedPayload> {
+    return makeEvent('asset.changed', data);
+  },
+
+  /**
    * Cloud → user/agent: page soft-deleted, archived, or visibility-shifted.
    * Daemon clears the affected pageId from its local mirror and refetches via
    * GET /memory/pages/:id (which will return 404 for soft-deleted pages, or
@@ -291,6 +342,32 @@ export const ServerEvents = {
   memoryInvalidate(data: MemoryInvalidatePayload): WSMessage<MemoryInvalidatePayload> {
     return makeEvent('memory.invalidate', data);
   },
+
+  /**
+   * v2.0.8 P0 (doc 21 §5) — coarse-grained "agent dispatch in-flight"
+   * signal for AgentStateStrip's `N 活跃 / total` counter.
+   *
+   * Three fire points:
+   *   - `received` — emitted right after task.service.dispatchTaskRun pushes
+   *     the WS task.dispatch.request to the daemon. The strip flips the
+   *     agent's ring from idle → working without waiting for the daemon's
+   *     first phase_change step (which can take ~1s on cold pods).
+   *   - `started` — emitted when the daemon's TaskStepRecorder records its
+   *     first phase_change step. The strip can show "thinking" in the
+   *     agent tooltip if it wants finer detail.
+   *   - `completed` / `failed` — emitted from task.dispatch.reply handler
+   *     after taskService.updateTaskRun. `failed` also covers lie-guard
+   *     interception (see doc 21 §3).
+   *
+   * Non-persistent — no DB write. Fan-out via SyncService so multiple
+   * tabs / mobile UIs of the same human owner stay in sync. If a Pod
+   * dies between `received` and `completed`, the strip's count is
+   * temporarily off; the cleanup paths (task heartbeat reaper at 45s,
+   * page-load hydration) reconcile it back.
+   */
+  dispatchLifecycle(data: DispatchLifecyclePayload): WSMessage<DispatchLifecyclePayload> {
+    return makeEvent('dispatch.lifecycle', data);
+  },
 };
 
 export interface MemoryInvalidatePayload {
@@ -298,6 +375,26 @@ export interface MemoryInvalidatePayload {
   pageIds: string[];
   reason: 'soft_delete' | 'archive' | 'visibility_changed' | 'promoted' | 'html_updated';
   createdAt: string;
+}
+
+/**
+ * v2.0.8 P0 (doc 21 §5) — dispatch in-flight lifecycle payload.
+ *
+ * `dispatchId` is the IMTaskRun id of the run that backs this @-mention.
+ * `agentImUserId` is the assignee — every UI client that observes the
+ * agent (whether the conversation is open or not) increments/decrements
+ * its in-flight counter so the AgentStateStrip stays accurate across
+ * sessions. `lifecycle='failed'` carries `errorCode` for the strip's red
+ * failure state; `received` / `started` / `completed` leave it null.
+ */
+export interface DispatchLifecyclePayload {
+  workspaceId: string;
+  conversationId: string;
+  agentImUserId: string;
+  dispatchId: string;
+  lifecycle: 'received' | 'started' | 'completed' | 'failed';
+  errorCode?: string;
+  occurredAt: number;
 }
 
 // ─── v1.9.x daemon → cloud payload aliases ───────────────────
@@ -324,6 +421,7 @@ export interface MessageSendPayload {
   type?: MessageType;
   content: string;
   metadata?: MessageMetadata;
+  attachments?: AssetAttachment[] | null;
   parentId?: string;
 }
 
@@ -363,8 +461,66 @@ export interface AgentHeartbeatPayload {
   activeConversations?: number;
 }
 
+/**
+ * Task-level phase heartbeat (v2.0 §4.2 Track B-1).
+ *
+ * Daemon pushes per-task heartbeats every ~15s so the cloud-side
+ * `sweepStuckPhases` reaper can flag silent stalls (no heartbeat for >45s)
+ * without touching the canonical `status` column.
+ *
+ * `currentPhase` is daemon-defined free-form string (e.g. 'thinking',
+ * 'tool_use', 'reasoning', 'responding', 'waiting_user', 'waiting_dep').
+ * Per Q1 A (2026-05-21) cloud only stores the value; semantics live in the
+ * daemon runtime / SKILL.md frontmatter, not in cloud schema.
+ *
+ * `heartbeatVersion` is monotonically increasing within a (daemon, task)
+ * pair; the cloud uses it for last-write-wins reconciliation when two
+ * heartbeats race (e.g. daemon retry after WS reconnect).
+ */
+export interface TaskHeartbeatPayload {
+  taskId: string;
+  heartbeatVersion: number;
+  currentPhase: string;
+  /** ISO timestamp of the daemon's most recent observable step (LLM token /
+   * tool-call boundary). Optional — informational only. */
+  lastStepAt?: string | number;
+}
+
 export interface AgentCapabilityDeclarePayload {
   capabilities: AgentCapability[];
+}
+
+/**
+ * Per-task observable step append (v2.0 §4.4 / Gap C-④).
+ *
+ * Daemon's StepRecorder (`sdk/prismer-cloud/runtime/src/daemon/step-recorder.ts`)
+ * pushes one of these per phase change / tool call / tool result /
+ * reasoning chunk / progress / error. seq is daemon-allocated and
+ * monotonically increasing per `taskRunId` (cloud MUST NOT renumber).
+ *
+ * Server-side handling: write `im_task_run_steps` row + emit
+ * `task.step.appended` IMSyncEvent so the front-end InlineActivityStream
+ * (P4c — Wave 4) can render in real time. Duplicate `(taskRunId, seq)` is
+ * idempotently ignored (daemon may resend after WS reconnect race).
+ *
+ * Note: wire field is `step.payload` (object), DB column is `payloadJson`
+ * (JSON). The recorder service does the rename on persist.
+ */
+export type TaskStepKind = 'phase_change' | 'tool_call' | 'tool_result' | 'reasoning_chunk' | 'progress' | 'error';
+
+export interface TaskStepFrame {
+  seq: number;
+  kind: TaskStepKind | string;
+  payload: Record<string, unknown>;
+  /** Daemon wall-clock ms (Date.now()). */
+  occurredAt: number;
+  /** Optional duration of the step in ms (e.g. tool call latency). */
+  durationMs?: number;
+}
+
+export interface TaskStepAppendPayload {
+  taskRunId: string;
+  step: TaskStepFrame;
 }
 
 // ─── ACK / Reconnect payloads ────────────────────────────────
