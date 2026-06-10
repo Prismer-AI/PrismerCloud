@@ -20,6 +20,7 @@ import {
   type LeaderboardRisingEntry,
   type LeaderboardHeroData,
 } from './helpers';
+import { useI18n } from '@/contexts/i18n-context';
 import { LeaderboardHero } from './leaderboard-hero';
 import { LeaderboardList } from './leaderboard-list';
 import { Sparkline } from './sparkline';
@@ -27,16 +28,16 @@ import { Sparkline } from './sparkline';
 type SubTab = 'agents' | 'contributors' | 'rising';
 type TimePeriod = 'weekly' | 'monthly' | 'alltime';
 
-const SUB_TABS: { key: SubTab; label: string; icon: typeof Trophy }[] = [
-  { key: 'agents', label: 'Agent Power', icon: Trophy },
-  { key: 'contributors', label: 'Contributors', icon: Users },
-  { key: 'rising', label: 'Rising Stars', icon: TrendingUp },
+const SUB_TABS: { key: SubTab; labelKey: `evolution.${string}`; icon: typeof Trophy }[] = [
+  { key: 'agents', labelKey: 'evolution.leaderboard.subtabs.agents', icon: Trophy },
+  { key: 'contributors', labelKey: 'evolution.leaderboard.subtabs.contributors', icon: Users },
+  { key: 'rising', labelKey: 'evolution.leaderboard.subtabs.rising', icon: TrendingUp },
 ];
 
-const TIME_LABELS: Record<TimePeriod, string> = {
-  weekly: 'W',
-  monthly: 'M',
-  alltime: 'All',
+const TIME_LABEL_KEYS: Record<TimePeriod, `evolution.${string}`> = {
+  weekly: 'evolution.leaderboard.periods.weekly',
+  monthly: 'evolution.leaderboard.periods.monthly',
+  alltime: 'evolution.leaderboard.periods.alltime',
 };
 
 interface LeaderboardTabProps {
@@ -45,20 +46,21 @@ interface LeaderboardTabProps {
   currentAgentId?: string;
 }
 
-const AGENT_SORTS = [
-  { key: 'value', label: 'Value' },
-  { key: 'err', label: 'ERR' },
-  { key: 'success', label: 'Success' },
-  { key: 'growth', label: 'Growth' },
+const AGENT_SORTS: Array<{ key: string; labelKey: `evolution.${string}` }> = [
+  { key: 'value', labelKey: 'evolution.leaderboard.sorts.value' },
+  { key: 'err', labelKey: 'evolution.leaderboard.sorts.err' },
+  { key: 'success', labelKey: 'evolution.leaderboard.sorts.success' },
+  { key: 'growth', labelKey: 'evolution.leaderboard.sorts.growth' },
 ];
-const CONTRIBUTOR_SORTS = [
-  { key: 'impact', label: 'Impact' },
-  { key: 'reach', label: 'Reach' },
-  { key: 'genes', label: 'Genes' },
-  { key: 'value', label: 'Value' },
+const CONTRIBUTOR_SORTS: Array<{ key: string; labelKey: `evolution.${string}` }> = [
+  { key: 'impact', labelKey: 'evolution.leaderboard.sorts.impact' },
+  { key: 'reach', labelKey: 'evolution.leaderboard.sorts.reach' },
+  { key: 'genes', labelKey: 'evolution.leaderboard.sorts.genes' },
+  { key: 'value', labelKey: 'evolution.leaderboard.sorts.value' },
 ];
 
 export function LeaderboardTab({ isDark, currentAgentId }: LeaderboardTabProps) {
+  const { t } = useI18n();
   const [subTab, setSubTab] = useState<SubTab>('agents');
   const [period, setPeriod] = useState<TimePeriod>('weekly');
   const [sortBy, setSortBy] = useState<string>('value');
@@ -147,7 +149,10 @@ export function LeaderboardTab({ isDark, currentAgentId }: LeaderboardTabProps) 
                 totalDevHoursSaved: totalHours,
               },
               network: { totalAgentsEvolving: mapped.length, totalGenesPublished: 0, totalGeneTransfers: 0 },
-              period: { label: `Week ${weekNum}, ${now.getFullYear()}`, weeklyGrowth: null },
+              period: {
+                label: t('evolution.leaderboard.periodWeek', { week: weekNum, year: now.getFullYear() }),
+                weeklyGrowth: null,
+              },
             });
           }
         }
@@ -164,12 +169,12 @@ export function LeaderboardTab({ isDark, currentAgentId }: LeaderboardTabProps) 
         if (json.ok) setRisingEntries(json.data?.entries || []);
       }
     } catch {
-      setError('Failed to load leaderboard');
+      setError(t('evolution.leaderboard.failedToLoad'));
     } finally {
       setLoading(false);
       setContentKey((k) => k + 1);
     }
-  }, [subTab, period, sortBy]);
+  }, [subTab, period, sortBy, t]);
 
   useEffect(() => {
     fetchData();
@@ -190,7 +195,12 @@ export function LeaderboardTab({ isDark, currentAgentId }: LeaderboardTabProps) 
       {/* Sub-tab + Time selector row */}
       <div className="flex items-center justify-between gap-4 flex-wrap">
         {/* Sub-tabs with sliding indicator */}
-        <div ref={tabsContainerRef} className="relative flex gap-1" role="tablist" aria-label="Leaderboard categories">
+        <div
+          ref={tabsContainerRef}
+          className="relative flex gap-1"
+          role="tablist"
+          aria-label={t('evolution.leaderboard.ariaCategories')}
+        >
           {/* Sliding indicator */}
           <div
             className={`absolute bottom-0 h-0.5 rounded-full ${isDark ? 'bg-violet-500' : 'bg-violet-600'}`}
@@ -219,7 +229,7 @@ export function LeaderboardTab({ isDark, currentAgentId }: LeaderboardTabProps) 
               }`}
             >
               <tab.icon className="w-4 h-4" />
-              <span className="hidden sm:inline">{tab.label}</span>
+              <span className="hidden sm:inline">{t(tab.labelKey)}</span>
             </button>
           ))}
         </div>
@@ -228,7 +238,7 @@ export function LeaderboardTab({ isDark, currentAgentId }: LeaderboardTabProps) 
         {subTab !== 'rising' && (
           <div className="flex items-center gap-2">
             <div className={`flex rounded-lg p-0.5 text-xs ${isDark ? 'bg-zinc-800/50' : 'bg-zinc-100'}`}>
-              {(Object.entries(TIME_LABELS) as [TimePeriod, string][]).map(([key, label]) => (
+              {(Object.entries(TIME_LABEL_KEYS) as [TimePeriod, `evolution.${string}`][]).map(([key, labelKey]) => (
                 <button
                   key={key}
                   onClick={() => setPeriod(key)}
@@ -242,7 +252,7 @@ export function LeaderboardTab({ isDark, currentAgentId }: LeaderboardTabProps) 
                         : 'text-zinc-400 hover:text-zinc-600'
                   }`}
                 >
-                  {label}
+                  {t(labelKey)}
                 </button>
               ))}
             </div>
@@ -261,7 +271,7 @@ export function LeaderboardTab({ isDark, currentAgentId }: LeaderboardTabProps) 
                         : 'text-zinc-400 hover:text-zinc-600'
                   }`}
                 >
-                  {s.label}
+                  {t(s.labelKey)}
                 </button>
               ))}
             </div>
@@ -280,7 +290,7 @@ export function LeaderboardTab({ isDark, currentAgentId }: LeaderboardTabProps) 
             onClick={fetchData}
             className={`text-xs underline ml-auto ${isDark ? 'text-red-300' : 'text-red-500'}`}
           >
-            Retry
+            {t('evolution.common.retry')}
           </button>
         </div>
       )}
@@ -318,7 +328,7 @@ export function LeaderboardTab({ isDark, currentAgentId }: LeaderboardTabProps) 
             emptyIcon={
               <Users className={`w-10 h-10 ${isDark ? 'text-zinc-600' : 'text-zinc-300'}`} strokeWidth={1.5} />
             }
-            emptyText="No contributors yet -- publish your Gene to help other Agents"
+            emptyText={t('evolution.leaderboard.emptyContributors')}
             renderItem={(entry) => (
               <Link
                 key={entry.agentId}
@@ -351,7 +361,7 @@ export function LeaderboardTab({ isDark, currentAgentId }: LeaderboardTabProps) 
                       </span>
                     ) : entry.prevRank === null ? (
                       <span className="text-[10px] bg-amber-500/15 text-amber-400 px-1.5 py-0.5 rounded-full font-medium">
-                        NEW
+                        {t('evolution.leaderboard.newBadge')}
                       </span>
                     ) : null}
                   </div>
@@ -364,31 +374,36 @@ export function LeaderboardTab({ isDark, currentAgentId }: LeaderboardTabProps) 
                       {entry.agentCount != null && entry.agentCount > 0 && (
                         <span className="flex items-center gap-0.5">
                           <Bot className="w-3 h-3" />
-                          {entry.agentCount} agent{entry.agentCount !== 1 ? 's' : ''}
+                          {t('evolution.leaderboard.agentsCount', {
+                            count: entry.agentCount,
+                            suffix: entry.agentCount !== 1 ? 's' : '',
+                          })}
                         </span>
                       )}
                     </div>
                   </div>
                   <div className="text-right">
                     <div className="text-emerald-400 font-semibold tabular-nums text-sm">
-                      {entry.genesPublished} genes
+                      {t('evolution.leaderboard.genesPublishedCount', { count: entry.genesPublished })}
                     </div>
                     <div className={`text-xs ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>
-                      {entry.agentsHelped} agents helped
+                      {t('evolution.leaderboard.agentsHelped', { count: entry.agentsHelped })}
                     </div>
                   </div>
                   <div className="text-right w-24 hidden md:block">
                     <div className="text-emerald-400 tabular-nums text-sm">
                       ${entry.value?.moneySaved?.toFixed(0) || 0}
                     </div>
-                    <div className={`text-xs ${isDark ? 'text-zinc-600' : 'text-zinc-400'}`}>value created</div>
+                    <div className={`text-xs ${isDark ? 'text-zinc-600' : 'text-zinc-400'}`}>
+                      {t('evolution.leaderboard.valueCreated')}
+                    </div>
                   </div>
                   <div className="flex gap-2 ml-auto">
                     <span
                       className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-xs ${isDark ? 'bg-white/[0.06] hover:bg-white/[0.12] text-zinc-400 hover:text-zinc-200' : 'bg-zinc-100 hover:bg-zinc-200 text-zinc-500 hover:text-zinc-700'} transition-colors`}
                     >
                       <ExternalLink className="w-3 h-3" />
-                      Profile
+                      {t('evolution.common.profile')}
                     </span>
                   </div>
                   <ChevronRight
@@ -408,7 +423,7 @@ export function LeaderboardTab({ isDark, currentAgentId }: LeaderboardTabProps) 
             emptyIcon={
               <TrendingUp className={`w-10 h-10 ${isDark ? 'text-zinc-600' : 'text-zinc-300'}`} strokeWidth={1.5} />
             }
-            emptyText="No rising stars yet -- start evolving this week to make the board"
+            emptyText={t('evolution.leaderboard.emptyRising')}
             renderItem={(entry) => (
               <Link
                 key={entry.entityId}
@@ -433,14 +448,16 @@ export function LeaderboardTab({ isDark, currentAgentId }: LeaderboardTabProps) 
                       {entry.entityName}
                     </div>
                     <div className={`text-xs ${isDark ? 'text-zinc-600' : 'text-zinc-400'}`}>
-                      {entry.entityType === 'agent' ? 'Agent' : 'Creator'}
+                      {entry.entityType === 'agent' ? t('evolution.common.agent') : t('evolution.common.creator')}
                     </div>
                   </div>
                   <div className="text-right">
                     <div className="text-emerald-400 font-bold tabular-nums text-sm">
                       +{Math.round(entry.growthRate * 100)}%
                     </div>
-                    <div className={`text-xs ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>growth</div>
+                    <div className={`text-xs ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>
+                      {t('evolution.leaderboard.growth')}
+                    </div>
                   </div>
                   <div className="w-20 hidden md:flex items-center">
                     {entry.trend && entry.trend.length >= 2 && <Sparkline data={entry.trend} width={80} height={24} />}
@@ -449,14 +466,16 @@ export function LeaderboardTab({ isDark, currentAgentId }: LeaderboardTabProps) 
                     <div className={`tabular-nums text-sm ${isDark ? 'text-zinc-200' : 'text-zinc-800'}`}>
                       ${entry.currentValue.toFixed(0)}
                     </div>
-                    <div className={`text-xs ${isDark ? 'text-zinc-600' : 'text-zinc-400'}`}>current value</div>
+                    <div className={`text-xs ${isDark ? 'text-zinc-600' : 'text-zinc-400'}`}>
+                      {t('evolution.leaderboard.currentValue')}
+                    </div>
                   </div>
                   <div className="flex gap-2 ml-auto">
                     <span
                       className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-xs ${isDark ? 'bg-white/[0.06] hover:bg-white/[0.12] text-zinc-400 hover:text-zinc-200' : 'bg-zinc-100 hover:bg-zinc-200 text-zinc-500 hover:text-zinc-700'} transition-colors`}
                     >
                       <ExternalLink className="w-3 h-3" />
-                      Profile
+                      {t('evolution.common.profile')}
                     </span>
                   </div>
                   <ChevronRight
@@ -509,6 +528,7 @@ function PaginatedSubList<T>({
   emptyText: string;
   renderItem: (entry: T, index: number) => React.ReactNode;
 }) {
+  const { t } = useI18n();
   const [visibleCount, setVisibleCount] = useState(SUB_PAGE_SIZE);
   const [prevCount, setPrevCount] = useState(SUB_PAGE_SIZE);
 
@@ -560,7 +580,7 @@ function PaginatedSubList<T>({
             )} ${isDark ? 'text-zinc-400 hover:text-zinc-200' : 'text-zinc-500 hover:text-zinc-800'}`}
             style={{ transition: `all 300ms ${SPRING_BOUNCE_TAB}` }}
           >
-            <span>Show More</span>
+            <span>{t('evolution.common.showMore')}</span>
             <span
               className={`text-xs px-2 py-0.5 rounded-full ${isDark ? 'bg-white/[0.06] text-zinc-500' : 'bg-zinc-100 text-zinc-400'}`}
             >
