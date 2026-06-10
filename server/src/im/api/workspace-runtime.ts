@@ -4,8 +4,9 @@
  *   GET /workspaces/:wsId/runtime         — devices + agents snapshot
  *   GET /workspaces/:wsId/runtime/events  — SSE stream of agent.heartbeat events
  *
- * Devices inferred from IMAgentCard.metadata.daemonId (or presence.deviceId).
- * No IMDesktopBinding model in this session; see plan §Task 8.
+ * Agent-to-daemon ownership is resolved from im_agent_bindings.boundDaemonId.
+ * IMAgentCard.metadata.daemonId is retained only as a legacy fallback for
+ * agents that do not yet have a binding row.
  */
 
 import { Hono } from 'hono';
@@ -36,6 +37,9 @@ interface RuntimeAgent {
   currentTaskId: string | null;
   version: string | null;
   lastHeartbeat: string | null;
+  authoritativeDaemonId?: string;
+  projectedDaemonId?: string;
+  bindingMismatch?: boolean;
 }
 
 interface RuntimeDevice {
@@ -50,6 +54,16 @@ interface RuntimeDevice {
    *   offline   — no heartbeat recorded
    */
   daemonStatus: 'connected' | 'stale' | 'offline';
+  /**
+   * Wave 5 F5 (§4.8.1, E4 hand-off) — daemon-reported transport probe.
+   * Joined from `im_containers` by daemonId so the DevicesPanel can render
+   * a "Recommended Transport" pill without a separate per-daemon diagnose
+   * round-trip. `null` when the daemon has never sent a transport-report
+   * (legacy row / not-yet-paired daemon).
+   */
+  transport: 'ws' | 'http' | 'both' | null;
+  gatewayIsPrivate: boolean | null;
+  lastProbeAt: string | null;
 }
 
 /** Mirrors `ONLINE_WINDOW_MS` in workspace/components/runtime-manager.tsx. */
@@ -71,6 +85,7 @@ interface RuntimeSnapshot {
 
 export function createWorkspaceRuntimeRouter(redis: Redis) {
   const router = new Hono();
+  // eslint-disable-next-line custom/no-wildcard-sub-router-middleware -- mounted at /workspaces (nested /:wsId/runtime) in routes.ts; wildcard scoped to that prefix
   router.use('*', authMiddleware);
 
   router.get('/:wsId/runtime', async (c) => {
@@ -91,6 +106,64 @@ export function createWorkspaceRuntimeRouter(redis: Redis) {
     // gesture. Until SSE `/runtime/events` is wired everywhere, force fresh.
     c.header('Cache-Control', 'no-store');
     return c.json<ApiResponse<RuntimeSnapshot>>({ ok: true, data: snapshot });
+  });
+
+  router.get('/:wsId/runtime/devices/:daemonId/logs', async (c) => {
+    const user = c.get('user');
+    const wsId = c.req.param('wsId');
+    const daemonId = decodeURIComponent(c.req.param('daemonId')).trim();
+    if (!daemonId) {
+      return c.json<ApiResponse>({ ok: false, error: 'invalid_daemon_id' }, 400);
+    }
+
+    const ws = await prisma.iMWorkspace.findFirst({
+      where: { id: wsId, deletedAt: null },
+      select: { id: true, ownerImUserId: true, metadata: true },
+    });
+    if (!ws || ws.ownerImUserId !== user.imUserId) {
+      return c.json<ApiResponse>({ ok: false, error: 'Workspace not found' }, 404);
+    }
+    if (isDaemonForgottenForMetadata(ws.metadata, daemonId)) {
+      return c.json<ApiResponse>({ ok: false, error: 'Daemon binding has been removed' }, 410);
+    }
+
+    // K8S device path: redirect to the existing SSE-streaming logs endpoint
+    // at `/api/sandboxes/:id/logs` (Next.js route, src/app/api/sandboxes/
+    // [id]/logs/route.ts). That route is poll-and-diff SSE which is what
+    // the workspace UI's runtime-manager.tsx streamLogs() consumer expects
+    // (Authorization Bearer + SSE `data:` frames). 307 Temporary Redirect
+    // preserves both method and Authorization header (per HTTP spec).
+    //
+    // Lookup by daemonId, prefer non-stopped non-local row (matches the
+    // T11 dup-row guard + commit c286b1dc semantics: K8S row is canonical
+    // when both exist).
+    const container = (await prisma.iMContainer.findFirst({
+      where: { workspaceId: wsId, daemonId, stoppedAt: null },
+      orderBy: [{ deviceType: 'desc' }, { createdAt: 'desc' }], // 'k8s' > 'local' alphabetically descending
+      select: { id: true, podName: true, deviceType: true, status: true, runtimeKind: true },
+    })) as { id: string; podName: string; deviceType: string; status: string; runtimeKind: string } | null;
+
+    const isK8sDevice = container && (container.deviceType === 'k8s' || container.runtimeKind === 'k8s');
+    if (isK8sDevice && container) {
+      // Pass through any query string (?tail=, ?timestamps=).
+      const inboundUrl = new URL(c.req.url);
+      const search = inboundUrl.search ? inboundUrl.search : '';
+      const redirectTarget = `/api/sandboxes/${encodeURIComponent(container.id)}/logs${search}`;
+      return c.redirect(redirectTarget, 307);
+    }
+
+    // Local daemon: still 501 (no transport channel). TODO(runtime-control-
+    // plane): independent device observability channel over daemon WS
+    // (e.g. runtime.logs.tail) — deferred per the agent IM/task/board
+    // closure release block.
+    return c.json<ApiResponse>(
+      {
+        ok: false,
+        error:
+          'Local daemon logs are not available through the cloud API. Use the terminal panel for command output or run `prismer daemon logs` on the linked machine.',
+      },
+      501,
+    );
   });
 
   router.post('/:wsId/runtime/bindings/:daemonId/forget', async (c) => {
@@ -118,6 +191,12 @@ export function createWorkspaceRuntimeRouter(redis: Redis) {
     }
     await redis.del(`runtime:device:${wsId}:${daemonId}`).catch(() => {});
     await redis.srem(`runtime:devices:${wsId}`, daemonId).catch(() => {});
+    await prisma.iMContainer
+      .updateMany({
+        where: { workspaceId: wsId, taskId: null, daemonId },
+        data: { status: 'stopped', stoppedAt: new Date() },
+      })
+      .catch(() => {});
 
     return c.json<ApiResponse>({ ok: true, data: { workspaceId: wsId, daemonId, forgotten: true } });
   });
@@ -224,14 +303,18 @@ async function listWorkspaceAgentImUserIds(wsId: string): Promise<string[]> {
   return cards.map((c: { imUserId: string }) => c.imUserId);
 }
 
-async function buildSnapshot(wsId: string, redis: Redis): Promise<RuntimeSnapshot> {
+interface AgentBindingProjection {
+  boundDaemonId: string;
+}
+
+export async function buildSnapshot(wsId: string, redis: Redis): Promise<RuntimeSnapshot> {
   const forgottenDaemonIds = await loadForgottenDaemonIds(wsId);
   const groups = await loadRuntimeDevicePresence(wsId, redis, forgottenDaemonIds);
   const cards = await prisma.iMAgentCard.findMany({
     where: { workspaceId: wsId },
     include: { imUser: { select: { displayName: true, username: true } } },
   });
-  if (cards.length === 0) return snapshotFromGroups(wsId, groups);
+  if (cards.length === 0) return snapshotFromGroups(wsId, groups, await loadTransportByDaemonId(wsId, groups));
 
   const pipeline = redis.pipeline();
   for (const card of cards) pipeline.get(`presence:agent:${card.imUserId}`);
@@ -250,19 +333,26 @@ async function buildSnapshot(wsId: string, redis: Redis): Promise<RuntimeSnapsho
       presenceByUserId.set(card.imUserId, null);
     }
   }
+  const bindingByAgentImUserId = await loadAgentBindingsByAgentImUserId(
+    cards.map((card: { imUserId: string }) => card.imUserId),
+  );
 
   for (const card of cards) {
     const presence = presenceByUserId.get(card.imUserId) ?? null;
-    let deviceId = presence?.deviceId ?? null;
-    if (!deviceId) {
-      try {
-        const meta = JSON.parse(card.metadata || '{}') as { daemonId?: string };
-        deviceId = meta.daemonId ?? null;
-      } catch {
-        /* leave null */
-      }
-    }
-    if (deviceId && forgottenDaemonIds.has(deviceId)) continue;
+    const projectedDaemonId = firstNonEmptyString(presence?.deviceId, legacyMetadataDaemonId(card.metadata));
+    const authoritativeDaemonId = firstNonEmptyString(
+      bindingByAgentImUserId.get(card.imUserId)?.boundDaemonId,
+      legacyMetadataDaemonId(card.metadata),
+      presence?.deviceId,
+    );
+    const bindingMismatch =
+      Boolean(bindingByAgentImUserId.has(card.imUserId)) &&
+      Boolean(projectedDaemonId) &&
+      Boolean(authoritativeDaemonId) &&
+      projectedDaemonId !== authoritativeDaemonId;
+
+    if (authoritativeDaemonId && forgottenDaemonIds.has(authoritativeDaemonId)) continue;
+    const deviceId = authoritativeDaemonId;
     const groupKey = deviceId ?? '__unbound__';
     let group = groups.get(groupKey);
     if (!group) {
@@ -284,10 +374,89 @@ async function buildSnapshot(wsId: string, redis: Redis): Promise<RuntimeSnapsho
       currentTaskId: presence?.currentTaskId ?? null,
       version: presence?.version ?? null,
       lastHeartbeat: lastHb ? new Date(lastHb).toISOString() : null,
+      ...(authoritativeDaemonId ? { authoritativeDaemonId } : {}),
+      ...(projectedDaemonId ? { projectedDaemonId } : {}),
+      ...(bindingMismatch ? { bindingMismatch } : {}),
     });
   }
 
-  return snapshotFromGroups(wsId, groups);
+  return snapshotFromGroups(wsId, groups, await loadTransportByDaemonId(wsId, groups));
+}
+
+async function loadAgentBindingsByAgentImUserId(agentImUserIds: string[]): Promise<Map<string, AgentBindingProjection>> {
+  const out = new Map<string, AgentBindingProjection>();
+  if (agentImUserIds.length === 0) return out;
+  try {
+    const rows = (await prisma.iMAgentBinding.findMany({
+      where: { agentImUserId: { in: agentImUserIds } },
+      select: { agentImUserId: true, boundDaemonId: true },
+    })) as Array<{ agentImUserId: string; boundDaemonId: string | null }>;
+    for (const row of rows) {
+      const boundDaemonId = row.boundDaemonId?.trim();
+      if (boundDaemonId) out.set(row.agentImUserId, { boundDaemonId });
+    }
+  } catch {
+    // Legacy/dev schemas may not have im_agent_bindings yet. In that case the
+    // snapshot keeps the historical metadata/presence projection.
+  }
+  return out;
+}
+
+function legacyMetadataDaemonId(metadata: string | null | undefined): string | null {
+  if (!metadata) return null;
+  try {
+    const meta = JSON.parse(metadata) as { daemonId?: unknown };
+    return typeof meta.daemonId === 'string' && meta.daemonId.trim() ? meta.daemonId.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+function firstNonEmptyString(...values: Array<string | null | undefined>): string | null {
+  for (const value of values) {
+    const trimmed = typeof value === 'string' ? value.trim() : '';
+    if (trimmed) return trimmed;
+  }
+  return null;
+}
+
+/**
+ * Wave 5 F5 — pull each daemon's transport probe (E4 §4.8.1) off the
+ * `im_containers` row so the devices snapshot can render the
+ * "Recommended Transport" pill without an extra round-trip per device.
+ * Returns a map keyed by `deviceId` (== `daemonId` in the snapshot).
+ */
+async function loadTransportByDaemonId(
+  wsId: string,
+  groups: Map<string, { deviceId: string }>,
+): Promise<Map<string, { transport: 'ws' | 'http' | 'both' | null; gatewayIsPrivate: boolean | null; lastProbeAt: string | null }>> {
+  const out = new Map<
+    string,
+    { transport: 'ws' | 'http' | 'both' | null; gatewayIsPrivate: boolean | null; lastProbeAt: string | null }
+  >();
+  const ids = [...groups.values()].map((g) => g.deviceId).filter((id) => id && id !== '__unbound__');
+  if (ids.length === 0) return out;
+  try {
+    const containers = await prisma.iMContainer.findMany({
+      where: { workspaceId: wsId, daemonId: { in: ids } },
+      select: { daemonId: true, transport: true, gatewayIsPrivate: true, lastProbeAt: true },
+    });
+    for (const c of containers) {
+      if (!c.daemonId) continue;
+      const t = c.transport;
+      const transport: 'ws' | 'http' | 'both' | null =
+        t === 'ws' || t === 'http' || t === 'both' ? t : null;
+      out.set(c.daemonId, {
+        transport,
+        gatewayIsPrivate: c.gatewayIsPrivate ?? null,
+        lastProbeAt: c.lastProbeAt ? c.lastProbeAt.toISOString() : null,
+      });
+    }
+  } catch {
+    // best-effort enrichment; if the join fails (schema drift) the snapshot
+    // still returns devices, the pill just shows "Probing…".
+  }
+  return out;
 }
 
 async function loadRuntimeDevicePresence(
@@ -343,27 +512,41 @@ async function loadForgottenDaemonIds(wsId: string): Promise<Set<string>> {
   return new Set(getForgottenDaemonIds(ws.metadata));
 }
 
+function isDaemonForgottenForMetadata(metadata: string | null | undefined, daemonId: string): boolean {
+  return new Set(getForgottenDaemonIds(metadata)).has(daemonId);
+}
+
 function snapshotFromGroups(
   workspaceId: string,
   groups: Map<string, { deviceId: string; name: string; lastSeenAt: number | null; agents: RuntimeAgent[] }>,
+  transportByDaemonId: Map<
+    string,
+    { transport: 'ws' | 'http' | 'both' | null; gatewayIsPrivate: boolean | null; lastProbeAt: string | null }
+  > = new Map(),
 ): RuntimeSnapshot {
   const now = Date.now();
   return {
     workspaceId,
-    devices: [...groups.values()].map((g) => ({
-      deviceId: g.deviceId,
-      name: g.name,
-      lastSeenAt: g.lastSeenAt ? new Date(g.lastSeenAt).toISOString() : null,
-      agents: g.agents,
-      // Synthetic group with no real device row (deviceId === '__unbound__'
-      // or no lastSeenAt) reports `offline` so the UI can flag agents that
-      // declared themselves but lack an associated daemon presence.
-      daemonStatus:
-        !g.lastSeenAt || g.deviceId === '__unbound__'
-          ? 'offline'
-          : now - g.lastSeenAt <= HEARTBEAT_FRESH_MS
-            ? 'connected'
-            : 'stale',
-    })),
+    devices: [...groups.values()].map((g) => {
+      const probe = transportByDaemonId.get(g.deviceId) ?? null;
+      return {
+        deviceId: g.deviceId,
+        name: g.name,
+        lastSeenAt: g.lastSeenAt ? new Date(g.lastSeenAt).toISOString() : null,
+        agents: g.agents,
+        // Synthetic group with no real device row (deviceId === '__unbound__'
+        // or no lastSeenAt) reports `offline` so the UI can flag agents that
+        // declared themselves but lack an associated daemon presence.
+        daemonStatus:
+          !g.lastSeenAt || g.deviceId === '__unbound__'
+            ? 'offline'
+            : now - g.lastSeenAt <= HEARTBEAT_FRESH_MS
+              ? 'connected'
+              : 'stale',
+        transport: probe?.transport ?? null,
+        gatewayIsPrivate: probe?.gatewayIsPrivate ?? null,
+        lastProbeAt: probe?.lastProbeAt ?? null,
+      };
+    }),
   };
 }
