@@ -73,6 +73,22 @@ export interface ConversationDTO {
   lastMessageAt: string | null;
   /** Caller's role on the participant row — undefined when not enriched. */
   myRole?: string;
+  viewerAccess?: {
+    source: 'participant' | 'workspace' | 'none' | string;
+    role: string;
+    canObserve: boolean;
+    canManage: boolean;
+    canRename: boolean;
+    canArchive: boolean;
+    canDelete: boolean;
+    canLeave: boolean;
+    canPin: boolean;
+    canMute: boolean;
+    canRead: boolean;
+    canAddMember: boolean;
+    canRemoveMember: boolean;
+    canSendMessage: boolean;
+  };
   pinned?: boolean;
   pinnedAt?: string | null;
   muted?: boolean;
@@ -146,6 +162,19 @@ export interface RuntimeDeviceDTO {
   lastSeenAt: string | null;
   agents: RuntimeAgentDTO[];
   daemonStatus?: RuntimeDaemonStatus;
+  /**
+   * Wave 5 F5 — daemon-reported transport probe (joined from `im_containers`
+   * via daemonId). `transport` is the daemon's own assessment of which
+   * channels it can serve dispatch on. `gatewayIsPrivate` is the daemon's
+   * IP classification of its inbound gateway (RFC1918 / loopback / mDNS).
+   * `null` when no probe report has landed yet (forgotten daemon / pre-2.0
+   * container row / dev daemon without local server).
+   *
+   * See evidence/14-e4-webhook-ws-first.md (E4) and §4.8.1.
+   */
+  transport?: 'ws' | 'http' | 'both' | null;
+  gatewayIsPrivate?: boolean | null;
+  lastProbeAt?: string | null;
 }
 
 export interface WorkspaceRuntimeDTO {
@@ -205,6 +234,13 @@ export type RuntimeKind = 'docker' | 'k8s';
 export interface RuntimeInstallationDTO {
   id: string;
   workspaceId: string;
+  /**
+   * v2.0.8 M448 (release201/20 §1) — optional project scope. `null` on
+   * workspace-level installations (default + every legacy row). UI uses this
+   * to render the project chip on the device card; daemon dispatch is
+   * unaffected (still per-agent, 09 §9.9).
+   */
+  projectId?: string | null;
   runtimeInstanceId: string;
   daemonId: string;
   podName: string;
@@ -345,6 +381,39 @@ export interface AgentProfileDTO {
   updatedAt: string;
 }
 
+export interface ApprovalOptionDTO {
+  value: string;
+  label: string;
+  hint?: string;
+}
+
+export interface ApprovalDTO {
+  id: string;
+  workspaceId: string;
+  conversationId: string | null;
+  taskId: string | null;
+  requestedById: string;
+  requestedByName?: string | null;
+  decidedById?: string | null;
+  category: string;
+  title: string;
+  context: string | null;
+  options: ApprovalOptionDTO[];
+  status: string;
+  selectedValue: string | null;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  decidedAt: string | null;
+  expiresAt: string | null;
+  /**
+   * v2.0 §4.4.8 — service-side intent dedup hash. Column added in
+   * migration 411; cloud-side compute is deferred to Wave 3.5 hand-off,
+   * so this field is currently always `null` in payloads. UI renders the
+   * "Similar to above — dedup proposed" hint only when present.
+   */
+  intentHash?: string | null;
+}
+
 export interface WorkspaceFileDTO {
   id: string;
   workspaceId: string;
@@ -359,6 +428,66 @@ export interface WorkspaceFileDTO {
   deletedAt: string | null;
 }
 
+export type AssetPreviewKind =
+  | 'image'
+  | 'pdf'
+  | 'media'
+  | 'text'
+  | 'html'
+  | 'table'
+  | 'document'
+  | 'code'
+  | 'archive'
+  | 'download-only';
+
+export type AssetPreviewStatus = 'ready' | 'processing' | 'partial' | 'unsupported' | 'too_large' | 'failed';
+
+export interface AssetPreviewContract {
+  kind: AssetPreviewKind;
+  status: AssetPreviewStatus;
+  maxInlineBytes: number;
+  contentLength?: number;
+  byteRangeSupported?: boolean;
+  preferredRenderer?:
+    | 'native'
+    | 'monaco'
+    | 'markdown'
+    | 'iframe-safe-html'
+    | 'table-sample'
+    | 'page-viewer'
+    | 'video-js';
+  inlinePolicy?: 'allow' | 'sample-only' | 'metadata-only' | 'download-only';
+  pageCount?: number;
+  rowCountApprox?: number;
+  sheetCount?: number;
+  extractorVersion?: string;
+  etag?: string;
+  derivatives: Array<{
+    type:
+      | 'thumbnail'
+      | 'text'
+      | 'html_safe'
+      | 'table_sample'
+      | 'schema'
+      | 'page_text'
+      | 'archive_listing'
+      | 'pdf_linearized'
+      | 'hls_manifest';
+    assetId?: string;
+    url?: string;
+    endpoint?: string;
+    metadata?: Record<string, unknown>;
+  }>;
+  warnings?: Array<{ code: string; message: string }>;
+  securityWarnings?: Array<{ code: string; message: string }>;
+}
+
+export interface AssetPreviewUrls {
+  small?: string | null;
+  medium?: string | null;
+  large?: string | null;
+}
+
 export interface AssetDTO {
   id: string;
   workspaceId: string;
@@ -370,6 +499,8 @@ export interface AssetDTO {
   kind: string;
   sourceAgentImUserId: string | null;
   sourceTaskId: string | null;
+  /** release201/09 §9.4a.2 — 'task-bound' | 'workspace-file' | null (legacy). */
+  boundKind?: 'task-bound' | 'workspace-file' | null;
   metadata: Record<string, unknown>;
   parentAssetId?: string | null;
   derivationKind?: string | null;
@@ -378,6 +509,12 @@ export interface AssetDTO {
   ingestError?: string | null;
   assetIndexSeq?: number;
   cdnUrl?: string | null;
+  thumbnailUrl?: string | null;
+  previewUrls?: AssetPreviewUrls | null;
+  /** release202/13 §3b① — base64 thumbHash for an instant blurred placeholder. */
+  blurHash?: string | null;
+  /** release202/13 §L1 — short text excerpt for the card (small md/txt only; derived, not stored). */
+  previewText?: string | null;
   previewAssetId?: string | null;
   folderPath?: string | null;
   filename?: string | null;
@@ -396,6 +533,34 @@ export interface AssetDTO {
   derivedAssets?: AssetDTO[];
   parentAsset?: AssetDTO | null;
   previewAsset?: AssetDTO | null;
+  preview?: AssetPreviewContract | null;
+}
+
+export interface AssetRevisionDTO {
+  id: string;
+  assetId: string;
+  workspaceId: string;
+  revision: number;
+  contentHash: string;
+  sizeBytes: number | null;
+  mime: string | null;
+  kind: string;
+  filename: string | null;
+  folderPath: string | null;
+  sourceRef: string | null;
+  sourceKind: string | null;
+  ingestStatus: string;
+  ingestVersion: number;
+  deletedAt: string | null;
+  createdByImUserId: string | null;
+  reason: string | null;
+  createdAt: string;
+}
+
+export interface AssetRevisionListDTO {
+  assetId: string;
+  currentRevision: number;
+  items: AssetRevisionDTO[];
 }
 
 export interface MemoryPageSummaryDTO {
@@ -415,6 +580,17 @@ export interface MemoryPageSummaryDTO {
   visibility?: string;
   inboundLinkCount?: number;
   outboundLinkCount?: number;
+  /**
+   * Wave 5 F5 — derived scope badge for the Library memory list (doc 14
+   * §3.0.2 F-①). MemoryPage rows don't carry the `scope` column directly
+   * (that lives on `im_memory_files` per E6), so the badge is computed from
+   * `visibility`: `visibility === 'workspace'` (or null/absent for legacy
+   * rows) → `workspace-shared` (🔓 all agents RW); any narrower scope
+   * (`task:*`, `human:*`, `secret-ref`) → `agent-private` (🔒). This is a
+   * read-only summary field; mutations still use the `visibility` PATCH
+   * surface.
+   */
+  scope?: 'workspace-shared' | 'agent-private' | null;
 }
 
 export interface MemoryPageDetailDTO extends MemoryPageSummaryDTO {
@@ -636,6 +812,13 @@ export interface TaskDTO {
   boardLane?: string | null;
   position?: number | null;
   terminalReason?: string | null;
+  // release201/10 — server-rolled acceptance fields. Optional because legacy
+  // TaskDTO consumers compiled before migration 438 expect the field to be
+  // absent on the wire.
+  acceptanceStatus?: 'none' | 'pending' | 'partial' | 'passed' | 'failed' | null;
+  /** Server-computed convenience: number of passed/failed/n.a. (i.e. not pending) criteria. */
+  acceptanceCompletedCount?: number;
+  acceptanceTotalCount?: number;
 }
 
 export type WorkspaceTaskKind = 'work_item' | 'goal' | 'agent_run';
@@ -690,6 +873,8 @@ export interface TaskLogDTO {
 export interface TaskDetailDTO {
   task: TaskDTO;
   logs: TaskLogDTO[];
+  runs?: TaskRunDTO[];
+  runEvents?: TaskRunEventDTO[];
   subtasks?: TaskDTO[];
   summary?: {
     total: number;
@@ -701,11 +886,53 @@ export interface TaskDetailDTO {
   };
 }
 
+export interface TaskRunDTO {
+  id: string;
+  taskId: string | null;
+  workspaceId: string | null;
+  conversationId: string | null;
+  creatorId: string;
+  assigneeId: string | null;
+  actorId: string | null;
+  sourceKind: string;
+  status: string;
+  output?: unknown | null;
+  error?: string | null;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
+}
+
+export interface TaskRunEventDTO {
+  id: string;
+  runId: string;
+  taskId: string | null;
+  workspaceId: string | null;
+  conversationId: string | null;
+  actorId: string | null;
+  type: string;
+  level: string;
+  message: string | null;
+  payload: Record<string, unknown>;
+  createdAt: string;
+}
+
 /**
- * Five-column kanban — see docs/54release/09-workspace-uiux.md §2.
- * Mirrors `multica` minus `blocked / cancelled`, intentionally narrow scope.
+ * Eight-column kanban — see docs/release200/15-task-state-machine-and-kanban.md §5.
+ * Each status maps 1:1 to a column (cancelled is the recycle bin, only shown
+ * via toggle). `blocked` is exposed as its own column (release 200 P6).
  */
-export type KanbanColumnKey = 'backlog' | 'todo' | 'in_progress' | 'review' | 'completed' | 'failed' | 'cancelled';
+export type KanbanColumnKey =
+  | 'backlog'
+  | 'todo'
+  | 'in_progress'
+  | 'review'
+  | 'blocked'
+  | 'completed'
+  | 'failed'
+  | 'cancelled';
 
 export interface KanbanColumn {
   key: KanbanColumnKey;
@@ -718,6 +945,7 @@ export const KANBAN_COLUMNS: KanbanColumn[] = [
   { key: 'todo', label: '待执行', hint: 'pending · assigned' },
   { key: 'in_progress', label: '进行中', hint: 'assigned · running' },
   { key: 'review', label: '待确认', hint: 'awaiting approval' },
+  { key: 'blocked', label: '已卡住', hint: 'agent self-reported stuck' },
   { key: 'completed', label: '已完成', hint: 'approved · completed' },
   { key: 'failed', label: '已失败', hint: 'execution failed' },
   { key: 'cancelled', label: '回收站', hint: 'cancelled · archive' },
@@ -733,6 +961,7 @@ export const KANBAN_VISIBLE_COLUMNS: KanbanColumnKey[] = [
   'todo',
   'in_progress',
   'review',
+  'blocked',
   'completed',
   'failed',
 ];
@@ -740,7 +969,7 @@ export const KANBAN_VISIBLE_COLUMNS: KanbanColumnKey[] = [
 /**
  * Bucket a task into a kanban column. Returns `null` only for unknown
  * statuses — `pending+assigneeId` now lands in Todo (covers Pause-back state),
- * `failed` and `cancelled` each have their own column.
+ * `blocked` / `failed` / `cancelled` each have their own column.
  */
 export function bucketTask(task: TaskDTO): KanbanColumnKey | null {
   switch (task.status) {
@@ -753,6 +982,8 @@ export function bucketTask(task: TaskDTO): KanbanColumnKey | null {
       return 'in_progress';
     case 'review':
       return 'review';
+    case 'blocked':
+      return 'blocked';
     case 'completed':
       return 'completed';
     case 'failed':
