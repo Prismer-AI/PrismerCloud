@@ -17,12 +17,12 @@ const LOG = '[MemoryExtract]';
 const MAX_CONTENT_SIZE = 8192;
 
 function getLLMConfig() {
-  const apiKey = process.env.OPENAI_API_KEY || process.env.LLM_API_KEY || '';
+  const apiKey = process.env.OPENAI_API_KEY || process.env.LLM_API_KEY || process.env.PRISMER_API_KEY || '';
   const apiBase =
     process.env.OPENAI_BASE_URL ||
     process.env.OPENAI_API_BASE_URL ||
     process.env.LLM_API_BASE ||
-    'https://api.openai.com/v1';
+    'http://localhost:3000/api/v1';
   const model =
     process.env.LLM_EXTRACT_MODEL ||
     process.env.LLM_RECALL_MODEL ||
@@ -139,7 +139,7 @@ Extract durable memories. Return JSON array only.`;
           { role: 'system', content: EXTRACTION_SYSTEM_PROMPT },
           { role: 'user', content: userPrompt },
         ],
-        temperature: 0.1,
+        temperature: 1.0,
         max_tokens: 2000,
       }),
       signal: AbortSignal.timeout(30_000),
