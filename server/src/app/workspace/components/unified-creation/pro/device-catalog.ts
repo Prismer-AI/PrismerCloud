@@ -11,32 +11,34 @@
 export interface K8sTemplate {
   id: string;
   label: string;
-  image: string;
+  /** When omitted the server resolves the image from Nacos CONTAINER_IMAGE. */
+  image?: string;
   description: string;
   recommendedFor: string;
+  /** When true, the template is shown but not selectable. */
+  disabled?: boolean;
 }
 
 export const TEMPLATES: readonly K8sTemplate[] = [
   {
     id: 'sandbox-default',
-    label: 'Sandbox · default',
-    image: 'dockerhub.services/prismer/library/sandbox:daemon-v1.0',
-    description: 'Standard daemon-first sandbox. Hermes + adapters preinstalled.',
-    recommendedFor: 'Most agent runtimes',
+    label: 'Cloud computer · Standard',
+    description: 'Ready-to-use cloud computer with the agent runtime preinstalled.',
+    recommendedFor: 'Most agents',
   },
   {
     id: 'sandbox-cuda',
-    label: 'Sandbox · CUDA',
-    image: 'dockerhub.services/prismer/library/sandbox:cuda-v1.0',
-    description: 'CUDA 12.4 base. Requires a GPU node-pool on the cluster.',
-    recommendedFor: 'Local model inference / training tasks',
+    label: 'Cloud computer · GPU',
+    description: 'GPU-accelerated (CUDA 12.4). Needs a GPU machine in the cluster.',
+    recommendedFor: 'Coming soon',
+    disabled: true,
   },
   {
     id: 'sandbox-devbox',
-    label: 'Sandbox · devbox',
-    image: 'dockerhub.services/prismer/library/sandbox:devbox-v1.0',
-    description: 'Heavy devtools (gcc, python, node, rust). Larger image.',
-    recommendedFor: 'Dev tools + scripting agents',
+    label: 'Cloud computer · Dev tools',
+    description: 'Heavier image with developer tools (gcc, python, node, rust).',
+    recommendedFor: 'Coming soon',
+    disabled: true,
   },
 ];
 
