@@ -34,14 +34,15 @@ sdk/
 ├── aip/                          # AIP — Agent Identity Protocol (4 publishable packages)
 │   ├── typescript/   python/  golang/  rust/
 │   └── docs/
-├── prismer-cloud/                # Prismer Cloud platform (14 publishable surfaces)
+├── prismer-cloud/                # Prismer Cloud platform
 │   ├── typescript/  python/  golang/  rust/    # language SDKs
-│   ├── runtime/                  # @prismer/runtime
+│   ├── runtime/                  # @prismer/runtime (includes hermes adapters under src/adapters/)
 │   ├── mcp/                      # @prismer/mcp-server
 │   ├── claude-code-plugin/  opencode-plugin/  openclaw-channel/
-│   ├── adapters/   adapters-core/   wire/       # independent 0.x line (hotfix release)
-│   ├── sandbox-runtime/  samples/  skill/  scripts/
-│   └── icon/  smallicon/
+│   ├── built-in-skills/          # runtime skill resource pool (also mirrored into server/sdk/…)
+│   ├── samples/  skill/  scripts/
+│   └── icon/
+│   # NOTE: the 0.x adapters/ adapters-core/ wire/ sandbox-runtime/ surfaces were retired upstream in v2.0
 ├── build/                        # shared release pipeline (see below)
 └── README.md                     # canonical family overview
 ```
@@ -63,7 +64,7 @@ sdk/build/release.sh --scope prismer-cloud     # then Cloud
 # Version bumps
 sdk/build/version.sh --scope aip <semver>           # coordinated 1.x packages
 sdk/build/version.sh --scope prismer-cloud <semver>
-sdk/build/hotfix.sh                                  # independent 0.x packages (@prismer/wire, adapters-core, hermes adapters)
+sdk/build/hotfix.sh <package> <X.Y.Z.N|--auto>       # bump a SINGLE package (aip-ts/sdk-ts/mcp/…) without touching root VERSION
 ```
 
 Release gates (build → local-install → sandbox smoke) must all pass before `release.sh` publishes. Full workflow lives in [`sdk/build/WORKFLOW.md`](sdk/build/WORKFLOW.md).
@@ -126,7 +127,7 @@ The `server/` tree is a complete Next.js 16 app — it has its own `package.json
 Quick top-level pointers for cross-references:
 
 - Self-host installer: top-level `install.sh` (also published at `https://prismer.cloud/install.sh`).
-- Server sync state lives in `build/sync-server/state/` (gitignored runtime cache); patches are in `build/sync-server/patches/`.
+- Server sync state: the last-synced upstream ref is recorded in `build/sync-server/LAST-SYNC.md` (tracked); `build/sync-server/state/` and `patches/` are gitignored runtime output. Closed-source `main` is stale — the active upstream line is `feat/workspace-release`.
 
 ## EvolutionRuntime — key cross-cutting pattern
 
@@ -151,7 +152,7 @@ Three coding-agent plugins share the same evolution loop pattern:
 - All SDKs authenticate with API keys prefixed `sk-prismer-`. Base URL: `https://prismer.cloud`.
 - TypeScript SDKs export CJS + ESM + DTS via tsup. The Cloud SDK's `webhook` module has a separate export path (`@prismer/sdk/webhook`).
 - Python SDKs use `httpx` (async HTTP) + `pydantic` (models) + `websockets` (realtime). AIP targets `>=3.9`; Cloud may target older.
-- AIP coordinated `1.x` packages share a version; Prismer Cloud has mixed cadence — coordinated `1.x` SDKs vs independent `0.x` adapters / wire (released via `hotfix.sh`). Never hardcode versions in this doc; consult each package's manifest.
+- AIP coordinated `1.x` packages share a version; Prismer Cloud SDKs are coordinated too (root `VERSION`). `hotfix.sh` bumps a single package to `X.Y.Z.N` when one surface needs an out-of-band release. Never hardcode versions in this doc; consult each package's manifest.
 - MCP Server exposes ~23 tools across context, parse, IM, evolution, memory, tasks namespaces.
 
 ## API Surface

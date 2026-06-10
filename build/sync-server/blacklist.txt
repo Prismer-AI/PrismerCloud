@@ -29,7 +29,6 @@ eslint-rules/
 tests/
 stress-5.json
 stress-report.json
-vitest.config.ts
 vitest.integration.config.ts
 playwright.config.ts
 VERSION

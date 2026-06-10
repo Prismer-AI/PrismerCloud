@@ -34,7 +34,7 @@ npm run prisma:generate:all    # Generate both clients
 npm run test:all:local   # Multi-env test script against localhost
 ```
 
-No automated test framework (no vitest/jest). IM server has custom test runners in `src/im/tests/`.
+Tests: vitest for unit/component suites — `npm test` (vitest run), `npm run test:unit` (src/lib/__tests__), `npm run test:skills` (built-in skill runners via tsx). The IM server additionally has custom test runners in `src/im/tests/` (plain `npx tsx`, no framework). Known limitation in this open-source mirror: a few `src/lib/__tests__` parity tests read `sdk/prismer-cloud/runtime/...` relative to the server root (the closed-source repo layout) and fail with ENOENT here — `server/sdk/` is a curated copy, not the full SDK tree.
 
 ## Architecture
 

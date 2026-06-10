@@ -18,7 +18,7 @@
 
 set -eu
 
-VERSION="1.8.1"
+VERSION="2.0.8"
 PRISMER_HOME="${PRISMER_HOME:-$HOME/.prismer}"
 FNM_DIR="${FNM_DIR:-$HOME/.local/share/fnm}"
 NODE_VERSION="lts"

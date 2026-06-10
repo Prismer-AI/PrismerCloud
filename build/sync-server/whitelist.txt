@@ -10,6 +10,7 @@ sql/
 scripts/sql/
 sdk/prismer-cloud/built-in-skills/
 packages/
+vitest.config.ts
 scripts/*.ts
 scripts/*.js
 scripts/*.mjs
