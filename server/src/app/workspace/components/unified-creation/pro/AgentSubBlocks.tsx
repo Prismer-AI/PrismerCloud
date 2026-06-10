@@ -10,8 +10,9 @@ import { Bot, Brain } from 'lucide-react';
 
 import { radius } from '../../../lib/design';
 import { ROLE_TEMPLATES, type AgentRoleTemplate } from '../../../lib/templates';
-import type { LocalDaemonHealthDTO } from '../../../lib/types';
 import { ModelPicker } from '../../model-picker';
+import type { ProxyProvider } from '../../proxy-provider-select';
+import type { DaemonTarget } from './daemon-target';
 
 export type LongRunningAdapter = 'hermes' | 'openclaw';
 
@@ -216,6 +217,7 @@ export function HermesFields({
   setHermesApiKey,
   model,
   onModelChange,
+  proxyProvider,
 }: {
   isDark: boolean;
   inputClass: string;
@@ -227,6 +229,12 @@ export function HermesFields({
   setHermesApiKey: (v: string) => void;
   model: string;
   onModelChange: (v: string) => void;
+  /**
+   * 2026-05-30 — proxyProvider × model 紧耦合. 透给嵌套的 ModelPicker, 让它
+   * 按 provider 漏斗拉 list. optional 是为了不破现有 caller (workspace-inspector-
+   * dialog 那种 ad-hoc 用法).
+   */
+  proxyProvider?: ProxyProvider;
 }) {
   void isDark;
   return (
@@ -258,7 +266,7 @@ export function HermesFields({
       </label>
       <label className="grid gap-1" htmlFor={ids.model}>
         <span className={labelClass}>Model</span>
-        <ModelPicker value={model} onChange={onModelChange} />
+        <ModelPicker value={model} onChange={onModelChange} proxyProvider={proxyProvider} />
       </label>
     </div>
   );
@@ -294,20 +302,28 @@ export function OpenClawField({
 
 // ───────────────────────── Daemon status badge ─────────────────────────
 
-export function DaemonStatusBadge({
-  isDark,
-  daemon,
-  daemonError,
-  bindable,
-  workspaceMismatch,
-}: {
-  isDark: boolean;
-  daemon: LocalDaemonHealthDTO | null;
-  daemonError: string | null;
-  bindable: boolean;
-  workspaceMismatch: boolean;
-}) {
-  const ready = !!daemon?.wsConnected;
+/**
+ * Informational badge showing the currently-selected DaemonTarget's status.
+ * Color flips emerald (bindable) ↔ amber (not bindable). Renders the target
+ * label as the headline and the daemonId / mismatchReason as a mono detail.
+ *
+ * v200 K8S device picker (2026-05-19): generalized from LocalDaemonHealthDTO
+ * to DaemonTarget so the badge mirrors whatever the user picked in the
+ * runtime-host radio group above it.
+ */
+export function DaemonStatusBadge({ isDark, target }: { isDark: boolean; target: DaemonTarget | null }) {
+  const bindable = !!target?.bindable;
+  const headline = !target
+    ? 'No device selected'
+    : target.source === 'local-host'
+      ? 'Local computer'
+      : `Cloud computer (${target.status})`;
+  const status = !target ? 'required' : bindable ? 'ready' : (target.mismatchReason ?? 'not ready');
+  const detail = !target
+    ? 'Run prismer setup or create a K8S device in this workspace.'
+    : target.source === 'local-host'
+      ? target.daemonId || 'Run prismer setup on this machine'
+      : (target.daemonId ?? target.podName);
   return (
     <div
       data-testid="pro-tile-agent-daemon-status"
@@ -322,12 +338,10 @@ export function DaemonStatusBadge({
       }`}
     >
       <div className="flex items-center justify-between">
-        <span className="font-medium">Local daemon</span>
-        <span>{workspaceMismatch ? 'wrong workspace' : ready ? 'connected' : 'required'}</span>
+        <span className="font-medium">{headline}</span>
+        <span>{status}</span>
       </div>
-      <p className="mt-0.5 truncate font-mono text-[10px] opacity-80">
-        {daemon?.daemonId ?? daemonError ?? 'Run prismer setup on this machine'}
-      </p>
+      <p className="mt-0.5 truncate font-mono text-[10px] opacity-80">{detail}</p>
     </div>
   );
 }
