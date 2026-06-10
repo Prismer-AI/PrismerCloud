@@ -15,12 +15,12 @@ import type { MemoryService } from './memory.service';
 const LOG = '[MemoryRecall]';
 
 function getLLMConfig() {
-  const apiKey = process.env.OPENAI_API_KEY || process.env.LLM_API_KEY || '';
+  const apiKey = process.env.OPENAI_API_KEY || process.env.LLM_API_KEY || process.env.PRISMER_API_KEY || '';
   const apiBase =
     process.env.OPENAI_BASE_URL ||
     process.env.OPENAI_API_BASE_URL ||
     process.env.LLM_API_BASE ||
-    'https://api.openai.com/v1';
+    'http://localhost:3000/api/v1';
   const model = process.env.LLM_RECALL_MODEL || process.env.DISTILL_MODEL || process.env.DEFAULT_MODEL || 'gpt-4o-mini';
   return { apiKey, apiBase, model };
 }
@@ -219,7 +219,7 @@ Select the ${maxResults} most relevant files. Return JSON array of indices only.
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userPrompt },
         ],
-        temperature: 0,
+        temperature: 1.0,
         max_tokens: 100,
       }),
       signal: AbortSignal.timeout(10_000),
@@ -330,7 +330,7 @@ Select the top ${maxResults} most relevant. Return JSON array of indices only.`;
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userPrompt },
         ],
-        temperature: 0,
+        temperature: 1.0,
         max_tokens: 100,
       }),
       signal: AbortSignal.timeout(10_000),
