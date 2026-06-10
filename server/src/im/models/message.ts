@@ -5,7 +5,7 @@
  */
 
 import prisma from '../db';
-import type { MessageType, MessageMetadata } from '../types/index';
+import type { AssetAttachment, MessageType, MessageMetadata } from '../types/index';
 
 export interface CreateMessageInput {
   conversationId: string;
@@ -13,8 +13,13 @@ export interface CreateMessageInput {
   type?: MessageType;
   content: string;
   metadata?: MessageMetadata;
+  attachments?: AssetAttachment[] | null;
   parentId?: string;
   quotedMessageId?: string; // v1.8.2: Quote reply
+  // v2.0 §4.1: first-class column with (conversationId, idempotencyKey) UNIQUE.
+  // Caller still doubles into metadata._idempotencyKey for the legacy
+  // app-level findByIdempotencyKey fast path during the transition.
+  idempotencyKey?: string;
   // E2E Signing fields (Layer 2)
   secVersion?: number;
   senderKeyId?: string;
@@ -35,29 +40,39 @@ export interface MessageQuery {
 }
 
 export class MessageModel {
+  /**
+   * Build the Prisma data object for an IMMessage row.
+   * Exported separately so service-layer code can compose it inside a
+   * `$transaction` (so the seq-allocation + insert run on the same
+   * connection — see v2.0 §4.1 Critical Invariant).
+   */
+  static buildCreateData(input: CreateMessageInput) {
+    return {
+      conversationId: input.conversationId,
+      senderId: input.senderId,
+      type: input.type ?? 'text',
+      content: input.content,
+      metadata: input.metadata ? JSON.stringify(input.metadata) : '{}',
+      attachments: input.attachments && input.attachments.length > 0 ? input.attachments : undefined,
+      parentId: input.parentId,
+      quotedMessageId: input.quotedMessageId,
+      idempotencyKey: input.idempotencyKey ?? null,
+      status: 'sent',
+      // E2E Signing fields (Layer 2)
+      secVersion: input.secVersion,
+      senderKeyId: input.senderKeyId,
+      sequence: input.sequence,
+      contentHash: input.contentHash,
+      prevHash: input.prevHash,
+      signature: input.signature,
+      // AIP DID fields (v1.8.0 S2)
+      senderDid: input.senderDid,
+      delegationProof: input.delegationProof,
+    };
+  }
+
   async create(input: CreateMessageInput) {
-    return prisma.iMMessage.create({
-      data: {
-        conversationId: input.conversationId,
-        senderId: input.senderId,
-        type: input.type ?? 'text',
-        content: input.content,
-        metadata: input.metadata ? JSON.stringify(input.metadata) : '{}',
-        parentId: input.parentId,
-        quotedMessageId: input.quotedMessageId,
-        status: 'sent',
-        // E2E Signing fields (Layer 2)
-        secVersion: input.secVersion,
-        senderKeyId: input.senderKeyId,
-        sequence: input.sequence,
-        contentHash: input.contentHash,
-        prevHash: input.prevHash,
-        signature: input.signature,
-        // AIP DID fields (v1.8.0 S2)
-        senderDid: input.senderDid,
-        delegationProof: input.delegationProof,
-      },
-    });
+    return prisma.iMMessage.create({ data: MessageModel.buildCreateData(input) });
   }
 
   async findById(id: string) {
