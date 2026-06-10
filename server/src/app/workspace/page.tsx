@@ -29,34 +29,52 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import { useRouter } from 'next/navigation';
-import { AnimatePresence, motion } from 'framer-motion';
+import { motion } from 'framer-motion';
 import { Loader2 } from 'lucide-react';
 
 import { useApp } from '@/contexts/app-context';
 import { useTheme } from '@/contexts/theme-context';
 import { getWorkspaceToken, imFetch } from './lib/im-api';
+import { loadCursor, saveCursor } from './lib/sse-cursor';
+import { publishAssetChanged } from './lib/asset-event-bus';
+import { isCurrentlyContested, listAgentBindings } from './lib/agent-bindings-api';
+import {
+  createDirectConversation,
+  seedLaunchTourContent,
+  sendMessage,
+  type LaunchTourSeed,
+  type MessageAttachmentDTO,
+} from './lib/mutations';
+import { uploadAssetWithDirectFallback, type AssetUploadProgress } from './lib/asset-upload';
 import { useTaskStream } from './lib/use-task-stream';
+import { useAgentPhaseMap } from './lib/agent-phase-store';
+import { deriveWorkspaceAgentStatuses, type AgentLiveStatus } from './lib/agent-status';
 import { springHeavy } from './lib/design';
 import { TopBar } from './components/top-bar';
 import { LeftRail } from './components/left-rail';
-import { ImChannel } from './components/im-channel';
+import { ProjectSwitcher } from './components/project-switcher';
+import { InsightsSurface, type InsightsCustomRange, type InsightsView } from './components/insights/insights-surface';
+import type { InsightsRange } from './lib/insights-api';
+import { ProjectOverviewDrawer } from './components/project-overview';
+import { useProjects } from './hooks/use-projects';
+import { ChatsSurface } from './components/chats-surface';
 import { TaskBoard } from './components/task-board';
 import { TaskDetailDrawer } from './components/task-detail-drawer';
-import { WorkspaceTour, hasSeenWorkspaceTour } from './components/workspace-tour';
+import { WorkspaceTour } from './components/workspace-tour';
+import { LaunchTour } from './components/launch-tour';
 import { WorkspaceOnboarding } from './components/workspace-onboarding';
 import { LibrarySurface } from './components/library-surface';
 import { LibrarySearchModal } from './components/library-search-modal';
-import { SaveAsMemoryModal, type SaveAsMemorySource } from './components/save-as-memory-modal';
 import { LibraryProposalReviewModal } from './components/library-proposal-review-modal';
-import { listProposals } from './lib/memory-api';
+import { MessageForwardDialog, type MessageForwardSource } from './components/message-forward-dialog';
+import { createMemoryPage, listProposals } from './lib/memory-api';
 import { RuntimeManager } from './components/runtime-manager';
-import { ContactsPanel } from './components/contacts-panel';
-import { NewAgentDialog } from './components/new-agent-dialog';
 import { NewChannelDialog } from './components/new-channel-dialog';
 import { NewTaskDialog } from './components/new-task-dialog';
 import { UnifiedCreationModal, type UnifiedCreationEvent } from './components/unified-creation';
 import dynamic from 'next/dynamic';
 import type { WorkspaceInspector } from './components/workspace-inspector-dialog';
+import { SurfaceWithPreviewDock } from './components/SurfaceWithPreviewDock';
 // react-pdf inside the inspector references DOM-only globals (DOMMatrix); load on client.
 const WorkspaceInspectorDialog = dynamic(
   () => import('./components/workspace-inspector-dialog').then((m) => m.WorkspaceInspectorDialog),
@@ -67,7 +85,6 @@ import { SessionSettingsMenu } from './components/session-settings-menu';
 import { AddMemberDialog } from './components/add-member-dialog';
 import { RenameSessionDialog } from './components/rename-session-dialog';
 import { MobileNav, type MobileSurface } from './components/mobile-nav';
-import { MobileSessionsList } from './components/mobile-sessions-list';
 import type { WorkspaceSurface } from './components/left-rail';
 import { isBoardProjectionTask } from './lib/types';
 import type {
@@ -85,6 +102,54 @@ import type {
   WorkspaceDTO,
   WorkspaceRuntimeDTO,
 } from './lib/types';
+
+const RECENT_DEVICE_ATTEMPT_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+function isFailedRuntimeInstallation(row: RuntimeInstallationDTO): boolean {
+  return row.status === 'errored' || row.status === 'failed' || row.phase === 'failed';
+}
+
+function isRecentRuntimeInstallation(row: RuntimeInstallationDTO, now = Date.now()): boolean {
+  const ts = Date.parse(row.stoppedAt ?? row.updatedAt ?? row.createdAt);
+  return Number.isFinite(ts) && now - ts <= RECENT_DEVICE_ATTEMPT_WINDOW_MS;
+}
+
+function filterRuntimeInstallationsForWorkspaceUi(rows: RuntimeInstallationDTO[]): RuntimeInstallationDTO[] {
+  const now = Date.now();
+  return rows.filter((row) => !isFailedRuntimeInstallation(row) || isRecentRuntimeInstallation(row, now));
+}
+
+function hasRecentDeviceAttempt(rows: RuntimeInstallationDTO[]): boolean {
+  const now = Date.now();
+  return rows.some((row) => !isFailedRuntimeInstallation(row) || isRecentRuntimeInstallation(row, now));
+}
+
+function replaceWorkspaceAssetQuery(assetId: string | null): void {
+  if (typeof window === 'undefined') return;
+  const url = new URL(window.location.href);
+  if (assetId) {
+    url.searchParams.set('asset', assetId);
+  } else {
+    url.searchParams.delete('asset');
+  }
+  window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
+}
+
+function conversationAccess(conversation: ConversationDTO | null) {
+  const role = conversation?.myRole;
+  return {
+    canAddMember: conversation?.viewerAccess?.canAddMember ?? (role === 'owner' || role === 'admin'),
+    canRename: conversation?.viewerAccess?.canRename ?? (role === 'owner' || role === 'admin'),
+    canPin: conversation?.viewerAccess?.canPin ?? Boolean(role && role !== 'observer'),
+    canMute: conversation?.viewerAccess?.canMute ?? Boolean(role && role !== 'observer'),
+    canArchive: conversation?.viewerAccess?.canArchive ?? (role === 'owner' || role === 'admin'),
+    canDelete: conversation?.viewerAccess?.canDelete ?? role === 'owner',
+    canLeave: conversation?.viewerAccess?.canLeave ?? Boolean(role && role !== 'observer' && role !== 'owner'),
+  };
+}
+
+const VALID_INSIGHTS_VIEWS = new Set<InsightsView>(['overview', 'project', 'agent']);
+const VALID_INSIGHTS_RANGES = new Set<InsightsRange>(['24h', '7d', '30d', '90d']);
 
 export default function WorkspacePage() {
   const router = useRouter();
@@ -108,30 +173,53 @@ export default function WorkspacePage() {
   const [workspaceFiles, setWorkspaceFiles] = useState<WorkspaceFileDTO[]>([]);
 
   const [bootstrapping, setBootstrapping] = useState(true);
-  // Workspace tour: shown to first-time users after bootstrap. localStorage
-  // flag (in workspace-tour.tsx) prevents replay on subsequent visits.
+  // Workspace tour: shown to fresh users (devices.length === 0) on every land.
+  // Task 40 (launch-flow rewire) drops the localStorage gate — the right
+  // "fresh user" predicate is server-derived state, not a client cookie that
+  // bleeds across accounts on the same browser. The tour will re-open on
+  // every visit until the user creates a device, at which point the
+  // condition in the gating useEffect goes false.
   const [tourOpen, setTourOpen] = useState(false);
-  const [onboardingDismissed, setOnboardingDismissed] = useState(() => {
-    if (typeof window === 'undefined') return false;
-    try {
-      return Boolean(localStorage.getItem('prismer.onboardingChecklistDismissed.v1'));
-    } catch {
-      return false;
-    }
-  });
+  // release201 v2.0.8 F-bug — onboarding dismissal is now **persisted per
+  // workspace** in localStorage. 用户原话："device 为 0 的情况下每次刷新只
+  // 出现一次", 即:
+  //   - device=0 → 显示, 直到用户主动 dismiss
+  //   - dismiss 一次 → 持久化 (`prismer_onboarding_dismissed_<workspaceId>`)
+  //     后续刷新 / 新 tab 都不再显示, 即使 device 数从 0 重新归 0 也不重显
+  //   - 用户清浏览器 localStorage 才会重新看到引导
+  //
+  // (workspace?.id 在初始 render 时 undefined; useEffect 在 workspace 加载后
+  // 同步实际值, 见下方 effect.)
+  const [onboardingDismissed, setOnboardingDismissed] = useState(false);
   const [tasksLoading, setTasksLoading] = useState(false);
   const [taskError, setTaskError] = useState<string | null>(null);
   const [bootstrapError, setBootstrapError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
+  // SSE handler reads "currently selected conversation" and "current user id"
+  // without re-binding the EventSource. Refs keep their values fresh across
+  // re-renders without invalidating the long-lived effect that owns the ES.
+  const selectedConversationIdRef = useRef<string | null>(null);
+  const meIdRef = useRef<string | null>(null);
   const [uploadTarget, setUploadTarget] = useState<{
     conversationId?: string | null;
     sourceTaskId?: string | null;
+    // When true, after the asset is uploaded we also POST a markdown message
+    // with the asset as an attachment into `conversationId`, so the file is
+    // visible in the chat stream (same shape as drag-drop sendAssetAttachment).
+    // Without this flag the upload stays asset-only (library / onboarding path).
+    attachToConversation?: boolean;
+    inputIntent?: 'vision_input' | 'file_attachment';
+  } | null>(null);
+  const [uploadProgress, setUploadProgress] = useState<{
+    filename: string;
+    fileIndex: number;
+    totalFiles: number;
+    progress: AssetUploadProgress;
   } | null>(null);
 
   // Modal open state.
-  const [newAgentOpen, setNewAgentOpen] = useState(false);
   const [newChannelOpen, setNewChannelOpen] = useState(false);
   const [newTaskOpen, setNewTaskOpen] = useState(false);
   // §30 B3.7 — unified creation modal state. Single `+` button in
@@ -143,7 +231,17 @@ export default function WorkspacePage() {
   // Simple, so the setter is intentionally retained for forward-compat.
   const [unifiedOpen, setUnifiedOpen] = useState(false);
   const [unifiedInitialMode, setUnifiedInitialMode] = useState<'simple' | 'pro'>('simple');
-  void setUnifiedInitialMode;
+  // Task 41 — Auto-open Simple Mode on fresh-user land. Session-scoped flag
+  // (one-shot per page session) so we don't re-open the modal after the
+  // user dismisses it but before devices/agents land. Resets on full reload.
+  const [autoOpenedSimple, setAutoOpenedSimple] = useState(false);
+  // Task 43 — Launch-tour seed produced by `seedLaunchTourContent` after
+  // Simple Mode completes. The downstream LaunchTour component (separate
+  // task) reads this to pick which task / asset card to highlight.
+  // `launchTourStage` lets the same downstream component coordinate
+  // pending→running→done without storing in localStorage.
+  const [launchTourSeed, setLaunchTourSeed] = useState<LaunchTourSeed | null>(null);
+  const [launchTourStage, setLaunchTourStage] = useState<'idle' | 'pending' | 'running' | 'done'>('idle');
   const [newTaskInitialColumn, setNewTaskInitialColumn] = useState<KanbanColumnKey | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   // Fallback for tasks that aren't on the board (agent_run subtasks live under
@@ -152,7 +250,6 @@ export default function WorkspacePage() {
   const [selectedTaskFallback, setSelectedTaskFallback] = useState<TaskDTO | null>(null);
   const taskFetchCacheRef = useRef<Map<string, { task: TaskDTO; ts: number }>>(new Map());
   const [leftRailCollapsed, setLeftRailCollapsed] = useState(false);
-  const [imCollapsed, setImCollapsed] = useState(false);
   // Wave-8 W4: session settings dialogs (mounted at root, controlled by ⋮ menu).
   const [addMemberOpen, setAddMemberOpen] = useState(false);
   const [renameOpen, setRenameOpen] = useState(false);
@@ -170,68 +267,65 @@ export default function WorkspacePage() {
     mq.addEventListener('change', apply);
     return () => mq.removeEventListener('change', apply);
   }, []);
-  // Wave-8 W4: which mobile surface is active (independent of desktop
-  // `activeSurface` because mobile has a 'sessions' surface that desktop
-  // doesn't — desktop combines sessions + main pane in the same flex row).
-  const [mobileSurface, setMobileSurface] = useState<MobileSurface>('sessions');
-  // Resizable session panel: width persisted in localStorage so the operator's
-  // chat/board ratio survives reload. Keep the session pane bounded so the
-  // kanban remains the dominant work surface at the default desktop ratio.
-  const IM_WIDTH_MIN = 340;
-  const IM_WIDTH_MAX = 520;
-  const IM_WIDTH_DEFAULT = 400;
-  const [imWidth, setImWidth] = useState<number>(IM_WIDTH_DEFAULT);
-  const [imDragging, setImDragging] = useState(false);
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const raw = window.localStorage.getItem('workspace:im:width');
-    const parsed = raw ? Number(raw) : NaN;
-    if (Number.isFinite(parsed) && parsed >= IM_WIDTH_MIN && parsed <= IM_WIDTH_MAX) {
-      setImWidth(parsed);
-    }
-  }, []);
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    window.localStorage.setItem('workspace:im:width', String(imWidth));
-  }, [imWidth]);
-  const startImResize = useCallback(
-    (e: React.PointerEvent<HTMLDivElement>) => {
-      e.preventDefault();
-      const startX = e.clientX;
-      const startWidth = imWidth;
-      const target = e.currentTarget;
-      target.setPointerCapture(e.pointerId);
-      setImDragging(true);
-      const onMove = (ev: PointerEvent) => {
-        const delta = ev.clientX - startX;
-        const next = Math.min(IM_WIDTH_MAX, Math.max(IM_WIDTH_MIN, startWidth + delta));
-        setImWidth(next);
-      };
-      const onUp = (ev: PointerEvent) => {
-        if (target.hasPointerCapture(ev.pointerId)) target.releasePointerCapture(ev.pointerId);
-        target.removeEventListener('pointermove', onMove);
-        target.removeEventListener('pointerup', onUp);
-        target.removeEventListener('pointercancel', onUp);
-        setImDragging(false);
-      };
-      target.addEventListener('pointermove', onMove);
-      target.addEventListener('pointerup', onUp);
-      target.addEventListener('pointercancel', onUp);
-    },
-    [imWidth],
-  );
+  const [mobileSurface, setMobileSurface] = useState<MobileSurface>('chats');
   const [inspector, setInspector] = useState<WorkspaceInspector | null>(null);
-  const [activeSurface, setActiveSurface] = useState<WorkspaceSurface>('tasks');
-  // Asset inspector overlays motion.main with `absolute inset-0 z-40`, so on
-  // desktop it sits on top of whatever surface is active. When the user
-  // navigates to a non-library surface (left rail, mobile nav, task drawer's
-  // "Open in Library" + back, etc.), close the overlay so it doesn't trap
-  // them on top of the wrong surface.
+  const [activeSurface, setActiveSurface] = useState<WorkspaceSurface>('chats');
+  // Asset preview layout (desktop). The dock reports whether the content area
+  // is wide enough to split; narrow areas always go full screen. `maximized`
+  // is the user's per-open override (the header maximize/restore button).
+  const [previewContainerWide, setPreviewContainerWide] = useState(true);
+  const previewContainerWideRef = useRef(true);
+  const [previewMaximized, setPreviewMaximized] = useState(false);
+  // Surface the full-screen preview is pinned to. Used to auto-close the
+  // overlay when the user navigates to a *different* surface (so it doesn't
+  // trap them), without closing when they merely maximize in place.
+  const previewSurfaceRef = useRef<WorkspaceSurface | null>(null);
+  const onMeasurePreviewWide = useCallback((wide: boolean) => {
+    previewContainerWideRef.current = wide;
+    setPreviewContainerWide(wide);
+  }, []);
+  const previewLayout: 'split' | 'full' = !previewContainerWide || previewMaximized ? 'full' : 'split';
+  // release201 S12 — Insights as an in-shell surface. View / range / scoped
+  // ids live in the URL so deep-links (counter drill-down, business cards,
+  // project-overview drawer) survive a refresh and reload pre-scoped.
+  const [insightsView, setInsightsView] = useState<InsightsView>('overview');
+  const [insightsRange, setInsightsRange] = useState<InsightsRange>('7d');
+  const [insightsProjectId, setInsightsProjectId] = useState<string | null>(null);
+  const [insightsAgentId, setInsightsAgentId] = useState<string | null>(null);
+  const [insightsRefreshNonce, setInsightsRefreshNonce] = useState(0);
+  // S38 (release201/12 v2.0.9) — custom range UX. When set, picker shows
+  // "Custom <from> → <to>"; URL syncs `range=custom&from=YYYY-MM-DD&to=…`.
+  // BFF (`fetchOverview/Project/Agent`) still receives the preset `range`
+  // value since the endpoint shape didn't change in this PR — custom is a
+  // local visual concept until 12 §7 adds custom support upstream.
+  const [insightsCustomRange, setInsightsCustomRange] = useState<InsightsCustomRange | null>(null);
+  // Drives "Last updated X min ago" in the surface header. Bumped whenever
+  // a view successfully renders fresh data (refreshNonce or initial load).
+  // For S38 we bump on refreshNonce change as a coarse proxy — sufficient
+  // for the picker; views still own their own asOf timestamp display.
+  const [insightsLastUpdated, setInsightsLastUpdated] = useState<Date | null>(null);
   useEffect(() => {
-    if (inspector?.kind === 'asset' && activeSurface !== 'library') {
+    setInsightsLastUpdated(new Date());
+  }, [insightsRefreshNonce, insightsView, insightsRange, insightsProjectId, insightsAgentId, insightsCustomRange]);
+  // In full-screen mode the asset inspector overlays the library surface, so
+  // navigating to a non-library surface (left rail, mobile nav, task drawer's
+  // "Open in Library" + back, etc.) should close it so it doesn't trap the
+  // user on top of the wrong surface. In split mode the preview is docked
+  // beside whatever surface is active, so it's fine to keep it open across
+  // surface switches.
+  useEffect(() => {
+    if (
+      previewLayout === 'full' &&
+      inspector?.kind === 'asset' &&
+      previewSurfaceRef.current &&
+      activeSurface !== previewSurfaceRef.current
+    ) {
       setInspector(null);
+      setPreviewMaximized(false);
+      previewSurfaceRef.current = null;
+      replaceWorkspaceAssetQuery(null);
     }
-  }, [activeSurface, inspector]);
+  }, [activeSurface, inspector, previewLayout]);
   const [prefillContactUserId, setPrefillContactUserId] = useState<string | null>(null);
   // Wave-9 Phase 3.3: when the task drawer's "Open in Library" lands,
   // we both flip activeSurface to 'library' AND pass this folder down to
@@ -241,7 +335,7 @@ export default function WorkspacePage() {
   const [libraryInitialFolder, setLibraryInitialFolder] = useState<string | null | undefined>(undefined);
   // Memory Line B: ⌘K + Asset detail "View as Memory" routes through here.
   const [memoryJumpPath, setMemoryJumpPath] = useState<string | null>(null);
-  const [saveAsMemorySource, setSaveAsMemorySource] = useState<SaveAsMemorySource | null>(null);
+  const [forwardSource, setForwardSource] = useState<MessageForwardSource | null>(null);
   const [proposalReviewOpen, setProposalReviewOpen] = useState(false);
   const [pendingProposalCount, setPendingProposalCount] = useState(0);
   const [proposalRefreshTick, setProposalRefreshTick] = useState(0);
@@ -258,7 +352,8 @@ export default function WorkspacePage() {
     const contactId = new URLSearchParams(window.location.search).get('addContact');
     if (!contactId) return;
     setPrefillContactUserId(contactId);
-    setActiveSurface('contacts');
+    setActiveSurface('chats');
+    setMobileSurface('chats');
     window.history.replaceState(null, '', '/workspace');
   }, []);
 
@@ -273,6 +368,149 @@ export default function WorkspacePage() {
     if (!focusId) return;
     setPendingFocusTaskId(focusId);
     window.history.replaceState(null, '', '/workspace');
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const assetId = new URLSearchParams(window.location.search).get('asset');
+    if (!assetId) return;
+    setActiveSurface('library');
+    setMobileSurface('library');
+    setInspector({ kind: 'asset', assetId });
+  }, []);
+
+  // release201 S12 — when Insights is active, mirror its scope into the URL
+  // so deep-links survive (refresh + share). When Insights is not active,
+  // strip the insights params so other surfaces don't carry stale scope in
+  // the URL. Uses `router.replace` so the browser history isn't polluted.
+  const syncInsightsUrl = useCallback(
+    (next: {
+      surface?: WorkspaceSurface;
+      view?: InsightsView;
+      range?: InsightsRange;
+      projectId?: string | null;
+      agentId?: string | null;
+      // S38 — `customRange === null` clears `?from=&to=` AND resets `?range=`
+      // back to the preset; `customRange === undefined` leaves whatever was
+      // there in place. Symmetric with the project/agent id treatment above.
+      customRange?: InsightsCustomRange | null;
+    }) => {
+      if (typeof window === 'undefined') return;
+      const sp = new URLSearchParams(window.location.search);
+      const surface = next.surface ?? activeSurface;
+      if (surface === 'insights') {
+        sp.set('surface', 'insights');
+        sp.set('view', next.view ?? insightsView);
+        const effectiveCustom = next.customRange !== undefined ? next.customRange : insightsCustomRange;
+        if (effectiveCustom) {
+          sp.set('range', 'custom');
+          sp.set('from', effectiveCustom.from);
+          sp.set('to', effectiveCustom.to);
+        } else {
+          sp.set('range', next.range ?? insightsRange);
+          sp.delete('from');
+          sp.delete('to');
+        }
+        const pid = next.projectId !== undefined ? next.projectId : insightsProjectId;
+        if (pid) sp.set('projectId', pid);
+        else sp.delete('projectId');
+        const aid = next.agentId !== undefined ? next.agentId : insightsAgentId;
+        if (aid) sp.set('agentId', aid);
+        else sp.delete('agentId');
+      } else {
+        sp.delete('surface');
+        sp.delete('view');
+        sp.delete('range');
+        sp.delete('from');
+        sp.delete('to');
+        sp.delete('projectId');
+        sp.delete('agentId');
+      }
+      const qs = sp.toString();
+      router.replace(qs ? `/workspace?${qs}` : '/workspace');
+    },
+    [activeSurface, insightsView, insightsRange, insightsProjectId, insightsAgentId, insightsCustomRange, router],
+  );
+
+  /**
+   * release201 S12 — open Insights as an in-shell surface, optionally
+   * pre-scoped to a project or agent. Single entry-point for all the
+   * deep-link callers (business event cards, session-context-sidebar,
+   * project-overview drawer). Replaces the legacy
+   * `window.location.href = '/workspace/insights?...'` pattern.
+   */
+  const openInsightsSurface = useCallback(
+    (opts?: { view?: InsightsView; projectId?: string | null; agentId?: string | null }) => {
+      const view = opts?.view ?? (opts?.projectId ? 'project' : opts?.agentId ? 'agent' : insightsView);
+      setInsightsView(view);
+      if (opts?.projectId !== undefined) setInsightsProjectId(opts.projectId);
+      if (opts?.agentId !== undefined) setInsightsAgentId(opts.agentId);
+      setActiveSurface('insights');
+      setMobileSurface('insights');
+      syncInsightsUrl({
+        surface: 'insights',
+        view,
+        projectId: opts?.projectId !== undefined ? opts.projectId : insightsProjectId,
+        agentId: opts?.agentId !== undefined ? opts.agentId : insightsAgentId,
+      });
+    },
+    [insightsView, insightsProjectId, insightsAgentId, syncInsightsUrl],
+  );
+
+  // Keep the URL in sync when the user navigates surfaces (left rail / mobile
+  // nav / programmatic setActiveSurface from other actions). Idempotent —
+  // syncInsightsUrl re-reads the current location each call, so duplicate
+  // pushes still produce the same query string.
+  useEffect(() => {
+    syncInsightsUrl({ surface: activeSurface });
+    // intentionally exclude syncInsightsUrl dep — we want to re-run on surface
+    // changes, not on every state update that re-creates the callback.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSurface]);
+
+  // release201 S12 — read `?surface=insights&view=…&range=…&projectId=…&agentId=…`
+  // on mount so deep links (legacy /workspace/insights redirect + business cards
+  // + project-overview "Open dashboard") land on the right view with the
+  // right scope. Sentinel sentinels: invalid view/range → fall back to
+  // overview/7d (matches the old standalone page's behaviour).
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const sp = new URLSearchParams(window.location.search);
+    const surface = sp.get('surface');
+    const view = sp.get('view');
+    const range = sp.get('range');
+    const fromParam = sp.get('from');
+    const toParam = sp.get('to');
+    const projectId = sp.get('projectId');
+    const agentId = sp.get('agentId');
+    if (view && VALID_INSIGHTS_VIEWS.has(view as InsightsView)) {
+      setInsightsView(view as InsightsView);
+    }
+    if (range && VALID_INSIGHTS_RANGES.has(range as InsightsRange)) {
+      setInsightsRange(range as InsightsRange);
+    }
+    // S38 — `?range=custom&from=YYYY-MM-DD&to=YYYY-MM-DD` rehydrates the
+    // custom range from a shared URL. Only accept ISO `YYYY-MM-DD` shape;
+    // bad input is silently dropped (we keep the preset range).
+    if (
+      range === 'custom' &&
+      fromParam &&
+      toParam &&
+      /^\d{4}-\d{2}-\d{2}$/.test(fromParam) &&
+      /^\d{4}-\d{2}-\d{2}$/.test(toParam) &&
+      fromParam <= toParam
+    ) {
+      setInsightsCustomRange({ from: fromParam, to: toParam });
+    }
+    if (projectId) setInsightsProjectId(projectId);
+    if (agentId) setInsightsAgentId(agentId);
+    if (surface === 'insights') {
+      setActiveSurface('insights');
+      setMobileSurface('insights');
+    } else if (surface === 'tasks' || surface === 'library' || surface === 'runtime' || surface === 'chats') {
+      setActiveSurface(surface);
+      setMobileSurface(surface === 'runtime' ? 'runtime' : (surface as MobileSurface));
+    }
   }, []);
 
   // ─── Reload helpers — share between bootstrap + post-mutation refreshes ──
@@ -332,9 +570,9 @@ export default function WorkspacePage() {
 
   const reloadRuntimeInstallations = useCallback(async (wsId: string) => {
     const res = await imFetch<RuntimeInstallationDTO[]>(
-      `/api/workspace/runtime-installations?workspaceId=${encodeURIComponent(wsId)}`,
+      `/api/workspace/runtime-installations?workspaceId=${encodeURIComponent(wsId)}&includeStopped=true`,
     );
-    if (res.ok) setRuntimeInstallations(res.data ?? []);
+    if (res.ok) setRuntimeInstallations(filterRuntimeInstallationsForWorkspaceUi(res.data ?? []));
   }, []);
 
   const reloadProfiles = useCallback(async (wsId: string) => {
@@ -346,7 +584,12 @@ export default function WorkspacePage() {
 
   const reloadConversations = useCallback(
     async (wsId: string) => {
-      const res = await imFetch<ConversationDTO[]>(`/conversations?workspaceId=${encodeURIComponent(wsId)}`);
+      // withUnread=true — the server only computes unreadCount when this flag
+      // is set (default 0). Without it the session-list unread badge resets to
+      // 0 on every reload and only ever flashes via the live message.new bump.
+      const res = await imFetch<ConversationDTO[]>(
+        `/conversations?workspaceId=${encodeURIComponent(wsId)}&withUnread=true`,
+      );
       if (res.ok) {
         setConversations(res.data ?? []);
       } else {
@@ -357,8 +600,13 @@ export default function WorkspacePage() {
   );
 
   const reloadAssets = useCallback(async (wsId: string) => {
+    // 2026-05-23: bumped limit 100→200 (server cap) so task-board's
+    // `assetsByTaskId` map can populate Paperclip badges + counts for the
+    // bulk of task-produced artifacts. Workspaces with >200 total assets
+    // still lose the badge for older tasks; the drawer's targeted
+    // /assets?taskId=... fetch (task-detail-drawer.tsx) covers that gap.
     const [assetsRes, filesRes] = await Promise.all([
-      imFetch<AssetDTO[]>(`/assets?workspaceId=${encodeURIComponent(wsId)}&limit=100`),
+      imFetch<AssetDTO[]>(`/assets?workspaceId=${encodeURIComponent(wsId)}&limit=200`),
       imFetch<WorkspaceFileDTO[]>(`/workspaces/${encodeURIComponent(wsId)}/files`),
     ]);
     if (assetsRes.ok) setAssets(assetsRes.data ?? []);
@@ -397,7 +645,7 @@ export default function WorkspacePage() {
 
       const [meRes, convRes, agentsRes] = await Promise.all([
         imFetch<UserProfileDTO>('/users/me'),
-        imFetch<ConversationDTO[]>(`/conversations?workspaceId=${encodeURIComponent(defaultWs.id)}`),
+        imFetch<ConversationDTO[]>(`/conversations?workspaceId=${encodeURIComponent(defaultWs.id)}&withUnread=true`),
         loadOwnedAgents(),
       ]);
       if (cancelled) return;
@@ -407,9 +655,8 @@ export default function WorkspacePage() {
       if (convRes.ok) {
         setConversations(convRes.data ?? []);
         const first = (convRes.data ?? [])[0];
-        // Wave-8 W4: on mobile we want to land on the sessions LIST, not on
-        // the channel itself — auto-selecting a session on mobile would skip
-        // straight to the full-screen ImChannel and bypass MobileSessionsList.
+        // On mobile we land on the Chats directory, not directly inside the
+        // first conversation, so Sessions / People stay reachable first.
         const isMobile =
           typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(max-width: 767px)').matches;
         if (first && !isMobile) setSelectedConversationId(first.id);
@@ -433,7 +680,7 @@ export default function WorkspacePage() {
         imFetch<ContactRequestDTO[]>('/contacts/requests/sent?limit=100'),
         imFetch<WorkspaceRuntimeDTO>(`/workspaces/${encodeURIComponent(defaultWs.id)}/runtime`),
         imFetch<RuntimeInstallationDTO[]>(
-          `/api/workspace/runtime-installations?workspaceId=${encodeURIComponent(defaultWs.id)}`,
+          `/api/workspace/runtime-installations?workspaceId=${encodeURIComponent(defaultWs.id)}&includeStopped=true`,
         ),
         imFetch<AssetDTO[]>(`/assets?workspaceId=${encodeURIComponent(defaultWs.id)}&limit=100`),
         imFetch<WorkspaceFileDTO[]>(`/workspaces/${encodeURIComponent(defaultWs.id)}/files`),
@@ -445,7 +692,9 @@ export default function WorkspacePage() {
       if (receivedRequestsRes.ok) setReceivedRequests(receivedRequestsRes.data ?? []);
       if (sentRequestsRes.ok) setSentRequests(sentRequestsRes.data ?? []);
       if (runtimeRes.ok) setRuntime(runtimeRes.data ?? null);
-      if (runtimeInstallationsRes.ok) setRuntimeInstallations(runtimeInstallationsRes.data ?? []);
+      if (runtimeInstallationsRes.ok) {
+        setRuntimeInstallations(filterRuntimeInstallationsForWorkspaceUi(runtimeInstallationsRes.data ?? []));
+      }
       if (assetsRes.ok) setAssets(assetsRes.data ?? []);
       if (filesRes.ok) setWorkspaceFiles(filesRes.data ?? []);
     })();
@@ -461,6 +710,82 @@ export default function WorkspacePage() {
   // callback would make React Compiler infer the broader `workspace` dep and
   // skip memoization.
   const workspaceId = workspace?.id ?? null;
+
+  // release201/09 Phase 1 — Project scope (opt-in 中间层). Phase 1 不接入资源
+  // filter,Phase 2 起 task-board/library/chats 才会消费 activeProjectFilter.
+  // release201/09 Phase 4 — adds soft-archive UI surface: archived projects
+  // are lazy-loaded on toggle, never made the active filter, restorable via
+  // PATCH status='active'.
+  const {
+    projects: projectsList,
+    loading: projectsLoading,
+    activeFilter: activeProjectFilter,
+    setActiveFilter: setActiveProjectFilter,
+    reload: reloadProjects,
+    showArchived: showArchivedProjects,
+    setShowArchived: setShowArchivedProjects,
+    archivedProjects,
+    archivedLoading: archivedProjectsLoading,
+  } = useProjects(workspaceId);
+  // Project overview drawer state (09 §15.1 Phase 4 §8.7). Selected id is
+  // independent of the active filter so the user can view (e.g.) an
+  // archived project without changing the surface scope.
+  const [projectOverviewId, setProjectOverviewId] = useState<string | null>(null);
+
+  /**
+   * One-click save for chat messages — replaces the old SaveAsMemoryModal
+   * flow. Defaults match what the modal used (`pageType: 'leaf'`,
+   * `visibility: 'workspace'`, auto-suggested path). No popup; toast only.
+   */
+  const saveMessageAsMemory = useCallback(
+    async (payload: {
+      conversationId: string;
+      messageId: string;
+      text: string;
+      authorImUserId: string;
+      createdAt: string;
+    }) => {
+      if (!workspaceId) {
+        addToast('Cannot save — workspace not loaded.', 'error');
+        return;
+      }
+      const slug =
+        payload.text
+          .toLowerCase()
+          .replace(/[^a-z0-9\s-]/g, '')
+          .trim()
+          .replace(/\s+/g, '-')
+          .replace(/-{2,}/g, '-')
+          .replace(/^-|-$/g, '')
+          .slice(0, 40) || 'untitled';
+      const stamp = new Date(payload.createdAt || Date.now()).toISOString().slice(0, 10);
+      const path = `memory/notes/${stamp}-${slug}.md`;
+      const content = [
+        '# Captured chat message',
+        '',
+        `> From **${payload.authorImUserId}** at ${payload.createdAt}`,
+        '',
+        payload.text,
+      ].join('\n');
+      const sourceRefs = [
+        `conversation:${payload.conversationId}`,
+        `message:${payload.messageId}`,
+        `actor:${payload.authorImUserId}`,
+      ];
+      const res = await createMemoryPage({
+        workspaceId,
+        path,
+        content,
+        pageType: 'leaf',
+        visibility: 'workspace',
+        sourceRefs,
+        rationale: 'Saved from chat via bubble action bar',
+      });
+      if (res.ok) addToast('Saved to memory.', 'success');
+      else addToast(`Save failed: ${res.message}`, 'error');
+    },
+    [workspaceId, addToast],
+  );
 
   // Memory Line B / B7 — pending proposal counter for the rail badge.
   useEffect(() => {
@@ -480,8 +805,16 @@ export default function WorkspacePage() {
     if (!workspaceId) return;
     setTasksLoading(true);
     setTaskError(null);
+    // release201/09 §4.2 Phase 2 — forward the active project filter so the
+    // service can scope task list (`__unscoped` / specific id / 'all'). The
+    // chip's `'all'` sentinel resolves to "no filter" on the server side
+    // (parseProjectIdFilter), so we still send it for analytics symmetry.
+    const projectParam =
+      activeProjectFilter && activeProjectFilter !== 'all'
+        ? `&projectId=${encodeURIComponent(activeProjectFilter)}`
+        : '';
     const res = await imFetch<TaskDTO[]>(
-      `/tasks?workspaceId=${encodeURIComponent(workspaceId)}&view=board&kind=work_item,goal&limit=100`,
+      `/tasks?workspaceId=${encodeURIComponent(workspaceId)}&view=board&kind=work_item,goal&limit=100${projectParam}`,
     );
     if (!res.ok) {
       setTaskError(res.message);
@@ -490,7 +823,7 @@ export default function WorkspacePage() {
     }
     setTasks((res.data ?? []).filter(isBoardProjectionTask));
     setTasksLoading(false);
-  }, [workspaceId]);
+  }, [workspaceId, activeProjectFilter]);
 
   useEffect(() => {
     if (workspaceId) void reloadTasks();
@@ -509,6 +842,77 @@ export default function WorkspacePage() {
     return () => clearInterval(id);
   }, [workspaceId, reloadRuntime, reloadRuntimeInstallations]);
 
+  /**
+   * Wave 3 C2 §4.8.2.3 — track contested-binding count at page level so the
+   * Devices tile in LeftRail shows a red badge even when the user hasn't
+   * opened the Devices surface yet. We poll lazily (60s) and on every
+   * `agent.binding.*` SSE event — the count is small ({0, 1, 2, ...}) so
+   * a thin polling layer is the simplest correct mechanism. RuntimeManager
+   * still owns the full binding list for its own panel.
+   */
+  const [contestedBindingCount, setContestedBindingCount] = useState(0);
+  const reloadContestedBindings = useCallback(async () => {
+    if (!workspaceId) {
+      setContestedBindingCount(0);
+      return;
+    }
+    const res = await listAgentBindings(workspaceId);
+    if (!res.ok) return;
+    setContestedBindingCount(res.data.bindings.filter((b) => isCurrentlyContested(b)).length);
+  }, [workspaceId]);
+  useEffect(() => {
+    void reloadContestedBindings();
+    if (!workspaceId) return;
+    const id = setInterval(() => void reloadContestedBindings(), 5_000);
+    return () => clearInterval(id);
+  }, [workspaceId, reloadContestedBindings]);
+
+  // Coalesced SSE-driven invalidation (2026-05-30).
+  //
+  // The sync stream pushes one envelope per domain event (live tail *and*
+  // cursor backfill). The handler below used to fire a full REST refetch
+  // per envelope — e.g. every replayed `agent.binding.*` triggered a fresh
+  // agent-bindings GET, *and* re-dispatched a window event that made
+  // RuntimeManager refetch the same list again. A reconnect that replayed
+  // N binding events therefore produced ~2N back-to-back requests. We now
+  // accumulate the dirty domains and flush each at most once per ~250ms
+  // tick, so a burst (replay gap or a rebind that emits
+  // contested→rebound→contestCleared) collapses to a single refetch per
+  // domain. The cursor fix below keeps the replay gap small in the first
+  // place; this is defense-in-depth against bursts.
+  type InvalidationDomain = 'assets' | 'contacts' | 'runtime' | 'bindings';
+  const invalidateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const dirtyDomainsRef = useRef<Set<InvalidationDomain>>(new Set());
+  const flushInvalidations = useCallback(() => {
+    invalidateTimerRef.current = null;
+    const dirty = dirtyDomainsRef.current;
+    if (dirty.size === 0) return;
+    dirtyDomainsRef.current = new Set();
+    if (dirty.has('contacts')) void reloadContacts();
+    if (dirty.has('bindings')) {
+      void reloadContestedBindings();
+      // Fan out to RuntimeManager's own list panel via the existing window
+      // event — but only once per coalesced flush, not once per envelope.
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(
+          new CustomEvent('prismer:agent-binding', { detail: { type: 'invalidate', payload: null } }),
+        );
+      }
+    }
+    if (workspaceId) {
+      if (dirty.has('assets')) void reloadAssets(workspaceId);
+      if (dirty.has('runtime')) void reloadRuntimeInstallations(workspaceId);
+    }
+  }, [workspaceId, reloadContacts, reloadContestedBindings, reloadAssets, reloadRuntimeInstallations]);
+  const invalidate = useCallback(
+    (domain: InvalidationDomain) => {
+      dirtyDomainsRef.current.add(domain);
+      if (invalidateTimerRef.current) return; // flush already scheduled
+      invalidateTimerRef.current = setTimeout(flushInvalidations, 250);
+    },
+    [flushInvalidations],
+  );
+
   // Wave-8 W8 C7 + W9: workspace-shell SSE subscriber.
   //
   // W8 covers `contact.*` events; W9 extends to `task.*` and `runtime.*`. The
@@ -524,23 +928,242 @@ export default function WorkspacePage() {
     const token = getWorkspaceToken();
     if (!token) return;
 
-    const es = new EventSource(`/api/im/sync/stream?token=${encodeURIComponent(token)}&since=0`);
+    // P2 (2026-05-25): cursor-based SSE replay. Read the last-seen seq
+    // from localStorage and pass it via &since= so the cloud replays
+    // events missed during the disconnect window.
+    //
+    // 2026-05-30 fix: gate the connection on a *resolved* identity. The old
+    // code read `meIdRef.current`, which is populated by a separate effect
+    // and was frequently still null on first authenticated render — so the
+    // cursor lookup fell through to `since=0`, asking the server to replay
+    // the user's entire event history on every connect (and re-truncate +
+    // reconnect when it exceeded BACKFILL_CAP). We now wait for `me.id` and
+    // re-subscribe exactly once when identity resolves (null → id is a
+    // one-shot transition, so this does not thrash the long-lived stream).
+    const uid = me?.id ?? null;
+    if (!uid) return;
+    const cursorStream = 'sync';
+    const initialCursor = loadCursor(cursorStream, uid);
+    const es = new EventSource(`/api/im/sync/stream?token=${encodeURIComponent(token)}&since=${initialCursor}`);
     const handler = (raw: MessageEvent) => {
       try {
-        const event = JSON.parse(raw.data) as { type?: string };
+        const event = JSON.parse(raw.data) as {
+          type?: string;
+          data?: { workspaceId?: string | null; assetId?: string | null };
+          seq?: number;
+          replayed?: boolean;
+        };
         if (typeof event.type !== 'string') return;
+        // P2 control envelopes — don't advance cursor, just react.
+        if (event.type === 'sync.backfill.done') {
+          // Persist the high-water seq the server replayed so the *next*
+          // reconnect resumes from here instead of falling back to since=0.
+          // Without this the cursor never advances past the bootstrap value
+          // and every reconnect re-replays the full gap.
+          const doneSeq = (event as { seq?: number }).seq;
+          if (typeof doneSeq === 'number' && doneSeq > 0) saveCursor(cursorStream, uid, doneSeq);
+          return;
+        }
+        if (event.type === 'sync.backfill.truncated') {
+          // Cursor was too stale for the backfill cap. Resume from the
+          // *newest* replayed seq rather than resetting to 0 — resetting
+          // made the next reconnect request since=0, which re-replays the
+          // entire history and immediately re-truncates: an infinite
+          // full-replay storm. Persisting newestSeq closes the loop (the
+          // server's own design note says clients should "re-establish from
+          // the newest replayed seq"). One coalesced bootstrap reconcile
+          // covers the gap above newestSeq.
+          console.warn('[workspace] SSE backfill truncated — resuming from newestSeq + reconciling');
+          const newestSeq = (event as { newestSeq?: number }).newestSeq;
+          if (typeof newestSeq === 'number' && newestSeq > 0) saveCursor(cursorStream, uid, newestSeq);
+          invalidate('assets');
+          invalidate('runtime');
+          invalidate('contacts');
+          invalidate('bindings');
+          // EventSource reconnects on its own (the server closed); the next
+          // open uses the newestSeq cursor we just saved.
+          return;
+        }
+        // Persist cursor for next reconnect — only for real events with
+        // a meaningful seq (synthetic control envelopes already returned
+        // above).
+        if (typeof event.seq === 'number' && event.seq > 0) {
+          saveCursor(cursorStream, uid, event.seq);
+        }
+        // 2026-05-22 — page-level fan-out for message.new so the left-rail
+        // session list reflects unread state without depending on the user
+        // opening that conversation. ImChannel's own SSE listener only
+        // updates the *currently open* conversation; before this branch was
+        // here, every other session's `unreadCount` was frozen at whatever
+        // the bootstrap fetch returned.
+        if (event.type === 'message.new') {
+          const msg = (
+            event as {
+              data?: {
+                conversationId?: string;
+                senderId?: string;
+                createdAt?: string;
+                type?: string;
+                attachments?: unknown;
+              };
+            }
+          ).data;
+          const convId = msg?.conversationId;
+          // release202 ROOT FIX — a new asset created via the MESSAGE path
+          // (deriveFileMessageAttachment, i.e. `cloud file send` / cli-send)
+          // emits NO `asset.changed` event, and `publishAssetChanged` (the
+          // upload path) targets the asset OWNER (the agent), not the human —
+          // so the human's frontend gets ZERO refresh signal for an
+          // agent-delivered file. The workspace `assets` list (and the session
+          // sidebar's `sessionAssets` derived from it) therefore stay stale,
+          // and the inspector resolves the clicked asset against that stale
+          // list → "Asset unavailable". The ONE event that reliably reaches the
+          // human here is `message.new` (the chat updates). A `type:'file'`
+          // message (or any message carrying attachments) means a new asset
+          // exists → refresh the asset list so it appears in list + sidebar and
+          // the inspector can resolve it.
+          const attachments = msg?.attachments;
+          const hasAttachments =
+            (Array.isArray(attachments) && attachments.length > 0) ||
+            (typeof attachments === 'string' && attachments.length > 2 && attachments !== 'null');
+          if (workspaceId && (msg?.type === 'file' || hasAttachments)) {
+            invalidate('assets');
+            // Per-asset nudge: for agent/cli-delivered files the human never
+            // receives `asset.changed` over the SSE sync stream (the sync row
+            // is scoped to the agent owner / conversation participants, and this
+            // event has conversationId=null). `message.new` is the one signal
+            // that reliably reaches the human — forward each attachment's asset
+            // id into the asset-event bus so the just-mounted MessageAssetCard
+            // re-fetches its own `/:id/detail` and picks up the thumbnail
+            // derivative once it lands, without a whole-page reload.
+            const rawAttachments = Array.isArray(attachments)
+              ? attachments
+              : typeof attachments === 'string'
+                ? (() => {
+                    try {
+                      return JSON.parse(attachments) as unknown[];
+                    } catch {
+                      return [];
+                    }
+                  })()
+                : [];
+            for (const att of rawAttachments) {
+              if (att && typeof att === 'object') {
+                const a = att as { id?: unknown; assetId?: unknown };
+                const aid = typeof a.id === 'string' ? a.id : typeof a.assetId === 'string' ? a.assetId : null;
+                if (aid) publishAssetChanged(aid);
+              }
+            }
+          }
+          if (convId) {
+            const isSelfSent = !!msg?.senderId && msg.senderId === meIdRef.current;
+            const isOpen = convId === selectedConversationIdRef.current;
+            setConversations((prev) =>
+              prev.map((c) => {
+                if (c.id !== convId) return c;
+                const nextLastAt = msg?.createdAt ?? c.lastMessageAt ?? new Date().toISOString();
+                // Don't bump unread for self-sent messages or when the user
+                // currently has that conversation open. Either case "reads"
+                // the message implicitly.
+                const bumped = !isSelfSent && !isOpen;
+                return {
+                  ...c,
+                  lastMessageAt: nextLastAt,
+                  unreadCount: bumped ? (c.unreadCount ?? 0) + 1 : (c.unreadCount ?? 0),
+                };
+              }),
+            );
+          }
+          return;
+        }
+        if (event.type === 'workspace_file.changed' || event.type.startsWith('asset.')) {
+          const eventWorkspaceId = event.data?.workspaceId;
+          if (workspaceId && (!eventWorkspaceId || eventWorkspaceId === workspaceId)) {
+            invalidate('assets');
+          }
+          // Per-asset fan-out: forward the specific asset id into the in-process
+          // asset-event bus so an individual chat-attachment card (which resolves
+          // its own thumbnail via /:id/detail) can re-fetch ONLY its own row when
+          // its derivative lands — no dependence on the coarse list invalidate
+          // above, and reaches cards even when the event's workspace can't be
+          // matched (agent-delivered assets whose payload may omit workspaceId).
+          if (event.type === 'asset.changed') {
+            publishAssetChanged(event.data?.assetId ?? null);
+          }
+          return;
+        }
         if (event.type.startsWith('contact.')) {
           // Single re-pull for friends + sent + received covers every event
           // type — cheap relative to the visible UX win.
-          void reloadContacts();
+          invalidate('contacts');
           return;
         }
         if (event.type.startsWith('task.')) {
           // The task-stream hook owns the kanban refresh.
           return;
         }
+        if (event.type.startsWith('approval.')) {
+          return;
+        }
+        // v2.0.8 P0-3 (doc 21 §5.2) — accumulate dispatch in-flight set
+        // so AgentStateStrip lights the agent's ring immediately. We
+        // mutate by key, but React state needs a new Map instance to
+        // trigger the agentStatuses recompute, so each update clones the
+        // outer map shallowly. The inner Sets are also cloned only for
+        // the affected agent — leaves untouched entries reference-stable
+        // so the memo upstream short-circuits cleanly.
+        if (event.type === 'dispatch.lifecycle') {
+          const data = (
+            event as {
+              data?: {
+                agentImUserId?: string;
+                dispatchId?: string;
+                lifecycle?: 'received' | 'started' | 'completed' | 'failed';
+              };
+            }
+          ).data;
+          const agentId = data?.agentImUserId;
+          const dispatchId = data?.dispatchId;
+          const lifecycle = data?.lifecycle;
+          if (!agentId || !dispatchId || !lifecycle) return;
+          setDispatchInFlight((prev) => {
+            const prevSet = prev.get(agentId);
+            if (lifecycle === 'received' || lifecycle === 'started') {
+              if (prevSet?.has(dispatchId)) return prev;
+              const nextSet = new Set(prevSet ?? []);
+              nextSet.add(dispatchId);
+              const next = new Map(prev);
+              next.set(agentId, nextSet);
+              return next;
+            }
+            // completed / failed → drop the dispatchId. No-op when
+            // nothing to remove (e.g. we missed `received` on a stale
+            // tab).
+            if (!prevSet?.has(dispatchId)) return prev;
+            const nextSet = new Set(prevSet);
+            nextSet.delete(dispatchId);
+            const next = new Map(prev);
+            if (nextSet.size === 0) next.delete(agentId);
+            else next.set(agentId, nextSet);
+            return next;
+          });
+          return;
+        }
         if (event.type.startsWith('runtime.')) {
-          if (workspaceId) void reloadRuntimeInstallations(workspaceId);
+          if (workspaceId) invalidate('runtime');
+          return;
+        }
+        // Wave 3 C2 §4.8.2.3 — multi-daemon binding race surfacing. Treat
+        // every agent.binding.* event as a canonical invalidation, including
+        // contestCleared. Otherwise the left rail can keep a stale red badge
+        // until the next poll even after the cloud cleared contestedSince.
+        if (event.type.startsWith('agent.binding.')) {
+          // Coalesced: marks the bindings domain dirty. The flush both
+          // refetches the page-level contested count and dispatches the
+          // `prismer:agent-binding` window event (once) for RuntimeManager's
+          // list panel — so a replay/burst of binding events no longer fans
+          // out into one duplicated REST pair per envelope.
+          invalidate('bindings');
           return;
         }
       } catch {
@@ -551,8 +1174,69 @@ export default function WorkspacePage() {
     return () => {
       es.removeEventListener('sync', handler);
       es.close();
+      if (invalidateTimerRef.current) {
+        clearTimeout(invalidateTimerRef.current);
+        invalidateTimerRef.current = null;
+      }
     };
-  }, [isAuthenticated, isAuthLoading, reloadContacts, workspaceId, reloadRuntimeInstallations]);
+  }, [
+    isAuthenticated,
+    isAuthLoading,
+    me?.id,
+    workspaceId,
+    invalidate,
+  ]);
+
+  // Keep the SSE handler refs in sync with the latest selection + identity.
+  // Done as plain assignments inside an effect so the long-lived ES doesn't
+  // need to re-subscribe when the user clicks a different session.
+  useEffect(() => {
+    selectedConversationIdRef.current = selectedConversationId;
+  }, [selectedConversationId]);
+  useEffect(() => {
+    meIdRef.current = me?.id ?? null;
+  }, [me?.id]);
+
+  // Clear unread count on the conversation the user just opened. Without
+  // this the badge stays sticky even after they read the messages — the
+  // server doesn't push a "read" event back to ourselves. Also persist the
+  // cursor server-side; otherwise refresh recomputes the unread count from
+  // the old IMReadCursor and the badge comes back.
+  //
+  // 2026-05-23 fix: pre-fix this was a single fire-and-forget POST that
+  // silently swallowed 401/403/transient-network errors. Test DB forensic
+  // showed 34 IMReadCursor rows total across 4 months + 70k messages,
+  // proving most markRead writes were dropped. Now: 3 attempts with
+  // exponential backoff (200ms/600ms/1.8s), explicit log on final fail.
+  useEffect(() => {
+    if (!selectedConversationId) return;
+    setConversations((prev) =>
+      prev.map((c) => (c.id === selectedConversationId && (c.unreadCount ?? 0) > 0 ? { ...c, unreadCount: 0 } : c)),
+    );
+    const convId = selectedConversationId;
+    let cancelled = false;
+    void (async () => {
+      let attempt = 0;
+      const maxAttempts = 3;
+      while (attempt < maxAttempts && !cancelled) {
+        const res = await imFetch(`/conversations/${encodeURIComponent(convId)}/read`, { method: 'POST' });
+        if (res.ok) return;
+        attempt += 1;
+        if (attempt >= maxAttempts) {
+          console.warn(
+            `[workspace] markRead persistence failed after ${maxAttempts} attempts for conv ${convId}; ` +
+              `unreadCount may resurface on refresh. lastError=${res.message ?? 'unknown'}`,
+          );
+          return;
+        }
+        // Exponential backoff: 200 / 600 / 1800 ms
+        await new Promise((r) => setTimeout(r, 200 * 3 ** (attempt - 1)));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedConversationId]);
 
   const streamState = useTaskStream({
     workspaceId: workspace?.id ?? null,
@@ -569,6 +1253,7 @@ export default function WorkspacePage() {
       workspaceId ? reloadProfiles(workspaceId) : Promise.resolve(),
       workspaceId ? reloadRuntime(workspaceId) : Promise.resolve(),
       workspaceId ? reloadRuntimeInstallations(workspaceId) : Promise.resolve(),
+      workspaceId ? reloadContestedBindings() : Promise.resolve(),
       workspaceId ? reloadAssets(workspaceId) : Promise.resolve(),
     ]);
     setRefreshing(false);
@@ -580,6 +1265,7 @@ export default function WorkspacePage() {
     reloadProfiles,
     reloadRuntime,
     reloadRuntimeInstallations,
+    reloadContestedBindings,
     reloadAssets,
     workspaceId,
   ]);
@@ -588,6 +1274,7 @@ export default function WorkspacePage() {
     () => conversations.find((c) => c.id === selectedConversationId) ?? null,
     [conversations, selectedConversationId],
   );
+  const selectedConversationAccess = useMemo(() => conversationAccess(selectedConversation), [selectedConversation]);
 
   // ─── Wave-8 W10: linked-context derivations ─────────────────────────────
   //
@@ -607,29 +1294,141 @@ export default function WorkspacePage() {
     const participantIds = new Set(selectedConversation.participants.map((p) => p.userId));
     return agents.filter((agent) => participantIds.has(agent.userId));
   }, [selectedConversation, agents]);
+
+  // Workspace-wide imUserId → agentType lookup. Feeds ImChannel's message
+  // avatars and members panel so each agent renders with its role icon
+  // (Crown for CEO, Wrench for Engineer, etc.) instead of the generic Bot.
+  // Membership in this map ALSO signals "this id is an agent" — humans
+  // simply aren't present, so the Avatar falls back to initials.
+  const agentTypeByImUserId = useMemo<Record<string, string>>(() => {
+    const out: Record<string, string> = {};
+    for (const a of agents) {
+      if (a.agentType) out[a.userId] = a.agentType;
+    }
+    return out;
+  }, [agents]);
+
+  // release202/09 avatar consistency — message avatars need the agent's ASCII
+  // username (ceo/engineer/marketer) to resolve the role icon (agentType is a
+  // generic tier that maps to no icon; localized names never match). AgentDTO
+  // exposes only `userId` (the /me/agents row id), so we ALSO key by username
+  // → username (identity bridge): the workspace can carry multiple im_users
+  // rows for one logical agent (cloudUserId numericId-vs-userId divergence,
+  // see register.ts cloudOwnerWhere), so a message `senderId` may be a
+  // duplicate row not in this map. The companion `agentUsernames` set lets the
+  // message row detect agent senders by the conversation member's username
+  // even when the id misses.
+  const usernameByImUserId = useMemo<Record<string, string>>(() => {
+    const out: Record<string, string> = {};
+    for (const a of agents) {
+      if (a.username) out[a.userId] = a.username;
+    }
+    return out;
+  }, [agents]);
+  const agentUsernames = useMemo<Set<string>>(() => {
+    const out = new Set<string>();
+    for (const a of agents) {
+      if (a.username) out.add(a.username);
+    }
+    return out;
+  }, [agents]);
   const [currentTime] = useState(() => Date.now());
 
-  const recentAssets = useMemo(() => {
+  // Task 3 — workspace-wide agent live-status map. Powered by the shared
+  // SSE phase store (singleton subscriber, opened lazily on first mount)
+  // plus the agents / tasks / runtime triple page already holds. Recomputes
+  // every 10s via `statusTick` so heartbeat-aged offline/stuck transitions
+  // surface without needing a separate SSE event.
+  const phaseMap = useAgentPhaseMap();
+  const [statusTick, setStatusTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setStatusTick((tick) => tick + 1), 10_000);
+    return () => clearInterval(id);
+  }, []);
+
+  // v2.0.8 P0-3 (doc 21 §5.2) — dispatch in-flight accumulator. SSE
+  // `dispatch.lifecycle` events update this; `agentStatuses` derives
+  // 'working' classification when count > 0. Keyed by agentImUserId →
+  // Set<dispatchId> so duplicate `received` echoes from multiple Pods
+  // don't inflate the count (idempotent add/remove). Map collapses to
+  // Map<userId, number> for the deriveAgentStatus input.
+  const [dispatchInFlight, setDispatchInFlight] = useState<Map<string, Set<string>>>(() => new Map());
+  const dispatchInFlightByAgent = useMemo<Map<string, number>>(() => {
+    const out = new Map<string, number>();
+    for (const [agentId, set] of dispatchInFlight) {
+      if (set.size > 0) out.set(agentId, set.size);
+    }
+    return out;
+  }, [dispatchInFlight]);
+
+  const agentStatuses = useMemo<Map<string, AgentLiveStatus>>(() => {
+    return deriveWorkspaceAgentStatuses({
+      agents,
+      tasks,
+      runtime,
+      taskPhases: phaseMap,
+      dispatchInFlightByAgent,
+      now: Date.now(),
+    });
+    // statusTick is intentional — drives the recompute. ESLint warns but the
+    // tick value is unused inside the body (only its reference triggers
+    // re-derivation when heartbeats age out without new SSE events).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agents, tasks, runtime, phaseMap, dispatchInFlightByAgent, statusTick]);
+
+  const sessionAssets = useMemo(() => {
     if (!selectedConversationId) return [] as AssetDTO[];
-    const cutoff = currentTime - 7 * 24 * 60 * 60 * 1000;
     return assets
       .filter((asset) => {
         const meta = asset.metadata ?? {};
         const cid = typeof meta.conversationId === 'string' ? meta.conversationId : null;
         if (cid !== selectedConversationId) return false;
+        return asset.kind !== 'preview' && asset.sourceKind !== 'asset-derived' && !asset.derivationKind;
+      })
+      .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+  }, [assets, selectedConversationId]);
+
+  const recentAssets = useMemo(() => {
+    const cutoff = currentTime - 7 * 24 * 60 * 60 * 1000;
+    return sessionAssets
+      .filter((asset) => {
         const ts = Date.parse(asset.createdAt);
         return Number.isFinite(ts) && ts >= cutoff;
       })
-      .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
       .slice(0, 3);
-  }, [assets, currentTime, selectedConversationId]);
+  }, [currentTime, sessionAssets]);
+
+  const activeTasks = useMemo(() => tasks.filter((task) => task.status !== 'cancelled'), [tasks]);
 
   const taskStats = useMemo(() => {
-    const total = tasks.length;
-    const inProgress = tasks.filter((task) => task.status === 'running' || task.status === 'review').length;
-    const done = tasks.filter((task) => task.status === 'completed').length;
+    const total = activeTasks.length;
+    const inProgress = activeTasks.filter((task) => task.status === 'running' || task.status === 'review').length;
+    const done = activeTasks.filter((task) => task.status === 'completed').length;
     return { total, inProgress, done };
-  }, [tasks]);
+  }, [activeTasks]);
+
+  useEffect(() => {
+    function onProfileUpdated(event: Event) {
+      const updated = (event as CustomEvent<Partial<UserProfileDTO>>).detail;
+      if (!updated?.id) return;
+      setMe((prev) => (prev && prev.id === updated.id ? { ...prev, ...updated } : prev));
+      setContacts((prev) =>
+        prev.map((contact) =>
+          contact.userId === updated.id
+            ? {
+                ...contact,
+                username: updated.username ?? contact.username,
+                displayName: updated.displayName ?? contact.displayName,
+                ...(Object.prototype.hasOwnProperty.call(updated, 'avatarUrl') ? { avatarUrl: updated.avatarUrl } : {}),
+              }
+            : contact,
+        ),
+      );
+      if (workspaceId) void reloadConversations(workspaceId);
+    }
+    window.addEventListener('prismer:im-profile-updated', onProfileUpdated);
+    return () => window.removeEventListener('prismer:im-profile-updated', onProfileUpdated);
+  }, [reloadConversations, workspaceId]);
 
   // Wave-8 W10 — task drawer reverse-link. Drops the user back into the IM
   // panel, selects the conversation, and (on mobile) flips to the sessions
@@ -639,9 +1438,9 @@ export default function WorkspacePage() {
   const onOpenChatFromTask = useCallback(
     (conversationId: string) => {
       setSelectedConversationId(conversationId);
-      setImCollapsed(false);
+      setActiveSurface('chats');
       if (isMobileViewport) {
-        setMobileSurface('sessions');
+        setMobileSurface('chats');
       }
     },
     [isMobileViewport],
@@ -655,11 +1454,64 @@ export default function WorkspacePage() {
   }, []);
 
   // Wave-8 W10 — open asset inspector from chat header chip.
-  const onOpenAssetInspector = useCallback((assetId: string) => {
-    setActiveSurface('library');
-    setMobileSurface('library');
-    setInspector({ kind: 'asset', assetId });
-  }, []);
+  // Where the asset preview was opened FROM (e.g. 'chats'), so closing it
+  // returns there — to the same session at its scroll position — instead of
+  // stranding the user on the 'library' surface the preview forces.
+  const assetInspectorOriginRef = useRef<WorkspaceSurface | null>(null);
+  const onOpenAssetInspector = useCallback(
+    (assetId: string) => {
+      // Wide desktop: dock the preview beside the current surface (split) so
+      // the user keeps their context (e.g. the chat they opened it from).
+      // Narrow / mobile: keep the legacy behaviour — switch to the library
+      // surface and overlay it full screen.
+      const canSplit = previewContainerWideRef.current && !isMobileViewport;
+      if (canSplit) {
+        assetInspectorOriginRef.current = activeSurface;
+        // Split docks beside the current surface — not pinned until maximized.
+        previewSurfaceRef.current = null;
+      } else {
+        if (activeSurface !== 'library') assetInspectorOriginRef.current = activeSurface;
+        setActiveSurface('library');
+        setMobileSurface('library');
+        // Full from the start — pinned to the library surface it overlays.
+        previewSurfaceRef.current = 'library';
+      }
+      setPreviewMaximized(false);
+      setInspector({ kind: 'asset', assetId });
+      replaceWorkspaceAssetQuery(assetId);
+    },
+    [activeSurface, isMobileViewport],
+  );
+
+  const openInspector = useCallback(
+    (next: WorkspaceInspector) => {
+      if (next.kind === 'asset') {
+        onOpenAssetInspector(next.assetId);
+        return;
+      }
+      setInspector(next);
+      replaceWorkspaceAssetQuery(null);
+    },
+    [onOpenAssetInspector],
+  );
+
+  const closeInspector = useCallback(() => {
+    if (inspector?.kind === 'asset') {
+      replaceWorkspaceAssetQuery(null);
+      // Return to the surface the preview was opened from (e.g. the chat
+      // session). The chats surface remounts ImChannel, whose module-level
+      // scroll memory restores the prior scroll position.
+      const origin = assetInspectorOriginRef.current;
+      assetInspectorOriginRef.current = null;
+      if (origin && origin !== 'library') {
+        setActiveSurface(origin);
+        setMobileSurface(origin);
+      }
+    }
+    setPreviewMaximized(false);
+    previewSurfaceRef.current = null;
+    setInspector(null);
+  }, [inspector]);
 
   // Wave-8 W4: pin/mute toggle helpers — backend already exposes both PATCH
   // endpoints under /conversations/:id/{pin,mute}. After mutation we just
@@ -780,7 +1632,8 @@ export default function WorkspacePage() {
         if (result?.conversationId) {
           await reloadConversations(workspaceId);
           setSelectedConversationId(result.conversationId);
-          setImCollapsed(false);
+          setActiveSurface('chats');
+          setMobileSurface('chats');
         }
       }
       if (!workspaceId) {
@@ -793,7 +1646,8 @@ export default function WorkspacePage() {
             if (result?.conversationId) {
               await reloadConversations(def.id);
               setSelectedConversationId(result.conversationId);
-              setImCollapsed(false);
+              setActiveSurface('chats');
+              setMobileSurface('chats');
             }
             await reloadRuntime(def.id);
             await reloadRuntimeInstallations(def.id);
@@ -818,28 +1672,13 @@ export default function WorkspacePage() {
     addToast('Cloud device provisioning started.', 'success');
   }, [workspaceId, addToast, reloadRuntimeInstallations, reloadRuntime]);
 
-  const onNewSession = useCallback(async () => {
-    if (!workspaceId || !addToast) return;
-    const title = `Session ${new Date().toLocaleDateString('zh-CN')}`;
-    const res = await imFetch<{ id: string }>('/groups', {
-      method: 'POST',
-      body: JSON.stringify({ title, members: [] }),
-    });
-    if (!res.ok) {
-      addToast(`Create session failed: ${res.message}`, 'error');
-      return;
-    }
-    await reloadConversations(workspaceId);
-    setSelectedConversationId(res.data.id);
-    setImCollapsed(false);
-  }, [workspaceId, addToast, reloadConversations]);
-
   const onChannelCreated = useCallback(
     async (newConvId: string) => {
       if (!workspaceId) return;
       await reloadConversations(workspaceId);
       setSelectedConversationId(newConvId);
-      setImCollapsed(false);
+      setActiveSurface('chats');
+      setMobileSurface('chats');
     },
     [reloadConversations, workspaceId],
   );
@@ -881,7 +1720,6 @@ export default function WorkspacePage() {
       }
       if (selectedConversationId === session.id) {
         setSelectedConversationId(null);
-        setImCollapsed(true);
       }
       if (workspaceId) await reloadConversations(workspaceId);
       addToast('Session archived.', 'success');
@@ -891,18 +1729,19 @@ export default function WorkspacePage() {
 
   const onDeleteSession = useCallback(
     async (session: ConversationDTO) => {
-      if (!window.confirm(`Leave "${session.displayTitle || session.title || 'this session'}"?`)) return;
+      const access = conversationAccess(session);
+      const action = access.canDelete ? 'Delete' : 'Leave';
+      if (!window.confirm(`${action} "${session.displayTitle || session.title || 'this session'}"?`)) return;
       const res = await imFetch(`/conversations/${encodeURIComponent(session.id)}`, { method: 'DELETE' });
       if (!res.ok) {
-        addToast(`Leave failed: ${res.message}`, 'error');
+        addToast(`${action} failed: ${res.message}`, 'error');
         return;
       }
       if (selectedConversationId === session.id) {
         setSelectedConversationId(null);
-        setImCollapsed(true);
       }
       if (workspaceId) await reloadConversations(workspaceId);
-      addToast('Session left.', 'success');
+      addToast(access.canDelete ? 'Session deleted.' : 'Session left.', 'success');
     },
     [addToast, reloadConversations, selectedConversationId, workspaceId],
   );
@@ -915,7 +1754,8 @@ export default function WorkspacePage() {
       if (existing.ok && existing.data.exists && existing.data.conversationId) {
         if (workspaceId) await reloadConversations(workspaceId);
         setSelectedConversationId(existing.data.conversationId);
-        setImCollapsed(false);
+        setActiveSurface('chats');
+        setMobileSurface('chats');
         return;
       }
 
@@ -929,7 +1769,8 @@ export default function WorkspacePage() {
       }
       if (workspaceId) await reloadConversations(workspaceId);
       setSelectedConversationId(created.data.id);
-      setImCollapsed(false);
+      setActiveSurface('chats');
+      setMobileSurface('chats');
     },
     [addToast, reloadConversations, workspaceId],
   );
@@ -938,19 +1779,16 @@ export default function WorkspacePage() {
     (sessionId: string | null) => {
       if (!sessionId) {
         setSelectedConversationId(null);
-        setImCollapsed(true);
         return;
       }
-      // Re-clicking the active session: always expand the IM panel. The
-      // previous toggle behaviour fought with onChannelCreated(), which opens
-      // the panel automatically — a follow-up row click in the seed flow
-      // (which the W4 spec helper performs) would otherwise re-collapse it.
       if (sessionId === selectedConversationId) {
-        setImCollapsed(false);
+        setActiveSurface('chats');
+        setMobileSurface('chats');
         return;
       }
       setSelectedConversationId(sessionId);
-      setImCollapsed(false);
+      setActiveSurface('chats');
+      setMobileSurface('chats');
     },
     [selectedConversationId],
   );
@@ -959,6 +1797,25 @@ export default function WorkspacePage() {
     setUploadTarget(null);
     uploadInputRef.current?.click();
   }, []);
+
+  // Composer attachment-panel entry (File / Photos / Camera in the chat input).
+  // Differs from `onUploadAsset` (which is library-only) by tagging the upload
+  // target with `attachToConversation` so the post-upload step also POSTs a
+  // markdown message with the asset attached — otherwise files vanish into
+  // the asset library instead of appearing in the conversation stream.
+  const onComposerUploadAsset = useCallback(() => {
+    if (!selectedConversationId) {
+      setUploadTarget(null);
+      uploadInputRef.current?.click();
+      return;
+    }
+    setUploadTarget({
+      conversationId: selectedConversationId,
+      attachToConversation: true,
+      inputIntent: 'file_attachment',
+    });
+    uploadInputRef.current?.click();
+  }, [selectedConversationId]);
 
   const onUploadTaskAttachment = useCallback(
     (taskId: string) => {
@@ -969,15 +1826,19 @@ export default function WorkspacePage() {
   );
 
   const uploadAssetFiles = useCallback(
-    async (files: File[], target?: { conversationId?: string | null; sourceTaskId?: string | null } | null) => {
+    async (
+      files: File[],
+      target?: {
+        conversationId?: string | null;
+        sourceTaskId?: string | null;
+        attachToConversation?: boolean;
+        inputIntent?: 'vision_input' | 'file_attachment';
+      } | null,
+    ) => {
       if (!workspaceId || files.length === 0) return;
       let lastAsset: AssetDTO | null = null;
       const effectiveTarget = target ?? uploadTarget;
-      for (const file of files) {
-        const form = new FormData();
-        form.set('workspaceId', workspaceId);
-        form.set('file', file);
-        form.set('kind', file.type.startsWith('image/') ? 'image' : 'file');
+      for (const [fileIndex, file] of files.entries()) {
         // Wave-8 W10: when the upload originates inside a session (the
         // attachments panel button or the chat composer's paperclip), tag
         // the asset metadata with `conversationId` so the linked-context
@@ -986,16 +1847,43 @@ export default function WorkspacePage() {
         if (effectiveTarget?.conversationId ?? selectedConversationId) {
           meta.conversationId = effectiveTarget?.conversationId ?? selectedConversationId;
         }
+        const targetIntent =
+          effectiveTarget?.inputIntent ??
+          (effectiveTarget?.attachToConversation
+            ? file.type.startsWith('image/')
+              ? 'vision_input'
+              : 'file_attachment'
+            : null);
+        if (targetIntent) {
+          meta.intent = targetIntent;
+          meta.inputIntent = targetIntent;
+        }
         if (effectiveTarget?.sourceTaskId) {
-          form.set('sourceTaskId', effectiveTarget.sourceTaskId);
           meta.taskId = effectiveTarget.sourceTaskId;
         }
-        form.set('metadata', JSON.stringify(meta));
-        const res = await imFetch<AssetDTO>('/assets', {
-          method: 'POST',
-          body: form,
-          headers: {},
-        });
+        let res;
+        try {
+          res = await uploadAssetWithDirectFallback({
+            file,
+            workspaceId,
+            metadata: meta,
+            sourceTaskId: effectiveTarget?.sourceTaskId,
+            imFetch,
+            onProgress: (progress) =>
+              setUploadProgress({
+                filename: file.name,
+                fileIndex: fileIndex + 1,
+                totalFiles: files.length,
+                progress,
+              }),
+          });
+        } catch (err) {
+          addToast(
+            `Asset upload failed: could not hash "${file.name}" before upload (${err instanceof Error ? err.message : 'unknown error'}).`,
+            'error',
+          );
+          continue;
+        }
         if (!res.ok) {
           addToast(`Asset upload failed: ${res.message}`, 'error');
           continue;
@@ -1006,10 +1894,68 @@ export default function WorkspacePage() {
           method: 'POST',
           body: JSON.stringify({ path: file.name, assetId: asset.id }),
         });
+
+        // Composer-originated upload: also send a markdown message with the
+        // asset as an attachment, mirroring im-channel's `sendAssetAttachment`
+        // (drag-drop) shape so the message renders the same way and the
+        // dispatcher contract (`metadata.assetIds`) reaches the daemon.
+        if (effectiveTarget?.attachToConversation && effectiveTarget.conversationId) {
+          const attachKind: MessageAttachmentDTO['kind'] = (() => {
+            const k = asset.kind;
+            if (k === 'file' || k === 'image' || k === 'audio' || k === 'video' || k === 'asset') return k;
+            const m = asset.mime ?? '';
+            if (m.startsWith('image/')) return 'image';
+            if (m.startsWith('audio/')) return 'audio';
+            if (m.startsWith('video/')) return 'video';
+            return 'file';
+          })();
+          const title = asset.filename || file.name;
+          const attachment: MessageAttachmentDTO = {
+            kind: attachKind,
+            assetId: asset.id,
+            title,
+            filename: title,
+            mime: asset.mime ?? null,
+            sizeBytes: asset.sizeBytes ?? null,
+            contentHash: asset.contentHash ?? null,
+            thumbnailUrl: asset.thumbnailUrl ?? null,
+            revision: asset.revision ?? null,
+            role: 'attachment',
+          };
+          const sendRes = await sendMessage({
+            conversationId: effectiveTarget.conversationId,
+            content: `Attached asset: ${title}`,
+            type: 'markdown',
+            metadata: {
+              kind: 'workspace_asset_attachment',
+              assetIds: [asset.id],
+              asset: {
+                id: asset.id,
+                assetId: asset.id,
+                title,
+                kind: asset.kind,
+                mime: asset.mime,
+                sizeBytes: asset.sizeBytes,
+                contentHash: asset.contentHash,
+                intent: targetIntent ?? 'file_attachment',
+              },
+            },
+            attachments: [attachment],
+          });
+          if (!sendRes.ok) {
+            addToast(`Asset uploaded, but message attach failed: ${sendRes.message}`, 'error');
+          }
+        }
       }
       await reloadAssets(workspaceId);
-      if (lastAsset && !effectiveTarget?.sourceTaskId) onOpenAssetInspector(lastAsset.id);
+      // Don't pop the asset inspector when the file was attached to a
+      // conversation — the user already sees it in the chat stream, and an
+      // inspector overlay would feel like a context switch they didn't ask for.
+      if (lastAsset && !effectiveTarget?.sourceTaskId && !effectiveTarget?.attachToConversation) {
+        onOpenAssetInspector(lastAsset.id);
+      }
       setUploadTarget(null);
+      setUploadProgress(null);
       addToast(
         files.length === 1 ? `Asset "${files[0].name}" uploaded.` : `${files.length} assets uploaded.`,
         'success',
@@ -1027,6 +1973,16 @@ export default function WorkspacePage() {
       await uploadAssetFiles(files, target);
     },
     [uploadAssetFiles, uploadTarget],
+  );
+
+  const onComposerPasteFiles = useCallback(
+    async (files: File[]) => {
+      await uploadAssetFiles(
+        files,
+        selectedConversationId ? { conversationId: selectedConversationId, attachToConversation: true } : null,
+      );
+    },
+    [selectedConversationId, uploadAssetFiles],
   );
 
   const onTaskCreated = useCallback(async () => {
@@ -1089,6 +2045,21 @@ export default function WorkspacePage() {
           // an unhandled rejection in console — silent UX disaster.
           void (async () => {
             try {
+              if (event.organizationName && workspaceId) {
+                setWorkspace((prev) =>
+                  prev && prev.id === workspaceId
+                    ? {
+                        ...prev,
+                        name: event.organizationName ?? prev.name,
+                        metadata: {
+                          ...(prev.metadata ?? {}),
+                          organizationName: event.organizationName,
+                          simpleModeOrganizationName: event.organizationName,
+                        },
+                      }
+                    : prev,
+                );
+              }
               await reloadAgents();
               if (workspaceId) {
                 // allSettled — refresh failures in any one source must not
@@ -1100,6 +2071,53 @@ export default function WorkspacePage() {
                   reloadConversations(workspaceId),
                 ]);
               }
+              // After the group + welcome land, mint a 1:1 direct
+              // conversation with each role agent so the human has a
+              // private channel for each persona (kept parallel to the
+              // group's "团队会议" all-hands feed). The backend dedupes by
+              // (callerId, otherUserId), so re-running this on retry is
+              // idempotent. We allSettled them — partial failures are
+              // logged but never block navigate.
+              if (event.agentIds && event.agentIds.length > 0) {
+                const directs = await Promise.allSettled(
+                  event.agentIds.map((agentId) => createDirectConversation(agentId, workspaceId ?? null)),
+                );
+                const failed = directs.filter(
+                  (r) => r.status === 'rejected' || (r.status === 'fulfilled' && !r.value.ok),
+                ).length;
+                if (failed > 0) {
+                  console.warn(`[Workspace] ${failed}/${event.agentIds.length} direct sessions failed to create`);
+                }
+                if (workspaceId && failed < event.agentIds.length) {
+                  // Refresh conversations again so the new direct rows
+                  // show up in the LeftRail sessions list.
+                  await reloadConversations(workspaceId);
+                }
+              }
+
+              // Task 43 — Pre-seed a demo task + a product-intro markdown
+              // asset so the post-creation LaunchTour subagent has real
+              // cards to highlight. Best-effort: any internal failure
+              // resolves to `null` ids inside the helper; an unhandled
+              // throw is caught here. MUST NOT block navigation.
+              const seed = await seedLaunchTourContent({
+                workspaceId,
+                conversationId: event.conversationId,
+                agentIds: event.agentIds ?? [],
+                organizationName: event.organizationName ?? null,
+              }).catch((err) => {
+                console.warn('[Workspace] launch-tour seed failed', err);
+                return null;
+              });
+              if (seed) {
+                setLaunchTourSeed(seed);
+                setLaunchTourStage('pending');
+              }
+              // Refresh tasks + assets so the seeded rows are visible on
+              // the kanban / library before the launch tour starts.
+              if (workspaceId) {
+                await Promise.allSettled([reloadTasks(), reloadAssets(workspaceId)]);
+              }
             } catch (err) {
               console.error('[Workspace] simple-team post-success refresh failed', err);
               addToast('团队已创建,但侧边栏刷新失败,请手动刷新页面', 'info');
@@ -1107,7 +2125,8 @@ export default function WorkspacePage() {
             // Navigate ALWAYS runs: conversationId is backend-confirmed and
             // the navigate itself doesn't depend on the reload succeeding.
             setSelectedConversationId(event.conversationId);
-            setImCollapsed(false);
+            setActiveSurface('chats');
+            setMobileSurface('chats');
           })();
           break;
         }
@@ -1126,10 +2145,13 @@ export default function WorkspacePage() {
       onChannelCreated,
       onTaskCreated,
       reloadAgents,
+      reloadAssets,
       reloadConversations,
       reloadProfiles,
       reloadRuntime,
       reloadRuntimeInstallations,
+      reloadTasks,
+      addToast,
     ],
   );
 
@@ -1138,10 +2160,27 @@ export default function WorkspacePage() {
     setNewTaskOpen(true);
   }, []);
 
-  const onOpenTaskById = useCallback((taskId: string) => {
-    setSelectedTaskId(taskId);
-    setActiveSurface('tasks');
-  }, []);
+  const onOpenTaskById = useCallback(
+    (taskId: string) => {
+      setActiveSurface('tasks');
+      setMobileSurface('tasks');
+      void openTaskById(taskId);
+    },
+    [openTaskById],
+  );
+
+  // P1 (Debug Pipeline 2026-05-24) — stub retry callback for the
+  // DeliveryTimelineChip. P2 (parallel session, daemon-retry domain)
+  // wires this to `POST /api/im/tasks/runs/:id/retry` or equivalent;
+  // for now we only log so the chip's [Retry] button is observably
+  // present without making a half-baked network call.
+  const onRetryDeliveryMessage = useCallback(
+    (messageId: string) => {
+      console.log('[workspace] TODO: retry delivery for message', messageId);
+      addToast('Retry coming in P2 — daemon retry path still in flight.', 'info');
+    },
+    [addToast],
+  );
 
   // Default assignee for "+ Task" when invoked from a conversation context:
   // pick the first non-self member of the active group. Falls back to the
@@ -1161,9 +2200,15 @@ export default function WorkspacePage() {
       <SessionSettingsMenu
         isDark={isDark}
         isGroup={selectedConversation.type !== 'direct'}
-        myRole={selectedConversation.myRole}
         pinned={Boolean(selectedConversation.pinned)}
         muted={Boolean(selectedConversation.muted)}
+        canAddMember={selectedConversationAccess.canAddMember}
+        canRename={selectedConversationAccess.canRename}
+        canPin={selectedConversationAccess.canPin}
+        canMute={selectedConversationAccess.canMute}
+        canArchive={selectedConversationAccess.canArchive}
+        canLeave={selectedConversationAccess.canLeave}
+        canDelete={selectedConversationAccess.canDelete}
         onAddMember={() => setAddMemberOpen(true)}
         onRename={() => setRenameOpen(true)}
         onTogglePin={() => void togglePinSession(selectedConversation.id, !selectedConversation.pinned)}
@@ -1173,43 +2218,256 @@ export default function WorkspacePage() {
         onDelete={() => void onDeleteSession(selectedConversation)}
       />
     );
-  }, [selectedConversation, isDark, togglePinSession, toggleMuteSession, onArchiveSession, onDeleteSession]);
+  }, [
+    selectedConversation,
+    selectedConversationAccess,
+    isDark,
+    togglePinSession,
+    toggleMuteSession,
+    onArchiveSession,
+    onDeleteSession,
+  ]);
 
-  // First-visit tour gating: open after bootstrap completes if user has not
-  // seen it. Decoupled from bootstrap so the tour overlays a settled UI.
-  // Auto-skips under automation (navigator.webdriver true) so Playwright
-  // specs covering downstream surfaces don't get blocked by the overlay's
-  // pointer-event capture — production users still see the tour as normal.
+  // Task 41 — Auto-open Simple Mode for fresh users. Server-derived "no
+  // devices" is the only gate (per user direction): a workspace with no
+  // daemon is unusable regardless of how many orphan agent rows exist.
+  // Fires once per page session via `autoOpenedSimple`. The user can still
+  // close the modal; we don't re-open on close because the flag stays true.
   useEffect(() => {
     if (bootstrapping || bootstrapError) return;
-    if (hasSeenWorkspaceTour()) return;
     if (typeof navigator !== 'undefined' && navigator.webdriver) return;
-    // Brief delay for layout to settle (lg-only setup-progress anchor needs
-    // its width to compute before we measure).
-    const t = window.setTimeout(() => setTourOpen(true), 400);
-    return () => window.clearTimeout(t);
-  }, [bootstrapping, bootstrapError]);
+    // 1. runtime 未加载完 — 不决策,等下一次 effect 重跑
+    if (runtime === undefined || runtime === null) return;
+    // 2. 已有 daemonStatus='connected' 的真实在线 device — 不弹
+    const connectedDevices = runtime.devices?.filter((d) => d.daemonStatus === 'connected') ?? [];
+    if (connectedDevices.length > 0) return;
+    // 3. 刚创建过 / 正在创建 / 刚失败的 device — 不反复弹创建向导。
+    // Runtime 面板会显示对应 failed/provisioning card 和错误详情。
+    if (hasRecentDeviceAttempt(runtimeInstallations)) return;
+    // 4. workspace 已标记 onboarding 完成 — 不弹(metadata 字段可能不存在,安全访问)
+    if (workspace?.metadata?.onboardingComplete === true) return;
+    // 5. 已经在本 session 弹过 — 不重弹
+    if (autoOpenedSimple) return;
+    setAutoOpenedSimple(true);
+    setUnifiedInitialMode('simple');
+    setUnifiedOpen(true);
+  }, [bootstrapping, bootstrapError, autoOpenedSimple, runtime, runtimeInstallations, workspace]);
 
+  // First-visit tour gating: open after bootstrap completes only when the
+  // user is still on the empty state (no devices) AND the creation modal
+  // isn't currently open. Task 40 dropped the localStorage gate — the
+  // server-derived "no devices" check is now the only condition. The tour
+  // closes itself via `onDone` when the user clicks through / skips.
+  //
+  // Auto-skips under automation (navigator.webdriver) so Playwright specs
+  // for downstream surfaces aren't blocked by the overlay's pointer capture.
+  useEffect(() => {
+    if (bootstrapping || bootstrapError) return;
+    if (typeof navigator !== 'undefined' && navigator.webdriver) return;
+    if (unifiedOpen) return;
+    const devicesCount = runtime?.devices?.length ?? 0;
+    if (devicesCount > 0) return;
+    if (hasRecentDeviceAttempt(runtimeInstallations)) return;
+    // Task 43 — suppress the legacy 4-step WorkspaceTour while the
+    // post-creation LaunchTour is pending/running. Both tours own the
+    // overlay z-index and would otherwise stack. LaunchTour wins after
+    // simple-mode creation; if the user never ran simple-mode (stage
+    // stays `idle`) the legacy tour still opens. After LaunchTour
+    // finishes (stage = `done`), we intentionally do NOT re-open the
+    // legacy tour — the user has already seen the surfaces.
+    if (launchTourStage !== 'idle') return;
+    // Small debounce so the modal-close transition settles before the tour
+    // overlay measures its anchor rects.
+    const t = window.setTimeout(() => setTourOpen(true), 500);
+    return () => window.clearTimeout(t);
+  }, [bootstrapping, bootstrapError, unifiedOpen, runtime, runtimeInstallations, launchTourStage]);
+
+  // Task 43 — flip launch-tour stage `pending` → `running` as soon as the
+  // seed is in place. The setter is wired upstream when simple-mode
+  // completes; we want a tiny debounce so the surface reload (tasks +
+  // assets refresh after seed) has a chance to land before the tour
+  // tries to measure its first anchor.
+  useEffect(() => {
+    if (launchTourStage !== 'pending') return;
+    if (!launchTourSeed) return;
+    const t = window.setTimeout(() => setLaunchTourStage('running'), 400);
+    return () => window.clearTimeout(t);
+  }, [launchTourStage, launchTourSeed]);
+
+  // release201 v2.0.8 F-bug — persisted dismiss. localStorage key 按 workspace
+  // 隔离 (一个用户切到另一个 workspace 仍会看到引导).
   const dismissOnboardingChecklist = useCallback(() => {
     setOnboardingDismissed(true);
-    try {
-      localStorage.setItem('prismer.onboardingChecklistDismissed.v1', String(Date.now()));
-    } catch {
-      /* private browsing */
+    if (typeof window !== 'undefined' && workspace?.id) {
+      try {
+        window.localStorage.setItem(`prismer_onboarding_dismissed_${workspace.id}`, '1');
+      } catch {
+        /* localStorage full / disabled — session-scoped fallback is fine */
+      }
     }
-  }, []);
+  }, [workspace?.id]);
+
+  // release201 v2.0.8 F-bug — re-hydrate dismiss flag when workspace?.id
+  // resolves. Reading localStorage in useState initializer doesn't work
+  // because workspace is loaded async (bootstrap fetches default workspace
+  // after first render). 当 workspace.id 切换时也重新读取 (按 workspace 隔离).
+  useEffect(() => {
+    if (!workspace?.id || typeof window === 'undefined') return;
+    try {
+      const persisted = window.localStorage.getItem(`prismer_onboarding_dismissed_${workspace.id}`);
+      setOnboardingDismissed(persisted === '1');
+    } catch {
+      /* localStorage disabled — fall back to in-memory session flag */
+    }
+  }, [workspace?.id]);
 
   // Show floating onboarding checklist when:
   //   - tour has been completed/skipped (tour overlay would conflict)
-  //   - user hasn't dismissed
+  //   - user hasn't dismissed (persisted per-workspace via localStorage)
   //   - at least one of the 4 setup steps is incomplete
+  //   - workspace has 0 online devices (user 原话："device 为 0 的情况下"
+  //     才显示, 而不是 "用户从没尝试过 device 创建"). 一旦至少一台
+  //     device 真正在线就隐藏; 这样既覆盖 device=0 显示, 又避免 device
+  //     已就绪但用户没打开过引导的场景重复打扰.
   //   - we're not running under Playwright/automation (the card's "Create
   //     agent / Open session / Dispatch task / Add asset" buttons confuse
   //     accessible-name selectors in downstream specs)
   const allSetupDone = agents.length > 0 && conversations.length > 0 && tasks.length > 0 && assets.length > 0;
+  const hasOnlineDevice = (runtime?.devices?.length ?? 0) > 0;
   const isAutomation = typeof navigator !== 'undefined' && navigator.webdriver;
+  // Suppress the floating checklist whenever the unified creation modal is
+  // open — Task 41 auto-opens that modal for fresh users, and a competing
+  // bottom-right card would clash with the centered modal.
   const showOnboardingChecklist =
-    !bootstrapping && !bootstrapError && !tourOpen && !onboardingDismissed && !allSetupDone && !isAutomation;
+    !bootstrapping &&
+    !bootstrapError &&
+    !tourOpen &&
+    !onboardingDismissed &&
+    !allSetupDone &&
+    !hasOnlineDevice &&
+    !isAutomation &&
+    !unifiedOpen;
+
+  // release201/30 Phase 2 — inline upload progress shape. Bottom-right
+  // overlay removed; payload is forwarded down through ChatsSurface →
+  // ImChannel and rendered next to the composer file tray. Failure path
+  // still flows through the existing toast queue (see `addToast(... error)`
+  // in `runAssetUploadsCore`), so this surface is success-path only.
+  const composerUploadProgressView = useMemo(() => {
+    if (!uploadProgress) return null;
+    return {
+      filename: uploadProgress.filename,
+      percent:
+        typeof uploadProgress.progress.percent === 'number' && Number.isFinite(uploadProgress.progress.percent)
+          ? Math.min(100, Math.max(0, uploadProgress.progress.percent))
+          : null,
+      phaseLabel: uploadPhaseLabel(uploadProgress.progress.phase),
+      multiLabel:
+        uploadProgress.totalFiles > 1 ? `${uploadProgress.fileIndex}/${uploadProgress.totalFiles}` : null,
+    };
+  }, [uploadProgress]);
+
+  const renderChatsSurface = (showMobileBack = false) => (
+    <ChatsSurface
+      isDark={isDark}
+      conversations={conversations}
+      selectedConversation={selectedConversation}
+      selectedConversationId={selectedConversationId}
+      currentUserId={me?.id}
+      workspaceId={workspace?.id}
+      me={me}
+      contacts={contacts}
+      agents={agents}
+      agentStatuses={agentStatuses}
+      receivedRequests={receivedRequests}
+      sentRequests={sentRequests}
+      assets={assets}
+      files={workspaceFiles}
+      linkedTasks={linkedTasks}
+      linkedAgents={linkedAgents}
+      sessionAssets={sessionAssets}
+      recentAssets={recentAssets}
+      agentTypeByImUserId={agentTypeByImUserId}
+      usernameByImUserId={usernameByImUserId}
+      agentUsernames={agentUsernames}
+      taskPhaseMap={phaseMap}
+      dispatchInFlight={dispatchInFlight}
+      refreshing={refreshing}
+      showMobileBack={showMobileBack}
+      prefillContactUserId={prefillContactUserId}
+      headerActions={sessionSettingsMenuElement}
+      notify={addToast}
+      onSelectSession={onSelectSession}
+      onNewSession={() => setNewChannelOpen(true)}
+      onRefresh={onRefresh}
+      onRenameSession={onRenameSession}
+      onArchiveSession={onArchiveSession}
+      onDeleteSession={onDeleteSession}
+      onTogglePinSession={(session, pinned) => void togglePinSession(session.id, pinned)}
+      onToggleMuteSession={(session, muted) => void toggleMuteSession(session.id, muted)}
+      onUploadAsset={onUploadAsset}
+      onComposerUploadAsset={onComposerUploadAsset}
+      onComposerPasteFiles={onComposerPasteFiles}
+      onOpenAssets={() => {
+        setActiveSurface('library');
+        setMobileSurface('library');
+      }}
+      onOpenTask={onOpenTaskById}
+      onTaskChanged={reloadTasks}
+      onAddMember={() => setAddMemberOpen(true)}
+      onOpenAsset={onOpenAssetInspector}
+      onOpenAgent={onOpenAgentInspector}
+      onStartContactChat={onStartContactChat}
+      onRetryMessage={onRetryDeliveryMessage}
+      onSaveMessageAsMemory={(payload) => void saveMessageAsMemory(payload)}
+      onForwardMessage={(payload) => setForwardSource(payload)}
+      onOpenProjectInsights={(projectId) => openInsightsSurface({ view: 'project', projectId })}
+      uploadProgress={composerUploadProgressView}
+    />
+  );
+
+  // Asset preview panel (desktop). Rendered by SurfaceWithPreviewDock either
+  // docked beside the surface (split) or overlaid full screen — the panel
+  // switches its own root via the `layout` prop. The maximize/restore toggle
+  // is only offered when the content area is wide enough to split.
+  const assetPreviewPanel =
+    inspector?.kind === 'asset' ? (
+      <WorkspaceInspectorDialog
+        open
+        isDark={isDark}
+        workspaceName={workspace?.name ?? 'Personal Workspace'}
+        inspector={inspector}
+        agents={agents}
+        agentStatuses={agentStatuses}
+        profiles={profiles}
+        runtime={runtime}
+        assets={assets}
+        files={workspaceFiles}
+        layout={previewLayout}
+        onToggleLayout={
+          previewContainerWide
+            ? () =>
+                setPreviewMaximized((value) => {
+                  const next = !value;
+                  // Entering full screen pins the overlay to the surface it's
+                  // currently over so navigating away (not maximizing) closes it.
+                  if (next) previewSurfaceRef.current = activeSurface;
+                  return next;
+                })
+            : undefined
+        }
+        onOpenChange={(open) => {
+          if (!open) closeInspector();
+        }}
+        onSelectAgent={(agentId) => setInspector({ kind: 'agent', agentId })}
+        onOpenMemoryPage={(path) => {
+          setMemoryJumpPath(path);
+          setActiveSurface('library');
+          setMobileSurface('library');
+        }}
+        notify={addToast}
+      />
+    ) : null;
 
   // ─── Render ─────────────────────────────────────────────────────────────
   if (isAuthLoading || (!isAuthenticated && !bootstrapError)) {
@@ -1222,9 +2480,7 @@ export default function WorkspacePage() {
 
   return (
     <div
-      // ClientLayout's <main> consumes pt-[88px] + pb-12 = 136px. Page must
-      // match or it overflows main → browser-level scroll.
-      className={`flex h-[calc(100vh-136px)] flex-col overflow-hidden ${
+      className={`flex h-[calc(100vh-88px)] min-h-0 flex-col overflow-hidden ${
         isDark
           ? 'bg-zinc-950 text-zinc-200'
           : 'bg-[linear-gradient(180deg,#fbfbff_0%,#f7f8fc_48%,#fbfbff_100%)] text-zinc-900'
@@ -1234,11 +2490,38 @@ export default function WorkspacePage() {
         isDark={isDark}
         workspace={workspace}
         streamState={streamState}
+        runtime={runtime}
         onRefresh={onRefresh}
         refreshing={refreshing}
+        projectSwitcher={
+          // release201 S12 — ProjectSwitcher lives in the workspace-level top
+          // bar (was previously in left-rail). Switching project pivots the
+          // active filter, which every project-scoped surface (chats / tasks
+          // / library / insights) consumes via `activeProjectFilter`.
+          <ProjectSwitcher
+            isDark={isDark}
+            workspaceId={workspaceId}
+            projects={projectsList}
+            loading={projectsLoading}
+            activeFilter={activeProjectFilter}
+            onChange={setActiveProjectFilter}
+            onReload={reloadProjects}
+            notify={(msg, opts) =>
+              addToast(msg, opts?.kind === 'error' ? 'error' : opts?.kind === 'success' ? 'success' : 'info')
+            }
+            onOpenOverview={(id) => setProjectOverviewId(id)}
+            showArchived={showArchivedProjects}
+            onToggleShowArchived={setShowArchivedProjects}
+            archivedProjects={archivedProjects}
+            archivedLoading={archivedProjectsLoading}
+          />
+        }
       />
 
       <input ref={uploadInputRef} type="file" multiple className="hidden" onChange={onAssetFileSelected} />
+      {/* release201/30 Phase 2 — the bottom-right AssetUploadProgressOverlay
+          was retired in favour of an inline composer row. Failure path
+          still toasts via addToast(..., 'error'). */}
 
       {isMobileViewport ? (
         <div className="flex flex-1 min-h-0 flex-col overflow-hidden pb-14">
@@ -1268,46 +2551,45 @@ export default function WorkspacePage() {
                 <p className="mt-1 text-xs">Create your first agent — your workspace will be set up automatically.</p>
               </div>
             </div>
-          ) : mobileSurface === 'sessions' && selectedConversation ? (
-            <ImChannel
+          ) : mobileSurface === 'chats' ? (
+            renderChatsSurface(true)
+          ) : mobileSurface === 'insights' ? (
+            // release201 S12 + S32 (12 §11 Phase 4) — Insights surface in
+            // mobile shell. Single column, sparkline replaces timeseries,
+            // tables hidden (use desktop).
+            <InsightsSurface
               isDark={isDark}
-              conversation={selectedConversation}
-              currentUserId={me?.id}
-              notify={addToast}
-              compact
-              assets={assets}
-              files={workspaceFiles}
-              onNewChannel={() => setNewChannelOpen(true)}
-              onUploadAsset={onUploadAsset}
-              onOpenAssets={() => {
-                setMobileSurface('library');
-                setSelectedConversationId(null);
+              workspaceId={workspaceId}
+              view={insightsView}
+              range={insightsRange}
+              projectId={insightsProjectId}
+              agentId={insightsAgentId}
+              refreshNonce={insightsRefreshNonce}
+              customRange={insightsCustomRange}
+              lastUpdated={insightsLastUpdated}
+              onChangeView={(v) => {
+                setInsightsView(v);
+                syncInsightsUrl({ view: v });
               }}
-              onOpenTask={onOpenTaskById}
-              onMobileBack={() => setSelectedConversationId(null)}
-              headerActions={sessionSettingsMenuElement}
-              onAddMember={() => setAddMemberOpen(true)}
-              linkedTasks={linkedTasks}
-              linkedAgents={linkedAgents}
-              recentAssets={recentAssets}
-              onOpenAsset={onOpenAssetInspector}
-              onOpenAgent={onOpenAgentInspector}
-              onSaveMessageAsMemory={(payload) => {
-                setSaveAsMemorySource({
-                  conversationId: payload.conversationId,
-                  messageId: payload.messageId,
-                  text: payload.text,
-                  authorImUserId: payload.authorImUserId,
-                  createdAt: payload.createdAt,
-                });
+              onChangeRange={(r) => {
+                setInsightsRange(r);
+                setInsightsCustomRange(null);
+                syncInsightsUrl({ range: r, customRange: null });
               }}
-            />
-          ) : mobileSurface === 'sessions' ? (
-            <MobileSessionsList
-              isDark={isDark}
-              conversations={conversations}
-              onSelect={(id) => setSelectedConversationId(id)}
-              onNewChannel={() => setNewChannelOpen(true)}
+              onChangeCustomRange={(cr) => {
+                setInsightsCustomRange(cr);
+                syncInsightsUrl({ customRange: cr });
+              }}
+              onChangeProject={(projectId) => {
+                setInsightsProjectId(projectId);
+                syncInsightsUrl({ projectId });
+              }}
+              onChangeAgent={(agentId) => {
+                setInsightsAgentId(agentId);
+                syncInsightsUrl({ agentId });
+              }}
+              onRefresh={() => setInsightsRefreshNonce((n) => n + 1)}
+              mobile
             />
           ) : mobileSurface === 'tasks' ? (
             <TaskBoard
@@ -1316,6 +2598,7 @@ export default function WorkspacePage() {
               loading={tasksLoading}
               error={taskError}
               agents={agents}
+              agentStatuses={agentStatuses}
               assets={assets}
               onTaskChanged={reloadTasks}
               notify={addToast}
@@ -1325,7 +2608,8 @@ export default function WorkspacePage() {
               onOpenAsset={onOpenAssetInspector}
               onOpenConversation={(conversationId) => {
                 setSelectedConversationId(conversationId);
-                setMobileSurface('sessions');
+                setActiveSurface('chats');
+                setMobileSurface('chats');
               }}
             />
           ) : mobileSurface === 'library' ? (
@@ -1336,7 +2620,8 @@ export default function WorkspacePage() {
                 assets={assets}
                 files={workspaceFiles}
                 onUploadAsset={onUploadAsset}
-                onOpenInspector={setInspector}
+                onUploadFiles={(files) => uploadAssetFiles(files)}
+                onOpenInspector={openInspector}
                 initialFolder={libraryInitialFolder}
                 onAssetsChanged={async () => {
                   if (workspaceId) await reloadAssets(workspaceId);
@@ -1358,12 +2643,13 @@ export default function WorkspacePage() {
                   workspaceName={workspace?.name ?? 'Personal Workspace'}
                   inspector={inspector}
                   agents={agents}
+                  agentStatuses={agentStatuses}
                   profiles={profiles}
                   runtime={runtime}
                   assets={assets}
                   files={workspaceFiles}
                   onOpenChange={(open) => {
-                    if (!open) setInspector(null);
+                    if (!open) closeInspector();
                   }}
                   onSelectAgent={(agentId) => setInspector({ kind: 'agent', agentId })}
                   onOpenMemoryPage={(path) => {
@@ -1375,16 +2661,6 @@ export default function WorkspacePage() {
                 />
               ) : null}
             </div>
-          ) : mobileSurface === 'contacts' ? (
-            <div
-              data-testid="mobile-contacts-placeholder"
-              className={`flex-1 flex flex-col items-center justify-center px-6 text-center ${
-                isDark ? 'text-zinc-400' : 'text-zinc-600'
-              }`}
-            >
-              <p className="text-sm font-semibold">Contacts</p>
-              <p className="mt-1 text-xs opacity-80">Contact directory is best on a wider screen.</p>
-            </div>
           ) : (
             <div
               data-testid="mobile-runtime-surface"
@@ -1395,7 +2671,8 @@ export default function WorkspacePage() {
                 runtime={runtime}
                 installations={runtimeInstallations}
                 agents={agents}
-                onOpenInspector={setInspector}
+                agentStatuses={agentStatuses}
+                onOpenInspector={openInspector}
                 onCreateRuntime={onCreateRuntime}
                 onOpenCreation={() => setUnifiedOpen(true)}
                 onRuntimeChanged={async () => {
@@ -1417,7 +2694,7 @@ export default function WorkspacePage() {
       <motion.div
         layout
         transition={springHeavy}
-        className={`flex min-h-0 flex-1 gap-3 p-3 pt-4 ${isMobileViewport ? 'hidden' : ''}`}
+        className={`flex min-h-0 flex-1 gap-2 p-2 pt-3 ${isMobileViewport ? 'hidden' : ''}`}
       >
         <LeftRail
           isDark={isDark}
@@ -1430,20 +2707,20 @@ export default function WorkspacePage() {
           contacts={contacts}
           pendingContactRequests={receivedRequests.length}
           pendingMemoryProposals={pendingProposalCount}
+          contestedBindingCount={contestedBindingCount}
           assets={assets}
           agents={agents}
           runtime={runtime}
-          selectedSessionId={selectedConversationId}
           activeSurface={activeSurface}
-          onSelectSession={onSelectSession}
           onSelectSurface={setActiveSurface}
           onOpenCreation={() => setUnifiedOpen(true)}
-          onNewSession={onNewSession}
-          onRenameSession={onRenameSession}
-          onArchiveSession={onArchiveSession}
-          onDeleteSession={onDeleteSession}
         />
 
+        <SurfaceWithPreviewDock
+          layout={previewLayout}
+          preview={assetPreviewPanel}
+          onMeasureWide={onMeasurePreviewWide}
+        >
         {bootstrapping && !workspace ? (
           <div className="flex-1 flex items-center justify-center">
             <Loader2 className={`w-6 h-6 animate-spin ${isDark ? 'text-zinc-600' : 'text-zinc-400'}`} />
@@ -1472,256 +2749,200 @@ export default function WorkspacePage() {
               </p>
             </div>
           </div>
+        ) : activeSurface === 'chats' ? (
+          renderChatsSurface(false)
         ) : (
-          <>
-            <AnimatePresence initial={false} mode="popLayout">
-              {!imCollapsed ? (
-                <motion.section
-                  key="session-panel"
-                  layout={false}
-                  initial={{ opacity: 0, x: -24, scale: 0.985, filter: 'blur(8px)' }}
-                  animate={{ opacity: 1, x: 0, scale: 1, filter: 'blur(0px)' }}
-                  exit={{ opacity: 0, x: -28, scale: 0.985, filter: 'blur(8px)' }}
-                  transition={{ duration: 0 }}
-                  style={{ width: imWidth }}
-                  className={`hidden md:flex shrink-0 flex-col overflow-hidden border ${
-                    isDark
-                      ? 'border-white/[0.06] bg-zinc-950/30 shadow-[0_22px_70px_-52px_rgba(139,92,246,0.9)]'
-                      : 'border-zinc-200/80 bg-white/78 shadow-[0_22px_70px_-54px_rgba(76,29,149,0.35)]'
-                  } rounded-2xl`}
-                >
-                  {/*
-                    NOTE: page.tsx wires `onOpenTask={openTaskById}` here once
-                    sibling W7 lands the message-level "Open card" affordance
-                    in im-channel.tsx (it adds the prop on ImChannelProps).
-                    For now we keep the prop unwired — the helper is exported
-                    via the drawer's `onOpenTask` and the board's `onOpenTask`
-                    so breadcrumb + board flows still exercise the fallback
-                    fetch, which is the part that was broken on board cache
-                    misses. T3's chat-message path is dead code without W7.
-                  */}
-                  <ImChannel
-                    isDark={isDark}
-                    conversation={selectedConversation}
-                    currentUserId={me?.id}
-                    notify={addToast}
-                    compact
-                    assets={assets}
-                    files={workspaceFiles}
-                    onNewChannel={() => setNewChannelOpen(true)}
-                    onUploadAsset={onUploadAsset}
-                    onOpenAssets={() => setActiveSurface('library')}
-                    onOpenTask={onOpenTaskById}
-                    onCollapse={() => setImCollapsed(true)}
-                    headerActions={sessionSettingsMenuElement}
-                    onAddMember={() => setAddMemberOpen(true)}
-                    linkedTasks={linkedTasks}
-                    linkedAgents={linkedAgents}
-                    recentAssets={recentAssets}
-                    onOpenAsset={onOpenAssetInspector}
-                    onOpenAgent={onOpenAgentInspector}
-                    onSaveMessageAsMemory={(payload) => {
-                      setSaveAsMemorySource({
-                        conversationId: payload.conversationId,
-                        messageId: payload.messageId,
-                        text: payload.text,
-                        authorImUserId: payload.authorImUserId,
-                        createdAt: payload.createdAt,
-                      });
-                    }}
-                  />
-                </motion.section>
-              ) : null}
-            </AnimatePresence>
-
-            {!imCollapsed ? (
-              <div
-                role="separator"
-                aria-label="Resize session panel"
-                aria-orientation="vertical"
-                tabIndex={0}
-                onPointerDown={startImResize}
-                onDoubleClick={() => setImWidth(IM_WIDTH_DEFAULT)}
-                onKeyDown={(e) => {
-                  if (e.key === 'ArrowLeft') {
-                    setImWidth((w) => Math.max(IM_WIDTH_MIN, w - 16));
-                    e.preventDefault();
-                  } else if (e.key === 'ArrowRight') {
-                    setImWidth((w) => Math.min(IM_WIDTH_MAX, w + 16));
-                    e.preventDefault();
-                  }
-                }}
-                data-testid="im-panel-resizer"
-                className={`hidden md:flex group relative -mx-2 w-4 shrink-0 cursor-col-resize items-center justify-center select-none ${
-                  imDragging ? 'cursor-col-resize' : ''
-                }`}
-                title="Drag to resize · double-click to reset"
-              >
-                <span
-                  className={`h-12 w-[3px] rounded-full transition-colors ${
-                    imDragging
-                      ? isDark
-                        ? 'bg-violet-300/80'
-                        : 'bg-violet-500/80'
-                      : isDark
-                        ? 'bg-white/[0.08] group-hover:bg-violet-300/60'
-                        : 'bg-zinc-300 group-hover:bg-violet-500/60'
-                  }`}
-                />
-              </div>
-            ) : null}
-
-            <motion.main
-              layout
-              transition={springHeavy}
-              className={`relative min-w-0 flex flex-1 flex-col overflow-hidden border ${
-                isDark
-                  ? 'border-white/[0.06] bg-zinc-950/30 shadow-[0_22px_70px_-52px_rgba(139,92,246,0.9)]'
-                  : 'border-zinc-200/80 bg-white/78 shadow-[0_22px_70px_-54px_rgba(76,29,149,0.35)]'
-              } rounded-2xl`}
-            >
-              {activeSurface === 'tasks' ? (
-                <TaskBoard
-                  isDark={isDark}
-                  tasks={tasks}
-                  loading={tasksLoading}
-                  error={taskError}
-                  agents={agents}
-                  assets={assets}
-                  onTaskChanged={reloadTasks}
-                  notify={addToast}
-                  onNewTask={onOpenNewTask}
-                  onOpenTask={(task) => void openTaskById(task.id)}
-                  onUploadTaskAttachment={onUploadTaskAttachment}
-                  onOpenAsset={onOpenAssetInspector}
-                  onOpenConversation={(conversationId) => {
-                    setSelectedConversationId(conversationId);
-                    setImCollapsed(false);
-                  }}
-                />
-              ) : activeSurface === 'contacts' ? (
-                <ContactsPanel
-                  isDark={isDark}
-                  me={me}
-                  friends={contacts}
-                  agents={agents}
-                  receivedRequests={receivedRequests}
-                  sentRequests={sentRequests}
-                  prefillUserId={prefillContactUserId}
-                  onReload={reloadContacts}
-                  onStartChat={onStartContactChat}
-                  onOpenAgentProfile={onOpenAgentInspector}
-                  onOpenSession={async (conversationId) => {
-                    // Reload conversations BEFORE selecting so the LeftRail
-                    // session row exists by the time the ImChannel queries
-                    // selectedConversation. Otherwise React renders an empty
-                    // middle panel for one frame before the list arrives.
-                    if (workspaceId) await reloadConversations(workspaceId);
-                    setSelectedConversationId(conversationId);
-                    setImCollapsed(false);
-                  }}
-                  notify={addToast}
-                />
-              ) : activeSurface === 'library' ? (
-                <LibrarySurface
-                  isDark={isDark}
-                  workspaceId={workspaceId}
-                  assets={assets}
-                  files={workspaceFiles}
-                  onUploadAsset={onUploadAsset}
-                  onOpenInspector={setInspector}
-                  initialFolder={libraryInitialFolder}
-                  onAssetsChanged={async () => {
-                    if (workspaceId) await reloadAssets(workspaceId);
-                  }}
-                  notify={addToast}
-                  memoryJumpPath={memoryJumpPath}
-                  onMemoryJumpHandled={() => setMemoryJumpPath(null)}
-                  onMemoryJumpRequest={(path) => setMemoryJumpPath(path)}
-                  myImUserId={me?.id ?? null}
-                  isOwnerHuman={me?.id != null && workspace?.ownerImUserId === me.id}
-                  activeTaskId={selectedTaskId}
-                  pendingProposalCount={pendingProposalCount}
-                  onOpenProposalReview={() => setProposalReviewOpen(true)}
-                />
-              ) : (
-                <RuntimeManager
-                  isDark={isDark}
-                  runtime={runtime}
-                  installations={runtimeInstallations}
-                  agents={agents}
-                  onOpenInspector={setInspector}
-                  onCreateRuntime={onCreateRuntime}
-                  onOpenCreation={() => setUnifiedOpen(true)}
-                  onRuntimeChanged={async () => {
-                    if (!workspaceId) return;
-                    await Promise.all([
-                      reloadAgents(),
-                      reloadProfiles(workspaceId),
-                      reloadRuntimeInstallations(workspaceId),
-                      reloadRuntime(workspaceId),
-                    ]);
-                  }}
-                  notify={addToast}
-                />
-              )}
-
-              <TaskDetailDrawer
+          <motion.main
+            layout
+            transition={springHeavy}
+            className={`relative min-w-0 flex flex-1 flex-col overflow-hidden border ${
+              isDark
+                ? 'border-white/[0.06] bg-zinc-950/30 shadow-[0_22px_70px_-52px_rgba(139,92,246,0.9)]'
+                : 'border-zinc-200/80 bg-white/78 shadow-[0_22px_70px_-54px_rgba(76,29,149,0.35)]'
+            } rounded-2xl`}
+          >
+            {activeSurface === 'insights' ? (
+              // release201 S12 — Insights is a peer surface (no longer at
+              // /workspace/insights). URL params under ?surface=insights&… are
+              // managed by `syncInsightsUrl` so deep links + refresh work.
+              <InsightsSurface
                 isDark={isDark}
-                task={selectedTask}
+                workspaceId={workspaceId}
+                view={insightsView}
+                range={insightsRange}
+                projectId={insightsProjectId}
+                agentId={insightsAgentId}
+                refreshNonce={insightsRefreshNonce}
+                customRange={insightsCustomRange}
+                lastUpdated={insightsLastUpdated}
+                onChangeView={(v) => {
+                  setInsightsView(v);
+                  syncInsightsUrl({ view: v });
+                }}
+                onChangeRange={(r) => {
+                  setInsightsRange(r);
+                  setInsightsCustomRange(null);
+                  syncInsightsUrl({ range: r, customRange: null });
+                }}
+                onChangeCustomRange={(cr) => {
+                  setInsightsCustomRange(cr);
+                  syncInsightsUrl({ customRange: cr });
+                }}
+                onChangeProject={(projectId) => {
+                  setInsightsProjectId(projectId);
+                  syncInsightsUrl({ projectId });
+                }}
+                onChangeAgent={(agentId) => {
+                  setInsightsAgentId(agentId);
+                  syncInsightsUrl({ agentId });
+                }}
+                onRefresh={() => setInsightsRefreshNonce((n) => n + 1)}
+              />
+            ) : activeSurface === 'tasks' ? (
+              <TaskBoard
+                isDark={isDark}
+                tasks={tasks}
+                loading={tasksLoading}
+                error={taskError}
                 agents={agents}
+                agentStatuses={agentStatuses}
                 assets={assets}
-                onClose={() => {
-                  setSelectedTaskId(null);
-                  setSelectedTaskFallback(null);
-                }}
-                onChanged={async () => {
-                  // Off-board tasks aren't in `tasks` — refresh the cached
-                  // fallback copy too so the drawer header reflects the
-                  // post-mutation state immediately.
-                  if (selectedTaskId && !tasks.some((task) => task.id === selectedTaskId)) {
-                    taskFetchCacheRef.current.delete(selectedTaskId);
-                  }
-                  await reloadTasks();
-                }}
-                onOpenTask={openTaskById}
+                onTaskChanged={reloadTasks}
+                notify={addToast}
+                onNewTask={onOpenNewTask}
+                onOpenTask={(task) => void openTaskById(task.id)}
+                onUploadTaskAttachment={onUploadTaskAttachment}
                 onOpenAsset={onOpenAssetInspector}
-                onOpenChat={onOpenChatFromTask}
-                onOpenLibrary={(folderPath) => {
-                  setLibraryInitialFolder(folderPath);
-                  setActiveSurface('library');
-                  setSelectedTaskId(null);
-                  setSelectedTaskFallback(null);
+                onOpenConversation={(conversationId) => {
+                  setSelectedConversationId(conversationId);
+                  setActiveSurface('chats');
+                }}
+              />
+            ) : activeSurface === 'library' ? (
+              <LibrarySurface
+                isDark={isDark}
+                workspaceId={workspaceId}
+                assets={assets}
+                files={workspaceFiles}
+                onUploadAsset={onUploadAsset}
+                onUploadFiles={(files) => uploadAssetFiles(files)}
+                onOpenInspector={openInspector}
+                initialFolder={libraryInitialFolder}
+                onAssetsChanged={async () => {
+                  if (workspaceId) await reloadAssets(workspaceId);
+                }}
+                notify={addToast}
+                memoryJumpPath={memoryJumpPath}
+                onMemoryJumpHandled={() => setMemoryJumpPath(null)}
+                onMemoryJumpRequest={(path) => setMemoryJumpPath(path)}
+                myImUserId={me?.id ?? null}
+                isOwnerHuman={me?.id != null && workspace?.ownerImUserId === me.id}
+                activeTaskId={selectedTaskId}
+                pendingProposalCount={pendingProposalCount}
+                onOpenProposalReview={() => setProposalReviewOpen(true)}
+              />
+            ) : (
+              <RuntimeManager
+                isDark={isDark}
+                runtime={runtime}
+                installations={runtimeInstallations}
+                agents={agents}
+                agentStatuses={agentStatuses}
+                onOpenInspector={openInspector}
+                onCreateRuntime={onCreateRuntime}
+                onOpenCreation={() => setUnifiedOpen(true)}
+                onRuntimeChanged={async () => {
+                  if (!workspaceId) return;
+                  await Promise.all([
+                    reloadAgents(),
+                    reloadProfiles(workspaceId),
+                    reloadRuntimeInstallations(workspaceId),
+                    reloadRuntime(workspaceId),
+                  ]);
                 }}
                 notify={addToast}
               />
-              {inspector?.kind === 'asset' ? (
-                <WorkspaceInspectorDialog
-                  open
-                  isDark={isDark}
-                  workspaceName={workspace?.name ?? 'Personal Workspace'}
-                  inspector={inspector}
-                  agents={agents}
-                  profiles={profiles}
-                  runtime={runtime}
-                  assets={assets}
-                  files={workspaceFiles}
-                  onOpenChange={(open) => {
-                    if (!open) setInspector(null);
-                  }}
-                  onSelectAgent={(agentId) => setInspector({ kind: 'agent', agentId })}
-                  onOpenMemoryPage={(path) => {
-                    setMemoryJumpPath(path);
-                    setActiveSurface('library');
-                    setMobileSurface('library');
-                  }}
-                  notify={addToast}
-                />
-              ) : null}
-            </motion.main>
-          </>
+            )}
+
+            <TaskDetailDrawer
+              isDark={isDark}
+              task={selectedTask}
+              agents={agents}
+              agentStatuses={agentStatuses}
+              assets={assets}
+              currentUserId={me?.id ?? null}
+              onClose={() => {
+                setSelectedTaskId(null);
+                setSelectedTaskFallback(null);
+              }}
+              onChanged={async () => {
+                // Off-board tasks aren't in `tasks` — refresh the cached
+                // fallback copy too so the drawer header reflects the
+                // post-mutation state immediately.
+                if (selectedTaskId && !tasks.some((task) => task.id === selectedTaskId)) {
+                  taskFetchCacheRef.current.delete(selectedTaskId);
+                }
+                await reloadTasks();
+              }}
+              onOpenTask={openTaskById}
+              onOpenAsset={onOpenAssetInspector}
+              onOpenChat={onOpenChatFromTask}
+              onOpenLibrary={(folderPath) => {
+                setLibraryInitialFolder(folderPath);
+                setActiveSurface('library');
+                setSelectedTaskId(null);
+                setSelectedTaskFallback(null);
+              }}
+              notify={addToast}
+            />
+            {/* Asset preview moved up to SurfaceWithPreviewDock so it can dock
+                beside the surface (split) instead of always overlaying it. */}
+          </motion.main>
         )}
+        </SurfaceWithPreviewDock>
       </motion.div>
+
+      {/* release201/09 Phase 4 — Project overview drawer. Rendered at the
+          workspace root so the drawer overlays surface content uniformly
+          whether the user came from ProjectSwitcher (active project),
+          dropdown chevron (any project), or the archived list. */}
+      <ProjectOverviewDrawer
+        isDark={isDark}
+        isOpen={projectOverviewId !== null}
+        workspaceId={workspaceId}
+        project={
+          projectsList.find((p) => p.id === projectOverviewId) ??
+          archivedProjects.find((p) => p.id === projectOverviewId) ??
+          null
+        }
+        canManage={
+          // workspace owner is always allowed; non-owner managers fall under
+          // the project's effective role check on the server side. The UI
+          // here optimistically gates affordances on workspace ownership
+          // (matches §5.2 short-circuit). Server still authoritative.
+          !!workspace && !!me && workspace.ownerImUserId === me.id
+        }
+        onClose={() => setProjectOverviewId(null)}
+        onMutated={() => {
+          reloadProjects();
+          void reloadTasks();
+        }}
+        onOpenTask={(taskId) => {
+          setProjectOverviewId(null);
+          setActiveSurface('tasks');
+          void openTaskById(taskId);
+        }}
+        onOpenDashboard={(projectId) => {
+          // release201 S12 — Insights is an in-shell surface. Close the
+          // drawer, flip to the insights surface scoped to this project,
+          // and let `syncInsightsUrl` push `?surface=insights&view=project&projectId=…`.
+          setProjectOverviewId(null);
+          openInsightsSurface({ view: 'project', projectId });
+        }}
+        notify={(msg, opts) =>
+          addToast(msg, opts?.kind === 'error' ? 'error' : opts?.kind === 'success' ? 'success' : 'info')
+        }
+      />
 
       <LibrarySearchModal
         isDark={isDark}
@@ -1732,11 +2953,7 @@ export default function WorkspacePage() {
           // gates by `mobileSurface === 'library'`; desktop's auto-close
           // effect requires `activeSurface === 'library'`). Search can fire
           // from any surface, so align both surface states first.
-          if (next.kind === 'asset') {
-            setActiveSurface('library');
-            setMobileSurface('library');
-          }
-          setInspector(next);
+          openInspector(next);
         }}
         onOpenMemoryPage={(path) => {
           setMemoryJumpPath(path);
@@ -1745,27 +2962,21 @@ export default function WorkspacePage() {
         }}
       />
 
-      <SaveAsMemoryModal
-        open={saveAsMemorySource !== null}
-        workspaceId={workspaceId}
-        isDark={isDark}
-        source={saveAsMemorySource}
-        onClose={() => setSaveAsMemorySource(null)}
-        onSaved={(page) => {
-          setSaveAsMemorySource(null);
-          setMemoryJumpPath(page.path);
-          setActiveSurface('library');
-          setMobileSurface('library');
-        }}
-        notify={addToast}
-      />
-
       <LibraryProposalReviewModal
         open={proposalReviewOpen}
         workspaceId={workspaceId}
         isDark={isDark}
         onClose={() => setProposalReviewOpen(false)}
         onChanged={() => setProposalRefreshTick((tick) => tick + 1)}
+        notify={addToast}
+      />
+
+      <MessageForwardDialog
+        open={forwardSource !== null}
+        isDark={isDark}
+        source={forwardSource}
+        conversations={conversations}
+        onClose={() => setForwardSource(null)}
         notify={addToast}
       />
 
@@ -1780,12 +2991,13 @@ export default function WorkspacePage() {
         workspaceName={workspace?.name ?? 'Personal Workspace'}
         inspector={inspector?.kind === 'asset' ? null : inspector}
         agents={agents}
+        agentStatuses={agentStatuses}
         profiles={profiles}
         runtime={runtime}
         assets={assets}
         files={workspaceFiles}
         onOpenChange={(open) => {
-          if (!open) setInspector(null);
+          if (!open) closeInspector();
         }}
         onSelectAgent={(agentId) => setInspector({ kind: 'agent', agentId })}
         onChanged={async () => {
@@ -1801,14 +3013,6 @@ export default function WorkspacePage() {
       />
 
       {/* Mutation modals — kept at root so they overlay the grid layout. */}
-      <NewAgentDialog
-        open={newAgentOpen}
-        onOpenChange={setNewAgentOpen}
-        workspaceId={workspace?.id ?? null}
-        onCreated={onAgentCreated}
-        isDark={isDark}
-        notify={addToast}
-      />
       {workspace ? (
         <>
           <NewChannelDialog
@@ -1816,6 +3020,7 @@ export default function WorkspacePage() {
             onOpenChange={setNewChannelOpen}
             workspaceId={workspace.id}
             agents={agents}
+            contacts={contacts}
             onCreated={onChannelCreated}
             isDark={isDark}
             notify={addToast}
@@ -1826,9 +3031,19 @@ export default function WorkspacePage() {
             workspaceId={workspace.id}
             agents={agents}
             profiles={profiles}
+            // Wave-8 W1 / L3: thread the workspace asset list through so
+            // the description editor's `#filename` picker can build
+            // `assetRefs[]` at submit time.
+            workspaceAssets={assets}
             defaultAssigneeId={defaultTaskAssigneeId}
             conversationId={selectedConversation?.id}
             initialColumn={newTaskInitialColumn}
+            // release201/09 §8.6 — pre-seed project picker from the global
+            // ProjectSwitcher selection so new tasks default to the
+            // currently-viewed project. Sentinels ('all' / '__unscoped')
+            // fall back to "None (workspace level)" inside the dialog.
+            projects={projectsList}
+            defaultProjectId={activeProjectFilter}
             onCreated={onTaskCreated}
             isDark={isDark}
             notify={addToast}
@@ -1850,13 +3065,58 @@ export default function WorkspacePage() {
             onOpenChange={setUnifiedOpen}
             isDark={isDark}
             workspaceId={workspace.id}
+            // 1:1 invariant — when the workspace already owns an org name,
+            // surface it as a locked badge in the creation flow's Step 1
+            // instead of prompting the user to retype. `metadata.organizationName`
+            // is the canonical source (written after first Simple-mode pass);
+            // fall back to `workspace.name` when metadata is missing AND the
+            // workspace name isn't the bare "Personal Workspace" default.
+            existingOrganizationName={(() => {
+              const fromMeta =
+                typeof workspace.metadata?.organizationName === 'string'
+                  ? workspace.metadata.organizationName.trim()
+                  : '';
+              if (fromMeta) return fromMeta;
+              const name = (workspace.name ?? '').trim();
+              if (!name || name === 'Personal Workspace' || name === 'Personal') return null;
+              return name;
+            })()}
             agents={agents}
             profiles={profiles}
             initialMode={unifiedInitialMode}
             onCreated={onUnifiedCreated}
+            // release201 v2.0.8 F-bug — project 抽象引导. activeProjectFilter
+            // 来自 useProjects() (ProjectSwitcher 共享 state); 当 filter 是
+            // sentinel ('all' / '__unscoped') 时, modal 内部把它当作 unscoped
+            // 处理. activeProjectName 用 projectsList 查表得到, 找不到时传 null
+            // 让 modal fallback 到 "..."占位符.
+            activeProjectId={activeProjectFilter ?? null}
+            activeProjectName={
+              activeProjectFilter ? (projectsList.find((p) => p.id === activeProjectFilter)?.name ?? null) : null
+            }
+            // 2026-05-29 — wire the inline project picker so users can switch
+            // scope mid-flow without leaving the modal (release201/20 Gap B).
+            // The inline create form lives inside the modal, so we forward
+            // the useProjects() reload trigger so the new row shows up in
+            // the picker immediately after create succeeds.
+            projects={projectsList.filter((p) => p.status === 'active').map((p) => ({ id: p.id, name: p.name }))}
+            onActiveProjectIdChange={(id) => setActiveProjectFilter(id ?? 'all')}
+            onReloadProjects={reloadProjects}
+            onCreateProject={() => {
+              // 复用 WorkspaceOnboarding 已有的 ProjectSwitcher trigger 逻辑:
+              // 打开 ProjectSwitcher 下拉 → 点击 "New project". 用户在
+              // ProjectSwitcher 里建好后会自动切换 active filter, 再次打开
+              // unified modal 时即可看到 project 上下文.
+              if (typeof document === 'undefined') return;
+              const trigger = document.querySelector<HTMLButtonElement>('[data-testid="project-switcher-trigger"]');
+              trigger?.click();
+              window.setTimeout(() => {
+                document.querySelector<HTMLButtonElement>('[data-testid="project-switcher-new"]')?.click();
+              }, 50);
+            }}
           />
           {/* Wave-8 W4: settings menu dialogs (controlled by ⋮ menu in ImChannel header) */}
-          {selectedConversation && selectedConversation.type !== 'direct' ? (
+          {selectedConversation && selectedConversation.type !== 'direct' && selectedConversationAccess.canAddMember ? (
             <AddMemberDialog
               open={addMemberOpen}
               onOpenChange={setAddMemberOpen}
@@ -1869,7 +3129,7 @@ export default function WorkspacePage() {
               notify={addToast}
             />
           ) : null}
-          {selectedConversation ? (
+          {selectedConversation && selectedConversationAccess.canRename ? (
             <RenameSessionDialog
               open={renameOpen}
               onOpenChange={setRenameOpen}
@@ -1885,31 +3145,44 @@ export default function WorkspacePage() {
         </>
       ) : null}
       {/* Wave-8 W4: mobile bottom-nav. Only renders at md: breakpoint and below.
-          Routes between Sessions / Tasks / Assets / Contacts / Devices surfaces. */}
+          Routes between Chats / Tasks / Assets / Devices surfaces. */}
       {isMobileViewport ? (
         <MobileNav
           isDark={isDark}
           active={mobileSurface}
           onSelect={(surface) => {
+            // release201 S12 — Insights is now an in-shell surface (no
+            // separate route), so the MobileNav `onSelect` path covers all
+            // five tiles uniformly. Keep desktop activeSurface in sync so
+            // the same surface is active across viewport changes.
             setMobileSurface(surface);
-            // Switching to a non-session surface should also drop any open
-            // session so the next time the user taps Sessions they land on
-            // the list, not on the previously-opened channel.
-            if (surface !== 'sessions') {
-              setSelectedConversationId(null);
-            }
-            // Keep desktop activeSurface in sync where it overlaps so layout
-            // stays consistent across viewport changes (e.g. user rotates a
-            // tablet, or our matchMedia listener fires post-resize).
-            if (surface === 'tasks' || surface === 'library' || surface === 'contacts' || surface === 'runtime') {
-              setActiveSurface(surface);
-            }
+            setActiveSurface(surface);
           }}
         />
       ) : null}
 
       {/* First-visit tour overlay — anchored to topbar elements via data-tour-anchor */}
       <WorkspaceTour open={tourOpen} isDark={isDark} onDone={() => setTourOpen(false)} />
+
+      {/* Task 43 — post-creation Launch Tour. Fires when simple-mode finishes
+          and the seed lands. Walks tasks → library → contacts → runtime →
+          chat, then flips stage to `done` so the legacy WorkspaceTour above
+          stays suppressed (its useEffect short-circuits on stage !== 'idle'). */}
+      <LaunchTour
+        open={launchTourStage === 'running'}
+        seed={launchTourSeed}
+        isDark={isDark}
+        onSetSurface={(surface) => {
+          setActiveSurface(surface);
+          if (isMobileViewport) setMobileSurface(surface);
+        }}
+        onSelectConversation={(id) => {
+          setSelectedConversationId(id);
+          setActiveSurface('chats');
+          if (isMobileViewport) setMobileSurface('chats');
+        }}
+        onDone={() => setLaunchTourStage('done')}
+      />
 
       {/* Persistent onboarding checklist — floating bottom-right card.
           Only shown when tour is closed AND not all 4 setup steps are done
@@ -1934,13 +3207,38 @@ export default function WorkspacePage() {
             <WorkspaceOnboarding
               isDark={isDark}
               agentsCount={agents.length}
+              projectsCount={projectsList.length}
               channelsCount={conversations.length}
-              tasksCount={tasks.length}
-              assetsCount={assets.length}
-              onNewAgent={() => setNewAgentOpen(true)}
+              tasksCount={taskStats.total}
+              devicesCount={runtime?.devices?.length ?? 0}
+              onSetupTeam={() => {
+                setUnifiedInitialMode('simple');
+                setUnifiedOpen(true);
+              }}
+              onNewAgent={() => {
+                // §30 B3.7 — single creation entry = unified flow. Onboarding's
+                // "create agent" step opens Pro mode (agent/executor tiles) instead
+                // of the retired NewAgentDialog.
+                setUnifiedInitialMode('pro');
+                setUnifiedOpen(true);
+              }}
+              onCreateProject={() => {
+                // release201/20 Gap B — onboarding 6-step flow.
+                // ProjectSwitcher owns the create-project UI; we drive it via
+                // its stable testids: open dropdown → click "New project".
+                if (typeof document === 'undefined') return;
+                const trigger = document.querySelector<HTMLButtonElement>('[data-testid="project-switcher-trigger"]');
+                trigger?.click();
+                window.setTimeout(() => {
+                  document.querySelector<HTMLButtonElement>('[data-testid="project-switcher-new"]')?.click();
+                }, 50);
+              }}
+              onPairDevice={() => {
+                setUnifiedInitialMode('simple');
+                setUnifiedOpen(true);
+              }}
               onNewChannel={() => setNewChannelOpen(true)}
               onNewTask={() => onOpenNewTask()}
-              onUploadAsset={onUploadAsset}
             />
           </div>
         </div>
@@ -1948,3 +3246,32 @@ export default function WorkspacePage() {
     </div>
   );
 }
+
+// release201/30 Phase 2 — `AssetUploadProgressOverlay` removed in favour
+// of the inline composer-area progress row in ImChannel (see
+// ComposerUploadProgressRow). The pure helper `uploadPhaseLabel` is
+// retained because page.tsx still maps the underlying phase enum into
+// the inline view's `phaseLabel`.
+
+function uploadPhaseLabel(phase: AssetUploadProgress['phase']): string {
+  switch (phase) {
+    case 'hashing':
+      return 'Hashing';
+    case 'requesting-upload':
+      return 'Preparing upload';
+    case 'uploading':
+      return 'Uploading';
+    case 'completing':
+      return 'Finalizing';
+    case 'fallback':
+      return 'Uploading through server';
+    case 'done':
+      return 'Uploaded';
+  }
+}
+
+// `formatUploadBytes` was the byte-count formatter for the deleted
+// AssetUploadProgressOverlay. The inline composer row doesn't surface a
+// bytes counter (the percent label + filename are enough at composer
+// scale), so the helper is removed alongside its only caller.
+
