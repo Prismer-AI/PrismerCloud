@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import type { RequestInit as NextRequestInit } from 'next/dist/server/web/spec-extension/request';
 import { apiGuard } from '@/lib/api-guard';
-import { checkRateLimit, rateLimitResponse } from '@/lib/rate-limit';
+import { checkLlmRateLimitDistributed, rateLimitResponse } from '@/lib/rate-limit';
 import { FEATURE_FLAGS } from '@/lib/feature-flags';
 import { proxyAnthropicToNewAPI } from '@/lib/llm-proxy-anthropic';
 import { ensureNacosConfig } from '@/lib/nacos-config';
@@ -36,10 +36,12 @@ export async function POST(request: NextRequest) {
     } as NextRequestInit);
   }
 
-  const guard = await apiGuard(guardRequest, { tier: 'tracked' });
+  // release202/12 (P1) — gate a minimum starting balance (Anthropic proxy);
+  // real cost deducted post-hoc inside proxyAnthropicToNewAPI.
+  const guard = await apiGuard(guardRequest, { tier: 'billable', estimatedCost: 1 });
   if (!guard.ok) return guard.response;
 
-  const rl = checkRateLimit(guard.auth.userId, 'llm');
+  const rl = await checkLlmRateLimitDistributed(guard.auth.userId);
   if (!rl.allowed) return rateLimitResponse(rl);
 
   return proxyAnthropicToNewAPI(request, guard, '/v1/messages');
