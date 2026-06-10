@@ -98,6 +98,8 @@ function stepLabel(step: ProvisioningStep): string {
       return '创建团队会议室';
     case 'welcome':
       return '发送欢迎消息';
+    case 'attach-materials':
+      return `附上企业材料 (${step.assetCount ?? 0})`;
   }
 }
 
@@ -111,6 +113,8 @@ function pendingLabel(step: ProvisioningStep): string {
       return '创建团队会议室';
     case 'welcome':
       return '发送欢迎消息';
+    case 'attach-materials':
+      return `附上企业材料 (${step.assetCount ?? 0})`;
   }
 }
 
@@ -199,7 +203,11 @@ export function SimpleStep3Launch({
   }, [steps]);
 
   const failedStep = error ? steps[error.stepIndex] : null;
-  const canSkip = failedStep ? failedStep.kind === 'conversation' || failedStep.kind === 'welcome' : false;
+  const canSkip = failedStep
+    ? failedStep.kind === 'conversation' ||
+      failedStep.kind === 'welcome' ||
+      failedStep.kind === 'attach-materials'
+    : false;
 
   return (
     <section data-testid="simple-step3-launch" className="flex flex-col gap-5" aria-label="AI 团队正在组装">
@@ -416,7 +424,11 @@ function StepRow({ step, index, isCurrent, isDark, cardSurface, tHeavy, tSnap, t
 
   const ariaLabel = `${displayLabel} — ${statusToAria(status)}`;
   const duration = formatDuration(
-    step.kind === 'device' || step.kind === 'agent' || step.kind === 'conversation' || step.kind === 'welcome'
+    step.kind === 'device' ||
+      step.kind === 'agent' ||
+      step.kind === 'conversation' ||
+      step.kind === 'welcome' ||
+      step.kind === 'attach-materials'
       ? step.durationMs
       : undefined,
   );
@@ -537,11 +549,9 @@ function StatusIcon({
         ) : status === 'done' ? (
           <motion.span
             key="check"
-            // The scale 0 → 1.2 → 1 overshoot is the "completion satisfaction"
-            // — spec §2.8.4 calls this out explicitly.
             initial={reduce ? { opacity: 0 } : { opacity: 0, scale: 0 }}
-            animate={reduce ? { opacity: 1 } : { opacity: 1, scale: [0, 1.2, 1] }}
-            transition={reduce ? REDUCED : { ...tHeavy, times: [0, 0.6, 1] }}
+            animate={reduce ? { opacity: 1 } : { opacity: 1, scale: 1 }}
+            transition={reduce ? REDUCED : tHeavy}
             className="flex items-center justify-center"
           >
             <Check className="h-3.5 w-3.5" />
