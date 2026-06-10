@@ -22,6 +22,13 @@ import {
   memoryWorkspaceErrorResponse,
   resolveMemoryWorkspaceIdForRequest,
 } from './workspace-resolver';
+// Release 201 P0-6 — IMMemoryPage recall paths bypassed visibility ACL
+// (queried by workspaceId only). Wire MemoryAclContext so the page query
+// filters on allowed visibilities + prefixes, matching the predicate the
+// /memory page-read endpoints already enforce. Without this, a delegated
+// agent caller could recall any visibility class (e.g. another agent's
+// agent:<id> private memory page) by issuing a /recall request.
+import { loadWorkspaceForMemoryAccess, type MemoryAclContext } from '../services/memory-acl';
 
 interface RecallResult {
   source: 'memory' | 'cache' | 'evolution';
@@ -107,6 +114,34 @@ function computeScore(
   return score;
 }
 
+/**
+ * Release 201 P0-6 — build the Prisma visibility predicate for an
+ * IMMemoryPage query from a MemoryAclContext. Mirrors the logic in
+ * memory-search.service.ts:visibilityWhere() so the recall path applies the
+ * same access rules as the /memory page-read endpoints.
+ *
+ * Returns `null` when no visibility class is allowed (caller has no ACL
+ * context). Caller should treat null as "skip the query entirely" rather
+ * than return all rows.
+ */
+// Exported for regression tests (src/im/tests/recall-acl.test.ts).
+export function pageVisibilityPredicate(acl: MemoryAclContext | null): Record<string, unknown> | null {
+  if (!acl) return null;
+  const clauses: Array<Record<string, unknown>> = [];
+  if (acl.allowedVisibilities.length > 0) {
+    clauses.push({ visibility: { in: acl.allowedVisibilities } });
+  }
+  for (const prefix of acl.allowedVisibilityPrefixes) {
+    clauses.push({ visibility: { startsWith: prefix } });
+  }
+  if (clauses.length === 0) return null;
+  return clauses.length === 1 ? clauses[0] : { OR: clauses };
+}
+
+function callerKindFromUser(user: { role?: string } | undefined): 'user' | 'agent' {
+  return user?.role === 'agent' ? 'agent' : 'user';
+}
+
 export function createRecallRouter(
   memoryService: MemoryService,
   knowledgeLinkService?: KnowledgeLinkService,
@@ -124,6 +159,7 @@ export function createRecallRouter(
     }
   };
 
+  // eslint-disable-next-line custom/no-wildcard-sub-router-middleware -- mounted at /recall in routes.ts; wildcard scoped to that prefix
   router.use('*', authMiddleware);
 
   /**
@@ -165,15 +201,13 @@ export function createRecallRouter(
       workspaceId = resolved.workspaceId;
     }
 
-    // ── Memory search ──────────────────────────────────────
+    // ── Memory search (legacy im_memory_files) ────────────────
     if (scope === 'all' || scope === 'memory') {
       searches.push(
         memoryService
           .searchMemoryFiles(workspaceId!, query, limit, memoryScope)
           .then((files) => {
             for (const f of files) {
-              // Pass through upstream relevance: memory.service already ran FULLTEXT +
-              // word-coverage, so its ranking is authoritative — don't recompute here.
               const upstreamRelevance = (f as any).relevance as number | undefined;
               results.push({
                 source: 'memory',
@@ -189,6 +223,65 @@ export function createRecallRouter(
           .catch((err) => {
             console.error('[Recall] Memory search error:', err);
           }),
+      );
+
+      // Also search workspace memory pages (im_memory_pages) for parity.
+      // Release 201 P0-6 — caller's MemoryAclContext gates which visibility
+      // classes (`workspace`, `agent:<id>`, `task:*`) the page query may
+      // return. Without this filter, /recall leaks any-visibility pages to
+      // any workspace member.
+      searches.push(
+        (async () => {
+          try {
+            const searchTerm = query.replace(/[+\-<>()~*"@]/g, ' ').trim();
+            const words = searchTerm.split(/\s+/).filter(Boolean);
+            if (words.length === 0) return;
+            const likeClauses = words.map((w) => `%${w}%`);
+
+            const acl = await loadWorkspaceForMemoryAccess(workspaceId!, user.imUserId, callerKindFromUser(user));
+            const visFilter = pageVisibilityPredicate(acl);
+            if (!visFilter) return; // No visibility allowed → no pages.
+
+            const pages = await prisma.iMMemoryPage.findMany({
+              where: {
+                workspaceId,
+                deletedAt: null,
+                AND: [
+                  visFilter,
+                  {
+                    OR: [
+                      ...words.map((w) => ({ path: { contains: w } })),
+                      ...words.map((w) => ({ content: { contains: w } })),
+                    ],
+                  },
+                ],
+              },
+              select: {
+                id: true,
+                path: true,
+                content: true,
+                stale: true,
+                updatedAt: true,
+              },
+              take: limit,
+              orderBy: { updatedAt: 'desc' },
+            });
+
+            for (const p of pages) {
+              results.push({
+                source: 'memory',
+                title: p.path,
+                path: p.path,
+                snippet: (p.content ?? '').slice(0, 300),
+                score: computeScore(query, p.path, p.content ?? '', p.updatedAt, 0.5, p.stale),
+                id: p.id,
+                updatedAt: p.updatedAt,
+              });
+            }
+          } catch (err) {
+            console.error('[Recall] Memory pages search error:', err);
+          }
+        })(),
       );
     }
 
@@ -379,6 +472,61 @@ export function createRecallRouter(
       strategy: strategy as RecallStrategy,
       memoryType,
     });
+
+    // Also search workspace memory pages (im_memory_pages) for parity.
+    // Release 201 P0-6 — gated by MemoryAclContext, see GET handler comment.
+    if (results.length < clampedMax) {
+      try {
+        const words = query.trim().split(/\s+/).filter(Boolean);
+        if (words.length > 0) {
+          const acl = await loadWorkspaceForMemoryAccess(
+            resolved.workspaceId!,
+            user.imUserId,
+            callerKindFromUser(user),
+          );
+          const visFilter = pageVisibilityPredicate(acl);
+          if (!visFilter) {
+            // No allowed visibilities → skip the page leg entirely. We
+            // still return the file results computed above.
+          } else {
+            const pages = await prisma.iMMemoryPage.findMany({
+              where: {
+                workspaceId: resolved.workspaceId,
+                deletedAt: null,
+                AND: [
+                  visFilter,
+                  {
+                    OR: [
+                      ...words.slice(0, 3).map((w) => ({ content: { contains: w } })),
+                      ...words.slice(0, 3).map((w) => ({ path: { contains: w } })),
+                    ],
+                  },
+                ],
+              },
+              select: { id: true, path: true, content: true, memoryType: true, description: true, stale: true, updatedAt: true },
+              take: clampedMax,
+              orderBy: { updatedAt: 'desc' },
+            });
+            for (const p of pages) {
+              if (results.length >= clampedMax) break;
+              if (results.some((r: any) => r.id === p.id)) continue;
+              results.push({
+                id: p.id,
+                path: p.path,
+                content: p.content ?? '',
+                memoryType: p.memoryType ?? 'reference',
+                description: p.description ?? '',
+                score: 0.5,
+                reason: 'keyword match (memory page)',
+                updatedAt: p.updatedAt,
+              } as any);
+            }
+          }
+        }
+      } catch (err) {
+        console.error('[Recall] Memory pages search error:', err);
+      }
+    }
 
     // Fire-and-forget: publish memory.recall event for Cross-system Signal Bridge
     // geneId is optional — bridge only records evolution signal when present
