@@ -14,6 +14,7 @@
  */
 
 import { useEffect, useState } from 'react';
+import { getIMClientToken } from '@/lib/im-token';
 
 interface ProvisioningHistoryEntry {
   step: string;
@@ -104,7 +105,11 @@ export function AdminSandboxClient() {
     let aborted = false;
     async function tick() {
       try {
-        const res = await fetch('/api/sandboxes/_admin/sandbox-metrics', { cache: 'no-store' });
+        const token = getIMClientToken();
+        const res = await fetch('/api/sandboxes/_admin/sandbox-metrics', {
+          cache: 'no-store',
+          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = (await res.json()) as SandboxMetrics;
         if (!aborted) {
@@ -301,6 +306,7 @@ export function AdminSandboxClient() {
                 <th className="text-left px-4 py-2 font-medium">Image</th>
                 <th className="text-left px-4 py-2 font-medium">Workspace</th>
                 <th className="text-right px-4 py-2 font-medium">Cold-Start</th>
+                <th className="text-right px-4 py-2 font-medium">Details</th>
               </tr>
             </thead>
             <tbody>
@@ -319,11 +325,19 @@ export function AdminSandboxClient() {
                     {shortId(c.workspaceId)}
                   </td>
                   <td className="px-4 py-2 text-right tabular-nums">{formatLatencyMs(c.coldStartLatencyMs)}</td>
+                  <td className="px-4 py-2 text-right">
+                    <a
+                      href={`/admin/sandbox/${c.id}`}
+                      className="text-xs text-blue-600 dark:text-blue-400 hover:underline"
+                    >
+                      open →
+                    </a>
+                  </td>
                 </tr>
               ))}
               {metrics && metrics.recent.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="px-4 py-6 text-center text-sm text-zinc-500">
+                  <td colSpan={7} className="px-4 py-6 text-center text-sm text-zinc-500">
                     No containers yet.
                   </td>
                 </tr>
