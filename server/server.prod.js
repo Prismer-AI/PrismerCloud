@@ -112,6 +112,9 @@ async function setupWSHandler(wss) {
     const handlers = getIMHandlers();
 
     if (services && handlers && handlers.setupWebSocket) {
+      if (!services.taskService) {
+        throw new Error('[Server] IM services ready without taskService; refusing to wire WebSocket daemon protocol');
+      }
       handlers.setupWebSocket(wss, {
         redis: services.redis,
         rooms: services.rooms,
@@ -120,8 +123,13 @@ async function setupWSHandler(wss) {
         presenceService: services.presenceService,
         agentService: services.agentService,
         streamService: services.streamService,
+        taskService: services.taskService,
+        // Wave 2-B2 sync, Wave 4-E4 webhook RPC. Both are optional but
+        // required for binding contested events / webhook reverse channel.
+        syncService: services.syncService,
+        wsRpc: services.wsRpc,
       });
-      console.log('[Server] WebSocket handler ready');
+      console.log('[Server] WebSocket handler ready (taskService=true)');
       return;
     }
 
