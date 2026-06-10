@@ -50,20 +50,25 @@ log_err() { printf "${color_red}[db-migrate] ✗${color_reset} %s\n" "$*" >&2; }
 log_warn(){ printf "${color_yellow}[db-migrate] ⚠${color_reset} %s\n" "$*"; }
 
 # ── DB shim — prefer docker exec on the dev container; fall back to host mysql ─
+# mysql warnings (esp. "[Warning] Using a password on the command line ... is
+# insecure") leak into captured query output and break checksum equality
+# (`recorded != checksum` false-positive → bogus "MODIFIED migration"). Pass the
+# password via MYSQL_PWD to suppress it at the source, AND strip any residual
+# `[Warning]` line (any prefix) as belt-and-suspenders.
 if [ -n "$DB_CONTAINER" ] && docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$DB_CONTAINER"; then
   mysql_q() {
-    docker exec -i "$DB_CONTAINER" mysql -uroot -prootdev -N -s "$DB_NAME" "$@" 2>&1 | sed '/^mysql: \[Warning\]/d'
+    docker exec -i -e MYSQL_PWD=rootdev "$DB_CONTAINER" mysql -uroot -N -s "$DB_NAME" "$@" 2>&1 | sed '/\[Warning\]/d'
   }
   mysql_apply() {
     # Apply a SQL file. Echo errors back to caller, return non-zero on fail.
-    docker exec -i "$DB_CONTAINER" mysql -uroot -prootdev "$DB_NAME" < "$1" 2>&1 | sed '/^mysql: \[Warning\]/d'
+    docker exec -i -e MYSQL_PWD=rootdev "$DB_CONTAINER" mysql -uroot "$DB_NAME" < "$1" 2>&1 | sed '/\[Warning\]/d'
   }
 elif command -v mysql >/dev/null; then
   mysql_q() {
-    mysql -h"$DB_HOST" -P"$DB_PORT" -u"$DB_USER" -p"$DB_PASS" -N -s "$DB_NAME" "$@" 2>&1 | sed '/^mysql: \[Warning\]/d'
+    MYSQL_PWD="$DB_PASS" mysql -h"$DB_HOST" -P"$DB_PORT" -u"$DB_USER" -N -s "$DB_NAME" "$@" 2>&1 | sed '/\[Warning\]/d'
   }
   mysql_apply() {
-    mysql -h"$DB_HOST" -P"$DB_PORT" -u"$DB_USER" -p"$DB_PASS" "$DB_NAME" < "$1" 2>&1 | sed '/^mysql: \[Warning\]/d'
+    MYSQL_PWD="$DB_PASS" mysql -h"$DB_HOST" -P"$DB_PORT" -u"$DB_USER" "$DB_NAME" < "$1" 2>&1 | sed '/\[Warning\]/d'
   }
 else
   log_err "neither docker ($DB_CONTAINER) nor host mysql available"
@@ -167,6 +172,19 @@ cmd_up() {
     fi
 
     if [ -n "$recorded" ] && [ "$recorded" != "$checksum" ]; then
+      # Sentinel: a fix-forward migration (e.g. 420_fix_418_drift.sql,
+      # 424_v200_rebaseline_420.sql) may rebaseline an earlier row by
+      # writing a sentinel like `__rebaselined_by_NNN__`. Recognise any
+      # value matching that prefix pattern so future fix-forwards don't
+      # require re-touching this script.
+      if [[ "$recorded" =~ ^__rebaselined_by_[0-9]+__$ ]]; then
+        log "skipping sha check for $filename (rebaselined via $recorded)"
+        # Refresh the recorded checksum to the actual file sha so subsequent
+        # runs don't keep hitting this branch.
+        mysql_q -e "UPDATE schema_migrations SET checksum='$checksum' WHERE filename='$filename';" >/dev/null
+        skipped=$((skipped + 1))
+        continue
+      fi
       log_err "MODIFIED migration: $filename"
       log_err "  applied sha: $recorded"
       log_err "  current sha: $checksum"
