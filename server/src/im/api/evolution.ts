@@ -23,6 +23,7 @@ import {
   memoryWorkspaceErrorResponse,
   resolveMemoryWorkspaceIdForRequest,
 } from './workspace-resolver';
+import { requireAgentToolAllowed } from '../security/mcp-allowlist';
 
 /** Extract and validate scope from query, return null on invalid */
 function getScope(c: any): string | null {
@@ -598,6 +599,8 @@ export function createEvolutionRouter(
   router.post('/genes', authMiddleware, rl('tool_call'), async (c) => {
     const user = c.get('user');
     const body = await c.req.json();
+    const denied = await requireAgentToolAllowed(c, 'prismer.evolve.createGene', body.workspaceId ?? body.workspace_id);
+    if (denied) return denied;
 
     if (!body.category || !body.signals_match || !body.strategy) {
       return c.json<ApiResponse>(
@@ -699,6 +702,8 @@ export function createEvolutionRouter(
   router.delete('/genes/:geneId', authMiddleware, async (c) => {
     const user = c.get('user');
     const geneId = c.req.param('geneId');
+    const denied = await requireAgentToolAllowed(c, 'prismer.evolve.delete', c.req.query('workspaceId'));
+    if (denied) return denied;
 
     const deleted = await evolutionService.deleteGene(user.imUserId, geneId);
     if (!deleted) {
@@ -766,6 +771,8 @@ export function createEvolutionRouter(
     const user = c.get('user');
     const geneId = c.req.param('geneId');
     const body = await c.req.json().catch(() => ({}));
+    const denied = await requireAgentToolAllowed(c, 'prismer.evolve.publish', body.workspaceId ?? body.workspace_id);
+    if (denied) return denied;
     const skipCanary = body?.skipCanary === true;
 
     const result = skipCanary
@@ -784,6 +791,8 @@ export function createEvolutionRouter(
     try {
       const user = c.get('user');
       const body = await c.req.json();
+      const denied = await requireAgentToolAllowed(c, 'prismer.evolve.import', body.workspaceId ?? body.workspace_id);
+      if (denied) return denied;
 
       if (!body.gene_id) {
         return c.json<ApiResponse>({ ok: false, error: 'gene_id is required' }, 400);
@@ -806,6 +815,8 @@ export function createEvolutionRouter(
   router.post('/genes/fork', authMiddleware, rl('tool_call'), async (c) => {
     const user = c.get('user');
     const body = await c.req.json();
+    const denied = await requireAgentToolAllowed(c, 'prismer.evolve.import', body.workspaceId ?? body.workspace_id);
+    if (denied) return denied;
 
     if (!body.gene_id) {
       return c.json<ApiResponse>({ ok: false, error: 'gene_id required' }, 400);
@@ -1005,6 +1016,12 @@ export function createEvolutionRouter(
     const user = c.get('user');
     const geneId = c.req.param('geneId');
     const body = await c.req.json().catch(() => ({}));
+    const denied = await requireAgentToolAllowed(
+      c,
+      'prismer.evolve.exportSkill',
+      body.workspaceId ?? body.workspace_id,
+    );
+    if (denied) return denied;
 
     // Find the gene and verify ownership
     const gene = await prisma.iMGene.findUnique({ where: { id: geneId } });
@@ -1056,6 +1073,14 @@ ${gene.description || ''}
 ${strategy.map((s: string, i: number) => `${i + 1}. ${s}`).join('\n')}
 `;
 
+    // v2.1 §A.7 — wrap the emitted SKILL.md into a single-file manifest so
+    // downstream consumers (daemon skill-sync, marketplace publish) see the
+    // same shape they see for multi-file built-in/user skills. Future
+    // evolution work (Phase 3 distill → skill) can extend the manifest with
+    // generated scripts/strategy artifacts without changing the wire shape.
+    const { buildSingleFileManifest } = await import('../skills/manifest');
+    const manifest = buildSingleFileManifest(content);
+
     // Create the skill in the catalog
     const skill = await prisma.iMSkill.create({
       data: {
@@ -1063,8 +1088,12 @@ ${strategy.map((s: string, i: number) => `${i + 1}. ${s}`).join('\n')}
         name: (body as any).displayName || gene.title || slug,
         description: gene.description || '',
         category: gene.category,
-        content,
-        source: 'prismer',
+        content, // dual-write — keep for 6mo deprecation window
+        contentManifest: JSON.stringify(manifest.files),
+        contentManifestRevision: manifest.revision,
+        fileCount: 1,
+        packageSize: Buffer.byteLength(content, 'utf8'),
+        source: 'evolution', // §A.7 enum convergence: replaces 'prismer' for evolution-derived
         ownerAgentId: user.imUserId,
         geneId: gene.id,
         signals: JSON.stringify(signals.map((s: any) => ({ type: s.signalId }))),
