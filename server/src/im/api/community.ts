@@ -22,6 +22,7 @@ import { createModuleLogger } from '@/lib/logger';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as crypto from 'node:crypto';
+import { requireAgentToolAllowed } from '../security/mcp-allowlist';
 
 const log = createModuleLogger('Community');
 
@@ -210,6 +211,8 @@ export function createCommunityRouter(
    * POST /posts — Create post (auth required)
    */
   router.post('/posts', authMiddleware, async (c) => {
+    const denied = await requireAgentToolAllowed(c, 'prismer.community.post', null);
+    if (denied) return denied;
     try {
       const user = c.get('user');
       const body = await c.req.json();
@@ -288,6 +291,8 @@ export function createCommunityRouter(
    * DELETE /posts/:id — Delete post (auth, author or admin)
    */
   router.delete('/posts/:id', authMiddleware, async (c) => {
+    const denied = await requireAgentToolAllowed(c, 'prismer.community.delete', null);
+    if (denied) return denied;
     try {
       const user = c.get('user');
       const id = c.req.param('id');
@@ -337,6 +342,8 @@ export function createCommunityRouter(
    * POST /posts/:id/comments — Create comment (auth)
    */
   router.post('/posts/:id/comments', authMiddleware, async (c) => {
+    const denied = await requireAgentToolAllowed(c, 'prismer.community.comment', null);
+    if (denied) return denied;
     try {
       const user = c.get('user');
       const postId = c.req.param('id');
@@ -368,6 +375,8 @@ export function createCommunityRouter(
    * PUT /comments/:id — Update comment (auth, only author)
    */
   router.put('/comments/:id', authMiddleware, async (c) => {
+    const denied = await requireAgentToolAllowed(c, 'prismer.community.edit', null);
+    if (denied) return denied;
     try {
       const user = c.get('user');
       const id = c.req.param('id');
@@ -388,6 +397,8 @@ export function createCommunityRouter(
    * DELETE /comments/:id — Delete comment (auth, soft delete)
    */
   router.delete('/comments/:id', authMiddleware, async (c) => {
+    const denied = await requireAgentToolAllowed(c, 'prismer.community.delete', null);
+    if (denied) return denied;
     try {
       const user = c.get('user');
       const id = c.req.param('id');
@@ -407,6 +418,8 @@ export function createCommunityRouter(
    * POST /comments/:id/best-answer — Mark best answer (auth, only post author)
    */
   router.post('/comments/:id/best-answer', authMiddleware, async (c) => {
+    const denied = await requireAgentToolAllowed(c, 'prismer.community.answer', null);
+    if (denied) return denied;
     try {
       const user = c.get('user');
       const commentId = c.req.param('id');
@@ -428,6 +441,8 @@ export function createCommunityRouter(
    * Rate limiting handled by the global api.write limiter in routes.ts
    */
   router.post('/vote', authMiddleware, async (c) => {
+    const denied = await requireAgentToolAllowed(c, 'prismer.community.vote', null);
+    if (denied) return denied;
     try {
       const user = c.get('user');
       const body = await c.req.json();
@@ -460,6 +475,8 @@ export function createCommunityRouter(
    * Body: { postId: string }
    */
   router.post('/bookmark', authMiddleware, async (c) => {
+    const denied = await requireAgentToolAllowed(c, 'prismer.community.bookmark', null);
+    if (denied) return denied;
     try {
       const user = c.get('user');
       const body = await c.req.json();
