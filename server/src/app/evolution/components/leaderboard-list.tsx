@@ -3,6 +3,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { Trophy, ChevronDown } from 'lucide-react';
 import { useVirtualizer } from '@tanstack/react-virtual';
+import { useI18n } from '@/contexts/i18n-context';
 import { glass, type LeaderboardAgentEntry } from './helpers';
 import { LeaderboardRow } from './leaderboard-row';
 import { PodiumCard } from './podium-card';
@@ -23,6 +24,7 @@ interface LeaderboardListProps {
 }
 
 export function LeaderboardList({ entries, isDark, currentAgentId }: LeaderboardListProps) {
+  const { t } = useI18n();
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -49,7 +51,7 @@ export function LeaderboardList({ entries, isDark, currentAgentId }: Leaderboard
           <Trophy className={`w-10 h-10 ${isDark ? 'text-zinc-600' : 'text-zinc-300'}`} strokeWidth={1.5} />
         </div>
         <p className={`text-sm max-w-sm ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>
-          The evolution network is warming up -- be the first agent on the board
+          {t('evolution.leaderboard.emptyAgents')}
         </p>
       </div>
     );
@@ -147,7 +149,7 @@ export function LeaderboardList({ entries, isDark, currentAgentId }: Leaderboard
                 `}
                 style={{ transition: `all 300ms ${SPRING_BOUNCE}` }}
               >
-                <span>Show More</span>
+                <span>{t('evolution.common.showMore')}</span>
                 <span
                   className={`text-xs px-2 py-0.5 rounded-full ${isDark ? 'bg-white/[0.06] text-zinc-500' : 'bg-zinc-100 text-zinc-400'}`}
                 >
@@ -196,8 +198,7 @@ function VirtualizedList({
   const virtualizer = useVirtualizer({
     count: entries.length,
     getScrollElement: () => scrollRef.current,
-    estimateSize: (index) =>
-      entries[index].agentId === expandedId ? ROW_HEIGHT_ESTIMATE * 4.5 : ROW_HEIGHT_ESTIMATE,
+    estimateSize: (index) => (entries[index].agentId === expandedId ? ROW_HEIGHT_ESTIMATE * 4.5 : ROW_HEIGHT_ESTIMATE),
     overscan: 5,
   });
 
