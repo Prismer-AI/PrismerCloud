@@ -34,6 +34,7 @@ export function drawGeneStoryEmbed(
   stories: EvolutionStory[],
   isDark: boolean,
   zoom: number = 1,
+  timeAgo?: (iso: string) => string,
 ) {
   if (stories.length === 0) return;
 
@@ -69,14 +70,14 @@ export function drawGeneStoryEmbed(
   for (let si = 0; si < storyCount; si++) {
     const story = stories[si];
     const icon = story.outcome === 'success' ? '\u26A1 ' : '\u274C ';
-    const timeAgo = formatTimeAgo(story.timestamp);
+    const storyTimeAgo = timeAgo?.(story.timestamp) ?? formatTimeAgo(story.timestamp);
 
     // Line 1: icon + time + outcome
     ctx.font = `bold ${10 * s}px ui-monospace, monospace`;
     ctx.textAlign = 'left';
     ctx.textBaseline = 'top';
     ctx.fillStyle = story.outcome === 'success' ? '#22c55e' : '#ef4444';
-    ctx.fillText(`${icon}${timeAgo}`, x + padding, curY);
+    ctx.fillText(`${icon}${storyTimeAgo}`, x + padding, curY);
     curY += lineH;
 
     // Line 2: agent @ task
