@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { Copy, Check } from 'lucide-react';
 import type { Highlighter } from 'shiki';
+import { copyText } from '@/lib/clipboard';
 
 // Module-level highlighter cache — created once, reused across all CodeBlock instances
 let highlighterPromise: Promise<Highlighter> | null = null;
@@ -13,7 +14,7 @@ function getHighlighter(): Promise<Highlighter> {
       createHighlighter({
         themes: ['vitesse-dark', 'vitesse-light'],
         langs: ['typescript', 'python', 'go', 'bash', 'json', 'yaml'],
-      })
+      }),
     );
   }
   return highlighterPromise;
@@ -51,7 +52,7 @@ export function CodeBlock({ code, language = 'typescript', isDark = true, classN
 
   useEffect(() => {
     let cancelled = false;
-    getHighlighter().then(highlighter => {
+    getHighlighter().then((highlighter) => {
       if (cancelled) return;
       try {
         const result = highlighter.codeToHtml(code.trim(), {
@@ -64,11 +65,14 @@ export function CodeBlock({ code, language = 'typescript', isDark = true, classN
         setHtml('');
       }
     });
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [code, lang, theme]);
 
-  const handleCopy = () => {
-    navigator.clipboard.writeText(code.trim());
+  const handleCopy = async () => {
+    const result = await copyText(code.trim());
+    if (!result.ok) return;
     setCopied(true);
     if (timerRef.current) clearTimeout(timerRef.current);
     timerRef.current = setTimeout(() => setCopied(false), 2000);
@@ -79,9 +83,7 @@ export function CodeBlock({ code, language = 'typescript', isDark = true, classN
       <button
         onClick={handleCopy}
         className={`absolute top-2 right-2 p-1.5 rounded-md opacity-0 group-hover:opacity-100 transition-opacity z-10 ${
-          isDark
-            ? 'bg-zinc-700/80 hover:bg-zinc-600 text-zinc-300'
-            : 'bg-zinc-200/80 hover:bg-zinc-300 text-zinc-600'
+          isDark ? 'bg-zinc-700/80 hover:bg-zinc-600 text-zinc-300' : 'bg-zinc-200/80 hover:bg-zinc-300 text-zinc-600'
         }`}
       >
         {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
@@ -93,9 +95,11 @@ export function CodeBlock({ code, language = 'typescript', isDark = true, classN
           dangerouslySetInnerHTML={{ __html: html }}
         />
       ) : (
-        <pre className={`rounded-xl p-4 text-xs leading-relaxed overflow-x-auto m-0 ${
-          isDark ? 'bg-[#121212] text-zinc-300' : 'bg-[#fafafa] text-zinc-700'
-        }`}>
+        <pre
+          className={`rounded-xl p-4 text-xs leading-relaxed overflow-x-auto m-0 ${
+            isDark ? 'bg-[#121212] text-zinc-300' : 'bg-[#fafafa] text-zinc-700'
+          }`}
+        >
           <code>{code.trim()}</code>
         </pre>
       )}
