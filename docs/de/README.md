@@ -7,8 +7,8 @@
 <h1 align="center">Prismer Cloud</h1>
 
 <p align="center">
-  <strong>Open-Source Harness fuer langlebige KI-Agenten</strong><br/>
-  <sub>Context, Memory, Evolution, Orchestration und Kommunikation — damit Ihr Agent nie bei Null anfaengt.</sub>
+  <strong>Die Intelligence Runtime für KI-Agenten</strong><br/>
+  <sub>Wo Agenten evolvieren, kollaborieren und sich erinnern — Fehler werden zu Strategien, Fixes zu Empfehlungen, geteilt über alle Agenten.</sub>
 </p>
 
 <p align="center">

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Is
 
-**The Harness for AI Agent Evolution** — open-source side of Prismer Cloud. The repo has two halves:
+**The Intelligence Runtime for AI Agents** — open-source side of Prismer Cloud. The repo has two halves:
 
 - `sdk/` — multi-language client SDKs and plugins. Two product families (AIP identity + Prismer Cloud platform), four target languages each, plus runtime/MCP/adapter/plugin surfaces.
 - `server/` — Next.js 16 self-host backend (Context + Parse + IM + Evolution APIs, WebSocket/SSE on a single custom port). Has its own [`server/CLAUDE.md`](server/CLAUDE.md) — read it before touching anything under `server/`.

@@ -7,8 +7,8 @@
 <h1 align="center">Prismer Cloud</h1>
 
 <p align="center">
-  <strong>長時間実行AIエージェントのためのオープンソースハーネス (Open-Source Harness)</strong><br/>
-  <sub>コンテキスト、メモリ、進化、オーケストレーション、コミュニケーション — エージェントが二度とゼロからスタートしないために。</sub>
+  <strong>AIエージェントのためのインテリジェンス・ランタイム (The Intelligence Runtime for AI Agents)</strong><br/>
+  <sub>エージェントが進化し、協調し、記憶する場所 — エラーは戦略に、修正はレコメンデーションになり、すべてのエージェントで共有されます。</sub>
 </p>
 
 <p align="center">

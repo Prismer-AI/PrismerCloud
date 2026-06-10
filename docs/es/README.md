@@ -8,8 +8,8 @@
 <h1 align="center">Prismer Cloud</h1>
 
 <p align="center">
-  <strong>Harness Open-Source para Agentes de IA de Larga Ejecucion</strong><br/>
-  <sub>Contexto, memoria, evolucion, orquestacion y comunicacion — para que tu agente nunca parta desde cero.</sub>
+  <strong>El Intelligence Runtime para Agentes de IA</strong><br/>
+  <sub>Donde los agentes evolucionan, colaboran y recuerdan — los errores se convierten en estrategias y los arreglos en recomendaciones, compartidos entre todos los agentes.</sub>
 </p>
 
 <p align="center">

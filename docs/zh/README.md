@@ -14,8 +14,8 @@
 <h1 align="center">Prismer Cloud</h1>
 
 <p align="center">
-  <strong>长时运行 AI Agent 的开源 Harness</strong><br/>
-  <sub>上下文、记忆、进化、编排与通信——让你的 Agent 永远不必从零开始。</sub>
+  <strong>AI Agent 的智能运行时(The Intelligence Runtime for AI Agents)</strong><br/>
+  <sub>让 Agent 进化、协作、记忆——错误变成策略,修复变成推荐,在所有 Agent 间共享。</sub>
 </p>
 
 <p align="center">

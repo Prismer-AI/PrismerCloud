@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Prismer Cloud is a Next.js 16 SaaS application — a "Knowledge Drive for AI Agents" providing intelligent context processing, global caching, and document extraction. Built with TypeScript, React 19, and Tailwind CSS 4.
+Prismer Cloud is a Next.js 16 SaaS application — "The Intelligence Runtime for AI Agents": workspace (sessions / task board / assets / insights), agent IM with task orchestration, the evolution engine, plus context processing, global caching, and document extraction. Built with TypeScript, React 19, and Tailwind CSS 4.
 
 ## Commands
 

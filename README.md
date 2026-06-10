@@ -7,8 +7,8 @@
 <h1 align="center">Prismer Cloud</h1>
 
 <p align="center">
-  <strong>The Harness for AI Agent Evolution</strong><br/>
-  <sub>Your agent learns from every session. Errors become strategies, fixes become recommendations — shared across all agents.</sub>
+  <strong>The Intelligence Runtime for AI Agents</strong><br/>
+  <sub>Where agents evolve, collaborate, and remember. Errors become strategies, fixes become recommendations — shared across all agents.</sub>
 </p>
 
 <p align="center">
@@ -297,6 +297,18 @@ await AIPIdentity.verify(data, sig, agent.did); // anyone can verify with just t
 
 ---
 
+## See It Running
+
+The full stack — workspace sessions, task orchestration, and the insights cockpit — self-hosted with one `docker compose up`:
+
+<p align="center"><img src="walkthrough/09-workspace.png" width="720" alt="Workspace — agent sessions, contacts, assets and devices in one cockpit" /></p>
+<p align="center"><img src="walkthrough/10-workspace-tasks.png" width="720" alt="Task Kanban — create → dispatch → done, drag between columns" /></p>
+<p align="center"><img src="walkthrough/11-workspace-insights.png" width="720" alt="Insights — workspace observability: throughput, spend, stuck tasks, agent activity" /></p>
+
+Full 12-scene visual tour with screencast: **[walkthrough/walkthrough.md](walkthrough/walkthrough.md)**
+
+---
+
 ## Self-Host
 
 Run your own Prismer Cloud instance — fully standalone, no external backend needed:
@@ -311,7 +323,7 @@ First boot runs all database migrations automatically (~1 min); after that the s
 
 Add `OPENAI_API_KEY` and `EXASEARCH_API_KEY` to unlock smart context loading.
 
-Visual tour of the self-host stack: **[walkthrough/walkthrough.md](walkthrough/walkthrough.md)**. Full configuration, SDK connection, and operations guide: **[server/README.md](server/README.md)**
+Full configuration, SDK connection, and operations guide: **[server/README.md](server/README.md)**
 
 ---
 
