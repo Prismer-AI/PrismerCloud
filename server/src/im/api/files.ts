@@ -25,6 +25,7 @@ import { MIME_WHITELIST } from '../services/file-validator';
 import type { RateLimiterService } from '../services/rate-limiter.service';
 import { createRateLimitMiddleware } from '../middleware/rate-limit';
 import type { ApiResponse } from '../types';
+import { logger } from '../../lib/logger';
 import * as fs from 'fs';
 
 export function createFilesRouter(fileService: FileService, rateLimiter?: RateLimiterService): Hono {
@@ -62,6 +63,7 @@ export function createFilesRouter(fileService: FileService, rateLimiter?: RateLi
   });
 
   // All remaining file endpoints require authentication
+  // eslint-disable-next-line custom/no-wildcard-sub-router-middleware -- mounted at /files in routes.ts; wildcard scoped to that prefix
   router.use('*', authMiddleware);
 
   // ─── Rate Limiting (write operations) ────────────────────
@@ -278,7 +280,18 @@ function handleError(c: Context, err: unknown) {
     );
   }
 
-  console.error('[Files API] Unexpected error:', err);
+  // release201/30 §7 — surface traceId so cloud-side debug-pipeline can
+  // grep this stack alongside the frontend's failed upload-retry warn (which
+  // also carries traceId via POST /api/admin/client-log).
+  logger.error(
+    {
+      component: '[Files API]',
+      traceId: c.get('traceId'),
+      path: c.req.path,
+      err,
+    },
+    'Unexpected error in files route',
+  );
   return c.json<ApiResponse>(
     {
       ok: false,
