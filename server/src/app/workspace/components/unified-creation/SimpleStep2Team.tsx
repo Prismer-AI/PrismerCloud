@@ -19,19 +19,30 @@
  * surfaces server-side 409s back via `slugErrors[role.slug]`.
  */
 
-import { useCallback, useMemo, useState, type KeyboardEvent, type ChangeEvent } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ChangeEvent, type KeyboardEvent } from 'react';
 import { AnimatePresence, motion, useReducedMotion, type Transition } from 'framer-motion';
-import { Popover as PopoverPrimitive } from 'radix-ui';
-import { Cloud, Plus } from 'lucide-react';
+import { ChevronDown, Cloud, Laptop, Plus, Server } from 'lucide-react';
 
 import { radius, s, springSnap, springSoft } from '../../lib/design';
+import { imFetch } from '../../lib/im-api';
+import { useDeviceSelector, useWorkspaceId } from './context';
 import { getAvailableRoles, renderTemplate } from '../../lib/templates/render';
 import type { IndustryKey, RenderedRole, SizeKey } from '../../lib/templates/types';
+import type { RuntimeInstallationDTO } from '../../lib/types';
 import { validateSlug } from '../../lib/agent-rename';
 import { getRoleIcon } from './role-icons';
-import { SimpleStep2RolePicker } from './SimpleStep2RolePicker';
+import { BrowseAllRolesModal } from './template-browser';
 
 // ───────────────────────── Public API ─────────────────────────
+
+interface DeviceOption {
+  id: string;
+  label: string;
+  daemonId: string;
+  kind: 'docker' | 'k8s';
+  spare: number;
+  maxAgents: number;
+}
 
 export interface SimpleStep2TeamProps {
   isDark: boolean;
@@ -54,6 +65,8 @@ export interface SimpleStep2TeamProps {
   slugErrors?: Record<string, string | null>;
   /** Called when the user types in a row's slug input. */
   onSlugChange?: (roleSlug: string, nextDraft: string) => void;
+  /** Optional merged role catalog from the template browser for Step 3 planning. */
+  onRoleCatalogChange?: (roles: RenderedRole[]) => void;
 }
 
 // ───────────────────────── Internals ─────────────────────────
@@ -86,15 +99,18 @@ export function SimpleStep2Team({
   size,
   selectedSlugs,
   onSelectionChange,
-  deviceMaxAgents = 3,
+  deviceMaxAgents = 10,
   slugDrafts = {},
   slugErrors = {},
   onSlugChange,
+  onRoleCatalogChange,
 }: SimpleStep2TeamProps) {
+  const workspaceId = useWorkspaceId();
   const theme = isDark ? 'dark' : 'light';
   const reduce = useReducedMotion() ?? false;
   const tSnap: Transition = reduce ? REDUCED : springSnap;
   const tSoft: Transition = reduce ? REDUCED : springSoft;
+  const onDeviceSelected = useDeviceSelector();
 
   // Recommended roles (the checkbox list rows) + the full universe (popover).
   const recommended = useMemo<RenderedRole[]>(() => renderTemplate(industry, size, 'zh'), [industry, size]);
@@ -108,9 +124,66 @@ export function SimpleStep2Team({
     [universe, recommendedSet, selectedSlugs],
   );
 
-  // Capacity bookkeeping.
+  // ── Device picker: fetch eligible devices when workspaceId is provided ──
+  const [devOpts, setDevOpts] = useState<DeviceOption[]>([]);
+  const [devIdx, setDevIdx] = useState(0);
+  useEffect(() => {
+    if (!workspaceId) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await imFetch<RuntimeInstallationDTO[]>(
+          `/api/workspace/runtime-installations?workspaceId=${encodeURIComponent(workspaceId)}`,
+        );
+        if (cancelled || !res.ok || !Array.isArray(res.data)) return;
+        const allDevices = res.data
+          .filter((r) => r.phase === 'online' || r.phase === 'provisioning')
+          .map((r) => ({
+            id: r.id,
+            label: (r.podName ?? '').replace(/^daemon:/, '').slice(0, 48) || r.runtimeInstanceId,
+            daemonId: r.daemonId,
+            kind: (r.runtimeKind ?? 'docker') as 'docker' | 'k8s',
+            spare: Math.max(0, r.maxAgents - (r.hostedAgentSummary?.declared ?? 0)),
+            maxAgents: r.maxAgents,
+          }))
+          // Show devices with spare capacity first, full devices after
+          .sort((a, b) => (b.spare > 0 ? 1 : 0) - (a.spare > 0 ? 1 : 0));
+        if (cancelled) return;
+        setDevOpts(allDevices);
+        // Default to first device with spare capacity
+        const firstAvail = allDevices.findIndex((d) => d.spare > 0);
+        const defaultIdx = firstAvail >= 0 ? firstAvail : 0;
+        setDevIdx(defaultIdx);
+        if (allDevices.length > 0 && onDeviceSelected) {
+          const d = allDevices[defaultIdx];
+          onDeviceSelected(d.id, d.daemonId, d.maxAgents);
+        }
+      } catch {
+        /* swallow */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // Only re-fetch when workspaceId changes
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspaceId]);
+
+  const handleDeviceChange = useCallback(
+    (idx: number) => {
+      setDevIdx(idx);
+      const opt = devOpts[idx];
+      if (opt && onDeviceSelected) onDeviceSelected(opt.id, opt.daemonId, opt.maxAgents);
+    },
+    [devOpts, onDeviceSelected],
+  );
+
+  // Capacity bookkeeping: use selected device's spare if available.
+  const selectedDevice = devOpts[devIdx] ?? null;
+  const capacityLimit = selectedDevice ? selectedDevice.spare : deviceMaxAgents;
+  const displayMax = selectedDevice ? selectedDevice.maxAgents : deviceMaxAgents;
   const selectedCount = selectedSlugs.size;
-  const atCapacity = selectedCount >= deviceMaxAgents;
+  const atCapacity = selectedCount >= capacityLimit;
 
   const toggleRole = useCallback(
     (slug: string) => {
@@ -118,38 +191,44 @@ export function SimpleStep2Team({
       if (next.has(slug)) {
         next.delete(slug);
       } else {
-        if (next.size >= deviceMaxAgents) return; // capacity hit — silent ignore
+        if (next.size >= capacityLimit) return; // capacity hit — silent ignore
         next.add(slug);
       }
       onSelectionChange(next);
     },
-    [selectedSlugs, deviceMaxAgents, onSelectionChange],
+    [selectedSlugs, capacityLimit, onSelectionChange],
   );
 
-  // ── Popover state ─────────────────────────────────────────────
-  const [popoverOpen, setPopoverOpen] = useState(false);
-  const [search, setSearch] = useState('');
+  // ── Browse-all modal state ────────────────────────────────────
+  // Friction-first surface for the 200+ agency templates.
+  // Default Step 2 view stays at the curated recommendation; modal is opt-in.
+  const [browseOpen, setBrowseOpen] = useState(false);
+  const [browserRoles, setBrowserRoles] = useState<RenderedRole[]>([]);
 
-  const popoverRoles = useMemo<RenderedRole[]>(() => {
-    const q = search.trim().toLowerCase();
-    if (!q) return universe;
-    return universe.filter(
-      (r) =>
-        r.displayName.toLowerCase().includes(q) ||
-        r.slug.toLowerCase().includes(q) ||
-        r.rationale.toLowerCase().includes(q),
-    );
-  }, [universe, search]);
-
-  const handlePopoverOpenChange = useCallback((next: boolean) => {
-    setPopoverOpen(next);
-    if (!next) setSearch('');
+  const handleBrowseOpenChange = useCallback((next: boolean) => {
+    setBrowseOpen(next);
   }, []);
+
+  const handleBrowserCatalogChange = useCallback(
+    (roles: RenderedRole[]) => {
+      setBrowserRoles(roles);
+      onRoleCatalogChange?.(roles);
+    },
+    [onRoleCatalogChange],
+  );
 
   // The "rows" displayed in the checkbox list: recommended first, then any
   // popover-added extras. We render in a stable order so React can keyframe
   // opacity without recycling motion nodes.
-  const allRows: RenderedRole[] = useMemo(() => [...recommended, ...extraRoles], [recommended, extraRoles]);
+  const allRows: RenderedRole[] = useMemo(() => {
+    const selectedExtraBrowserRoles = browserRoles.filter(
+      (role) =>
+        !recommendedSet.has(role.slug) &&
+        !extraRoles.some((item) => item.slug === role.slug) &&
+        selectedSlugs.has(role.slug),
+    );
+    return [...recommended, ...extraRoles, ...selectedExtraBrowserRoles];
+  }, [browserRoles, extraRoles, recommended, recommendedSet, selectedSlugs]);
 
   const headingClass = `text-base font-semibold ${isDark ? 'text-zinc-100' : 'text-zinc-900'}`;
   const cardSurface = s(theme, 'card');
@@ -172,7 +251,7 @@ export function SimpleStep2Team({
           <AnimatePresence mode="popLayout" initial={false}>
             <AnimatedInteger key={selectedCount} value={selectedCount} transition={tSnap} />
           </AnimatePresence>
-          /{deviceMaxAgents} agents 已选)
+          /{displayMax} agents 已选)
         </p>
       </div>
 
@@ -202,54 +281,106 @@ export function SimpleStep2Team({
         })}
       </div>
 
-      {/* ─── + Add other roles popover ──────────────────────────── */}
-      <PopoverPrimitive.Root open={popoverOpen} onOpenChange={handlePopoverOpenChange}>
-        <PopoverPrimitive.Trigger asChild>
-          <button
-            type="button"
-            data-testid="simple-step2-add-role"
-            className={`inline-flex items-center justify-center gap-1.5 self-start border ${radius.button} px-3 py-2 text-xs font-medium ${
-              isDark
-                ? 'border-white/[0.06] bg-white/[0.03] text-zinc-300 hover:border-white/[0.14] hover:bg-white/[0.06]'
-                : 'border-zinc-200 bg-zinc-50 text-zinc-700 hover:border-zinc-300 hover:bg-zinc-100'
-            } focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/60`}
+      {/* ─── Browse all roles: full-width dashed CTA card. The legacy outline
+          button (textbook compact) was visually indistinguishable from
+          the "+ row" form-help affordance and users missed it. Made it a
+          full-row card with accent palette so it scans as a peer to the
+          recommended-team rows above. */}
+      <button
+        type="button"
+        data-testid="simple-step2-browse-all-roles"
+        onClick={() => setBrowseOpen(true)}
+        className={[
+          'group flex w-full items-center justify-between gap-3 rounded-xl border border-dashed px-4 py-3 text-left transition',
+          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/60',
+          isDark
+            ? 'border-violet-400/40 bg-violet-500/[0.06] hover:border-violet-300/70 hover:bg-violet-500/[0.10]'
+            : 'border-violet-300 bg-violet-50/40 hover:border-violet-400 hover:bg-violet-50',
+        ].join(' ')}
+      >
+        <span className="flex items-center gap-3">
+          <span
+            aria-hidden
+            className={[
+              'flex h-9 w-9 shrink-0 items-center justify-center rounded-lg',
+              isDark ? 'bg-violet-500/20 text-violet-200' : 'bg-violet-100 text-violet-700',
+            ].join(' ')}
           >
-            <Plus aria-hidden className="h-3.5 w-3.5" />
-            添加其他角色
-          </button>
-        </PopoverPrimitive.Trigger>
-        <PopoverPrimitive.Portal>
-          <PopoverPrimitive.Content
-            sideOffset={8}
-            align="start"
-            className={`z-[60] w-80 rounded-2xl border p-3 ${s(theme, 'modal')}`}
-            data-testid="simple-step2-add-role-popover"
-          >
-            <SimpleStep2RolePicker
-              isDark={isDark}
-              roles={popoverRoles}
-              selectedSlugs={selectedSlugs}
-              recommendedSet={recommendedSet}
-              atCapacity={atCapacity}
-              search={search}
-              onSearchChange={setSearch}
-              onToggle={toggleRole}
-            />
-          </PopoverPrimitive.Content>
-        </PopoverPrimitive.Portal>
-      </PopoverPrimitive.Root>
+            <Plus className="h-4 w-4" strokeWidth={2} />
+          </span>
+          <span className="flex flex-col gap-0.5">
+            <span className={`text-sm font-medium ${isDark ? 'text-violet-100' : 'text-violet-900'}`}>
+              浏览全部角色
+            </span>
+            <span className={`text-[11px] ${isDark ? 'text-violet-300/80' : 'text-violet-700/80'}`}>
+              从 225 个模板中按领域 / 关键词挑选，找你真正需要的那一位
+            </span>
+          </span>
+        </span>
+        <span
+          aria-hidden
+          className={[
+            'shrink-0 text-xs transition-transform group-hover:translate-x-0.5',
+            isDark ? 'text-violet-200' : 'text-violet-700',
+          ].join(' ')}
+        >
+          →
+        </span>
+      </button>
+      <BrowseAllRolesModal
+        open={browseOpen}
+        onOpenChange={handleBrowseOpenChange}
+        isDark={isDark}
+        selectedSlugs={selectedSlugs}
+        fallbackRoles={universe}
+        recommendedSet={recommendedSet}
+        atCapacity={atCapacity}
+        onToggle={(role) => toggleRole(role.slug)}
+        onCatalogChange={handleBrowserCatalogChange}
+      />
 
-      {/* ─── Device row (informational) ──────────────────────────── */}
+      {/* ─── Device picker ───────────────────────────────────────── */}
       <div
         data-testid="simple-step2-device-row"
         className={`mt-1 flex items-center gap-2 rounded-xl border px-3 py-2 text-xs ${insetSurface} ${
           isDark ? 'text-zinc-400' : 'text-zinc-600'
         }`}
       >
-        <Cloud aria-hidden className="h-4 w-4 shrink-0" strokeWidth={1.5} />
-        <span>
-          设备: 1 × Cloud Device ({deviceMaxAgents} agents 容量, 你将用 {selectedCount})
-        </span>
+        {devOpts.length > 0 ? (
+          <div className="relative flex w-full items-center gap-2">
+            {(devOpts[devIdx]?.kind ?? 'docker') === 'k8s' ? (
+              <Server aria-hidden className="h-4 w-4 shrink-0" strokeWidth={1.5} />
+            ) : (
+              <Laptop aria-hidden className="h-4 w-4 shrink-0" strokeWidth={1.5} />
+            )}
+            <select
+              data-testid="simple-step2-device-select"
+              value={devIdx}
+              onChange={(e) => handleDeviceChange(Number(e.target.value))}
+              className={`flex-1 bg-transparent text-xs font-medium outline-none ${
+                isDark ? 'text-zinc-200' : 'text-zinc-800'
+              }`}
+            >
+              {devOpts.map((opt, i) => (
+                <option key={opt.id} value={i}>
+                  {opt.label} · {opt.spare > 0 ? `空闲${opt.spare}` : '已满'}/{opt.maxAgents} ·{' '}
+                  {opt.kind === 'k8s' ? '云端' : '本地'}
+                </option>
+              ))}
+            </select>
+            <ChevronDown aria-hidden className="h-3 w-3 shrink-0 opacity-50" />
+            <span className="shrink-0 text-[10px] opacity-60">
+              {selectedCount}/{displayMax} agents 已选
+            </span>
+          </div>
+        ) : (
+          <>
+            <Cloud aria-hidden className="h-4 w-4 shrink-0" strokeWidth={1.5} />
+            <span>
+              设备: 1 × Cloud Device ({deviceMaxAgents} agents 容量, 你将用 {selectedCount})
+            </span>
+          </>
+        )}
       </div>
     </div>
   );
