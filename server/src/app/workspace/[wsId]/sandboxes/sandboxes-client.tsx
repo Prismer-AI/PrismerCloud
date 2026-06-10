@@ -15,6 +15,19 @@
 import { useEffect, useState, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { getWorkspaceToken } from '@/app/workspace/lib/im-api';
+
+/**
+ * Helper for /api/sandboxes/** session-bound calls. All routes use
+ * authorizeContainer/authorizeWorkspace which require an Authorization
+ * Bearer header (NextAuth session or platform JWT or active API key).
+ */
+function authHeaders(extra?: Record<string, string>): Record<string, string> {
+  const token = getWorkspaceToken();
+  const headers: Record<string, string> = { ...(extra ?? {}) };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  return headers;
+}
 
 interface Container {
   id: string;
@@ -54,6 +67,7 @@ export function SandboxesClient({ workspaceId, initialContainers }: Props) {
     try {
       const res = await fetch(`/api/sandboxes?workspaceId=${encodeURIComponent(workspaceId)}`, {
         cache: 'no-store',
+        headers: authHeaders(),
       });
       if (!res.ok) {
         // 401/403 are non-fatal here — surface to user but don't keep alerting
@@ -78,7 +92,7 @@ export function SandboxesClient({ workspaceId, initialContainers }: Props) {
     try {
       const res = await fetch('/api/sandboxes', {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: authHeaders({ 'content-type': 'application/json' }),
         body: JSON.stringify({ workspaceId }),
       });
       if (!res.ok) {
@@ -92,7 +106,10 @@ export function SandboxesClient({ workspaceId, initialContainers }: Props) {
   }
 
   async function action(id: string, op: 'start' | 'stop') {
-    const res = await fetch(`/api/sandboxes/${encodeURIComponent(id)}/${op}`, { method: 'POST' });
+    const res = await fetch(`/api/sandboxes/${encodeURIComponent(id)}/${op}`, {
+      method: 'POST',
+      headers: authHeaders(),
+    });
     if (!res.ok) {
       const text = await res.text().catch(() => '');
       alert(`${op} failed (${res.status}): ${text}`);
@@ -102,7 +119,10 @@ export function SandboxesClient({ workspaceId, initialContainers }: Props) {
 
   async function remove(id: string) {
     if (!confirm('Delete this sandbox? Disk will be discarded.')) return;
-    const res = await fetch(`/api/sandboxes/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    const res = await fetch(`/api/sandboxes/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers: authHeaders(),
+    });
     if (!res.ok) {
       const text = await res.text().catch(() => '');
       alert(`Delete failed (${res.status}): ${text}`);
@@ -111,7 +131,10 @@ export function SandboxesClient({ workspaceId, initialContainers }: Props) {
   }
 
   async function snapshot(id: string) {
-    const res = await fetch(`/api/sandboxes/${encodeURIComponent(id)}/snapshot`, { method: 'POST' });
+    const res = await fetch(`/api/sandboxes/${encodeURIComponent(id)}/snapshot`, {
+      method: 'POST',
+      headers: authHeaders(),
+    });
     if (!res.ok) {
       const text = await res.text().catch(() => '');
       alert(`Snapshot failed (${res.status}): ${text}`);
