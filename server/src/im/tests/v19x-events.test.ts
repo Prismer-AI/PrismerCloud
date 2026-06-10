@@ -22,6 +22,7 @@ import type {
   WorkspaceChangedPayload,
   AgentProfileChangedPayload,
   WorkspaceFileChangedPayload,
+  AssetChangedPayload,
   WSMessage,
 } from '../types/index';
 
@@ -140,6 +141,15 @@ test('ServerEvents.hostAcked — envelope shape + requestId echo', () => {
     workspaceId: 'ws-1',
     syncCursor: { workspaces: 100, agent_profiles: 200 },
     profilesToSync: ['prof-1'],
+    profilesToDelete: [],
+    acceptedAgents: ['agent-accepted'],
+    rejectedAgents: [
+      {
+        imUserId: 'agent-rejected',
+        reason: 'bound-to-other-daemon',
+        ownerDaemonId: 'daemon-owner',
+      },
+    ],
   };
   const envelope = ServerEvents.hostAcked(data, 'req-declare-1');
   assertEnvelope(envelope, 'host.acked', 'req-declare-1');
@@ -265,6 +275,20 @@ test('ServerEvents.workspaceFileChanged — delete omits asset fields', () => {
   };
   const envelope = ServerEvents.workspaceFileChanged(data);
   assertEq(envelope.payload, data, 'workspaceFileChanged.payload (delete)');
+});
+
+test('ServerEvents.assetChanged — update carries index cursor hint', () => {
+  const data: AssetChangedPayload = {
+    workspaceId: 'ws-1',
+    assetId: 'ast-1',
+    operation: 'update',
+    contentHash: 'b'.repeat(64),
+    assetIndexSeq: 42,
+    revision: 3,
+  };
+  const envelope = ServerEvents.assetChanged(data);
+  assertEnvelope(envelope, 'asset.changed');
+  assertEq(envelope.payload, data, 'assetChanged.payload (update)');
 });
 
 test('task.dispatch.request with mention context — round-trip', () => {
