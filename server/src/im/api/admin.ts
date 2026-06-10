@@ -9,6 +9,7 @@ import { Hono } from 'hono';
 import { authMiddleware } from '../auth/middleware';
 import type { ApiResponse } from '../types/index';
 import prisma from '../db';
+import { runSyncEventCleanup } from '../services/sync-event-cleanup.service';
 
 function adminGuard() {
   return async (c: any, next: any) => {
@@ -22,7 +23,9 @@ function adminGuard() {
 
 export function createAdminRouter() {
   const router = new Hono();
+  // eslint-disable-next-line custom/no-wildcard-sub-router-middleware -- mounted at /admin in routes.ts; wildcard scoped to that prefix
   router.use('*', authMiddleware);
+  // eslint-disable-next-line custom/no-wildcard-sub-router-middleware -- adminGuard layered after authMiddleware; same /admin prefix scope
   router.use('*', adminGuard());
 
   /**
@@ -65,6 +68,24 @@ export function createAdminRouter() {
     });
     if (!user) return c.json<ApiResponse>({ ok: false, error: 'User not found' }, 404);
     return c.json<ApiResponse>({ ok: true, data: user });
+  });
+
+  /**
+   * POST /api/admin/sync-events/cleanup — Ad-hoc trigger for IMSyncEvent
+   * retention cleanup. Same logic as the daily scheduler cron; useful when
+   * the table has grown unexpectedly and the operator wants a forced run.
+   * Returns CleanupResult; can run for several seconds on large backlogs.
+   */
+  router.post('/sync-events/cleanup', async (c) => {
+    try {
+      const result = await runSyncEventCleanup();
+      return c.json<ApiResponse>({ ok: true, data: result });
+    } catch (err) {
+      return c.json<ApiResponse>(
+        { ok: false, error: err instanceof Error ? err.message : String(err) },
+        500,
+      );
+    }
   });
 
   return router;
