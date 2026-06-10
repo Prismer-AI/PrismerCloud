@@ -22,6 +22,8 @@ import type { RateLimiterService } from '../services/rate-limiter.service';
 import { createRateLimitMiddleware } from '../middleware/rate-limit';
 import type { ApiResponse, MessageType } from '../types/index';
 import { resolveTargetUser } from '../utils/resolve-user';
+import { requireAgentToolAllowed, resolveConversationWorkspaceId } from '../security/mcp-allowlist';
+import { resolveConversationViewerAccess } from '../api/conversation-visibility';
 
 type GroupParticipantWithUser = {
   imUserId: string;
@@ -60,6 +62,7 @@ export function createGroupsRouter(
 ) {
   const router = new Hono();
 
+  // eslint-disable-next-line custom/no-wildcard-sub-router-middleware -- mounted at /groups in routes.ts; wildcard scoped to that prefix
   router.use('*', authMiddleware);
 
   /**
@@ -150,11 +153,13 @@ export function createGroupsRouter(
    */
   router.get('/', async (c) => {
     const user = c.get('user');
+    const workspaceId = c.req.query('workspaceId')?.trim() || null;
 
     const groups = await prisma.iMParticipant.findMany({
       where: {
         imUserId: user.imUserId,
-        conversation: { type: 'group', status: 'active' },
+        leftAt: null,
+        conversation: { type: 'group', status: 'active', ...(workspaceId ? { workspaceId } : {}) },
       },
       include: {
         conversation: {
@@ -165,16 +170,46 @@ export function createGroupsRouter(
       },
     });
 
-    return c.json<ApiResponse>({
-      ok: true,
-      data: groups.map((g: (typeof groups)[number]) => ({
+    const byId = new Map<string, any>();
+    for (const g of groups) {
+      const viewerAccess = await resolveConversationViewerAccess(g.conversation.id, user.imUserId);
+      byId.set(g.conversation.id, {
         groupId: g.conversation.id,
         title: displayGroupTitleForViewer(g.conversation.title, g.conversation.participants, user.imUserId),
         displayTitle: displayGroupTitleForViewer(g.conversation.title, g.conversation.participants, user.imUserId),
         description: g.conversation.description,
-        myRole: g.role,
+        myRole: viewerAccess.role,
+        viewerAccess,
         memberCount: g.conversation.participants.length,
-      })),
+      });
+    }
+
+    if (workspaceId) {
+      const workspaceGroups = await prisma.iMConversation.findMany({
+        where: { workspaceId, type: 'group', status: 'active' },
+        include: {
+          participants: { where: { leftAt: null }, include: { imUser: true } },
+        },
+      });
+      for (const group of workspaceGroups) {
+        if (byId.has(group.id)) continue;
+        const viewerAccess = await resolveConversationViewerAccess(group.id, user.imUserId);
+        if (!viewerAccess.canObserve) continue;
+        byId.set(group.id, {
+          groupId: group.id,
+          title: displayGroupTitleForViewer(group.title, group.participants, user.imUserId),
+          displayTitle: displayGroupTitleForViewer(group.title, group.participants, user.imUserId),
+          description: group.description,
+          myRole: viewerAccess.role,
+          viewerAccess,
+          memberCount: group.participants.length,
+        });
+      }
+    }
+
+    return c.json<ApiResponse>({
+      ok: true,
+      data: [...byId.values()],
     });
   });
 
@@ -185,9 +220,8 @@ export function createGroupsRouter(
     const user = c.get('user');
     const groupId = c.req.param('groupId')!;
 
-    // Check membership
-    const isMember = await conversationService.isParticipant(groupId, user.imUserId);
-    if (!isMember) {
+    const viewerAccess = await resolveConversationViewerAccess(groupId, user.imUserId);
+    if (!viewerAccess.canObserve) {
       return c.json<ApiResponse>({ ok: false, error: 'Not a member of this group' }, 403);
     }
 
@@ -209,10 +243,13 @@ export function createGroupsRouter(
         title: displayGroupTitleForViewer(group.title, group.participants, user.imUserId),
         displayTitle: displayGroupTitleForViewer(group.title, group.participants, user.imUserId),
         description: group.description,
+        myRole: viewerAccess.role,
+        viewerAccess,
         members: group.participants.map((p: (typeof group.participants)[number]) => ({
           userId: p.imUser.id,
           username: p.imUser.username,
           displayName: p.imUser.displayName,
+          avatarUrl: p.imUser.avatarUrl,
           role: p.role,
         })),
       },
@@ -229,11 +266,18 @@ export function createGroupsRouter(
     const user = c.get('user');
     const groupId = c.req.param('groupId')!;
     const body = await c.req.json();
+    const denied = await requireAgentToolAllowed(
+      c,
+      'prismer.message.send',
+      await resolveConversationWorkspaceId(groupId),
+    );
+    if (denied) return denied;
 
     const {
       type,
       content,
       metadata,
+      attachments,
       secVersion,
       senderKeyId,
       senderDid,
@@ -245,7 +289,8 @@ export function createGroupsRouter(
       timestamp,
     } = body;
 
-    if (!content && type !== 'system_event') {
+    const hasAttachments = Array.isArray(attachments) && attachments.length > 0;
+    if (!content && !hasAttachments && type !== 'system_event') {
       return c.json<ApiResponse>({ ok: false, error: 'content is required' }, 400);
     }
 
@@ -320,6 +365,7 @@ export function createGroupsRouter(
         type: (type as MessageType) ?? 'text',
         content: content ?? '',
         metadata: enrichedMetadata,
+        attachments,
         ...(isSigned
           ? {
               secVersion,
@@ -364,6 +410,7 @@ export function createGroupsRouter(
       type: msg.type as any,
       content: msg.content,
       metadata: messageMetadata,
+      attachments: msg.attachments ?? undefined,
       parentId: msg.parentId ?? undefined,
       createdAt: msg.createdAt instanceof Date ? msg.createdAt.toISOString() : String(msg.createdAt),
     });
@@ -391,9 +438,8 @@ export function createGroupsRouter(
     const user = c.get('user');
     const groupId = c.req.param('groupId')!;
 
-    // Check membership
-    const isMember = await conversationService.isParticipant(groupId, user.imUserId);
-    if (!isMember) {
+    const viewerAccess = await resolveConversationViewerAccess(groupId, user.imUserId);
+    if (!viewerAccess.canObserve) {
       return c.json<ApiResponse>({ ok: false, error: 'Not a member of this group' }, 403);
     }
 
@@ -425,14 +471,8 @@ export function createGroupsRouter(
       return c.json<ApiResponse>({ ok: false, error: 'userId is required' }, 400);
     }
 
-    // Check if requester is owner/admin
-    const participant = await prisma.iMParticipant.findUnique({
-      where: {
-        conversationId_imUserId: { conversationId: groupId, imUserId: user.imUserId },
-      },
-    });
-
-    if (!participant || !['owner', 'admin'].includes(participant.role)) {
+    const viewerAccess = await resolveConversationViewerAccess(groupId, user.imUserId);
+    if (!viewerAccess.canAddMember) {
       return c.json<ApiResponse>({ ok: false, error: 'Only owner/admin can add members' }, 403);
     }
 
@@ -462,17 +502,10 @@ export function createGroupsRouter(
       return c.json<ApiResponse>({ ok: false, error: `User not found: ${targetUserId}` }, 404);
     }
 
-    // Check if requester is owner/admin or removing self
-    const participant = await prisma.iMParticipant.findUnique({
-      where: {
-        conversationId_imUserId: { conversationId: groupId, imUserId: user.imUserId },
-      },
-    });
-
+    const viewerAccess = await resolveConversationViewerAccess(groupId, user.imUserId);
     const isSelf = resolvedUserId === user.imUserId;
-    const isAdmin = participant && ['owner', 'admin'].includes(participant.role);
 
-    if (!isSelf && !isAdmin) {
+    if (!isSelf && !viewerAccess.canRemoveMember) {
       return c.json<ApiResponse>({ ok: false, error: 'Permission denied' }, 403);
     }
 
