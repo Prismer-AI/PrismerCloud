@@ -2,14 +2,25 @@
  * Version Consistency Checker
  *
  * Scans all version declarations across the monorepo and flags
- * any package that is NOT on the expected 1.8.x line.
+ * any package that does not match the root /VERSION file (single
+ * source of truth, per CLAUDE.md §Versioning Principle).
  *
  * Sources checked:
+ *   - Root /VERSION                                       (single source of truth)
  *   - Root package.json
- *   - sdk / * / package.json  (excluding node_modules)
+ *   - sdk / * / package.json                              (excluding node_modules)
  *   - sdk / * / pyproject.toml
- *   - sdk / * / Cargo.toml    (excluding target/)
+ *   - sdk / * / Cargo.toml                                (excluding target/)
+ *   - sdk / * / .claude-plugin/plugin.json                (claude-code-plugin manifest)
+ *   - sdk/prismer-cloud/mcp/src/index.ts                  (McpServer hardcoded version)
+ *   - sdk/prismer-cloud/runtime/src/cli/index.ts          (const VERSION literal)
+ *   - sdk/prismer-cloud/rust/src/cli.rs                   (clap version attr — env! macro should match Cargo.toml)
  *   - src/lib/version.ts
+ *
+ * Intentionally NOT scanned:
+ *   - sdk/prismer-cloud/runtime/src/cli/util.ts           (banner subtitle reads
+ *     dynamically from runtime/package.json at module load — drift impossible
+ *     by construction, no static scan needed)
  *
  * Usage: npx tsx scripts/check-version-consistency.ts
  */
@@ -19,7 +30,9 @@ import fg from 'fast-glob';
 import { resolve, relative } from 'path';
 
 const ROOT = resolve(__dirname, '..');
-const EXPECTED_MAJOR_MINOR = '1.8';
+const VERSION_FILE = resolve(ROOT, 'VERSION');
+const ROOT_VERSION = readFileSync(VERSION_FILE, 'utf-8').trim(); // e.g. "2.0.0"
+const EXPECTED_VERSION = ROOT_VERSION; // exact match — full semver, not major.minor
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -27,8 +40,7 @@ interface VersionEntry {
   source: string; // relative file path
   label: string; // human-readable package identifier
   version: string; // extracted version string
-  majorMinor: string; // e.g. "1.8"
-  aligned: boolean; // true if majorMinor matches EXPECTED_MAJOR_MINOR
+  aligned: boolean; // true if version matches EXPECTED_VERSION exactly
 }
 
 // ─── Extraction helpers ─────────────────────────────────────────────────────
@@ -39,13 +51,11 @@ function extractFromPackageJson(filePath: string): VersionEntry | null {
     const json = JSON.parse(content);
     if (!json.version) return null;
     const ver: string = json.version;
-    const parts = ver.split('.');
     return {
       source: relative(ROOT, filePath),
       label: json.name || relative(ROOT, filePath),
       version: ver,
-      majorMinor: `${parts[0]}.${parts[1]}`,
-      aligned: `${parts[0]}.${parts[1]}` === EXPECTED_MAJOR_MINOR,
+      aligned: ver === EXPECTED_VERSION,
     };
   } catch {
     return null;
@@ -59,13 +69,11 @@ function extractFromPyproject(filePath: string): VersionEntry | null {
     const match = content.match(/^version\s*=\s*"([^"]+)"/m);
     if (!match) return null;
     const ver = match[1];
-    const parts = ver.split('.');
     return {
       source: relative(ROOT, filePath),
       label: relative(ROOT, filePath),
       version: ver,
-      majorMinor: `${parts[0]}.${parts[1]}`,
-      aligned: `${parts[0]}.${parts[1]}` === EXPECTED_MAJOR_MINOR,
+      aligned: ver === EXPECTED_VERSION,
     };
   } catch {
     return null;
@@ -79,13 +87,11 @@ function extractFromCargoToml(filePath: string): VersionEntry | null {
     const match = content.match(/^version\s*=\s*"([^"]+)"/m);
     if (!match) return null;
     const ver = match[1];
-    const parts = ver.split('.');
     return {
       source: relative(ROOT, filePath),
       label: relative(ROOT, filePath),
       version: ver,
-      majorMinor: `${parts[0]}.${parts[1]}`,
-      aligned: `${parts[0]}.${parts[1]}` === EXPECTED_MAJOR_MINOR,
+      aligned: ver === EXPECTED_VERSION,
     };
   } catch {
     return null;
@@ -98,13 +104,80 @@ function extractFromVersionTs(filePath: string): VersionEntry | null {
     const match = content.match(/export\s+const\s+VERSION\s*=\s*'([^']+)'/);
     if (!match) return null;
     const ver = match[1];
-    const parts = ver.split('.');
     return {
       source: relative(ROOT, filePath),
       label: 'src/lib/version.ts (VERSION)',
       version: ver,
-      majorMinor: `${parts[0]}.${parts[1]}`,
-      aligned: `${parts[0]}.${parts[1]}` === EXPECTED_MAJOR_MINOR,
+      aligned: ver === EXPECTED_VERSION,
+    };
+  } catch {
+    return null;
+  }
+}
+
+// Matches the `const VERSION = '...'` literal in runtime/src/cli/index.ts
+// (kept in sync via sdk/build/version.sh `bump_runtime_cli_version`).
+function extractFromRuntimeCliVersion(filePath: string): VersionEntry | null {
+  try {
+    const content = readFileSync(filePath, 'utf-8');
+    const match = content.match(/^const\s+VERSION\s*=\s*'([^']+)'/m);
+    if (!match) return null;
+    const ver = match[1];
+    return {
+      source: relative(ROOT, filePath),
+      label: 'runtime/src/cli/index.ts (const VERSION)',
+      version: ver,
+      aligned: ver === EXPECTED_VERSION,
+    };
+  } catch {
+    return null;
+  }
+}
+
+// Matches the McpServer `version: '...'` literal in mcp/src/index.ts
+// (kept in sync via sdk/build/version.sh `bump_hardcoded`).
+function extractFromMcpServerVersion(filePath: string): VersionEntry | null {
+  try {
+    const content = readFileSync(filePath, 'utf-8');
+    // Look for `name: 'prismer'` followed by `version: '...'` (McpServer block).
+    const match = content.match(/name:\s*['"]prismer['"]\s*,\s*version:\s*['"]([^'"]+)['"]/);
+    if (!match) return null;
+    const ver = match[1];
+    return {
+      source: relative(ROOT, filePath),
+      label: 'mcp/src/index.ts (McpServer version)',
+      version: ver,
+      aligned: ver === EXPECTED_VERSION,
+    };
+  } catch {
+    return null;
+  }
+}
+
+// Matches the clap `version = "..."` literal in rust/src/cli.rs.
+// After R1, this should be `env!("CARGO_PKG_VERSION")` — we accept that as
+// always aligned (it inherits from Cargo.toml, already checked).
+function extractFromRustCli(filePath: string): VersionEntry | null {
+  try {
+    const content = readFileSync(filePath, 'utf-8');
+    // env! macro — treat as aligned since Cargo.toml is already validated above.
+    if (/version\s*=\s*env!\(\s*"CARGO_PKG_VERSION"\s*\)/.test(content)) {
+      return {
+        source: relative(ROOT, filePath),
+        label: 'rust/src/cli.rs (clap version, env! macro)',
+        version: EXPECTED_VERSION,
+        aligned: true,
+      };
+    }
+    // Fallback: hardcoded literal (regression detector).
+    const match = content.match(/version\s*=\s*"([^"]+)"/);
+    if (!match) return null;
+    const ver = match[1];
+    return {
+      source: relative(ROOT, filePath),
+      label: 'rust/src/cli.rs (clap version, hardcoded)',
+      version: ver,
+      aligned: ver === EXPECTED_VERSION,
     };
   } catch {
     return null;
@@ -118,6 +191,7 @@ function findFiles(pattern: string, ignore: string[] = []): string[] {
     cwd: ROOT,
     absolute: true,
     ignore,
+    dot: true, // include dotfile dirs like .claude-plugin/
   });
 }
 
@@ -125,7 +199,7 @@ function findFiles(pattern: string, ignore: string[] = []): string[] {
 
 function main() {
   console.log(`\n[VersionCheck] Scanning for version declarations...`);
-  console.log(`[VersionCheck] Expected major.minor: ${EXPECTED_MAJOR_MINOR}.x\n`);
+  console.log(`[VersionCheck] Expected version (from /VERSION): ${EXPECTED_VERSION}\n`);
 
   const entries: VersionEntry[] = [];
 
@@ -161,13 +235,38 @@ function main() {
   const versionTsEntry = extractFromVersionTs(resolve(ROOT, 'src/lib/version.ts'));
   if (versionTsEntry) entries.push(versionTsEntry);
 
-  // ─── Group by major.minor ──────────────────────────────────────────────
+  // 6. plugin.json files (claude-code-plugin manifest, etc.)
+  const pluginJsons = findFiles('sdk/**/plugin.json', ['**/node_modules/**', '**/target/**']);
+  for (const f of pluginJsons) {
+    const entry = extractFromPackageJson(f);
+    if (entry) {
+      entry.label = `${relative(ROOT, f)} (plugin manifest)`;
+      entries.push(entry);
+    }
+  }
+
+  // 7. Hardcoded version literals in TS source files.
+  const runtimeCliEntry = extractFromRuntimeCliVersion(
+    resolve(ROOT, 'sdk/prismer-cloud/runtime/src/cli/index.ts'),
+  );
+  if (runtimeCliEntry) entries.push(runtimeCliEntry);
+
+  const mcpServerEntry = extractFromMcpServerVersion(
+    resolve(ROOT, 'sdk/prismer-cloud/mcp/src/index.ts'),
+  );
+  if (mcpServerEntry) entries.push(mcpServerEntry);
+
+  // 8. Rust CLI version attr (sanity check; env! macro should align by construction).
+  const rustCliEntry = extractFromRustCli(resolve(ROOT, 'sdk/prismer-cloud/rust/src/cli.rs'));
+  if (rustCliEntry) entries.push(rustCliEntry);
+
+  // ─── Group by exact version ────────────────────────────────────────────
 
   const groups = new Map<string, VersionEntry[]>();
   for (const e of entries) {
-    const list = groups.get(e.majorMinor) || [];
+    const list = groups.get(e.version) || [];
     list.push(e);
-    groups.set(e.majorMinor, list);
+    groups.set(e.version, list);
   }
 
   // ─── Report ────────────────────────────────────────────────────────────
@@ -180,7 +279,7 @@ function main() {
   console.log('='.repeat(72));
 
   // Aligned packages
-  console.log(`\n  Aligned (${EXPECTED_MAJOR_MINOR}.x) — ${aligned.length} package(s):\n`);
+  console.log(`\n  Aligned (${EXPECTED_VERSION}) — ${aligned.length} package(s):\n`);
   if (aligned.length === 0) {
     console.log('    (none)');
   } else {
@@ -193,26 +292,26 @@ function main() {
   if (misaligned.length > 0) {
     console.log(`\n  MISALIGNED — ${misaligned.length} package(s):\n`);
     for (const e of misaligned) {
-      console.log(`    ${e.version.padEnd(12)} ${e.label}  (expected ${EXPECTED_MAJOR_MINOR}.x)`);
+      console.log(`    ${e.version.padEnd(12)} ${e.label}  (expected ${EXPECTED_VERSION})`);
     }
   }
 
-  // Summary by major.minor group
+  // Summary by exact version
   console.log(`\n  Version groups:`);
   const sortedKeys = [...groups.keys()].sort();
   for (const key of sortedKeys) {
     const list = groups.get(key)!;
-    const marker = key === EXPECTED_MAJOR_MINOR ? '  (expected)' : '  ** UNEXPECTED **';
-    console.log(`    ${key}.x — ${list.length} package(s)${marker}`);
+    const marker = key === EXPECTED_VERSION ? '  (expected)' : '  ** UNEXPECTED **';
+    console.log(`    ${key.padEnd(12)} — ${list.length} package(s)${marker}`);
   }
 
   console.log('\n' + '='.repeat(72));
 
   if (misaligned.length > 0) {
-    console.log(`\n  RESULT: FAIL — ${misaligned.length} package(s) not at ${EXPECTED_MAJOR_MINOR}.x\n`);
+    console.log(`\n  RESULT: FAIL — ${misaligned.length} package(s) not at ${EXPECTED_VERSION}\n`);
     process.exit(1);
   } else {
-    console.log(`\n  RESULT: PASS — all ${aligned.length} package(s) at ${EXPECTED_MAJOR_MINOR}.x\n`);
+    console.log(`\n  RESULT: PASS — all ${aligned.length} package(s) at ${EXPECTED_VERSION}\n`);
     process.exit(0);
   }
 }
