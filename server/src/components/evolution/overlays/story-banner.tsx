@@ -9,6 +9,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { X, Zap } from 'lucide-react';
+import { useI18n } from '@/contexts/i18n-context';
 import type { EvolutionStory } from '../types/evolution-map.types';
 
 interface Props {
@@ -17,15 +18,18 @@ interface Props {
   onStoryClick?: (geneId: string) => void;
 }
 
-function timeAgo(ts: string): string {
+type EvolutionT = ReturnType<typeof useI18n>['t'];
+
+function timeAgo(ts: string, t: EvolutionT): string {
   const sec = Math.floor((Date.now() - new Date(ts).getTime()) / 1000);
-  if (sec < 60) return `${sec}s ago`;
-  if (sec < 3600) return `${Math.floor(sec / 60)}m ago`;
-  if (sec < 86400) return `${Math.floor(sec / 3600)}h ago`;
-  return `${Math.floor(sec / 86400)}d ago`;
+  if (sec < 60) return t('evolution.common.secondsAgo', { count: Math.max(sec, 0) });
+  if (sec < 3600) return t('evolution.common.minutesAgo', { count: Math.floor(sec / 60) });
+  if (sec < 86400) return t('evolution.common.hoursAgo', { count: Math.floor(sec / 3600) });
+  return t('evolution.common.daysAgo', { count: Math.floor(sec / 86400) });
 }
 
 export function StoryBanner({ story, isDark, onStoryClick }: Props) {
+  const { t } = useI18n();
   const [visible, setVisible] = useState(false);
   const [dismissed, setDismissed] = useState(false);
   const prevStoryRef = useRef<string | null>(null);
@@ -65,7 +69,7 @@ export function StoryBanner({ story, isDark, onStoryClick }: Props) {
       >
         <div className="flex items-center gap-2 min-w-0">
           <Zap size={12} className={isDark ? 'text-violet-400' : 'text-violet-500'} />
-          <span className={isDark ? 'text-zinc-500' : 'text-zinc-400'}>{timeAgo(story.timestamp)}</span>
+          <span className={isDark ? 'text-zinc-500' : 'text-zinc-400'}>{timeAgo(story.timestamp, t)}</span>
           <span className="truncate">
             <span className="font-medium">{story.agent.name}</span>
             <span className={isDark ? 'text-zinc-600' : 'text-zinc-400'}>{' → '}</span>
