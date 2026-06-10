@@ -64,29 +64,19 @@ export class ConversationService {
    * Create a 1:1 direct conversation.
    */
   async createDirect(input: CreateDirectInput) {
+    const participantWhere = [
+      { participants: { some: { imUserId: input.createdBy, leftAt: null } } },
+      { participants: { some: { imUserId: input.otherUserId, leftAt: null } } },
+    ];
     const existing = await prisma.iMConversation.findFirst({
       where: {
         type: 'direct',
         status: { not: 'deleted' },
-        AND: [
-          { participants: { some: { imUserId: input.createdBy, leftAt: null } } },
-          { participants: { some: { imUserId: input.otherUserId, leftAt: null } } },
-        ],
+        ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
+        AND: participantWhere,
       },
     });
     if (existing) {
-      if (input.workspaceId && !existing.workspaceId) {
-        const patched = await prisma.iMConversation.update({
-          where: { id: existing.id },
-          data: { workspaceId: input.workspaceId },
-        });
-        await this.writeSyncForParticipants(
-          'conversation.update',
-          { id: existing.id, workspaceId: input.workspaceId },
-          existing.id,
-        );
-        return patched;
-      }
       if (existing.status === 'archived') {
         const reactivated = await prisma.iMConversation.update({
           where: { id: existing.id },
@@ -96,6 +86,33 @@ export class ConversationService {
         return reactivated;
       }
       return existing;
+    }
+
+    if (input.workspaceId) {
+      const legacy = await prisma.iMConversation.findFirst({
+        where: {
+          type: 'direct',
+          status: { not: 'deleted' },
+          workspaceId: null,
+          AND: participantWhere,
+        },
+        orderBy: { updatedAt: 'desc' },
+      });
+      if (legacy) {
+        const patched = await prisma.iMConversation.update({
+          where: { id: legacy.id },
+          data: {
+            workspaceId: input.workspaceId,
+            ...(legacy.status === 'archived' ? { status: 'active' as ConversationStatus } : {}),
+          },
+        });
+        await this.writeSyncForParticipants(
+          'conversation.update',
+          { id: legacy.id, workspaceId: input.workspaceId, status: patched.status },
+          legacy.id,
+        );
+        return patched;
+      }
     }
 
     const conv = await this.convModel.create({
@@ -204,6 +221,12 @@ export class ConversationService {
     return result;
   }
 
+  async softDelete(id: string) {
+    const result = await this.convModel.updateStatus(id, 'deleted');
+    await this.writeSyncForParticipants('conversation.delete', { id }, id);
+    return result;
+  }
+
   async update(id: string, data: { title?: string; description?: string; metadata?: Record<string, unknown> }) {
     const result = await this.convModel.update(id, data);
     await this.writeSyncForParticipants('conversation.update', { id, ...data }, id);
@@ -234,5 +257,51 @@ export class ConversationService {
 
   async isParticipant(conversationId: string, userId: string) {
     return this.participantModel.isParticipant(conversationId, userId);
+  }
+
+  /**
+   * release201/08 §3.0 — tag a conversation with one of the 4 skill-dev roles
+   * (business | dev | test | review). Writes to `metadata.skillDev` and emits
+   * a `conversation.update` sync event so Studio Lifecycle session-links can
+   * surface the chain. Idempotent: re-applying the same role is a no-op.
+   *
+   * `parentConversationId` lets dev/test/review sessions link back to the
+   * originating business session, forming the chain described in §3.0.
+   */
+  async setSkillDevRole(
+    conversationId: string,
+    skillDraftId: string,
+    role: 'business' | 'dev' | 'test' | 'review',
+    options: { projectId?: string; parentConversationId?: string } = {},
+  ): Promise<{ conversationId: string; metadata: Record<string, unknown> }> {
+    const existing = await prisma.iMConversation.findUnique({ where: { id: conversationId } });
+    if (!existing) {
+      throw new Error(`conversation ${conversationId} not found`);
+    }
+    let metadata: Record<string, unknown> = {};
+    try {
+      const raw = (existing as { metadata?: unknown }).metadata;
+      if (typeof raw === 'string') metadata = JSON.parse(raw) || {};
+      else if (raw && typeof raw === 'object') metadata = raw as Record<string, unknown>;
+    } catch {
+      metadata = {};
+    }
+    metadata.skillDev = {
+      skillDraftId,
+      role,
+      ...(options.projectId ? { projectId: options.projectId } : {}),
+      ...(options.parentConversationId ? { parentConversationId: options.parentConversationId } : {}),
+      taggedAt: new Date().toISOString(),
+    };
+    await prisma.iMConversation.update({
+      where: { id: conversationId },
+      data: { metadata: JSON.stringify(metadata) as any },
+    });
+    await this.writeSyncForParticipants(
+      'conversation.update',
+      { id: conversationId, skillDev: metadata.skillDev },
+      conversationId,
+    );
+    return { conversationId, metadata };
   }
 }
