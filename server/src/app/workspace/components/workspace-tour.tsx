@@ -31,13 +31,13 @@ const STEPS: TourStep[] = [
   {
     anchor: '[data-tour-anchor="setup-progress"]',
     title: 'Setup progress',
-    body: 'Tracks your first 4 milestones — agent, session, task, asset. The bar fills as you complete each step.',
+    body: 'Tracks your first 4 milestones — agent, session, task, asset. The badge in the bottom-right fills as you complete each step.',
     icon: MessageSquare,
   },
   {
     anchor: '[data-tour-anchor="setup-cta"]',
     title: 'Take the next action',
-    body: 'This button always points to the next missing step. Click it to jump in. You can come back to this checklist any time from the right rail.',
+    body: 'This is your launch button — pick an industry + team size and your AI team is live in 30 seconds. You can revisit the checklist anytime from the right rail.',
     icon: Send,
   },
 ];
