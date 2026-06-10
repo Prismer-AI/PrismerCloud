@@ -322,14 +322,20 @@ cmd_apply() {
   branch="$(git -C "$OPEN_ROOT" rev-parse --abbrev-ref HEAD)"
   [[ "$branch" == "main" ]] && die "refusing to apply directly on main — create a sync branch first"
 
-  # ordered patch list: adds, then modifies, then deletes (each sorted by path)
+  # ordered patch list: adds, then modifies, then deletes (each sorted by path).
+  # No-ops (staged content identical to the worktree — e.g. a conflict resolved
+  # as keep-ours, or a rerun after a partial apply) are filtered out here so
+  # the NNN/TOTAL numbering stays accurate and git never sees an empty commit.
   local -a adds=() mods=() dels=()
+  is_noop() { [[ -f "$SERVER_DIR/$1" ]] && cmp -s "$STAGE_DIR/$1" "$SERVER_DIR/$1"; }
   while IFS=$'\t' read -r action path; do
     case "$action" in
-      add) adds+=("$path");;
-      take-theirs|merge|conflict) mods+=("$path");;
-      delete) dels+=("$path");;
-      delete-conflict) if [[ -f "$STAGE_DIR/$path" ]]; then mods+=("$path"); else dels+=("$path"); fi;;
+      add) is_noop "$path" || adds+=("$path");;
+      take-theirs|merge|conflict) is_noop "$path" || mods+=("$path");;
+      delete) [[ -e "$SERVER_DIR/$path" ]] && dels+=("$path");;
+      delete-conflict)
+        if [[ -f "$STAGE_DIR/$path" ]]; then is_noop "$path" || mods+=("$path")
+        elif [[ -e "$SERVER_DIR/$path" ]]; then dels+=("$path"); fi;;
     esac
   done < <(sort -t$'\t' -k2 "$PLAN_FILE")
 
