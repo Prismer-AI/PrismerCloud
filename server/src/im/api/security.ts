@@ -19,6 +19,7 @@ async function isParticipant(conversationId: string, imUserId: string): Promise<
 
 export function createSecurityRouter() {
   const router = new Hono();
+  // eslint-disable-next-line custom/no-wildcard-sub-router-middleware -- createSecurityRouter mounted at /conversations in routes.ts; wildcard scoped to that prefix
   router.use('*', authMiddleware);
 
   /**
