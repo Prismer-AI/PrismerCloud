@@ -10,6 +10,7 @@ import type { IncomingMessage } from 'node:http';
 import type Redis from 'ioredis';
 
 import { verifyToken } from '../auth/jwt';
+import { ownerIdentityKeys } from '../auth/middleware';
 import { config } from '../config';
 import { WebSocketTransport } from './transport';
 import { RoomManager, type ConnectedClient } from './rooms';
@@ -27,24 +28,35 @@ import {
   type AgentCapabilityDeclarePayload,
   type AckPayload,
   type ReconnectPayload,
+  type TaskHeartbeatPayload,
+  type TaskStepAppendPayload,
 } from './events';
 import { AckTracker } from './ack-tracker';
+import type { WSAckPersistentService } from '../services/ws-ack-persistent.service';
 import { MessageService } from '../services/message.service';
+import { ApprovalService } from '../services/approval.service';
 import { ConversationService } from '../services/conversation.service';
 import { PresenceService } from '../services/presence.service';
 import { AgentService } from '../services/agent.service';
 import { StreamService } from '../services/stream.service';
 import type { TaskService } from '../services/task.service';
 import { MemoryService } from '../services/memory.service';
+import type { SyncService } from '../services/sync.service';
+import { TaskStepRecorderService } from '../services/task-step-recorder.service';
+import { AgentBindingService } from '../services/agent-binding.service';
+import { WS_RPC_REPLY_TYPES, type WsRpcService } from '../services/ws-rpc.service';
 import type {
   WSMessage,
+  AssetAttachment,
   AgentHostDeclarePayload,
+  HostAckedPayload,
   AgentStatusChangedPayload,
   TaskDispatchProgressPayload,
   TaskDispatchReplyPayload,
+  TaskDispatchResumeFailedPayload,
 } from '../types/index';
-import type { AssetDispatchObservation } from '../types/im-events';
-import { computeProfilesToSync } from './v19x-helpers';
+import type { AssetDispatchObservation, OutboxRejectionRecord } from '../types/im-events';
+import { computeProfilesToDelete, computeProfilesToSync } from './v19x-helpers';
 import prisma from '../db';
 import { createModuleLogger } from '../../lib/logger';
 import { isDaemonForgotten } from '../services/runtime-binding.service';
@@ -58,6 +70,212 @@ function daemonRouteKey(daemonId: string): string {
   return `${DAEMON_ROUTE_PREFIX}${daemonId}`;
 }
 
+/**
+ * release201/26 §8 Phase 4 — core effect of a `task.dispatch.resume_failed`
+ * report, extracted from the WS closure so it is unit-testable independently
+ * of the daemon-ownership resolution (which stays in the closure).
+ *
+ * Effects (ownership already validated by the caller):
+ *   1. write `IMTaskRun.status='resume_failed'` + `error=reason` +
+ *      `metadata.resumeFailedReason/At` (status is a free String column —
+ *      schema.prisma:797 — so no enum / migration needed),
+ *   2. post a `system_event` message carrying `metadata.status='resume_failed'`
+ *      so the conversation-timeline strip renders the retry affordance.
+ *
+ * Distinct from `updateTaskRun` (which publishes terminal task.completed/failed
+ * SSE + reconciles the board projection) — resume_failed is a retryable,
+ * NON-terminal interruption, so we write the row + status-event directly.
+ *
+ * Never throws — DB / message failures are logged and swallowed so a bad
+ * report can't crash the daemon WS connection.
+ */
+export async function applyResumeFailed(opts: {
+  prisma: Pick<typeof prisma, 'iMTaskRun'>;
+  messageService: Pick<MessageService, 'send'> | undefined;
+  runId: string;
+  taskId?: string;
+  reason: string;
+  run: { assigneeId: string; conversationId: string | null; metadata: string | null; sourceKind: string };
+}): Promise<void> {
+  const { runId, taskId, reason, run } = opts;
+  let priorMeta: Record<string, unknown> = {};
+  try {
+    priorMeta = run.metadata ? (JSON.parse(run.metadata) as Record<string, unknown>) : {};
+  } catch {
+    priorMeta = {};
+  }
+  try {
+    await opts.prisma.iMTaskRun
+      .update({
+        where: { id: runId },
+        data: {
+          status: 'resume_failed',
+          error: reason,
+          metadata: JSON.stringify({
+            ...priorMeta,
+            resumeFailedReason: reason,
+            resumeFailedAt: new Date().toISOString(),
+          }),
+        },
+      })
+      .catch((err: unknown) => {
+        console.warn('[WS] task.dispatch.resume_failed run update failed:', (err as Error).message);
+      });
+  } catch (err) {
+    console.warn('[WS] task.dispatch.resume_failed run update threw:', (err as Error).message);
+  }
+  // Surface the interruption to the conversation timeline. Mirrors the
+  // run-failure system_event shape so the existing readTaskStatusEvent picks
+  // it up — only the status value differs.
+  if (run.conversationId && opts.messageService) {
+    const isChatMention = run.sourceKind === 'chat_mention';
+    try {
+      await opts.messageService.send({
+        conversationId: run.conversationId,
+        senderId: run.assigneeId,
+        type: 'system_event',
+        content: `⚠️ 任务中断，点击重试: ${reason}`,
+        metadata: {
+          kind: isChatMention ? 'agent_status_event' : 'task_status_event',
+          status: 'resume_failed',
+          taskId: taskId ?? runId,
+          runId,
+          sourceKind: run.sourceKind,
+          error: reason,
+        },
+      });
+    } catch (postErr) {
+      console.warn('[WS] failed to post resume_failed system message:', (postErr as Error).message);
+    }
+  }
+}
+
+/**
+ * v2.0.8 P0 (doc 21 §3.1) — detect agent's "I generated a file" claim.
+ *
+ * Why: office-artifacts SKILL.md says "Never claim 已落盘 / 已生成 without
+ * an uploaded asset", but enforcement was prompt-only. The 2026-05-22
+ * regression of 25/27 completed office-artifact tasks (per SKILL.md HARD
+ * RULE preamble) where agents wrote the claim but uploaded zero files
+ * means the prompt rule is insufficient — we need a server-side guard.
+ *
+ * Trigger: reply.output matches one of the patterns below AND assetIds
+ * resolved to zero IMAsset rows. We DELIBERATELY do not look at
+ * payload.assetIds alone — even if the daemon declared an id, that id
+ * might not have an IMAsset row yet (artifacts-watcher race), so the user
+ * still doesn't have a file. The criterion that matters is "did the
+ * chat reply attach a real attachment". Patterns are tight enough to
+ * avoid catching "我会生成 / I will create" future-tense statements,
+ * generic enumerations ("生成了一份大纲"), or references to existing
+ * assets the user uploaded.
+ *
+ * Edge cases consciously skipped:
+ *   - "已为你写好如下大纲" — no file extension, no 附件 keyword → ignored
+ *   - "已生成 3 个点子" — no file extension → ignored
+ *   - "I'll prepare the PDF in a minute" — future tense, no past-perfect → ignored
+ *
+ * Returns true only when the text clearly asserts past-tense file delivery.
+ */
+// 2026-05-29 — DOWNGRADED from a content-rewrite to metadata-only flag.
+//
+// Why: the regex-based content rewrite was treating a symptom (agent text
+// says "PDF generated" while cloud sees zero attached assets) as the root
+// cause. The actual root cause for the lying-CEO screenshot today was
+// architectural: release201/09 renamed `_outbox/` to `result/` (later
+// renamed again to `artifacts/` in release202/04 §3.1) and retired the
+// artifacts-watcher (née outbox-watcher) auto-upload for the new host-mode
+// layout (dispatch.ts, §9.4a.1). Agents now MUST explicitly call
+// `cloud asset upload --task-id` to surface deliverables — but
+// office-artifacts SKILL.md never made that obvious enough for hermes
+// to consistently obey it. The CEO agent literally generated 3 PDFs
+// into `tasks/<id>/result/` but never called the upload command, so
+// cloud reply.assetIds came back empty. The agent wasn't lying; the
+// asset bridge was just broken.
+//
+// Rewriting the chat text papered over the real fix (close the asset
+// bridge so reply.assetIds reflects reality) and made user-visible
+// content drift from what the agent actually produced. A user pointed
+// this out today: "为什么全部是硬编码 — 这是业界最佳实践吗？" — fair.
+//
+// 2026-05-31 release201/30 §8 — FURTHER DOWNGRADED to warn-only telemetry.
+//
+// Phase 1 of release201/30 闭合了 asset bridge 的两条新路径：(a) typescript
+// SDK 的 `cloud file send` 在 daemon host-mode 下 cp 源文件进 PRISMER_ARTIFACTS_DIR
+// (release202/04;旧 PRISMER_OUTBOX_DIR 仍兼容) → artifacts-watcher.flushPending
+// 自动把 assetId 挂到 reply.assetIds；
+// (b) cloud message handler 看到 type='file' 时从 metadata.uploadId 反查
+// IMFileUpload + lookup-or-create IMAsset + 加进 attachments[]。两路打通后，
+// "claimedFile && !hasRealAsset" 的真实 false-positive 大幅下降。
+//
+// detect 函数 + LIE_PATTERNS 保留作为兜底 telemetry，但**不再写**
+// metadata.systemFlags = ['lie_intercepted'] / originalOutput / lieReason，
+// **不再以 disagreement 触发** dispatch.lifecycle='failed'。Agent reply 永远
+// 走 'completed' lifecycle；如有 disagreement，落 log.warn 供 SRE 追溯。
+// 原 2026-05-29 systemFlags 立场（doc 21 §3.1）正式 DEPRECATED。
+// LIE_PATTERNS + detectAgentFileClaim extracted to ./lie-detector so the
+// patterns are unit-testable without importing this whole handler
+// (release201/31 §4.1). Behaviour unchanged.
+import { detectAgentFileClaim } from './lie-detector';
+
+interface DaemonAgentAuthorizationPrisma {
+  iMAgentBinding?: {
+    findUnique(args: {
+      where: { agentImUserId: string };
+      select: { boundDaemonId: true };
+    }): Promise<{ boundDaemonId: string | null } | null>;
+  };
+  iMAgentCard: {
+    findUnique(args: {
+      where: { imUserId: string };
+      select: { metadata: true };
+    }): Promise<{ metadata: string | null } | null>;
+  };
+}
+
+export async function isDaemonAuthorizedForAgentBinding(
+  prismaClient: DaemonAgentAuthorizationPrisma,
+  agentImUserId: string,
+  daemonId: string | null,
+  context = 'task.dispatch.*',
+): Promise<boolean> {
+  if (!daemonId) return false;
+
+  try {
+    const binding = await prismaClient.iMAgentBinding?.findUnique({
+      where: { agentImUserId },
+      select: { boundDaemonId: true },
+    });
+    if (binding) {
+      const boundDaemonId = typeof binding.boundDaemonId === 'string' ? binding.boundDaemonId.trim() : '';
+      return boundDaemonId === daemonId;
+    }
+  } catch (err) {
+    console.warn(
+      `[WS] ${context} im_agent_bindings lookup failed for ${agentImUserId}; falling back to metadata.daemonId: ${(err as Error).message}`,
+    );
+    return isDaemonAuthorizedByLegacyMetadata(prismaClient, agentImUserId, daemonId);
+  }
+
+  return isDaemonAuthorizedByLegacyMetadata(prismaClient, agentImUserId, daemonId);
+}
+
+async function isDaemonAuthorizedByLegacyMetadata(
+  prismaClient: DaemonAgentAuthorizationPrisma,
+  agentImUserId: string,
+  daemonId: string,
+): Promise<boolean> {
+  const card = await prismaClient.iMAgentCard
+    .findUnique({ where: { imUserId: agentImUserId }, select: { metadata: true } })
+    .catch(() => null);
+  try {
+    const meta = card?.metadata ? (JSON.parse(card.metadata) as { daemonId?: unknown }) : {};
+    const metadataDaemonId = typeof meta.daemonId === 'string' ? meta.daemonId.trim() : '';
+    return metadataDaemonId === daemonId;
+  } catch {
+    return false;
+  }
+}
+
 export interface WebSocketDeps {
   redis: Redis;
   rooms: RoomManager;
@@ -66,18 +284,70 @@ export interface WebSocketDeps {
   presenceService: PresenceService;
   agentService: AgentService;
   streamService: StreamService;
-  /** Optional in test environments; required for v1.9.x daemon protocol. */
-  taskService?: TaskService;
+  /** Required for v1.9.x daemon protocol completion/progress handling. */
+  taskService: TaskService;
+  /**
+   * v2.0 §4.8.2 (Wave 2-B2) — needed by handleAgentHostDeclare to emit
+   * `agent.binding.contested` sync events when a second daemon tries to host
+   * an agent already bound elsewhere. Optional so existing tests/dev paths
+   * that wire a bare deps object still type-check; absence falls back to a
+   * no-op syncService (binding row still records the contest).
+   */
+  syncService?: SyncService;
+  /**
+   * Wave-4 E3 (§4.5) — persistent ack tracker. Mirrors high-priority
+   * outbound events into `im_ws_acks` so a reconnecting client can ask
+   * "what did I miss since cursor?" and the server can replay them
+   * across Pod restarts / drift. Optional — if absent, only the in-memory
+   * AckTracker (5min TTL, single-Pod) is used.
+   */
+  wsAckPersistent?: WSAckPersistentService;
+  /**
+   * v2.0 §4.8.1 (Wave 4-E4) — webhook dispatch RPC reply correlator.
+   * When set, incoming frames whose `type ∈ WS_RPC_REPLY_TYPES` are routed
+   * into `wsRpc.handleReply()` instead of (or in addition to) regular
+   * IM event handling. Optional so tests and the standalone IM dev runner
+   * keep type-checking without the webhook path.
+   */
+  wsRpc?: WsRpcService;
 }
 
 export function setupWebSocket(wss: WebSocketServer, deps: WebSocketDeps): void {
   const { rooms, messageService, conversationService, presenceService, agentService, streamService, taskService } =
     deps;
+  if (!taskService) {
+    throw new Error('setupWebSocket requires taskService for daemon task.dispatch.* handling');
+  }
   const memoryService = new MemoryService();
+
+  // v2.0 §4.8.2 (Wave 2-B2) — service that owns IMAgentBinding lifecycle.
+  // Replaces the silent-reject branch on contested host.declare with an
+  // explicit binding row + sync event the user can see and act on.
+  const agentBindingService = new AgentBindingService(prisma as any, deps.syncService);
+
+  // v2.0 §4.4 (Wave 3.5 W4 — P4a) — durable activity timeline writer for
+  // daemon-pushed `task.step.append` frames. Fans out a
+  // `task.step.appended` IMSyncEvent on each new row so the front-end
+  // InlineActivityStream (P4c — Wave 4) updates without polling.
+  const taskStepRecorder = new TaskStepRecorderService({ syncService: deps.syncService });
 
   // Shared ACK tracker for all connections on this Pod
   const ackTracker = new AckTracker();
   rooms.setAckTracker(ackTracker);
+
+  // Wave-4 E3 (§4.5) — mirror high-priority outbound events to im_ws_acks.
+  // RoomManager calls the hook on every local sendToUser (before serialize)
+  // so the row exists before the client could possibly ACK. Pure side-channel:
+  // failure to insert never blocks delivery.
+  const wsAckPersistent = deps.wsAckPersistent;
+  if (wsAckPersistent) {
+    rooms.setLocalSendHook((userId, event) => {
+      const payload = event as unknown as Record<string, unknown>;
+      const ackId = (payload as { ackId?: string }).ackId;
+      if (!ackId) return; // skipped event types (SKIP_ACK_TYPES) → no row
+      void wsAckPersistent.trackOutbound(userId, ackId, payload);
+    });
+  }
 
   wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
     let client: ConnectedClient | null = null;
@@ -91,6 +361,7 @@ export function setupWebSocket(wss: WebSocketServer, deps: WebSocketDeps): void 
      * (mobile, web) connections — they never call task.dispatch.* anyway.
      */
     const declaredAgents = new Set<string>();
+    const pendingRejectedAgents = new Set<string>();
     let declaredDaemonId: string | null = null;
     let declaredWorkspaceId: string | null = null;
 
@@ -140,21 +411,25 @@ export function setupWebSocket(wss: WebSocketServer, deps: WebSocketDeps): void 
 
     ws.on('close', () => {
       if (client) {
-        ackTracker.handleDisconnect(client.userId);
+        const userId = client.userId;
+        ackTracker.handleDisconnect(userId);
         rooms.removeClient(client);
-        presenceService.setOffline(client.userId);
+        presenceService.setOffline(userId);
+        // §4.5 — if this was the LAST connection on this Pod for the user,
+        // SREM us from `im:user:<userId>:pods` so other Pods stop routing
+        // here. Check AFTER removeClient.
+        const wasLast = !rooms.isOnline(userId);
+        void rooms.onClientDisconnected(userId, wasLast);
         // Tear down per-agent shadow registrations so RoomManager doesn't
         // route to a closed socket on the next dispatch.
         for (const shadow of shadowClients) {
           rooms.removeClient(shadow);
         }
         if (shadowClients.length > 0) {
-          console.log(
-            `[WS] Disconnected: ${client.username} (${client.userId}) + ${shadowClients.length} shadow route(s)`,
-          );
+          console.log(`[WS] Disconnected: ${client.username} (${userId}) + ${shadowClients.length} shadow route(s)`);
           shadowClients.length = 0;
         } else {
-          console.log(`[WS] Disconnected: ${client.username} (${client.userId})`);
+          console.log(`[WS] Disconnected: ${client.username} (${userId})`);
         }
       }
     });
@@ -181,13 +456,40 @@ export function setupWebSocket(wss: WebSocketServer, deps: WebSocketDeps): void 
 
       if (type === 'ack') {
         const { ackId } = payload as AckPayload;
-        if (ackId) ackTracker.ack(ackId);
+        if (ackId) {
+          ackTracker.ack(ackId);
+          // §4.5 — also mark the persistent row acked. Fire-and-forget; the
+          // in-memory tracker already covers the fast path.
+          if (wsAckPersistent && client) {
+            void wsAckPersistent.markAcked(client.userId, ackId);
+          }
+        }
         return;
       }
 
       // All other events require authentication
       if (!client) {
         ws.send(JSON.stringify(ServerEvents.error('Not authenticated', 'AUTH_REQUIRED', requestId)));
+        return;
+      }
+
+      // v2.0 §4.8.1 (Wave 4-E4) — RPC reply correlation. Daemon-originated
+      // replies (currently only `webhook.dispatch.reply`) carry an
+      // embedded `_rpcId` matching the request the server issued via
+      // `WsRpcService.invoke`. Route those into the RPC service instead of
+      // (or in addition to) the regular handler table. We do this BEFORE
+      // the handler dispatch so a missing handler entry doesn't generate a
+      // bogus `UNKNOWN_EVENT` error frame back to the daemon.
+      if (typeof type === 'string' && WS_RPC_REPLY_TYPES.has(type)) {
+        if (deps.wsRpc) {
+          const { handled } = deps.wsRpc.handleReply(payload);
+          if (!handled) {
+            // Reply without an `_rpcId` — daemon bug or stale message; log
+            // but do NOT emit an error frame (the daemon already moved on
+            // and we don't want to spam its WS receive loop).
+            console.warn(`[WS] ${type} arrived without _rpcId — dropped`);
+          }
+        }
         return;
       }
 
@@ -209,6 +511,18 @@ export function setupWebSocket(wss: WebSocketServer, deps: WebSocketDeps): void 
         'agent.status.changed': () => handleAgentStatusChanged(payload as AgentStatusChangedPayload),
         'task.dispatch.progress': () => handleTaskDispatchProgress(payload as TaskDispatchProgressPayload),
         'task.dispatch.reply': () => handleTaskDispatchReply(payload as TaskDispatchReplyPayload, requestId),
+        // release201/26 §8 Phase 4 — daemon couldn't resume an interrupted
+        // run from its local checkpoint. Mark the run resume_failed and surface
+        // a retry strip in the conversation timeline.
+        'task.dispatch.resume_failed': () => handleTaskDispatchResumeFailed(payload as TaskDispatchResumeFailedPayload),
+        // v2.0 §4.2 Track B-1 — per-task phase heartbeat (distinct from
+        // `agent.heartbeat` which is agent-process-level liveness).
+        'task.heartbeat': () => handleTaskHeartbeat(payload as TaskHeartbeatPayload),
+        // v2.0 §4.4 (Wave 3.5 W4 — P4a) — durable per-step activity timeline.
+        // Sibling channel to task.heartbeat (which only carries phase signal);
+        // this one persists per phase change / tool call / reasoning chunk so
+        // the front-end InlineActivityStream can render history.
+        'task.step.append': () => handleTaskStepAppend(payload as TaskStepAppendPayload),
         reconnect: () => handleReconnect(payload as ReconnectPayload, requestId),
       };
 
@@ -345,10 +659,46 @@ export function setupWebSocket(wss: WebSocketServer, deps: WebSocketDeps): void 
       };
       rooms.addClient(client);
       presenceService.setOnline(args.userId);
+      // §4.5 — record this Pod in the user's pod-membership set so other
+      // Pods know to forward sendToUser via backplane.sendToPod.
+      void rooms.onClientConnected(args.userId);
       ws.send(JSON.stringify(ServerEvents.authenticated(args.userId, args.requestId)));
       console.log(`[WS] Authenticated: ${args.username} (${args.userId})`);
       deliverUnackedMessages(args.userId);
+      // §4.5 — also drain im_ws_acks (durable) for cross-Pod / cross-restart
+      // recovery. Independent path: in-memory deliverUnackedMessages above
+      // handles the fast same-Pod case; this catches everything else.
+      void deliverPersistentUnacked(args.userId);
       autoJoinConversations(args.userId);
+    }
+
+    /**
+     * §4.5 — replay un-acked HIGH-PRIORITY events from im_ws_acks. Called on
+     * authenticate AND reconnect. Independent of in-memory ackTracker, so a
+     * client reconnecting to a freshly-started Pod still gets its missed
+     * messages.
+     */
+    async function deliverPersistentUnacked(userId: string): Promise<void> {
+      if (!wsAckPersistent) return;
+      try {
+        const rows = await wsAckPersistent.getUnacked(userId);
+        if (rows.length === 0) return;
+        console.log(`[WS] Delivering ${rows.length} persisted-unacked events to ${userId}`);
+        for (const row of rows) {
+          // Mark isRetry so the client UI can dedupe if it already showed
+          // this event from a prior session. The ackId is preserved — same
+          // ack confirms both the in-memory and DB rows.
+          const retryPayload = { ...row.payload, ackId: row.ackId, isRetry: true };
+          try {
+            ws.send(JSON.stringify(retryPayload));
+          } catch (err) {
+            console.warn('[WS] persistent replay send failed:', (err as Error).message);
+            break;
+          }
+        }
+      } catch (err) {
+        console.warn('[WS] deliverPersistentUnacked error:', (err as Error).message);
+      }
     }
 
     async function autoJoinConversations(userId: string) {
@@ -383,6 +733,8 @@ export function setupWebSocket(wss: WebSocketServer, deps: WebSocketDeps): void 
 
       // Deliver unacked messages (in case authenticate didn't catch them all)
       deliverUnackedMessages(client.userId);
+      // §4.5 — also drain persisted unacks (covers cross-Pod / restart gaps)
+      await deliverPersistentUnacked(client.userId);
 
       // Tell the client to use /sync for any gap beyond what ACK covers
       ws.send(
@@ -411,6 +763,7 @@ export function setupWebSocket(wss: WebSocketServer, deps: WebSocketDeps): void 
         type: payload.type,
         content: payload.content,
         metadata: payload.metadata,
+        attachments: payload.attachments,
         parentId: payload.parentId,
       });
 
@@ -434,6 +787,7 @@ export function setupWebSocket(wss: WebSocketServer, deps: WebSocketDeps): void 
           type: msg.type as any,
           content: msg.content,
           metadata: messageMetadata,
+          attachments: msg.attachments ?? undefined,
           parentId: msg.parentId ?? undefined,
           createdAt: msg.createdAt.toISOString(),
         }),
@@ -442,7 +796,8 @@ export function setupWebSocket(wss: WebSocketServer, deps: WebSocketDeps): void 
 
     async function handleStreamStart(payload: StreamStartPayload, requestId?: string) {
       if (!client) return;
-      streamService.startStream({
+      // v2.0 §4.4.7 — async; allocates per-stream flush timer + recipient fan-out cache.
+      await streamService.startStream({
         streamId: payload.streamId,
         conversationId: payload.conversationId,
         senderId: client.userId,
@@ -456,6 +811,10 @@ export function setupWebSocket(wss: WebSocketServer, deps: WebSocketDeps): void 
       const stream = streamService.getStream(payload.streamId);
       if (!stream) return;
 
+      // v2.0 §4.4.7 — just append; the 200ms flush timer inside StreamService
+      // batches chunks into SSE `message.partial` envelopes + im_message_partials
+      // rows. We still emit the legacy WS `message.stream.chunk` for any
+      // pre-2.0 daemon that's listening on the WS room.
       streamService.appendChunk(payload.streamId, payload.chunk);
 
       rooms.broadcastToRoom(
@@ -475,13 +834,20 @@ export function setupWebSocket(wss: WebSocketServer, deps: WebSocketDeps): void 
       const result = await streamService.endStream(payload.streamId, payload.finalContent);
       if (!result) return;
 
-      // Persist as a message
+      // Persist final message via the standard Wave 2-B1 outbox path.
+      // Use the stream's reserved messageId so the partial-row buffer
+      // (im_message_partials.messageId) keys to the final im_messages row.
       const sendResult = await messageService.send({
         conversationId: result.conversationId,
         senderId: client.userId,
         type: result.type,
         content: result.finalContent,
-        metadata: { ...result.metadata, wasStreamed: true, streamId: payload.streamId },
+        metadata: {
+          ...result.metadata,
+          wasStreamed: true,
+          streamId: payload.streamId,
+          streamMessageId: result.messageId,
+        },
       });
 
       rooms.broadcastToRoom(
@@ -581,7 +947,7 @@ export function setupWebSocket(wss: WebSocketServer, deps: WebSocketDeps): void 
       // IMUsers share `userId` field (= cloud pc_users.id as string).
       const owner = await prisma.iMUser.findUnique({
         where: { id: userId },
-        select: { userId: true, role: true },
+        select: { userId: true, numericId: true, role: true },
       });
       if (!owner) {
         ws.send(JSON.stringify(ServerEvents.error('Connected user not found', 'NO_USER', requestId)));
@@ -620,12 +986,21 @@ export function setupWebSocket(wss: WebSocketServer, deps: WebSocketDeps): void 
       });
       type VerifiedAgent = (typeof verifiedAgents)[number];
       const verifiedById = new Map<string, VerifiedAgent>(verifiedAgents.map((a: VerifiedAgent) => [a.id, a]));
+      const rejectedAgents: NonNullable<HostAckedPayload['rejectedAgents']> = [];
+      // release202/08 — numericId-aware ownership match (same bug class as
+      // register.ts). The human owner and a register-created agent do NOT
+      // always share the same `userId` field value: api-key register sets the
+      // agent's `userId = cloudUserId` (= numericId string), while the human
+      // owner may carry userId=null and only `numericId` set. So compare the
+      // agent's userId against the owner's identity SET {userId, numericId}.
+      const ownerKeys = ownerIdentityKeys(owner);
       const ownedAgents = payload.agents.filter((candidate) => {
         const v = verifiedById.get(candidate.imUserId);
-        if (!v || v.userId !== owner.userId) {
+        if (!v || !v.userId || !ownerKeys.has(v.userId)) {
           console.warn(
-            `[WS] Ignoring host declaration for agent ${candidate.imUserId} not owned by user ${owner.userId}`,
+            `[WS] Ignoring host declaration for agent ${candidate.imUserId} not owned by user ${owner.userId ?? owner.numericId}`,
           );
+          rejectedAgents.push({ imUserId: candidate.imUserId, reason: 'not-owned' });
           return false;
         }
         return true;
@@ -638,24 +1013,116 @@ export function setupWebSocket(wss: WebSocketServer, deps: WebSocketDeps): void 
       const cardByAgentId = new Map(
         (cards as AgentCardBinding[]).map((card: AgentCardBinding) => [card.imUserId, card]),
       );
-      const validAgents = ownedAgents.filter((candidate) => {
-        const card = cardByAgentId.get(candidate.imUserId);
-        let metadata: Record<string, unknown> = {};
+
+      // v2.0 §4.8.2 (Wave 2-B2) — consult IMAgentBinding (im_agent_bindings)
+      // for ownership decisions. Replaces the old silent-reject branch that
+      // dropped contested agents (the smoking-gun fix from §1.5 jasonzhou
+      // production case). Three outcomes per agent:
+      //   created   — first-ever declare for this agent → bound
+      //   refreshed — same daemon re-declaring → lastHostDeclareAt updated
+      //   contested — different daemon → row stays with current owner, but
+      //               contestedSince + contestCount marker + sync event
+      //               'agent.binding.contested' flow to the user UI. The
+      //               contender does NOT win dispatch until the user issues
+      //               POST /agent-bindings/:agentImUserId/rebind.
+      const declaredDaemonKind: 'k8s' | 'local' | 'edge' =
+        payload.daemonKind ?? (payload.daemonId.startsWith('daemon-') ? 'local' : 'k8s');
+      const declaredDaemonLabel =
+        payload.daemonLabel?.trim() ||
+        (payload.daemonId.startsWith('daemon-') ? payload.daemonId.slice('daemon-'.length) : payload.daemonId);
+
+      const validAgents: typeof ownedAgents = [];
+      const contestedAgents: { imUserId: string; ownerDaemonId: string; contestCount: number }[] = [];
+      for (const candidate of ownedAgents) {
+        if (pendingRejectedAgents.has(candidate.imUserId)) {
+          rejectedAgents.push({
+            imUserId: candidate.imUserId,
+            reason: 'bound-to-other-daemon',
+          });
+          await agentBindingService.clearContestMarker(candidate.imUserId, userId, 'rejected-daemon-redeclare');
+          continue;
+        }
         try {
-          metadata = card?.metadata ? (JSON.parse(card.metadata) as Record<string, unknown>) : {};
-        } catch {
-          metadata = {};
-        }
-        const boundDaemonId = typeof metadata.daemonId === 'string' ? metadata.daemonId.trim() : '';
-        if (boundDaemonId && boundDaemonId !== payload.daemonId) {
-          console.warn(
-            `[WS] Ignoring host declaration for agent ${candidate.imUserId} on ${payload.daemonId}; bound to ${boundDaemonId}`,
+          const decision = await agentBindingService.handleHostDeclare({
+            agentImUserId: candidate.imUserId,
+            daemonId: payload.daemonId,
+            daemonKind: declaredDaemonKind,
+            daemonLabel: declaredDaemonLabel,
+            ownerImUserId: userId,
+          });
+          if (decision.outcome === 'contested') {
+            contestedAgents.push({
+              imUserId: candidate.imUserId,
+              ownerDaemonId: decision.ownerDaemonId,
+              contestCount: decision.contestCount,
+            });
+            rejectedAgents.push({
+              imUserId: candidate.imUserId,
+              reason: 'bound-to-other-daemon',
+              ownerDaemonId: decision.ownerDaemonId,
+            });
+            console.warn(
+              `[WS] agent.binding.contested agent=${candidate.imUserId} contender=${payload.daemonId} owner=${decision.ownerDaemonId} count=${decision.contestCount} — silent reject replaced with marker + sync event`,
+            );
+            continue;
+          }
+          validAgents.push(candidate);
+        } catch (err) {
+          // Binding service failure should NOT lose the entire declare.
+          // Fall back to the legacy metadata-derived check so a transient
+          // DB blip on im_agent_bindings does not break online presence.
+          const card = cardByAgentId.get(candidate.imUserId);
+          let metadata: Record<string, unknown> = {};
+          try {
+            metadata = card?.metadata ? (JSON.parse(card.metadata) as Record<string, unknown>) : {};
+          } catch {
+            metadata = {};
+          }
+          const boundDaemonId = typeof metadata.daemonId === 'string' ? metadata.daemonId.trim() : '';
+          if (boundDaemonId && boundDaemonId !== payload.daemonId) {
+            console.warn(
+              `[WS] (fallback) Ignoring host declaration for agent ${candidate.imUserId} on ${payload.daemonId}; bound to ${boundDaemonId} (binding service err: ${(err as Error).message})`,
+            );
+            rejectedAgents.push({
+              imUserId: candidate.imUserId,
+              reason: 'bound-to-other-daemon',
+              ownerDaemonId: boundDaemonId,
+            });
+            continue;
+          }
+          validAgents.push(candidate);
+          log.warn(
+            { err, agentImUserId: candidate.imUserId, daemonId: payload.daemonId },
+            'agent-binding service threw during host.declare — fell back to metadata-derived check',
           );
-          return false;
         }
-        return true;
-      });
+      }
+
+      if (contestedAgents.length > 0) {
+        log.warn(
+          {
+            daemonId: payload.daemonId,
+            contender: payload.daemonId,
+            contestedCount: contestedAgents.length,
+            agents: contestedAgents.map((c) => c.imUserId),
+          },
+          `agent.host.declare: ${contestedAgents.length} agent(s) contested — see im_agent_bindings + sync events`,
+        );
+      }
+
       const declaredAgentIds = new Set(validAgents.map((a) => a.imUserId));
+      const acceptedAgents = Array.from(declaredAgentIds);
+      const payloadAgentIds = new Set(payload.agents.map((a) => a.imUserId));
+      const releasedRejectedAgents = Array.from(pendingRejectedAgents).filter((agentImUserId) => {
+        return !payloadAgentIds.has(agentImUserId);
+      });
+      for (const agentImUserId of releasedRejectedAgents) {
+        pendingRejectedAgents.delete(agentImUserId);
+        await agentBindingService.clearContestMarker(agentImUserId, userId, 'rejected-daemon-stopped-declaring');
+      }
+      for (const rejected of rejectedAgents) {
+        pendingRejectedAgents.add(rejected.imUserId);
+      }
 
       // Stash on the connection so subsequent task.dispatch.* events can be
       // validated. Refresh-on-redeclare semantics — the latest declare wins.
@@ -793,7 +1260,14 @@ export function setupWebSocket(wss: WebSocketServer, deps: WebSocketDeps): void 
         },
         select: { id: true, agentImUserId: true, version: true },
       });
-      const profilesToSync = computeProfilesToSync(payload.agents, cloudProfiles);
+      const profilesToSync = computeProfilesToSync(validAgents, cloudProfiles);
+
+      // 2b. Compute profilesToDelete — profiles the daemon declared (cached
+      // locally) that no longer exist as non-deleted rows on the cloud. These
+      // are tombstones: the profile was soft-deleted while the daemon was
+      // offline, so it missed the agent_profile.changed event. Returning them
+      // lets the daemon purge dead profiles from its local SQLite store.
+      const profilesToDelete = computeProfilesToDelete(validAgents, cloudProfiles);
 
       // 3. Resolve workspace — v1.9.x is 1:1 user ↔ default Personal
       // workspace; Track A's m1 backfill guarantees one exists for every
@@ -833,10 +1307,14 @@ export function setupWebSocket(wss: WebSocketServer, deps: WebSocketDeps): void 
           await deps.redis.sadd(`runtime:devices:${workspaceId}`, payload.daemonId).catch((err: unknown) => {
             log.warn({ err, workspaceId, daemonId: payload.daemonId }, 'runtime device presence set add failed');
           });
+          // device name: strip "daemon-" prefix to show the hostname.
+          const deviceName = payload.daemonId.startsWith('daemon-')
+            ? payload.daemonId.slice('daemon-'.length)
+            : payload.daemonId;
           const presencePayload = JSON.stringify({
             daemonId: payload.daemonId,
             deviceId: payload.daemonId,
-            name: `Daemon ${payload.daemonId.slice(0, 8)}`,
+            name: deviceName,
             lastSeenAt: Date.now(),
             hostedAgents: validAgents.length,
             daemonVersion: payload.daemonVersion ?? null,
@@ -869,43 +1347,106 @@ export function setupWebSocket(wss: WebSocketServer, deps: WebSocketDeps): void 
           }
 
           const containerId = generateIMUserId('container');
-          await prisma.iMContainer
-            .upsert({
-              where: { podName: `daemon:${containerImUserId}` },
-              create: {
-                id: containerId,
+          const now = new Date();
+
+          // 2026-05-19 dup-row guard: if this daemonId is already represented
+          // by a non-local IMContainer row (K8S sandbox provisioned via Pro
+          // flow → /api/workspace/runtime-installations, which threads
+          // PRISMER_DAEMON_ID env into the pod), the K8S row is the canonical
+          // record. Skip the legacy `deviceType=local` upsert so we don't
+          // end up with two rows for the same daemon — the bug surfaced as
+          // "K8S device daemon offline" in the runtime-manager UI because
+          // Redis presence was keyed once but matched the local row first.
+          //
+          // agent.register::lookup uses `OR: [{ agentImUserId }, { daemonId }]`
+          // (src/im/api/register.ts:357) so the K8S row satisfies the
+          // UNKNOWN_DAEMON gate without the local row.
+          //
+          // 2026-05-20 — DROPPED the `stoppedAt: null` constraint. Real bug
+          // observed in test env: user creates K8S device → row created with
+          // stoppedAt=null. Daemon boots, host.declare succeeds, K8S row
+          // found. User clicks Delete → K8S row becomes stoppedAt=now. The
+          // daemon process (or a leftover container/pod) re-emits host.declare
+          // before WS closes → with the old filter `stoppedAt: null`, the K8S
+          // row is no longer matched → fallthrough creates a `daemon:<short>`
+          // local row with the same daemonId UUID → user sees TWO device
+          // cards on next list. Matching on daemonId alone (ignoring stop
+          // state) keeps the K8S row authoritative throughout its lifecycle.
+          const k8sRow = await prisma.iMContainer.findFirst({
+            where: {
+              workspaceId,
+              daemonId: payload.daemonId,
+              deviceType: { not: 'local' },
+            },
+            select: { id: true, podName: true, deviceType: true, stoppedAt: true },
+          });
+          if (k8sRow) {
+            log.info(
+              {
+                daemonId: payload.daemonId,
                 workspaceId,
-                tenantId: userId,
-                agentImUserId: containerImUserId,
-                podName: `daemon:${containerImUserId}`,
-                namespace: 'default',
-                image: 'prismer-daemon:local',
-                imageTag: 'local',
-                status: 'running',
-                runtimeKind: 'docker',
-                deviceType: 'local',
-                daemonId: payload.daemonId,
-                maxAgents: 3,
-                cpuRequest: '250m',
-                cpuLimit: '2000m',
-                memoryRequest: '2Gi',
-                memoryLimit: '4Gi',
-                startedAt: new Date(),
+                k8sContainerId: k8sRow.id,
+                k8sPodName: k8sRow.podName,
+                k8sDeviceType: k8sRow.deviceType,
               },
-              update: {
-                status: 'running',
-                daemonId: payload.daemonId,
-                // Intentionally NOT updating startedAt — heartbeat redeclares
-                // (every 30s) must not reset the original boot timestamp.
-                stoppedAt: null,
-              },
-            })
-            .catch((err: unknown) => {
-              log.error(
-                { err, workspaceId, daemonId: payload.daemonId, msg: (err as Error).message },
-                'im_containers upsert failed — subsequent agent.register calls will fail with UNKNOWN_DAEMON',
-              );
-            });
+              'host.declare: K8S container row exists for this daemon — skipping legacy local row upsert',
+            );
+          } else {
+            await prisma.iMContainer
+              .updateMany({
+                where: {
+                  workspaceId,
+                  taskId: null,
+                  deviceType: 'local',
+                  daemonId: { not: payload.daemonId },
+                  stoppedAt: null,
+                },
+                data: { status: 'stopped', stoppedAt: now },
+              })
+              .catch((err: unknown) => {
+                log.warn(
+                  { err, workspaceId, daemonId: payload.daemonId, msg: (err as Error).message },
+                  'failed to stop superseded local daemon rows',
+                );
+              });
+            await prisma.iMContainer
+              .upsert({
+                where: { podName: `daemon:${containerImUserId}` },
+                create: {
+                  id: containerId,
+                  workspaceId,
+                  tenantId: userId,
+                  agentImUserId: containerImUserId,
+                  podName: `daemon:${containerImUserId}`,
+                  namespace: 'default',
+                  image: 'prismer-daemon:local',
+                  imageTag: 'local',
+                  status: 'running',
+                  runtimeKind: 'docker',
+                  deviceType: 'local',
+                  daemonId: payload.daemonId,
+                  maxAgents: 10,
+                  cpuRequest: '250m',
+                  cpuLimit: '2000m',
+                  memoryRequest: '2Gi',
+                  memoryLimit: '4Gi',
+                  startedAt: now,
+                },
+                update: {
+                  status: 'running',
+                  daemonId: payload.daemonId,
+                  // Intentionally NOT updating startedAt — heartbeat redeclares
+                  // (every 30s) must not reset the original boot timestamp.
+                  stoppedAt: null,
+                },
+              })
+              .catch((err: unknown) => {
+                log.error(
+                  { err, workspaceId, daemonId: payload.daemonId, msg: (err as Error).message },
+                  'im_containers upsert failed — subsequent agent.register calls will fail with UNKNOWN_DAEMON',
+                );
+              });
+          }
         }
       }
 
@@ -920,6 +1461,9 @@ export function setupWebSocket(wss: WebSocketServer, deps: WebSocketDeps): void 
                 agent_profiles: 0, // Track A m2/m3 fills cursor semantics
               },
               profilesToSync,
+              profilesToDelete,
+              acceptedAgents,
+              rejectedAgents,
             },
             requestId,
           ),
@@ -955,7 +1499,7 @@ export function setupWebSocket(wss: WebSocketServer, deps: WebSocketDeps): void 
       }
 
       console.log(
-        `[WS] agent.host.declare from ${client.username}: ${validAgents.length}/${payload.agents.length} agents, ${profilesToSync.length} profiles to sync`,
+        `[WS] agent.host.declare from ${client.username}: ${validAgents.length}/${payload.agents.length} agents, ${profilesToSync.length} sync, ${profilesToDelete.length} delete`,
       );
     }
 
@@ -1013,16 +1557,15 @@ export function setupWebSocket(wss: WebSocketServer, deps: WebSocketDeps): void 
       if (declaredAgents.has(task.assigneeId)) {
         return task.assigneeId;
       }
-      if (declaredDaemonId) {
-        const card = await prisma.iMAgentCard
-          .findUnique({ where: { imUserId: task.assigneeId }, select: { metadata: true } })
-          .catch(() => null);
-        try {
-          const meta = card?.metadata ? (JSON.parse(card.metadata) as { daemonId?: unknown }) : {};
-          if (meta.daemonId === declaredDaemonId) return task.assigneeId;
-        } catch {
-          /* fall through to warning */
-        }
+      if (
+        await isDaemonAuthorizedForAgentBinding(
+          prisma,
+          task.assigneeId,
+          declaredDaemonId,
+          `task.dispatch.* for task ${taskId}`,
+        )
+      ) {
+        return task.assigneeId;
       }
       {
         console.warn(
@@ -1036,31 +1579,99 @@ export function setupWebSocket(wss: WebSocketServer, deps: WebSocketDeps): void 
       assigneeId: string;
       conversationId: string | null;
       metadata: string | null;
+      sourceKind: string;
+      source: 'task_run' | 'task';
     } | null> {
+      // Primary lookup — IMTaskRun keyed by its own CUID. Many dispatch flows
+      // create IMTaskRun rows whose id matches IMTask.id (legacy + some chat
+      // mention paths); others mint a separate run id with `taskId=null`. The
+      // wire-level `payload.taskId` always carries IMTask.id (see
+      // v19x-helpers.buildTaskDispatchRequest L185), so this query misses
+      // whenever the run row used a distinct id.
       const run = await prisma.iMTaskRun
-        .findUnique({ where: { id: taskId }, select: { assigneeId: true, conversationId: true, metadata: true } })
+        .findUnique({
+          where: { id: taskId },
+          select: { assigneeId: true, conversationId: true, metadata: true, sourceKind: true },
+        })
         .catch(() => null);
-      if (!run?.assigneeId) return null;
-      if (declaredAgents.has(run.assigneeId)) {
-        return { assigneeId: run.assigneeId, conversationId: run.conversationId, metadata: run.metadata };
-      }
-      if (declaredDaemonId) {
-        const card = await prisma.iMAgentCard
-          .findUnique({ where: { imUserId: run.assigneeId }, select: { metadata: true } })
-          .catch(() => null);
-        try {
-          const meta = card?.metadata ? (JSON.parse(card.metadata) as { daemonId?: unknown }) : {};
-          if (meta.daemonId === declaredDaemonId) {
-            return { assigneeId: run.assigneeId, conversationId: run.conversationId, metadata: run.metadata };
-          }
-        } catch {
-          /* fall through to warning */
+      if (run?.assigneeId) {
+        if (declaredAgents.has(run.assigneeId)) {
+          return {
+            assigneeId: run.assigneeId,
+            conversationId: run.conversationId,
+            metadata: run.metadata,
+            sourceKind: run.sourceKind,
+            source: 'task_run',
+          };
         }
+        if (
+          await isDaemonAuthorizedForAgentBinding(
+            prisma,
+            run.assigneeId,
+            declaredDaemonId,
+            `task.dispatch.* for run ${taskId}`,
+          )
+        ) {
+          return {
+            assigneeId: run.assigneeId,
+            conversationId: run.conversationId,
+            metadata: run.metadata,
+            sourceKind: run.sourceKind,
+            source: 'task_run',
+          };
+        }
+        console.warn(
+          `[WS] task.dispatch.* for run ${taskId} — assignee ${run.assigneeId} not bound to daemon ${declaredDaemonId ?? '(none)'}`,
+        );
+        return null;
       }
-      console.warn(
-        `[WS] task.dispatch.* for run ${taskId} — assignee ${run.assigneeId} not bound to daemon ${declaredDaemonId ?? '(none)'}`,
+      // 2026-05-24 fallback — IMTaskRun row missing. The dispatch wire
+      // payload always uses IMTask.id, but several creation paths
+      // (taskService.createTaskRun(null, ...) from chat @-mention) never
+      // backfill a corresponding IMTaskRun row keyed by that id. Without
+      // this fallback the entire reply branch silently no-ops, leaving the
+      // agent's text + attachments stranded in IMTaskRun.output and never
+      // appearing in chat. Reading IMTask directly recovers conversationId +
+      // assigneeId so the same message-send path can run.
+      const task = await prisma.iMTask
+        .findUnique({
+          where: { id: taskId },
+          select: { assigneeId: true, conversationId: true, metadata: true },
+        })
+        .catch(() => null);
+      if (!task?.assigneeId) {
+        log.warn(
+          { taskId, declaredDaemonId },
+          'task.dispatch.reply: neither IMTaskRun nor IMTask resolved an assignee — message-post path skipped',
+        );
+        return null;
+      }
+      const taskAuthorized =
+        declaredAgents.has(task.assigneeId) ||
+        (await isDaemonAuthorizedForAgentBinding(
+          prisma,
+          task.assigneeId,
+          declaredDaemonId,
+          `task.dispatch.* for task ${taskId} (fallback)`,
+        ));
+      if (!taskAuthorized) {
+        log.warn(
+          { taskId, assigneeId: task.assigneeId, declaredDaemonId },
+          'task.dispatch.reply IMTask fallback rejected — assignee not bound to declared daemon',
+        );
+        return null;
+      }
+      log.info(
+        { taskId, assigneeId: task.assigneeId, conversationId: task.conversationId },
+        'task.dispatch.reply: resolved via IMTask fallback (no matching IMTaskRun row)',
       );
-      return null;
+      return {
+        assigneeId: task.assigneeId,
+        conversationId: task.conversationId,
+        metadata: task.metadata,
+        sourceKind: 'task_fallback',
+        source: 'task',
+      };
     }
 
     async function resolveRuntimeDaemon(taskId: string): Promise<string | null> {
@@ -1165,18 +1776,273 @@ export function setupWebSocket(wss: WebSocketServer, deps: WebSocketDeps): void 
     }
 
     /**
+     * release201/26 §8 Phase 4 — daemon reports it could NOT resume an
+     * interrupted run from its local checkpoint (kill -9 / crash / corrupt
+     * checkpoint). We:
+     *   1. mark `IMTaskRun.status='resume_failed'` (free-string column, no
+     *      enum / migration — see schema.prisma:797) and stash the reason in
+     *      `error` + `metadata.resumeFailedReason`,
+     *   2. post a `system_event` message with `metadata.status='resume_failed'`
+     *      so the conversation timeline strip renders "任务中断，点击重试",
+     *   3. emit the `task_dispatch_resume_failed_total` metric (§9).
+     *
+     * Unlike `task.dispatch.reply { ok:false }` this is NOT a normal terminal
+     * failure — the run never finished and there is no agent reply. We do NOT
+     * call `updateTaskRun` (that publishes task.completed/failed SSE +
+     * reconciles the board projection as a terminal state); resume_failed is a
+     * retryable non-terminal interruption, so we write the run row + the
+     * status-event message directly.
+     *
+     * Auth: daemon ownership is validated via `resolveDeclaredRun` keyed by
+     * `payload.runId` (the IMTaskRun.id). Unowned / unknown runs are dropped
+     * with a warn (graceful — never throws).
+     */
+    async function handleTaskDispatchResumeFailed(payload: TaskDispatchResumeFailedPayload) {
+      log.info(
+        { metric: 'task_dispatch_resume_failed_total', runId: payload?.runId, taskId: payload?.taskId },
+        `[WS] task.dispatch.resume_failed run=${payload?.runId ?? '(none)'} reason=${payload?.reason ?? ''}`,
+      );
+      if (!client || !taskService) {
+        console.warn(`[WS] task.dispatch.resume_failed skipped: client=${!!client} taskService=${!!taskService}`);
+        return;
+      }
+      const runId = typeof payload?.runId === 'string' ? payload.runId : '';
+      if (!runId) {
+        console.warn('[WS] task.dispatch.resume_failed missing runId');
+        return;
+      }
+      // resolveDeclaredRun looks up IMTaskRun by id and validates the run's
+      // assignee is bound to this declared daemon (same guard as the other
+      // task.dispatch.* handlers). resume_failed always carries the run id.
+      const run = await resolveDeclaredRun(runId);
+      if (!run) {
+        console.warn(
+          `[WS] task.dispatch.resume_failed: run ${runId} not resolved / not owned by daemon ${declaredDaemonId ?? '(none)'} — dropped`,
+        );
+        return;
+      }
+      const reason = typeof payload.reason === 'string' && payload.reason ? payload.reason : 'resume_failed';
+      await applyResumeFailed({
+        prisma,
+        messageService,
+        runId,
+        taskId: payload.taskId,
+        reason,
+        run,
+      });
+    }
+
+    /**
+     * Daemon reports a per-task phase heartbeat (v2.0 §4.2 Track B-1).
+     *
+     * Distinct from `agent.heartbeat` (process liveness) — this is a fine-
+     * grained "I'm still actively working on task X, currently in phase Y"
+     * signal pushed every ~15s while the task runs. The cloud-side reaper
+     * (`SchedulerService.sweepStuckPhases`) writes `currentPhase='stuck'`
+     * when 45s of silence elapses; this handler clears that marker when
+     * the daemon resumes.
+     *
+     * Auth: must come from a declared daemon WS connection. We reuse the
+     * existing daemon-owner resolvers (`resolveRuntimeDaemon` and
+     * `resolveDeclaredAssignee`) so unowned reports are silently dropped —
+     * matching the behavior of `task.dispatch.*`.
+     *
+     * Per §12.4 contract, this handler NEVER updates the `status` column.
+     * It only writes the phase signal triple
+     * (`lastHeartbeatAt`/`heartbeatVersion`/`currentPhase`).
+     */
+    async function handleTaskHeartbeat(payload: TaskHeartbeatPayload) {
+      if (!client || !taskService) return;
+      if (!payload?.taskId || typeof payload.taskId !== 'string') {
+        console.warn('[WS] task.heartbeat missing taskId');
+        return;
+      }
+      if (typeof payload.currentPhase !== 'string' || payload.currentPhase.length === 0) {
+        console.warn(`[WS] task.heartbeat ${payload.taskId} missing currentPhase`);
+        return;
+      }
+      if (typeof payload.heartbeatVersion !== 'number' || !Number.isFinite(payload.heartbeatVersion)) {
+        console.warn(`[WS] task.heartbeat ${payload.taskId} missing heartbeatVersion`);
+        return;
+      }
+
+      // Validate sender owns the task. Try runtime daemon first (shell-
+      // route), then declared agent assignee (agent-route). Either branch
+      // returning null means "this WS connection is not authoritative for
+      // this task" and we silently no-op (consistent with task.dispatch.*).
+      const runtimeDaemon = await resolveRuntimeDaemon(payload.taskId);
+      if (!runtimeDaemon) {
+        const assignee = await resolveDeclaredAssignee(payload.taskId);
+        if (!assignee) {
+          console.warn(`[WS] task.heartbeat ${payload.taskId} — sender not authorized (no runtime/assignee binding)`);
+          return;
+        }
+      }
+
+      try {
+        const lastStepAt =
+          typeof payload.lastStepAt === 'number'
+            ? new Date(payload.lastStepAt)
+            : typeof payload.lastStepAt === 'string'
+              ? new Date(payload.lastStepAt)
+              : undefined;
+        await taskService.recordTaskHeartbeat(payload.taskId, {
+          heartbeatVersion: payload.heartbeatVersion,
+          currentPhase: payload.currentPhase,
+          lastStepAt,
+        });
+      } catch (err) {
+        console.warn('[WS] task.heartbeat persist failed:', (err as Error).message);
+      }
+    }
+
+    /**
+     * Daemon reports a per-task observable step (v2.0 §4.4 Wave 3.5 W4-P4a).
+     *
+     * Wire (from `sdk/prismer-cloud/runtime/src/daemon/step-recorder.ts`):
+     *   `{ taskRunId, step: { seq, kind, payload, occurredAt, durationMs? } }`
+     *
+     * Server-side responsibility:
+     *   1. Resolve the IMTaskRun row — must exist (otherwise the daemon is
+     *      reporting on an orphan; silently drop).
+     *   2. Ownership: the WS sender must be the run.assigneeId OR the
+     *      daemon that owns the agent (existing `declaredAgents` /
+     *      `daemonId` binding rules from B3's task.heartbeat). We reuse
+     *      the same authorisation surface as task.heartbeat so a daemon
+     *      that's authoritative for the run can push BOTH signals on the
+     *      same socket.
+     *   3. Persist via TaskStepRecorderService — deterministic id ⇒
+     *      idempotent under daemon reconnect re-send.
+     *   4. Recorder emits `task.step.appended` IMSyncEvent on new rows
+     *      (skipped for duplicates).
+     *
+     * Distinct from task.heartbeat: heartbeat = "I'm alive, current
+     * phase=X", step = "here is what I just did (tool call, reasoning,
+     * phase transition)". Heartbeat is volatile (only the latest matters);
+     * steps are durable timeline.
+     */
+    async function handleTaskStepAppend(payload: TaskStepAppendPayload) {
+      if (!client) return;
+      if (!payload?.taskRunId || typeof payload.taskRunId !== 'string') {
+        console.warn('[WS] task.step.append missing taskRunId');
+        return;
+      }
+      const step = payload.step;
+      if (!step || typeof step !== 'object') {
+        console.warn(`[WS] task.step.append ${payload.taskRunId} missing step`);
+        return;
+      }
+      if (typeof step.seq !== 'number' || !Number.isFinite(step.seq) || step.seq < 1) {
+        console.warn(`[WS] task.step.append ${payload.taskRunId} invalid step.seq=${step.seq}`);
+        return;
+      }
+      if (typeof step.kind !== 'string' || step.kind.length === 0) {
+        console.warn(`[WS] task.step.append ${payload.taskRunId} missing step.kind`);
+        return;
+      }
+
+      // Resolve the run. Distinct from task.heartbeat which keys by taskId
+      // — steps are per-RUN so a single task with multiple retries gets
+      // segregated timelines (matches IMTaskRun.id PK semantics).
+      const run = await taskStepRecorder.resolveRun(payload.taskRunId);
+      if (!run) {
+        console.warn(`[WS] task.step.append ${payload.taskRunId} — run not found`);
+        return;
+      }
+
+      // Ownership: sender must own the run. Three accepted paths:
+      //   (a) sender_userId === run.assigneeId — direct ownership (mobile
+      //       app uploading its own LLM steps, test driver in this suite).
+      //   (b) sender declared this agent via agent.host.declare — the
+      //       daemon path. `declaredAgents` is the shadow-route registry.
+      //   (c) sender's declared daemonId matches im_agent_bindings
+      //       boundDaemonId; legacy metadata.daemonId is only used when the
+      //       binding row is missing or the binding lookup fails.
+      //   (d) Fallback: `resolveRuntimeDaemon(taskId)` matches — runtime
+      //       route='shell' case where the daemon owns the task without
+      //       per-agent binding.
+      let authorized = false;
+      if (run.assigneeId && run.assigneeId === client.userId) authorized = true;
+      if (!authorized && run.assigneeId && declaredAgents.has(run.assigneeId)) authorized = true;
+      if (!authorized && declaredDaemonId && run.assigneeId) {
+        authorized = await isDaemonAuthorizedForAgentBinding(
+          prisma,
+          run.assigneeId,
+          declaredDaemonId,
+          `task.step.append ${payload.taskRunId}`,
+        );
+      }
+      if (!authorized && run.taskId) {
+        // Fall back to the task-level resolver (handles runtime-route='shell'
+        // where the daemon owns the task without per-agent binding).
+        const fallback = await resolveRuntimeDaemon(run.taskId);
+        if (fallback) authorized = true;
+      }
+      if (!authorized) {
+        console.warn(
+          `[WS] task.step.append ${payload.taskRunId} — sender not authorized (assignee=${run.assigneeId ?? 'none'} declaredDaemon=${declaredDaemonId ?? 'none'})`,
+        );
+        return;
+      }
+
+      // taskRun.taskId may be null (legacy run without parent task). The
+      // recorder requires a taskId; in that case use the runId as a stand-in
+      // so the row's task_occurred_idx still has a stable key.
+      const taskId = run.taskId ?? run.id;
+
+      try {
+        await taskStepRecorder.recordStep(
+          payload.taskRunId,
+          taskId,
+          {
+            seq: step.seq,
+            kind: step.kind,
+            payload: (step.payload ?? {}) as Record<string, unknown>,
+            occurredAt: step.occurredAt,
+            durationMs: typeof step.durationMs === 'number' ? step.durationMs : null,
+          },
+          {
+            conversationId: run.conversationId ?? null,
+            // Default recipient is the human creator so a single-recipient
+            // event still surfaces in their sync stream. Conversation
+            // participants get fan-out via SyncPublisher.publishPending.
+            recipientImUserId: run.creatorId ?? run.assigneeId ?? client.userId,
+          },
+        );
+      } catch (err) {
+        console.warn(`[WS] task.step.append ${payload.taskRunId} persist failed:`, (err as Error).message);
+      }
+    }
+
+    /**
      * Daemon reports task completion. Success → completeTask; failure →
      * failTask. Error code / assetIds ride in metadata since the
      * TaskCompleteInput / TaskFailInput shapes don't have first-class
      * fields for them.
      */
-    async function handleTaskDispatchReply(payload: TaskDispatchReplyPayload, _requestId?: string) {
+    async function handleTaskDispatchReply(payload: TaskDispatchReplyPayload, requestId?: string) {
+      // v2.0 (A5) — requestId was previously underscored (`_requestId`) and
+      // silently dropped. Log it so we can correlate daemon-side dispatch
+      // logs with the originating cloud envelope. Correlation logic (e.g.
+      // resolving back to the originating request, deduping duplicate
+      // replies) is intentionally deferred to v2.1+ — this fix just stops
+      // the silent discard.
       console.log(
-        `[WS] task.dispatch.reply task=${payload.taskId} ok=${payload.ok} outputLen=${payload.output?.length ?? 0}`,
+        `[WS] task.dispatch.reply task=${payload.taskId} ok=${payload.ok} outputLen=${payload.output?.length ?? 0}${requestId ? ` requestId=${requestId}` : ''}`,
       );
       if (!client || !taskService) {
         console.warn(`[WS] task.dispatch.reply skipped: client=${!!client} taskService=${!!taskService}`);
         return;
+      }
+      // P1-2 (2026-05-25): persist daemon-reported outbox MIME-mismatch
+      // rejections onto the task's metadata so the next dispatch's prompt
+      // can warn the agent. Done BEFORE branching into runtime/declared/
+      // fallback paths so the persistence is universal (rejection feedback
+      // matters regardless of which dispatch path settled the task). REPLACE
+      // semantics — fresh reply overwrites prior rejection set; see
+      // mergeOutboxRejectionsIntoTask for the rationale.
+      if (Array.isArray(payload.outboxRejections) && payload.outboxRejections.length > 0) {
+        await mergeOutboxRejectionsIntoTask(payload.taskId, payload.outboxRejections);
       }
       const daemonId = await resolveRuntimeDaemon(payload.taskId);
       if (daemonId) {
@@ -1192,6 +2058,14 @@ export function setupWebSocket(wss: WebSocketServer, deps: WebSocketDeps): void 
           } else {
             await taskService.failRuntimeTask(payload.taskId, daemonId, {
               error: payload.error?.message ?? 'unknown',
+              result:
+                payload.output !== undefined
+                  ? {
+                      output: payload.output,
+                      assetIds: payload.assetIds,
+                      metrics: payload.metrics,
+                    }
+                  : undefined,
               metadata: {
                 errorCode: payload.error?.code,
               },
@@ -1203,6 +2077,18 @@ export function setupWebSocket(wss: WebSocketServer, deps: WebSocketDeps): void 
         return;
       }
       const run = await resolveDeclaredRun(payload.taskId);
+      log.info(
+        {
+          taskId: payload.taskId,
+          ok: payload.ok,
+          outputLen: payload.output?.length ?? 0,
+          assetCount: payload.assetIds?.length ?? 0,
+          runResolved: !!run,
+          runSource: run?.source ?? null,
+          conversationId: run?.conversationId ?? null,
+        },
+        'task.dispatch.reply: declared-path resolution',
+      );
       if (run) {
         try {
           if (payload.ok) {
@@ -1215,8 +2101,89 @@ export function setupWebSocket(wss: WebSocketServer, deps: WebSocketDeps): void 
               },
             });
 
-            const output = (payload.output ?? '').trim();
+            const rawOutput = (payload.output ?? '').trim();
             const attachments = await buildAgentReplyAttachments(payload.assetIds);
+
+            // 2026-05-31 release201/30 §8 — lie-detector 降级为 warn-only telemetry.
+            //
+            // 既然 `cloud file send` CLI 现在会把源文件 cp 进 PRISMER_ARTIFACTS_DIR
+            // （release202/04;旧 PRISMER_OUTBOX_DIR 仍兼容；typescript SDK §6）+
+            // cloud message handler 会 dual-write attachments[]
+            // （message.service.ts §7），`claimedFile && !hasRealAsset` 的真实
+            // false-positive 大幅下降。但保留 detect 函数 + LIE_PATTERNS 作为兜底
+            // telemetry — 如果还有 disagreement，记录足够字段供后续追溯，
+            // **不再触发 UI banner / systemFlags.lie_intercepted / lifecycle=failed**。
+            //
+            // 原 2026-05-29 注释（systemFlags=['lie_intercepted'] + UI banner）
+            // 已废止；旧 doc 21 §lie-detector 同步 DEPRECATED。
+            const hasRealAsset = attachments != null && attachments.length > 0;
+            const claimedFile = detectAgentFileClaim(rawOutput);
+            const claimAssetDisagreement = claimedFile && !hasRealAsset;
+            const output = rawOutput;
+            if (claimAssetDisagreement) {
+              log.warn(
+                {
+                  dispatchId: payload.taskId,
+                  agentImUserId: run.assigneeId,
+                  sample: rawOutput.slice(0, 200),
+                  declaredAssetIds: payload.assetIds ?? [],
+                  attachmentsResolved: attachments?.length ?? 0,
+                },
+                '[dispatch.reply] claim/asset disagreement (warn-only, see release201/30 §8 — telemetry only, no UI flag)',
+              );
+            }
+
+            // P0-1 (2026-05-25): mirror the resolved assetIds into the
+            // task's metadata so the kanban TaskCard's paperclip badge +
+            // any downstream consumer that re-reads `task.metadata.assets.
+            // linkedAssetIds` (e.g. `task.service.resolveAssetRefs` on the
+            // next dispatch) sees them. Only fires when attachments
+            // actually resolved — otherwise the daemon-reported ids are
+            // unverified and the invariant_violation branch below handles
+            // the chat-side warning.
+            if (attachments && attachments.length > 0) {
+              await mergeLinkedAssetIdsIntoTask(payload.taskId, payload.assetIds);
+            }
+            // 2026-05-24 — assetId mismatch invariant (P0-2). When daemon
+            // sends N assetIds but buildAgentReplyAttachments returns 0/undef,
+            // the row(s) either weren't committed yet (race) or were never
+            // minted (artifacts-watcher gap / asset-cache ingest failure). The
+            // text-only reply still goes through below, but the user has no
+            // way to know "agent claims to have written 3 files but I see
+            // none" — surface a calm warning chip into chat AND log.error
+            // for admin/CI invariant tripwire.
+            if (Array.isArray(payload.assetIds) && payload.assetIds.length > 0 && !attachments) {
+              log.error(
+                {
+                  invariant: 'asset_ids_unresolved',
+                  taskId: payload.taskId,
+                  assetIds: payload.assetIds,
+                  conversationId: run.conversationId,
+                },
+                'task.dispatch.reply invariant: daemon reported asset ids but none resolved to IMAsset rows',
+              );
+              if (run.conversationId && messageService) {
+                try {
+                  await messageService.send({
+                    conversationId: run.conversationId,
+                    senderId: run.assigneeId,
+                    type: 'system_event',
+                    content: `⚠ Agent 报告了 ${payload.assetIds.length} 个产物但 cloud 未收到记录,可能是 outbox-ingest 链路异常。已记录原始 assetIds=${payload.assetIds.slice(0, 5).join(',')} 至日志,可用 \`scripts/debug/task-trace.ts ${payload.taskId}\` 追溯。`,
+                    metadata: {
+                      kind: 'invariant_violation',
+                      invariant: 'asset_ids_unresolved',
+                      taskId: payload.taskId,
+                      assetIds: payload.assetIds,
+                    },
+                  });
+                } catch (writeErr) {
+                  log.warn(
+                    { err: writeErr, taskId: payload.taskId },
+                    'asset_ids_unresolved system_event post failed (chat surface skipped)',
+                  );
+                }
+              }
+            }
             // Post when EITHER text or attachments are present. File-only
             // replies ("send the report to me" → daemon-collected files,
             // empty text) used to be silently dropped because the legacy
@@ -1234,6 +2201,11 @@ export function setupWebSocket(wss: WebSocketServer, deps: WebSocketDeps): void 
               // sees A's response as context. See
               // message.service.ts §dispatchPendingMention.
               let pendingMentionTargets: string[] = [];
+              // Chain-wide de-dupe set: every agent already dispatched/queued in
+              // this mention chain. Admits only NEW @mentions an agent introduces
+              // in its reply (echoes coalesce away); bounds each agent to one
+              // dispatch per chain.
+              let chainMentionedUserIds: string[] = [];
               try {
                 const meta = run.metadata ? (JSON.parse(run.metadata) as Record<string, unknown>) : {};
                 triggerMessageId = typeof meta.triggerMessageId === 'string' ? meta.triggerMessageId : undefined;
@@ -1251,11 +2223,23 @@ export function setupWebSocket(wss: WebSocketServer, deps: WebSocketDeps): void 
                     (v): v is string => typeof v === 'string' && v.length > 0,
                   );
                 }
+                if (Array.isArray(meta.chainMentionedUserIds)) {
+                  chainMentionedUserIds = meta.chainMentionedUserIds.filter(
+                    (v): v is string => typeof v === 'string' && v.length > 0,
+                  );
+                }
               } catch {
                 triggerMessageId = undefined;
                 runHopCount = undefined;
                 runConversationType = undefined;
                 pendingMentionTargets = [];
+                chainMentionedUserIds = [];
+              }
+              // In-flight chains dispatched before this field existed (deploy
+              // straddle): seed from the known cursor + self so echoes are still
+              // suppressed and we never re-dispatch an already-queued target.
+              if (chainMentionedUserIds.length === 0) {
+                chainMentionedUserIds = [...pendingMentionTargets, run.assigneeId];
               }
               const replyMetadata: Record<string, unknown> = {
                 kind: 'agent_reply',
@@ -1263,6 +2247,12 @@ export function setupWebSocket(wss: WebSocketServer, deps: WebSocketDeps): void 
               };
               if (triggerMessageId) replyMetadata.triggerMessageId = triggerMessageId;
               if (attachments) replyMetadata.attachments = attachments;
+              // 2026-05-31 release201/30 §8 — lie-detector 降级 warn-only。
+              // 不再写 metadata.systemFlags = ['lie_intercepted'] / originalOutput /
+              // lieReason，因此前端 InlineActivityStrip 不会再 surface 红色 banner。
+              // disagreement 仍走上面的 log.warn telemetry（含 dispatchId / sample /
+              // declaredAssetIds），可后台追溯。原 2026-05-28 (doc 21 §3.1) UI banner
+              // 立场废止。
               // Propagate hopCount so downstream @-mentions in the reply
               // are bounded by MAX_AGENT_HOPS (see message.service.ts).
               if (typeof runHopCount === 'number') replyMetadata.hopCount = runHopCount;
@@ -1281,7 +2271,59 @@ export function setupWebSocket(wss: WebSocketServer, deps: WebSocketDeps): void 
                   output ||
                   (attachments ? `📎 Sent ${attachments.length} file${attachments.length === 1 ? '' : 's'}` : ''),
                 metadata: replyMetadata,
+                attachments,
               });
+
+              // 2026-05-28 (doc 21 §5.1) — emit dispatch.lifecycle so the
+              // AgentStateStrip drops the agent's in-flight ring as soon
+              // as the reply lands. `failed` covers the lie-guard
+              // interception path; success path emits `completed`.
+              if (deps.syncService) {
+                void deps.syncService
+                  .writeEvent(
+                    'dispatch.lifecycle',
+                    {
+                      workspaceId: null,
+                      conversationId: run.conversationId,
+                      agentImUserId: run.assigneeId,
+                      dispatchId: payload.taskId,
+                      // 2026-05-31 release201/30 §8 — lifecycle 始终 'completed'，
+                      // lie-detector 降级 warn-only 后不再以 disagreement 触发 failed。
+                      lifecycle: 'completed',
+                      occurredAt: Date.now(),
+                    },
+                    run.conversationId,
+                    run.assigneeId,
+                  )
+                  .catch((err: Error) =>
+                    log.warn(
+                      { err, taskId: payload.taskId },
+                      'dispatch.lifecycle(completed|failed) writeEvent failed (non-fatal)',
+                    ),
+                  );
+              }
+
+              // Admit NEW @mentions the agent introduced in THIS reply — the
+              // delegation case (orchestrator → @engineer @marketer). Only
+              // `explicit` routing (real @mentions) counts; `capability`/
+              // `broadcast` (a reply that merely ends with "?") must NOT fan
+              // out to everyone. Targets already in the chain are filtered, so
+              // an echo of the original @a @b coalesces away (no ping-pong),
+              // and self is filtered. This restores pre-2026-06-05 agent→agent
+              // delegation that `88f47d55`'s `!isAgentReply` guard had fully
+              // blocked, without reintroducing the double-dispatch the guard
+              // was added to fix.
+              const replyRouting = replyResult.routing;
+              if (replyRouting?.mode === 'explicit') {
+                const replyNewTargets = replyRouting.targets
+                  .filter((t) => t.role === 'agent')
+                  .map((t) => t.userId)
+                  .filter((uid) => uid && uid !== run.assigneeId && !chainMentionedUserIds.includes(uid));
+                if (replyNewTargets.length > 0) {
+                  pendingMentionTargets = [...pendingMentionTargets, ...replyNewTargets];
+                  chainMentionedUserIds = [...chainMentionedUserIds, ...replyNewTargets];
+                }
+              }
 
               // Sequential mention fan-out: dispatch the next target with
               // the just-posted reply as the trigger message. The new
@@ -1318,6 +2360,7 @@ export function setupWebSocket(wss: WebSocketServer, deps: WebSocketDeps): void 
                       rest,
                       nextHop,
                       runConversationType,
+                      chainMentionedUserIds,
                     );
                   } else {
                     log.warn(
@@ -1338,33 +2381,210 @@ export function setupWebSocket(wss: WebSocketServer, deps: WebSocketDeps): void 
               }
             }
           } else {
+            // 2026-05-22 (doc 12) — approval deadlock fix.
+            //
+            // When the daemon's hermes adapter observed an approval-request
+            // MCP tool call before the reaper killed the run, it emits a
+            // dispatch reply with `error.code === 'awaiting_human_approval'`.
+            // Treat this as a non-terminal suspension, NOT a failure:
+            //   - park the run at status='awaiting_approval' (new in v2.0
+            //     TaskStatus union)
+            //   - post a calm "⏳ waiting for human review" system_event
+            //     instead of the red "⚠️ Agent failed" pill
+            //   - do NOT emit task.failed downstream
+            // When the human decides, task.service.ts
+            // `applyApprovalDecisionAndRedispatch` resumes the run by
+            // dispatching a fresh request labelled `approval.decided`.
+            const isAwaitingApproval = payload.error?.code === 'awaiting_human_approval';
+            // P2 (2026-05-24): daemon-side retry exhaustion. The daemon has
+            // already attempted dispatch N=3 times with exponential backoff;
+            // surface a dedicated chat message so the user sees "retried 3
+            // times" rather than the raw last-attempt error.
+            const isRetryExhausted = payload.error?.code === 'daemon_local_retry_exhausted';
             await taskService.updateTaskRun(payload.taskId, run.assigneeId, {
-              status: 'failed',
-              error: payload.error?.message ?? 'unknown',
+              status: isAwaitingApproval ? 'awaiting_approval' : 'failed',
+              error: isAwaitingApproval ? undefined : (payload.error?.message ?? 'unknown'),
               metadata: { errorCode: payload.error?.code },
             });
+
+            // 2026-05-28 (doc 21 §5.1) — emit dispatch.lifecycle 'failed'
+            // so AgentStateStrip drops the in-flight ring. Awaiting
+            // approval is NOT a terminal state, so suppress the signal —
+            // the strip stays "active" with awaiting status carried by
+            // the approval card. Reapply 'received' lifecycle happens
+            // when applyApprovalDecisionAndRedispatch re-emits the
+            // dispatch frame via emitDaemonDispatchRequest.
+            if (!isAwaitingApproval && deps.syncService && run.conversationId) {
+              void deps.syncService
+                .writeEvent(
+                  'dispatch.lifecycle',
+                  {
+                    workspaceId: null,
+                    conversationId: run.conversationId,
+                    agentImUserId: run.assigneeId,
+                    dispatchId: payload.taskId,
+                    lifecycle: 'failed',
+                    errorCode: payload.error?.code ?? 'adapter_dispatch_failed',
+                    occurredAt: Date.now(),
+                  },
+                  run.conversationId,
+                  run.assigneeId,
+                )
+                .catch((err: Error) =>
+                  log.warn({ err, taskId: payload.taskId }, 'dispatch.lifecycle(failed) writeEvent failed (non-fatal)'),
+                );
+            }
             // Why: without this, the UI shows a "thinking…" indicator that
             // simply disappears when the run fails — no error feedback to the
             // user, no way to know dispatch died. Surface the error as a
             // system_event message in the same conversation so the operator
             // sees adapter_dispatch_failed / task_cancelled / etc. and can
-            // act. Posted as the agent itself so it threads with the chat;
-            // metadata.kind='task_status_event' lets the UI render it as a
-            // muted system row (existing W7 pattern).
+            // act. Posted as the agent itself so it threads with the chat.
+            // Chat mentions are agent runs, not kanban tasks, so keep their
+            // system-event kind separate from task_status_event.
             if (run.conversationId && messageService) {
               const errMsg = payload.error?.message ?? 'unknown error';
               const errCode = payload.error?.code ?? 'adapter_dispatch_failed';
+              let triggerMessageId: string | undefined;
+              try {
+                const meta = run.metadata ? (JSON.parse(run.metadata) as Record<string, unknown>) : {};
+                triggerMessageId = typeof meta.triggerMessageId === 'string' ? meta.triggerMessageId : undefined;
+              } catch {
+                triggerMessageId = undefined;
+              }
+              const isChatMention = run.sourceKind === 'chat_mention';
+
+              // Bug 1(b) (2026-05-29) — when the daemon signals
+              // `awaiting_human_approval`, the agent already submitted an
+              // ApprovalRequest row via the MCP tool
+              // `prismer.approval.request_human_approval` with its own
+              // structured title + context + risk. The previous code path
+              // ALSO minted a second row here with a template title
+              // ("Approve: Agent xxxxxx 任务") and a template context
+              // ("Agent requested human approval and is suspended pending
+              // decision...") which is literally just the daemon's reply
+              // error.message echoed back to the user. That violated
+              // SKILL.md §Workflow #3 ("reason mandatory") and produced
+              // duplicate cards (because the agent's row uses
+              // category='general' and the fallback used 'agent_tool_call',
+              // so intentHash dedup didn't collapse them).
+              //
+              // The right contract: cloud LOOKS UP the agent-submitted row
+              // and only mints a fallback if the agent skipped the MCP
+              // tool. The fallback warns explicitly (no fake reason
+              // template) — the missing-reason case is itself a contract
+              // violation worth surfacing, not papering over.
+              let createdApprovalId: string | null = null;
+              if (isAwaitingApproval && taskService) {
+                try {
+                  const approvalService = new ApprovalService({
+                    rooms: deps.rooms,
+                    taskService,
+                  });
+                  const taskRow = await prisma.iMTask
+                    .findUnique({
+                      where: { id: payload.taskId },
+                      select: { title: true, workspaceId: true },
+                    })
+                    .catch(() => null);
+
+                  // Lookup: agent-submitted pending approvals for this run.
+                  // listApprovals runs ACL through the actor (the agent's
+                  // imUserId, who can always see their own submitted
+                  // approvals). If we find one, reuse it.
+                  const existingAgentSubmitted = await approvalService
+                    .listApprovals(run.assigneeId, {
+                      taskId: payload.taskId,
+                      status: 'pending',
+                      limit: 5,
+                    })
+                    .catch(() => [] as Awaited<ReturnType<ApprovalService['listApprovals']>>);
+
+                  if (existingAgentSubmitted.length > 0) {
+                    // Agent already wrote a real ApprovalRequest with its
+                    // own reason / context / options via the MCP tool.
+                    // Reuse the earliest one — that's the user-visible
+                    // card; no duplicate mint.
+                    const earliest = existingAgentSubmitted.reduce(
+                      (acc, cur) =>
+                        Date.parse(
+                          cur.createdAt instanceof Date ? cur.createdAt.toISOString() : String(cur.createdAt),
+                        ) <
+                        Date.parse(acc.createdAt instanceof Date ? acc.createdAt.toISOString() : String(acc.createdAt))
+                          ? cur
+                          : acc,
+                      existingAgentSubmitted[0],
+                    );
+                    createdApprovalId = earliest.id;
+                  } else {
+                    // Agent flagged `approvalRequested` in the SSE stream
+                    // but didn't actually call the MCP tool — this is a
+                    // malformed contract. Surface the issue honestly
+                    // instead of fabricating a reason: the title says
+                    // "missing reason", the context names the contract
+                    // violation explicitly, so the human reviewer sees
+                    // there's no real "why" attached and the agent gets
+                    // a debuggable signal.
+                    const titleSeed =
+                      taskRow?.title && taskRow.title.trim().length > 0
+                        ? taskRow.title.trim().slice(0, 80)
+                        : `Agent ${run.assigneeId.slice(-6)} task`;
+                    const approval = await approvalService.createApproval(run.assigneeId, {
+                      workspaceId: taskRow?.workspaceId ?? undefined,
+                      conversationId: run.conversationId,
+                      taskId: payload.taskId,
+                      category: 'agent_tool_call',
+                      title: `Approve (missing reason): ${titleSeed}`,
+                      context:
+                        'Agent paused itself awaiting approval but did NOT call ' +
+                        '`prismer.approval.request_human_approval` with a reason / risk / context. ' +
+                        'This is a SKILL.md contract violation — review with caution; reject and ' +
+                        'ask the agent to re-submit with a real explanation.',
+                      options: [
+                        { value: 'approve', label: '批准' },
+                        { value: 'reject', label: '拒绝' },
+                      ],
+                      metadata: {
+                        taskRunId: payload.taskId,
+                        triggerMessageId,
+                        source: 'dispatch_reply_awaiting_human_approval_fallback_no_mcp_submission',
+                      },
+                    });
+                    createdApprovalId = approval.id;
+                  }
+                } catch (apprErr) {
+                  log.warn(
+                    { err: apprErr, taskId: payload.taskId },
+                    'awaiting_human_approval: approval lookup/createApproval failed — user will see only the system_event pill',
+                  );
+                }
+              }
+
               try {
                 await messageService.send({
                   conversationId: run.conversationId,
                   senderId: run.assigneeId,
                   type: 'system_event',
-                  content: `⚠️ Agent failed: ${errMsg}`,
+                  content: isAwaitingApproval
+                    ? '⏳ Waiting for human approval'
+                    : isRetryExhausted
+                      ? `⚠ Agent 已重试 3 次仍失败: ${errMsg}. 可用 \`scripts/debug/task-trace.ts ${payload.taskId}\` 追溯每次 attempt 的错误.`
+                      : `⚠️ Agent failed: ${errMsg}`,
                   metadata: {
-                    kind: 'task_status_event',
-                    status: 'failed',
+                    kind: isChatMention ? 'agent_status_event' : 'task_status_event',
+                    // 'awaiting_approval' is a new chat-side status the
+                    // frontend renders as a yellow pill (im-channel.tsx).
+                    // It must NOT be conflated with 'failed' / 'cancelled'
+                    // — those are terminal; this one is reversible by a
+                    // human decision.
+                    status: isAwaitingApproval ? 'awaiting_approval' : 'failed',
                     taskId: payload.taskId,
+                    runId: payload.taskId,
+                    sourceKind: run.sourceKind,
+                    ...(triggerMessageId ? { triggerMessageId } : {}),
+                    ...(createdApprovalId ? { approvalId: createdApprovalId } : {}),
                     errorCode: errCode,
+                    error: errMsg,
                   },
                 });
               } catch (postErr) {
@@ -1379,7 +2599,48 @@ export function setupWebSocket(wss: WebSocketServer, deps: WebSocketDeps): void 
       }
       const agentId = await resolveDeclaredAssignee(payload.taskId);
       if (!agentId) {
-        console.warn(`[WS] task.dispatch.reply: no declared agent for task ${payload.taskId}`);
+        // 2026-05-24 P0-2 invariant: all 3 resolution paths exhausted
+        // (resolveDeclaredRun via IMTaskRun, IMTask fallback inside it,
+        // and now resolveDeclaredAssignee). daemon ok=true but cloud has
+        // nowhere to write the reply — the user-facing chat goes silent.
+        // Best-effort surface: pull IMTask directly so we can at least
+        // post a "lost reply" system_event to the right conversation.
+        log.error(
+          {
+            invariant: 'dispatch_reply_orphan',
+            taskId: payload.taskId,
+            ok: payload.ok,
+            outputLen: payload.output?.length ?? 0,
+            assetCount: payload.assetIds?.length ?? 0,
+          },
+          'task.dispatch.reply invariant: no declared agent + no IMTask fallback — reply orphaned',
+        );
+        try {
+          const orphanTask = await prisma.iMTask
+            .findUnique({
+              where: { id: payload.taskId },
+              select: { conversationId: true, assigneeId: true },
+            })
+            .catch(() => null);
+          if (orphanTask?.conversationId && orphanTask.assigneeId && messageService) {
+            await messageService.send({
+              conversationId: orphanTask.conversationId,
+              senderId: orphanTask.assigneeId,
+              type: 'system_event',
+              content: `⚠ Agent 已完成处理但 cloud 无法定位任务归属 — reply 丢失。\`scripts/debug/task-trace.ts ${payload.taskId}\` 可追溯。`,
+              metadata: {
+                kind: 'invariant_violation',
+                invariant: 'dispatch_reply_orphan',
+                taskId: payload.taskId,
+              },
+            });
+          }
+        } catch (writeErr) {
+          log.warn(
+            { err: writeErr, taskId: payload.taskId },
+            'dispatch_reply_orphan emergency system_event also failed',
+          );
+        }
         return;
       }
 
@@ -1414,6 +2675,14 @@ export function setupWebSocket(wss: WebSocketServer, deps: WebSocketDeps): void 
           });
           const output = (payload.output ?? '').trim();
           const attachments = await buildAgentReplyAttachments(payload.assetIds);
+          // P0-1 (2026-05-25): mirror resolved assetIds into the task's
+          // metadata.assets.linkedAssetIds so the kanban paperclip badge
+          // reflects produced artifacts. Fires only when buildAgentReply
+          // successfully resolved at least one asset row (so we don't
+          // record ghost ids that lost a write-vs-read race upstream).
+          if (attachments && attachments.length > 0) {
+            await mergeLinkedAssetIdsIntoTask(payload.taskId, payload.assetIds);
+          }
           if (taskRow?.conversationId && (output || attachments) && messageService) {
             const conversationId = taskRow.conversationId;
             let triggerMessageId: string | undefined;
@@ -1454,6 +2723,7 @@ export function setupWebSocket(wss: WebSocketServer, deps: WebSocketDeps): void 
                   output ||
                   (attachments ? `📎 Sent ${attachments.length} file${attachments.length === 1 ? '' : 's'}` : ''),
                 metadata: replyMetadata,
+                attachments,
               });
               await maybeWriteSessionMemory({
                 taskId: payload.taskId,
@@ -1509,8 +2779,14 @@ export function setupWebSocket(wss: WebSocketServer, deps: WebSocketDeps): void 
             }
           }
         } else {
+          // P2 (2026-05-24): friendlier task-level error when daemon
+          // exhausted its local retry budget. The raw last-attempt message
+          // (e.g. "fetch failed") is preserved but prefixed so anyone
+          // reading the task feed knows N=3 retries were already burnt.
+          const rawErr = payload.error?.message ?? 'unknown';
+          const isRetryExhausted = payload.error?.code === 'daemon_local_retry_exhausted';
           await taskService.failTask(payload.taskId, agentId, {
-            error: payload.error?.message ?? 'unknown',
+            error: isRetryExhausted ? `Agent 已重试 3 次仍失败: ${rawErr}` : rawErr,
             metadata: {
               errorCode: payload.error?.code,
             },
@@ -1646,21 +2922,32 @@ export function setupWebSocket(wss: WebSocketServer, deps: WebSocketDeps): void 
  * src/app/workspace/components/im-channel.tsx — `MessageAssetAttachment`
  * accepts both the singular `metadata.asset` (legacy user→agent path) and
  * plural `metadata.attachments[]` (this path). Title falls back to the
- * IMAsset.metadata.title set by the producer (OutboxWatcher, etc).
+ * IMAsset.metadata.title set by the producer (ArtifactsWatcher, etc).
  *
  * Returns undefined when the input is empty or no assets resolved — caller
  * decides whether to omit the field entirely from the message metadata.
  */
 async function buildAgentReplyAttachments(
   assetIds: readonly string[] | undefined,
-): Promise<Array<Record<string, unknown>> | undefined> {
+): Promise<AssetAttachment[] | undefined> {
   if (!Array.isArray(assetIds) || assetIds.length === 0) return undefined;
   const dedup = Array.from(new Set(assetIds.filter((id): id is string => typeof id === 'string' && id.length > 0)));
   if (dedup.length === 0) return undefined;
   const rows = await prisma.iMAsset
     .findMany({
       where: { id: { in: dedup }, deletedAt: null },
-      select: { id: true, mime: true, kind: true, sizeBytes: true, metadata: true },
+      select: {
+        id: true,
+        mime: true,
+        kind: true,
+        sizeBytes: true,
+        contentHash: true,
+        thumbnailUrl: true,
+        previewUrls: true,
+        revision: true,
+        filename: true,
+        metadata: true,
+      },
     })
     .catch(
       () =>
@@ -1669,12 +2956,28 @@ async function buildAgentReplyAttachments(
           mime: string | null;
           kind: string;
           sizeBytes: bigint | null;
+          contentHash: string;
+          thumbnailUrl: string | null;
+          previewUrls: unknown;
+          revision: number;
+          filename: string | null;
           metadata: string | null;
         }>,
     );
-  type AssetRow = { id: string; mime: string | null; kind: string; sizeBytes: bigint | null; metadata: string | null };
+  type AssetRow = {
+    id: string;
+    mime: string | null;
+    kind: string;
+    sizeBytes: bigint | null;
+    contentHash: string;
+    thumbnailUrl: string | null;
+    previewUrls: unknown;
+    revision: number;
+    filename: string | null;
+    metadata: string | null;
+  };
   const byId = new Map<string, AssetRow>(rows.map((r: AssetRow) => [r.id, r]));
-  const out: Array<Record<string, unknown>> = [];
+  const out: AssetAttachment[] = [];
   for (const id of dedup) {
     const row = byId.get(id);
     if (!row) {
@@ -1689,14 +2992,48 @@ async function buildAgentReplyAttachments(
       // best-effort — metadata blob is owner-controlled
     }
     out.push({
-      id,
+      assetId: id,
       title: title ?? `[${row.kind}]`,
+      filename: row.filename ?? undefined,
       mime: row.mime,
-      kind: row.kind,
+      kind: attachmentKindFromAsset(row.kind, row.mime),
       sizeBytes: row.sizeBytes != null ? Number(row.sizeBytes) : null,
+      contentHash: row.contentHash,
+      thumbnailUrl: row.thumbnailUrl,
+      previewUrls: normalizeAttachmentPreviewUrls(row.previewUrls),
+      revision: row.revision,
+      role: 'output',
     });
   }
   return out.length > 0 ? out : undefined;
+}
+
+function attachmentKindFromAsset(kind: string, mime: string | null): AssetAttachment['kind'] {
+  if (kind === 'file' || kind === 'image' || kind === 'audio' || kind === 'video' || kind === 'asset') return kind;
+  const normalizedMime = mime ?? '';
+  if (normalizedMime.startsWith('image/')) return 'image';
+  if (normalizedMime.startsWith('audio/')) return 'audio';
+  if (normalizedMime.startsWith('video/')) return 'video';
+  return 'file';
+}
+
+function normalizeAttachmentPreviewUrls(raw: unknown): AssetAttachment['previewUrls'] {
+  const parsed = typeof raw === 'string' ? parsePreviewUrls(raw) : raw;
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  const out: NonNullable<AssetAttachment['previewUrls']> = {};
+  for (const key of ['small', 'medium', 'large'] as const) {
+    const value = (parsed as Record<string, unknown>)[key];
+    if (typeof value === 'string' && value.trim()) out[key] = value.trim();
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+function parsePreviewUrls(raw: string): unknown {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
 }
 
 async function mergeAssetObservability(taskId: string, observations: AssetDispatchObservation[]): Promise<void> {
@@ -1735,5 +3072,110 @@ async function mergeAssetObservability(taskId: string, observations: AssetDispat
       { err, taskId, count: observations.length },
       `failed to merge asset observability: ${(err as Error).message}`,
     );
+  }
+}
+
+/**
+ * P0-1 (2026-05-25): mirror the assetIds the daemon just reported on
+ * task.dispatch.reply into `IMTask.metadata.assets.linkedAssetIds`. The
+ * kanban TaskCard's paperclip badge + multiple back-references (e.g.
+ * `task.service.ts::resolveAssetRefs` which rehydrates assetRefs[] on the
+ * next dispatch from the same slot) read from this metadata field, so
+ * without this mirror a task that produced N files perpetually shows "0
+ * attachments" in the board even though the rows + chat attachments exist.
+ *
+ * Dedup-union with the existing list (a task can produce more files on
+ * subsequent dispatches; we keep the cumulative set). Capped at 100
+ * entries to bound the JSON column size.
+ *
+ * Non-fatal: the chat attachment and IMAsset row are already written by
+ * the time we get here; this is purely a kanban-side mirror. We `log.warn`
+ * on failure but never throw — never destabilize the reply path for a
+ * cosmetic mirror.
+ */
+async function mergeLinkedAssetIdsIntoTask(taskId: string, newIds: string[] | undefined): Promise<void> {
+  if (!Array.isArray(newIds) || newIds.length === 0) return;
+  try {
+    const row = await prisma.iMTask.findUnique({
+      where: { id: taskId },
+      select: { metadata: true },
+    });
+    if (!row) return;
+    let prev: Record<string, unknown> = {};
+    try {
+      prev = JSON.parse(row.metadata ?? '{}');
+    } catch {
+      prev = {};
+    }
+    const assets = (
+      prev.assets && typeof prev.assets === 'object' && !Array.isArray(prev.assets)
+        ? { ...(prev.assets as Record<string, unknown>) }
+        : {}
+    ) as Record<string, unknown>;
+    const existingRaw = Array.isArray(assets.linkedAssetIds) ? (assets.linkedAssetIds as unknown[]) : [];
+    const existing = existingRaw.filter((v): v is string => typeof v === 'string' && v.length > 0);
+    const seen = new Set<string>(existing);
+    const merged = [...existing];
+    for (const id of newIds) {
+      if (typeof id !== 'string' || id.length === 0) continue;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      merged.push(id);
+    }
+    if (merged.length > 100) merged.splice(0, merged.length - 100);
+    // Skip the write when nothing actually changed — avoids burning a row
+    // update on every reply that re-confirms an already-recorded asset id
+    // (e.g. when the cloud receives the same reply twice via ack retry).
+    if (merged.length === existing.length && merged.every((id, i) => id === existing[i])) return;
+    assets.linkedAssetIds = merged;
+    await prisma.iMTask.update({
+      where: { id: taskId },
+      data: { metadata: JSON.stringify({ ...prev, assets }) },
+    });
+  } catch (err) {
+    log.warn({ err, taskId, newIds: newIds.slice(0, 5) }, `failed to merge linkedAssetIds: ${(err as Error).message}`);
+  }
+}
+
+/**
+ * P1-2 (2026-05-25): persist the daemon's just-reported outbox rejection
+ * records onto `IMTask.metadata.outboxRejections`. The next dispatch's
+ * `v19x-helpers.buildTaskDispatchRequest` reads them and prepends a
+ * warning section to the prompt so the agent learns its previous output
+ * was rejected (e.g. wrote markdown into a `.pdf` file) BEFORE retrying
+ * the same broken strategy.
+ *
+ * REPLACE semantics: each reply carries the latest set; stale rejections
+ * from earlier turns do not stay in metadata. The buffer on the daemon
+ * side already drains atomically per turn (see
+ * `flushRejections(taskId)`).
+ *
+ * Non-fatal: log.warn on failure but don't throw — the task is already
+ * settled and the cloud still has the local rejection event log surface
+ * (POST /tasks/:id/event with `OUTBOX_MIME_MISMATCH`).
+ */
+async function mergeOutboxRejectionsIntoTask(taskId: string, rejections: OutboxRejectionRecord[]): Promise<void> {
+  if (!Array.isArray(rejections) || rejections.length === 0) return;
+  try {
+    const row = await prisma.iMTask.findUnique({
+      where: { id: taskId },
+      select: { metadata: true },
+    });
+    if (!row) return;
+    let prev: Record<string, unknown> = {};
+    try {
+      prev = JSON.parse(row.metadata ?? '{}');
+    } catch {
+      prev = {};
+    }
+    // Defensive: clamp to the same cap the daemon uses (20) to keep
+    // metadata bounded even if a future daemon version forgets to.
+    const capped = rejections.slice(-20);
+    await prisma.iMTask.update({
+      where: { id: taskId },
+      data: { metadata: JSON.stringify({ ...prev, outboxRejections: capped }) },
+    });
+  } catch (err) {
+    log.warn({ err, taskId, count: rejections.length }, `failed to merge outbox rejections: ${(err as Error).message}`);
   }
 }
