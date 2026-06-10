@@ -28,8 +28,19 @@ import {
   trackUnmatchedSignals,
 } from './evolution-signals';
 import { getAgentMode, queryHypergraphCandidates } from './evolution-hypergraph';
-import { dbGeneToModel, isCanaryVisibleToAgent, checkCircuitBreakerData } from './evolution-lifecycle';
+import {
+  dbGeneToModel,
+  isCanaryVisibleToAgent,
+  checkCircuitBreakerData,
+  generateTitle,
+  inferCategory,
+} from './evolution-shared';
 import { getPersonality } from './evolution-personality';
+
+// Re-export from evolution-shared so external callers (evolution.service.ts,
+// evolution-lifecycle.ts) that historically imported these from
+// `./evolution-selector` keep working without changes.
+export { generateTitle, inferCategory };
 
 // ─── Constants ──────────────────────────────────────────────
 
@@ -409,60 +420,9 @@ export function buildCreateSuggestion(
   };
 }
 
-/**
- * Infer gene category from signal prefixes (v0.3.0: accepts SignalTag[]).
- * High-cardinality signals (error:500 with no other context) → diagnostic.
- */
-export function inferCategory(signals: SignalTag[]): GeneCategory {
-  let errorCount = 0;
-  let perfCount = 0;
-  let otherCount = 0;
-
-  for (const s of signals) {
-    if (s.type.startsWith('error:') || s.type === 'task.failed') errorCount++;
-    else if (s.type.startsWith('perf:') || s.type.startsWith('cost:')) perfCount++;
-    else otherCount++;
-  }
-
-  // Single high-cardinality error signal with no specific context → diagnostic
-  if (errorCount === 1 && signals.length === 1 && Object.keys(signals[0]).length === 1) {
-    return 'diagnostic';
-  }
-  if (errorCount >= perfCount && errorCount >= otherCount) return 'repair';
-  if (perfCount >= errorCount && perfCount >= otherCount) return 'optimize';
-  return 'innovate';
-}
-
-/**
- * Generate a human-readable title from signals.
- * "error:graphql_validation" → "GraphQL Validation Handler"
- * "perf:cold_start" → "Cold Start Optimizer"
- */
-export function generateTitle(signals: SignalTag[]): string {
-  // Use the most specific signal (prefer tags with most fields)
-  const sorted = [...signals].sort((a, b) => Object.keys(b).length - Object.keys(a).length);
-  const primary = sorted[0]?.type || 'unknown';
-  const parts = primary.split(':');
-  const specific = parts.length > 1 ? parts.slice(1).join(':') : parts[0];
-
-  // Convert snake_case to Title Case
-  const words = specific
-    .replace(/[_.-]/g, ' ')
-    .split(' ')
-    .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
-    .join(' ');
-
-  // Add suffix based on category
-  const category = inferCategory(signals);
-  const suffixMap: Record<GeneCategory, string> = {
-    repair: 'Handler',
-    optimize: 'Optimizer',
-    innovate: 'Strategy',
-    diagnostic: 'Triage',
-  };
-  const suffix = suffixMap[category] ?? 'Strategy';
-  return `${words} ${suffix}`;
-}
+// `inferCategory` + `generateTitle` were moved to `./evolution-shared.ts`
+// (and re-exported at the top of this module) to break the
+// lifecycle ↔ selector circular import.
 
 // ===== Gene Selection Orchestration =====
 
