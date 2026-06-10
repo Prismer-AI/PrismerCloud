@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useId } from 'react';
 import { Coins, Leaf, Clock } from 'lucide-react';
+import { useI18n } from '@/contexts/i18n-context';
 import { glass, type LeaderboardHeroData } from './helpers';
 
 /* ── Animated counter with spring easing ─────────────────── */
@@ -83,8 +84,19 @@ interface LeaderboardHeroProps {
 }
 
 // Trend data will come from API when available; empty array hides sparkline gracefully
+type EvolutionT = ReturnType<typeof useI18n>['t'];
+
+function localizedPeriodLabel(label: string | undefined, t: EvolutionT): string {
+  if (!label) return '';
+  const weekMatch = /^Week\s+(\d+),\s*(\d{4})$/i.exec(label.trim());
+  if (weekMatch) {
+    return t('evolution.leaderboard.periodWeek', { week: Number(weekMatch[1]), year: Number(weekMatch[2]) });
+  }
+  return label;
+}
 
 export function LeaderboardHero({ data, isDark, onStatClick }: LeaderboardHeroProps) {
+  const { t } = useI18n();
   const [mounted, setMounted] = useState(false);
   useEffect(() => {
     setMounted(true);
@@ -120,25 +132,27 @@ export function LeaderboardHero({ data, isDark, onStatClick }: LeaderboardHeroPr
   const moneySavedVal = Math.round(data.global.totalMoneySaved || 0);
   const co2Val = Math.round((data.global.totalCo2Reduced || 0) * 10) / 10;
   const hoursVal = Math.round(data.global.totalDevHoursSaved || 0);
+  const periodLabel = localizedPeriodLabel(data.period.label, t);
+  const hourUnit = t('evolution.common.hoursShort', { count: '' }).trim();
 
   // Value metrics all zero — show network activity stats instead
   if (moneySavedVal === 0 && co2Val === 0 && hoursVal === 0) {
     const networkStats = [
       {
         value: data.network.totalAgentsEvolving,
-        label: 'Agents Evolving',
+        label: t('evolution.leaderboard.hero.agentsEvolving'),
         color: isDark ? '#34d399' : '#10b981',
         textColor: 'text-emerald-400',
       },
       {
         value: data.network.totalGenesPublished,
-        label: 'Genes Published',
+        label: t('evolution.leaderboard.hero.genesPublished'),
         color: isDark ? '#60a5fa' : '#3b82f6',
         textColor: 'text-blue-400',
       },
       {
         value: data.network.totalGeneTransfers,
-        label: 'Gene Transfers',
+        label: t('evolution.leaderboard.hero.geneTransfers'),
         color: isDark ? '#c084fc' : '#a855f7',
         textColor: 'text-purple-400',
       },
@@ -155,7 +169,7 @@ export function LeaderboardHero({ data, isDark, onStatClick }: LeaderboardHeroPr
         />
         <div className="relative z-10 p-6 md:p-8">
           <div className={`text-center text-xs font-medium mb-4 ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>
-            Evolution Network &middot; {data.period.label}
+            {t('evolution.leaderboard.hero.network', { period: periodLabel })}
           </div>
           <div className="flex flex-col md:flex-row items-stretch justify-center">
             {networkStats.map((s, i) => (
@@ -187,7 +201,7 @@ export function LeaderboardHero({ data, isDark, onStatClick }: LeaderboardHeroPr
   const stats = [
     {
       value: moneySavedVal,
-      label: 'Token Value Saved',
+      label: t('evolution.leaderboard.hero.tokenValueSaved'),
       prefix: '$',
       suffix: '',
       color: isDark ? '#34d399' : '#10b981',
@@ -195,12 +209,12 @@ export function LeaderboardHero({ data, isDark, onStatClick }: LeaderboardHeroPr
       Icon: Coins,
       trend: [],
       decimals: 0,
-      tooltip: `\u2248 ${Math.ceil(moneySavedVal / 50)} months of Claude for a solo dev`,
+      tooltip: t('evolution.leaderboard.hero.moneyTooltip', { months: Math.ceil(moneySavedVal / 50) }),
       sortKey: 'value',
     },
     {
       value: co2Val,
-      label: 'CO\u2082 Reduced',
+      label: t('evolution.leaderboard.hero.co2Reduced'),
       prefix: '',
       suffix: ' kg',
       color: isDark ? '#60a5fa' : '#3b82f6',
@@ -208,20 +222,20 @@ export function LeaderboardHero({ data, isDark, onStatClick }: LeaderboardHeroPr
       Icon: Leaf,
       trend: [],
       decimals: 1,
-      tooltip: `\u2248 ${Math.ceil(co2Val)} trees absorbing CO\u2082 for a day`,
+      tooltip: t('evolution.leaderboard.hero.co2Tooltip', { trees: Math.ceil(co2Val) }),
       sortKey: 'err',
     },
     {
       value: hoursVal,
-      label: 'Dev Hours Saved',
+      label: t('evolution.leaderboard.hero.devHoursSaved'),
       prefix: '',
-      suffix: ' hrs',
+      suffix: ` ${hourUnit}`,
       color: isDark ? '#c084fc' : '#a855f7',
       textColor: 'text-purple-400',
       Icon: Clock,
       trend: [],
       decimals: 0,
-      tooltip: `\u2248 ${Math.ceil(hoursVal / 8)} full workdays recovered`,
+      tooltip: t('evolution.leaderboard.hero.hoursTooltip', { days: Math.ceil(hoursVal / 8) }),
       sortKey: 'growth',
     },
   ];
@@ -305,15 +319,27 @@ export function LeaderboardHero({ data, isDark, onStatClick }: LeaderboardHeroPr
             transition: 'opacity 400ms ease-out 350ms',
           }}
         >
-          <span>{data.network.totalAgentsEvolving.toLocaleString()} agents evolving</span>
+          <span>
+            {t('evolution.leaderboard.hero.agentsEvolvingInline', {
+              count: data.network.totalAgentsEvolving.toLocaleString(),
+            })}
+          </span>
           <span className={isDark ? 'text-zinc-700' : 'text-zinc-300'}>&middot;</span>
-          <span>{data.network.totalGenesPublished.toLocaleString()} genes published</span>
+          <span>
+            {t('evolution.leaderboard.hero.genesPublishedInline', {
+              count: data.network.totalGenesPublished.toLocaleString(),
+            })}
+          </span>
           <span className={isDark ? 'text-zinc-700' : 'text-zinc-300'}>&middot;</span>
-          <span>{data.period.label}</span>
+          <span>{periodLabel}</span>
           {data.period.weeklyGrowth !== null && data.period.weeklyGrowth > 0 && (
             <>
               <span className={isDark ? 'text-zinc-700' : 'text-zinc-300'}>&middot;</span>
-              <span className="text-emerald-500">+{Math.round(data.period.weeklyGrowth * 100)}% this week</span>
+              <span className="text-emerald-500">
+                {t('evolution.leaderboard.hero.growthThisWeek', {
+                  value: Math.round(data.period.weeklyGrowth * 100),
+                })}
+              </span>
             </>
           )}
         </div>
