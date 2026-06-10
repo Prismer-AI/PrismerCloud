@@ -22,6 +22,7 @@ import prisma from '../db';
 import type { ApiResponse } from '../types/index';
 import { ServerEvents } from '../ws/events';
 import type { RoomManager } from '../ws/rooms';
+import type { SyncService } from '../services/sync.service';
 
 interface WorkspaceFileDTO {
   id: string;
@@ -92,9 +93,10 @@ function normalizePath(raw: string): string | null {
  * (e.g. unit tests that hit the router without a WS layer), publication is
  * silently skipped — the daemon's periodic pull still catches up.
  */
-export function createWorkspaceFilesRouter(rooms?: RoomManager) {
+export function createWorkspaceFilesRouter(rooms?: RoomManager, syncService?: SyncService) {
   const router = new Hono();
 
+  // eslint-disable-next-line custom/no-wildcard-sub-router-middleware -- mounted at /workspaces (nested /:wsId/files) in routes.ts; wildcard scoped to that prefix
   router.use('*', authMiddleware);
 
   // GET /:wsId/files/sync — registered before /:wsId/files/:fileId/* to avoid collision
@@ -254,26 +256,33 @@ export function createWorkspaceFilesRouter(rooms?: RoomManager) {
     // delta. The DB commit is the source of truth; publish failures (transport
     // closed, serialization bug) must not fail the request — the daemon will
     // catch up via the next periodic /files/sync poll.
+    const changedPayload = {
+      workspaceId: wsId,
+      path: normalized,
+      operation: existing ? ('update' as const) : ('create' as const),
+      assetId: asset.id,
+      contentHash: asset.contentHash,
+      version: result.version,
+    };
     try {
-      rooms?.sendToUser(
-        ws.ownerImUserId,
-        ServerEvents.workspaceFileChanged({
-          workspaceId: wsId,
-          path: normalized,
-          operation: existing ? 'update' : 'create',
-          assetId: asset.id,
-          contentHash: asset.contentHash,
-          version: result.version,
-        }),
-      );
+      rooms?.sendToUser(ws.ownerImUserId, ServerEvents.workspaceFileChanged(changedPayload));
     } catch (err) {
       console.error('[WorkspaceFiles] WS publish failed', {
         wsId,
         path: normalized,
-        operation: existing ? 'update' : 'create',
+        operation: changedPayload.operation,
         err: err instanceof Error ? err.message : String(err),
       });
     }
+    await syncService?.writeEvent('workspace_file.changed', changedPayload, null, ws.ownerImUserId).catch((err) => {
+      console.error('[WorkspaceFiles] sync publish failed', {
+        wsId,
+        path: normalized,
+        operation: changedPayload.operation,
+        err: err instanceof Error ? err.message : String(err),
+      });
+    });
+    c.header('X-Workspace-File-Sync', '1');
     return c.json<ApiResponse<WorkspaceFileDTO>>({ ok: true, data: toDTO(result) }, 201);
   });
 
@@ -302,24 +311,31 @@ export function createWorkspaceFilesRouter(rooms?: RoomManager) {
     // Wave-54 B6: emit the delete signal so the daemon can drop the row
     // from its mirror without waiting for the next periodic pull. Same
     // error-isolation discipline as the create/update branch above.
+    const changedPayload = {
+      workspaceId: wsId,
+      path: normalized,
+      operation: 'delete' as const,
+      version: existing.version,
+    };
     try {
-      rooms?.sendToUser(
-        ws.ownerImUserId,
-        ServerEvents.workspaceFileChanged({
-          workspaceId: wsId,
-          path: normalized,
-          operation: 'delete',
-          version: existing.version,
-        }),
-      );
+      rooms?.sendToUser(ws.ownerImUserId, ServerEvents.workspaceFileChanged(changedPayload));
     } catch (err) {
       console.error('[WorkspaceFiles] WS publish failed', {
         wsId,
         path: normalized,
-        operation: 'delete',
+        operation: changedPayload.operation,
         err: err instanceof Error ? err.message : String(err),
       });
     }
+    await syncService?.writeEvent('workspace_file.changed', changedPayload, null, ws.ownerImUserId).catch((err) => {
+      console.error('[WorkspaceFiles] sync publish failed', {
+        wsId,
+        path: normalized,
+        operation: changedPayload.operation,
+        err: err instanceof Error ? err.message : String(err),
+      });
+    });
+    c.header('X-Workspace-File-Sync', '1');
     return c.json<ApiResponse>({ ok: true });
   });
 
