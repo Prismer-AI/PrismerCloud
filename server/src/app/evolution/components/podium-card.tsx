@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { TrendingUp, TrendingDown, ExternalLink } from 'lucide-react';
+import { useI18n } from '@/contexts/i18n-context';
 import { glass, RANK_COLORS, type LeaderboardAgentEntry } from './helpers';
 import { Sparkline } from './sparkline';
 import { AwardBadge, AdoptGeneButton } from './leaderboard-row';
@@ -18,8 +19,6 @@ interface PodiumCardProps {
   staggerIndex?: number;
 }
 
-const RANK_LABELS: Record<1 | 2 | 3, string> = { 1: '1st', 2: '2nd', 3: '3rd' };
-
 const RANK_GLOW_COLORS: Record<1 | 2 | 3, { dark: string; light: string }> = {
   1: { dark: 'rgba(251,191,36,0.15)', light: 'rgba(251,191,36,0.10)' },
   2: { dark: 'rgba(212,212,216,0.12)', light: 'rgba(161,161,170,0.08)' },
@@ -27,6 +26,7 @@ const RANK_GLOW_COLORS: Record<1 | 2 | 3, { dark: string; light: string }> = {
 };
 
 export function PodiumCard({ entry, rank, isDark, staggerIndex = 0 }: PodiumCardProps) {
+  const { t } = useI18n();
   const router = useRouter();
   const [tilt, setTilt] = useState({ x: 0, y: 0 });
   const [isHovered, setIsHovered] = useState(false);
@@ -63,7 +63,9 @@ export function PodiumCard({ entry, rank, isDark, staggerIndex = 0 }: PodiumCard
         {entry.rankChange}
       </span>
     ) : entry.prevRank === null ? (
-      <span className="text-[10px] bg-amber-500/15 text-amber-400 px-1.5 py-0.5 rounded-full font-medium">NEW</span>
+      <span className="text-[10px] bg-amber-500/15 text-amber-400 px-1.5 py-0.5 rounded-full font-medium">
+        {t('evolution.leaderboard.newBadge')}
+      </span>
     ) : null;
 
   return (
@@ -109,7 +111,9 @@ export function PodiumCard({ entry, rank, isDark, staggerIndex = 0 }: PodiumCard
         >
           {/* Rank label + change */}
           <div className="flex items-center gap-2">
-            <span className={`text-xs font-semibold ${rankColor.text}`}>{RANK_LABELS[rank]}</span>
+            <span className={`text-xs font-semibold ${rankColor.text}`}>
+              {t(`evolution.leaderboard.rank.${rank}` as `evolution.${string}`)}
+            </span>
             {changeIcon}
           </div>
 
@@ -124,7 +128,9 @@ export function PodiumCard({ entry, rank, isDark, staggerIndex = 0 }: PodiumCard
           {/* Value */}
           <div className={`text-emerald-400 ${rank === 1 ? 'text-2xl' : 'text-xl'} font-bold tabular-nums`}>
             ${(entry.value?.moneySaved ?? 0).toFixed(0)}
-            <span className={`text-xs font-normal ml-1 ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>saved</span>
+            <span className={`text-xs font-normal ml-1 ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>
+              {t('evolution.leaderboard.saved')}
+            </span>
           </div>
 
           {/* ERR % */}
@@ -158,7 +164,7 @@ export function PodiumCard({ entry, rank, isDark, staggerIndex = 0 }: PodiumCard
               className="flex-1 flex items-center justify-center gap-1 py-1.5 rounded-md text-xs bg-white/[0.06] hover:bg-white/[0.12] text-zinc-300 transition-colors"
             >
               <ExternalLink className="w-3 h-3" />
-              Profile
+              {t('evolution.common.profile')}
             </Link>
             <div className="flex-1" onClick={(e) => e.stopPropagation()}>
               <AdoptGeneButton agentId={entry.agentId} isDark={isDark} />
