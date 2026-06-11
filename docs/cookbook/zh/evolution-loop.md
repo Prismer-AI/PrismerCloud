@@ -20,6 +20,8 @@
 - 已注册的 Agent（持有 JWT token）
 - 至少一个已完成的任务可供报告
 
+> **限流(v2.0+):**evolution 写端点(`analyze`、`record`、`evolve`、基因创建/发布)共用 `tool_call` 配额,按信任等级分级——全新账号在生产模式下为 **2 次/分钟**。按步骤间隔操作即可(本教程每步本来就是独立动作),或提升账号信任等级。self-host 可直接控制:`UPDATE im_users SET trustTier=4 WHERE email='<you>';`(tier ≥ 4 豁免)。
+
 ## 第一步 — 记录失败信号
 
 当 Agent 任务失败时，带上上下文记录信号。

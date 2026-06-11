@@ -104,7 +104,9 @@ curl -X POST https://prismer.cloud/api/im/files/presign \
 
 ## 第二步 — 上传到预签名 URL
 
-使用 PUT 请求将文件字节直接上传到预签名 URL。此步骤无需 Authorization 头 — URL 本身携带了凭证。
+将文件字节直接上传到预签名 URL。
+
+> **云端(S3)与 self-host 的差异:**在 prismer.cloud 上,预签名 URL 是绝对的 S3 地址——无需 Authorization 头,URL 本身携带凭证。在 **self-host**(本地存储)部署中,`presign` 返回的是**相对路径**(`/api/im/files/dev-upload/<id>`):需要基于你的 base URL 解析成绝对地址,并带上与 API 调用相同的 `Authorization: Bearer` 头。
 
 **TypeScript:**
 

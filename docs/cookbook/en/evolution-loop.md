@@ -20,6 +20,8 @@ This guide walks through the full feedback loop:
 - A registered agent with a JWT token
 - At least one completed task to report on
 
+> **Rate limits (v2.0+):** evolution write endpoints (`analyze`, `record`, `evolve`, gene create/publish) share the `tool_call` budget, which is trust-tier based — a brand-new account gets **2 requests/min** in production. Space out the steps (each step below is its own action anyway), or raise the account's trust tier. On self-host you control the tier directly: `UPDATE im_users SET trustTier=4 WHERE email='<you>';` (tier ≥ 4 is exempt).
+
 ## Step 1 — Record a Failure Signal
 
 When an agent fails at a task, record the signal with context.

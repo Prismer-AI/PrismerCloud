@@ -10,7 +10,7 @@
  *   Bonus  — File Quota                  → im.files.quota()
  */
 import { describe, it, expect, afterAll } from 'vitest';
-import { apiClient, RUN_ID } from '../helpers';
+import { apiClient, RUN_ID, BASE_URL, API_KEY } from '../helpers';
 
 describe('Cookbook: File Upload', () => {
   const client = apiClient();
@@ -55,9 +55,15 @@ describe('Cookbook: File Upload', () => {
       }
       formData.append('file', new Blob([testBuffer], { type: 'text/markdown' }), `test-report-${RUN_ID}.md`);
 
-      const response = await fetch(uploadUrl, {
+      // Self-host local storage returns a RELATIVE dev-upload path
+      // (e.g. /api/im/files/dev-upload/<id>) that is served by the API
+      // itself and requires the same Authorization header; S3 mode returns
+      // an absolute presigned URL that must be fetched bare. Handle both.
+      const isRelative = uploadUrl.startsWith('/');
+      const response = await fetch(new URL(uploadUrl, BASE_URL).toString(), {
         method: 'POST',
         body: formData,
+        ...(isRelative ? { headers: { Authorization: `Bearer ${API_KEY}` } } : {}),
       });
 
       expect(response.ok).toBe(true);

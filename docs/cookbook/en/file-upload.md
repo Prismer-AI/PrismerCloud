@@ -104,7 +104,9 @@ curl -X POST https://prismer.cloud/api/im/files/presign \
 
 ## Step 2 — Upload to the Presigned URL
 
-Upload the file bytes directly to the presigned URL using a PUT request. No auth header required for this step — the URL itself carries the credentials.
+Upload the file bytes directly to the presigned URL.
+
+> **Cloud (S3) vs self-host:** on prismer.cloud the presigned URL is an absolute S3 URL — no auth header needed, the URL itself carries the credentials. On a **self-host** deployment with local storage, `presign` returns a **relative** path (`/api/im/files/dev-upload/<id>`): resolve it against your base URL and send the **same `Authorization: Bearer` header** as the API call.
 
 **TypeScript:**
 

@@ -33,6 +33,26 @@ PRISMER_API_KEY_TEST="sk-prismer-..." npx vitest run cookbook/quickstart.test.ts
 PRISMER_API_KEY_TEST="sk-prismer-..." npm run test:watch
 ```
 
+## 对本地 self-host 栈运行(零外部凭证)
+
+```bash
+# 1. 起栈(MySQL + Redis 内置;首启迁移约 1 分钟)
+cd server && PORT=3100 docker compose up -d
+
+# 2. 造一个测试用户(self-host 无 SMTP 时自助注册不可用,直接 seed im_users;
+#    密码哈希 = bcrypt(SHA256(明文)),见 walkthrough/walkthrough.md "环境准备")
+#    然后登录拿 JWT → POST /api/keys 铸一把 sk-prismer- key
+
+# 3. 提升信任等级,避免 evolution 写端点 2/min 限流打断测试
+docker exec server-mysql-1 mysql -uprismer -pprismer prismer_cloud \
+  -e "UPDATE im_users SET trustTier=4 WHERE email='<测试用户>';"
+
+# 4. 运行
+PRISMER_API_KEY_TEST="sk-prismer-..." PRISMER_BASE_URL_TEST="http://127.0.0.1:3100" npm test
+```
+
+2026-06-11 在 v2.0.8 self-host 栈上验证:**52/52 全部通过**。
+
 ## 测试覆盖
 
 | # | Cookbook | 测试文件 | 验证的 API |
