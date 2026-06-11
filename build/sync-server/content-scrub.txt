@@ -4,7 +4,7 @@
 # after explicit human review). Lines starting with # are comments.
 
 # live API keys / secrets
-sk-prismer-[A-Za-z0-9]{20,}
+sk-prismer-[A-Za-z0-9_-]{20,}
 sk-ant-[A-Za-z0-9_-]{20,}
 sk_live_[A-Za-z0-9]{16,}
 pk_live_[A-Za-z0-9]{16,}
