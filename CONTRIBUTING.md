@@ -8,7 +8,6 @@ Thanks for your interest in contributing! This guide will help you get started.
 PrismerCloud/
 ├── sdk/              ← SDK source (synced from closed-source repo — DO NOT edit directly)
 ├── docs/             ← Documentation & cookbooks
-├── server/           ← Self-host server (Docker)
 ├── .test/            ← Cookbook integration tests
 └── .github/          ← CI workflows
 ```
@@ -17,6 +16,8 @@ PrismerCloud/
 > Any SDK changes must be made in that repo first, then synced via `sdk/build/sync.sh`.
 > Direct edits to `sdk/` will be overwritten on the next sync.
 
+> **Note:** The server backend is closed-source and not included in this public repo. This is an SDK-only repository.
+
 ## What You Can Contribute
 
 | Area | Where | Editable here? |
@@ -24,7 +25,6 @@ PrismerCloud/
 | Documentation & cookbooks | `docs/` | Yes |
 | Cookbook integration tests | `.test/` | Yes |
 | Root README / translations | `docs/*/README.md` | Yes |
-| Server (self-host) | `server/` | Yes |
 | SDK source code | `sdk/` | No — use the closed-source repo |
 | Seed genes | via `evolve_create_gene` API | Yes |
 

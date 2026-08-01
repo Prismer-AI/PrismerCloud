@@ -4,23 +4,20 @@ All notable changes to Prismer Cloud are documented here. For per-package change
 
 ## [2.0.8] — 2026-06-10
 
-Big catch-up sync from the closed-source tree (covers everything since 1.7.4, including the 1.9.x line). `server/` and `sdk/` are now both at v2.0.8.
+Big catch-up sync from the closed-source tree (covers everything since 1.7.4, including the 1.9.x line). `sdk/` is now at v2.0.8.
 
 ### Added
 - **Workspace surfaces**: task board (kanban), contacts panel, unified agent/profile creation flow (pro tiles, model + proxy-provider picker), workspace inspector with spreadsheet/PDF/PPTX/Word previews, session settings, mobile bottom-nav.
 - **Task → Agent orchestration**: full task lifecycle (create → dispatch → progress → done/failed/cancelled) over REST + WS, with SSE task events.
 - **Insights & admin**: insights cockpit, admin analytics (env-driven `ADMIN_EMAILS`/`INIT_ADMIN_EMAIL` RBAC), sandbox fleet view.
-- **Built-in skills**: `sdk/prismer-cloud/built-in-skills/` runtime resource pool — auto-installed to agents at registration, shipped in the Docker image.
+- **Built-in skills**: `sdk/prismer-cloud/built-in-skills/` runtime resource pool — auto-installed to agents at registration.
 - **Asset pipeline**: blurHash instant placeholders, preview derivatives (PDF first-page via poppler/mupdf/qpdf), multi-tier delivery.
-- **Self-host sync tooling**: `build/sync-server/` — 3-way merge sync from the closed-source repo with whitelist/blacklist/content-scrub gates and per-file `[PATCH NNN/TOTAL]` attribution; sync state recorded in `build/sync-server/LAST-SYNC.md`.
-- **Server tests**: vitest unit/component suites (`npm test` in `server/`) alongside the existing custom IM runners.
 
 ### Changed
 - SDK tree restructured: the independent 0.x `adapters` / `adapters-core` / `wire` / `sandbox-runtime` surfaces were retired upstream and removed from `sdk/prismer-cloud/`.
-- NextAuth callbacks, model routes and runtime presence are fully env-driven in self-host mode.
 
 ### Security
-- Redacted internal infrastructure credentials that had shipped in the v1.9.x sync (`server/scripts/`); the patterns are now part of the sync content-scrub gate so they cannot recur. Treat the previously published values as compromised.
+- Redacted internal infrastructure credentials that had shipped in the v1.9.x sync; the patterns are now part of the sync content-scrub gate so they cannot recur. Treat the previously published values as compromised.
 
 ## [1.7.4] — 2026-03-28
 
@@ -66,4 +63,3 @@ Big catch-up sync from the closed-source tree (covers everything since 1.7.4, in
 |---------|-----------|
 | TypeScript SDK | [`sdk/prismer-cloud/typescript/CHANGELOG.md`](sdk/prismer-cloud/typescript/CHANGELOG.md) |
 | All SDKs (aggregated) | [`sdk/prismer-cloud/CHANGELOG.md`](sdk/prismer-cloud/CHANGELOG.md) |
-| Server | [`server/CHANGELOG.md`](server/CHANGELOG.md) |

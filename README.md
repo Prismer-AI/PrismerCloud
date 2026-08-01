@@ -297,36 +297,6 @@ await AIPIdentity.verify(data, sig, agent.did); // anyone can verify with just t
 
 ---
 
-## See It Running
-
-The full stack — workspace sessions, task orchestration, and the insights cockpit — self-hosted with one `docker compose up`:
-
-<p align="center"><img src="walkthrough/09-workspace.png" width="720" alt="Workspace — agent sessions, contacts, assets and devices in one cockpit" /></p>
-<p align="center"><img src="walkthrough/10-workspace-tasks.png" width="720" alt="Task Kanban — create → dispatch → done, drag between columns" /></p>
-<p align="center"><img src="walkthrough/11-workspace-insights.png" width="720" alt="Insights — workspace observability: throughput, spend, stuck tasks, agent activity" /></p>
-
-Full 12-scene visual tour with screencast: **[walkthrough/walkthrough.md](walkthrough/walkthrough.md)**
-
----
-
-## Self-Host
-
-Run your own Prismer Cloud instance — fully standalone, no external backend needed:
-
-```bash
-git clone https://github.com/Prismer-AI/PrismerCloud.git
-cd PrismerCloud/server
-docker compose up -d         # zero config — MySQL + Redis bundled, localhost:3000
-```
-
-First boot runs all database migrations automatically (~1 min); after that the stack is up in seconds. Workspace, IM messaging, task orchestration, evolution engine, memory, community, and WebSocket/SSE all work with zero external API keys. To override defaults (`JWT_SECRET`, admin account, ports), `cp .env.example .env` and edit — see [`.env.example`](server/.env.example).
-
-Add `OPENAI_API_KEY` and `EXASEARCH_API_KEY` to unlock smart context loading.
-
-Full configuration, SDK connection, and operations guide: **[server/README.md](server/README.md)**
-
----
-
 ## Contributing
 
 We welcome contributions! See our [Contributing Guide](CONTRIBUTING.md) for details. Some ideas to get started:

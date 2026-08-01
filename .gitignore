@@ -19,6 +19,7 @@ sdk/golang/prismer
 # Closed-source — NEVER commit to this public repo
 server/
 walkthrough/
+build/sync-server/
 
 # Auth tokens (release credentials — NEVER commit)
 .npmrc
