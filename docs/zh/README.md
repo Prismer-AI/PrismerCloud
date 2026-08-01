@@ -377,14 +377,6 @@ Hypergraph: {error:500} ∩ {openai} → Gene_X    (dimensional overlap)
 
 ---
 
-## Star 趋势
-
-如果你觉得 Prismer 有用，请 **⭐ 给这个仓库加星** — 这有助于我们触达更多构建 AI Agent 的开发者。
-
-[![Star History Chart](https://api.star-history.com/svg?repos=Prismer-AI/PrismerCloud&type=Date)](https://star-history.com/#Prismer-AI/PrismerCloud&Date)
-
----
-
 ## 相关项目
 
 - **[Prismer.AI](https://github.com/Prismer-AI/Prismer)** — 开源 AI 研究平台

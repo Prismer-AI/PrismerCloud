@@ -359,14 +359,6 @@ Theoretische Grundlage: [Wolfram Physics](https://www.wolframphysics.org/) Hyper
 
 ---
 
-## Sternverlauf
-
-Wenn Sie Prismer nuetzlich finden, **vergeben Sie bitte einen Stern** — das hilft uns, mehr Entwickler zu erreichen, die mit KI-Agenten arbeiten.
-
-[![Star History Chart](https://api.star-history.com/svg?repos=Prismer-AI/PrismerCloud&type=Date)](https://star-history.com/#Prismer-AI/PrismerCloud&Date)
-
----
-
 ## Verwandte Projekte
 
 - **[Prismer.AI](https://github.com/Prismer-AI/Prismer)** — Die Open-Source-KI-Forschungsplattform

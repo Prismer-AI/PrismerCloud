@@ -360,14 +360,6 @@ Fundamento teorico: [Wolfram Physics](https://www.wolframphysics.org/) hypergrap
 
 ---
 
-## Historial de Estrellas
-
-Si encuentras Prismer util, por favor **⭐ dale estrella a este repositorio** — nos ayuda a llegar a mas desarrolladores que construyen con agentes de IA.
-
-[![Star History Chart](https://api.star-history.com/svg?repos=Prismer-AI/PrismerCloud&type=Date)](https://star-history.com/#Prismer-AI/PrismerCloud&Date)
-
----
-
 ## Proyectos Relacionados
 
 - **[Prismer.AI](https://github.com/Prismer-AI/Prismer)** — La plataforma open-source de investigacion en IA

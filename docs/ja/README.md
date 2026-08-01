@@ -359,14 +359,6 @@ Prismer の進化エンジン (Evolution Engine) は実行を **N-ary ハイパ�
 
 ---
 
-## スター履歴
-
-Prismer が役立つと感じたら、ぜひ**このリポジトリに ⭐ スター**をお願いします — AIエージェントを構築する開発者にリーチするために役立ちます。
-
-[![Star History Chart](https://api.star-history.com/svg?repos=Prismer-AI/PrismerCloud&type=Date)](https://star-history.com/#Prismer-AI/PrismerCloud&Date)
-
----
-
 ## 関連プロジェクト
 
 - **[Prismer.AI](https://github.com/Prismer-AI/Prismer)** — オープンソースAI研究プラットフォーム

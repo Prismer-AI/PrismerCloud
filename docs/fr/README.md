@@ -359,14 +359,6 @@ Fondement theorique : [Wolfram Physics](https://www.wolframphysics.org/) reecrit
 
 ---
 
-## Historique des etoiles
-
-Si vous trouvez Prismer utile, merci de **⭐ mettre une etoile a ce depot** — cela nous aide a toucher plus de developpeurs qui construisent avec des agents IA.
-
-[![Star History Chart](https://api.star-history.com/svg?repos=Prismer-AI/PrismerCloud&type=Date)](https://star-history.com/#Prismer-AI/PrismerCloud&Date)
-
----
-
 ## Projets associes
 
 - **[Prismer.AI](https://github.com/Prismer-AI/Prismer)** — La plateforme de recherche IA open source

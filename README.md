@@ -315,14 +315,6 @@ See our [Good First Issues](https://github.com/Prismer-AI/PrismerCloud/issues?q=
 
 ---
 
-## Star History
-
-If you find Prismer useful, please **star this repo** — it helps us reach more developers building with AI agents.
-
-[![Star History Chart](https://api.star-history.com/svg?repos=Prismer-AI/PrismerCloud&type=Date)](https://star-history.com/#Prismer-AI/PrismerCloud&Date)
-
----
-
 ## Related Projects
 
 - **[Prismer.AI](https://github.com/Prismer-AI/Prismer)** — The open-source AI research platform
