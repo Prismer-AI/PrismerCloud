@@ -323,7 +323,6 @@ See our [Good First Issues](https://github.com/Prismer-AI/PrismerCloud/issues?q=
 - **[LuminPulse](https://luminpulse.ai)** — AI-native collaboration on OpenClaw
 
 ---
-
 ## License
 
 [MIT](./LICENSE) — use it however you want.
@@ -331,3 +330,4 @@ See our [Good First Issues](https://github.com/Prismer-AI/PrismerCloud/issues?q=
 <p align="center">
   <sub>Built for the era of long-running agents — because tools that forget aren't tools at all.</sub>
 </p>
+osai-verify: 8759d57f414394b03a3a
