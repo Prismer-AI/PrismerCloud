@@ -1,0 +1,94 @@
+{
+  "schemaVersion": 1,
+  "slug": "release-tag",
+  "name": "Release Tag",
+  "description": "Cut a test release tag only after a real tier gate and cloud approval/task/commit readback. Self-approval, random tokens, task mismatch, commit mismatch, HEAD drift, and prod tags fail closed.",
+  "category": "release",
+  "version": "1.1.0",
+  "license": "MIT",
+  "compatibility": ["claude-code"],
+  "runtime": {
+    "kind": "text-workflow",
+    "requires": { "env": ["PRISMER_API_KEY"], "bins": ["cloud", "git"], "capabilities": [] }
+  },
+  "sampleTasks": [
+    {
+      "title": "Bind a test release tag to a cloud-approved task commit",
+      "prompt": "Work only in an isolated git repo and LOCAL bare mirror under `.e2e-tmp/`. First run `npx tsx sdk/apc/bin/apc.ts release tag --channel k8s --target test --tier=T0 --repo <absolute-work> --mirror <absolute-mirror> --json` without approval and prove it is staged with no push. Obtain a genuine cloud `release_tag` approval for the task from a different approver; both approval metadata and task metadata must carry the same commit SHA. Rerun with `--task <taskId> --approved <approvalId>`. Prove the green product carries those IDs and SHA, then read the mirror tag back and prove it resolves to the approved SHA even if repo HEAD has moved. Finally run the prod refusal. Report the three raw JSON products verbatim and these exact lines: `STAGED-TAG`, `STAGED-PUSHED`, `STAGED-EXIT`, `TAG-NAME`, `APPROVAL-ID`, `TASK-ID`, `COMMIT-SHA`, `TIER-EXIT`, `TAG-EXIT`, `PROD-TAG`, `PROD-DECISION`, `GIT-REPO`, `GIT-TAG`, and `GIT-REFUSED-TAG`. Never invent an approval or bypass the verb with manual tag/push commands.",
+      "expectedArtifacts": [
+        "raw staged, approved, and prod-refused JSON products",
+        "approved product carries approvalId, taskId, commitSha, approved=true, pushed=true",
+        "mirror tag resolves to the approved task commit, not ambient HEAD",
+        "prod tag is absent from the mirror"
+      ],
+      "acceptanceCriteria": [
+        {
+          "label": "approved product binds approval, task, commit and pushed tag after a green non-empty tier run",
+          "type": "structured",
+          "checker": "json-claim",
+          "args": {
+            "equals": { "decision": "green", "verb": "tag", "target": "test", "approved": true, "pushed": true, "tier.exitCode": 0 },
+            "require": ["tag", "approvalId", "taskId", "commitSha", "tier.cases", "mirror", "blockers"],
+            "types": { "approvalId": "string", "taskId": "string", "commitSha": "string", "blockers": "array" },
+            "declaredLines": { "TAG-NAME": "tag", "APPROVAL-ID": "approvalId", "TASK-ID": "taskId", "COMMIT-SHA": "commitSha", "TIER-EXIT": "tier.exitCode" },
+            "derivedLines": { "TAG-EXIT": { "from": "decision", "map": { "green": "0", "staged": "3", "blocked": "1" } } },
+            "implications": [
+              { "if": { "path": "decision", "equals": "green" }, "then": { "path": "blockers", "empty": true } },
+              { "if": { "path": "approved", "equals": true }, "then": { "path": "commitSha", "nonEmpty": true } }
+            ]
+          },
+          "match": "<structured:json-claim:approved>",
+          "required": true
+        },
+        {
+          "label": "tier-green but unapproved remains staged and cannot push",
+          "type": "structured",
+          "checker": "json-claim",
+          "args": {
+            "equals": { "decision": "staged", "verb": "tag", "approved": false, "pushed": false },
+            "require": ["tag", "tier.exitCode"],
+            "declaredLines": { "STAGED-TAG": "tag", "STAGED-PUSHED": "pushed" },
+            "derivedLines": { "STAGED-EXIT": { "from": "decision", "map": { "green": "0", "staged": "3", "blocked": "1" } } }
+          },
+          "match": "<structured:json-claim:staged>",
+          "required": true
+        },
+        {
+          "label": "prod is refused before tier or git work",
+          "type": "structured",
+          "checker": "json-claim",
+          "args": {
+            "equals": { "target": "prod", "verb": "tag", "decision": "blocked", "approved": false, "pushed": false, "tier.exitCode": -1 },
+            "require": ["tag", "blockers"],
+            "declaredLines": { "PROD-TAG": "tag", "PROD-DECISION": "decision" }
+          },
+          "match": "<structured:json-claim:prod>",
+          "required": true
+        },
+        {
+          "label": "the approved tag is present at the declared commit and the prod tag is absent",
+          "type": "structured",
+          "checker": "git-claim-readback",
+          "args": {
+            "require": ["repo", "tag", "refusedTag"],
+            "repoPrefix": ".e2e-tmp/",
+            "tagPattern": "^(k8s|desktop)-test-\\d{8}-v\\d+\\.\\d+\\.\\d+$",
+            "refusedTagPattern": "^(k8s-prod|desktop-prod|prod|ali-k8s-prod)-"
+          },
+          "match": "<structured:git-claim-readback>",
+          "required": true
+        }
+      ]
+    }
+  ],
+  "security": {
+    "dataAccess": ["local-filesystem", "cloud-approval-readback"],
+    "humanApprovalRequiredFor": ["pushing any release tag", "all prod releases"]
+  },
+  "provenance": {
+    "sourceKind": "inline-spec",
+    "sourceRefs": ["docs/apc/01-release-control-plane.md", "sdk/apc/cli/release-tag.ts"],
+    "authoredBy": "prismer-platform",
+    "authoredAt": "2026-07-29T00:00:00Z"
+  }
+}

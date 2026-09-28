@@ -1,69 +1,41 @@
 # Agent Identity Protocol (AIP)
 
 <p align="center">
-  <a href="./README.md"><img alt="English" src="https://img.shields.io/badge/English-d9d9d9"></a>
-  <a href="./docs/zh/README.md"><img alt="简体中文" src="https://img.shields.io/badge/简体中文-d9d9d9"></a>
-  <a href="./docs/de/README.md"><img alt="Deutsch" src="https://img.shields.io/badge/Deutsch-d9d9d9"></a>
-  <a href="./docs/fr/README.md"><img alt="Français" src="https://img.shields.io/badge/Français-d9d9d9"></a>
-  <a href="./docs/es/README.md"><img alt="Español" src="https://img.shields.io/badge/Español-d9d9d9"></a>
-  <a href="./docs/ja/README.md"><img alt="日本語" src="https://img.shields.io/badge/日本語-d9d9d9"></a>
+  <a href="./README.md">English</a> ·
+  <a href="./docs/zh/README.md">简体中文</a> ·
+  <a href="./docs/de/README.md">Deutsch</a> ·
+  <a href="./docs/fr/README.md">Français</a> ·
+  <a href="./docs/es/README.md">Español</a> ·
+  <a href="./docs/ja/README.md">日本語</a>
 </p>
 
-**Self-sovereign identity for AI Agents — no platform, no permission, no lock-in.**
+AIP is an open identity and trust protocol for agents. It is independently usable and independently versioned: no Prismer Cloud account or Runtime process is required to create a key, derive a `did:key`, sign bytes, or verify a signed artifact.
 
-## The Problem
+## Protocol scope
 
-In 2026, AI Agents have no identity of their own. An agent's "identity" is whatever API key or OAuth token a platform gave it. Switch platforms? Identity gone. Reputation gone. Authorization history gone.
+The current implementation provides:
 
-| Problem | Impact |
-|---------|--------|
-| **Agent impersonation** | No cryptographic way to prove "I am who I claim to be" |
-| **Platform lock-in** | All reputation and history locked inside one platform's database |
-| **Cross-platform distrust** | Agent moving from LangChain to CrewAI starts from zero |
-| **SubAgent black hole** | Sub-agents created at runtime have no traceable identity |
-| **Unverifiable delegation** | No proof that a human actually authorized this agent |
+- Ed25519 identities and `did:key` encoding/decoding;
+- local DID Document derivation for `did:key`;
+- byte signatures and verification;
+- directly signed, scoped, time-bounded delegations and ephemeral delegations;
+- signed Verifiable Credential and challenge-bound Presentation structures;
+- shared TypeScript/Python conformance vectors for positive and negative cases.
 
-**For human users, this was solved in 2020 with DIDs and Verifiable Credentials. For agents, we're still in 1995.**
+AIP does **not** own agent execution, provider lifecycle, skill delivery, memory extraction, Cloud task schemas, or their transport. Runtime host-declare, task, and result messages may carry AIP signatures in the future, but their wire schemas remain Runtime/Cloud contracts.
 
-## The Solution
+The 2.2.x SDK does not claim `did:web` resolution, zero-knowledge proofs, automatic multi-hop delegation-chain validation, or standalone StatusList processing. Prismer Cloud has credential and revocation adoption points, but those server data flows are not silently presented as features of the standalone AIP SDK.
 
-AIP gives every agent a **cryptographic identity that exists independently of any platform**:
+## Supported implementations
 
-```
-Private Key (random, Ed25519)
-    ↓ elliptic curve (one-way)
-Public Key
-    ↓ Multicodec + Base58btc
-DID (did:key:z6Mk...)  ← globally unique, self-generated, no registration
-```
+| Language   | Package            | Status                           |
+| ---------- | ------------------ | -------------------------------- |
+| TypeScript | `@prismer/aip-sdk` | Supported and conformance-tested |
+| Python     | `prismer-aip`      | Supported and conformance-tested |
 
-**Core principle: identity is generated, not assigned.** An agent creates its own DID in milliseconds, offline, with no API call. Any other agent or platform can verify its signatures using only the DID string — no need to query the issuing platform.
+Go and Rust implementations are not part of the active 2.2.5 support surface.
 
-## Four Layers
-
-```
-Layer 4: Verifiable Credentials (VC)      "What have I accomplished?"
-         ├── Platform issues TaskCompletion VC to agent
-         ├── Agent presents VC to new platform (zero-knowledge proof of capability)
-         └── Bitstring revocation registry (W3C StatusList2021)
-
-Layer 3: Delegation                        "Who authorized me?"
-         ├── Human → Agent delegation (scoped, time-limited, signed)
-         ├── Agent → SubAgent ephemeral delegation (seconds-to-minutes TTL)
-         └── Chain verification: SubAgent → Agent → Human (cryptographic proof)
-
-Layer 2: DID Document                      "How to reach me?"
-         ├── Public keys, service endpoints, capabilities
-         └── Self-signed, resolvable via did:key (local) or did:web (remote)
-
-Layer 1: Identity                          "Who am I?"
-         ├── Ed25519 keypair → did:key
-         └── Deterministic derivation from API key (no storage needed)
-```
-
-**No blockchain. No gas fees. No consensus.** Identity verification is pure cryptography — Ed25519 signs at 15,000 ops/sec on a single core.
-
-## Quick Start
+## TypeScript quick start
 
 ```bash
 npm install @prismer/aip-sdk @noble/curves
@@ -72,135 +44,111 @@ npm install @prismer/aip-sdk @noble/curves
 ```typescript
 import { AIPIdentity } from '@prismer/aip-sdk';
 
-// Create a new agent identity (instant, offline, no API call)
+// New identities use a random keypair. Persist the private key securely.
 const agent = await AIPIdentity.create();
+const message = new TextEncoder().encode('hello AIP');
+const signature = await agent.sign(message);
+
 console.log(agent.did); // did:key:z6Mk...
-
-// Sign a message — any platform can verify with just the DID
-const sig = await agent.sign(new TextEncoder().encode('hello'));
-const valid = await AIPIdentity.verify(data, sig, agent.did); // true
-
-// Deterministic: same API key always produces same DID (no storage needed)
-const agent2 = await AIPIdentity.fromApiKey('sk-prismer-...');
+console.log(await AIPIdentity.verify(message, signature, agent.did)); // true
 ```
 
-### Delegation (Human authorizes Agent)
+`AIPIdentity.fromApiKey()` remains available only to preserve existing deterministic Prismer Cloud DIDs during the 2.x line. It is deprecated for new identities; use `create()` and persist the generated private key.
+
+## Python quick start
+
+```bash
+pip install prismer-aip
+```
+
+```python
+from aip import AIPIdentity
+
+agent = AIPIdentity.create()
+message = b"hello AIP"
+signature = agent.sign(message)
+
+assert AIPIdentity.verify(message, signature, agent.did)
+```
+
+## Delegation
 
 ```typescript
-import { buildDelegation, verifyDelegation } from '@prismer/aip-sdk';
+import { AIPIdentity, buildDelegation, verifyDelegation } from '@prismer/aip-sdk';
 
-const human = await AIPIdentity.create();
-const agent = await AIPIdentity.create();
-
+const issuer = await AIPIdentity.create();
+const worker = await AIPIdentity.create();
 const delegation = await buildDelegation({
-  issuer: human,
-  subjectDid: agent.did,
-  scope: ['messaging:send', 'task:execute'],
-  validDays: 90,
+  issuer,
+  subjectDid: worker.did,
+  scope: ['task:read', 'task:write'],
+  validDays: 7,
 });
 
-await verifyDelegation(delegation); // true — cryptographic proof of authorization
+console.log(await verifyDelegation(delegation)); // true
 ```
 
-### Credentials (Portable reputation)
+This verifies one signed delegation artifact and its time bounds. Applications that accept a chain remain responsible for chain construction, authority semantics, and policy evaluation.
+
+## Credentials and presentations
 
 ```typescript
 import { buildCredential, buildPresentation, verifyPresentation } from '@prismer/aip-sdk';
 
-// Platform issues a credential to agent
-const vc = await buildCredential({
-  issuer: platform,
-  holderDid: agent.did,
-  type: 'TaskCompletionCredential',
-  claims: { 'aip:score': 0.95, 'aip:tasksCompleted': 47 },
+const credential = await buildCredential({
+  issuer,
+  holderDid: worker.did,
+  type: 'AgentCapabilityCredential',
+  claims: { 'aip:capability': 'code-review' },
+});
+const presentation = await buildPresentation({
+  holder: worker,
+  credentials: [credential],
+  challenge: 'verifier-nonce',
 });
 
-// Agent presents credential to a NEW platform (no need to call original platform)
-const vp = await buildPresentation({
-  holder: agent,
-  credentials: [vc],
-  challenge: 'nonce-from-verifier',
-});
-
-await verifyPresentation(vp, 'nonce-from-verifier'); // true
+console.log(await verifyPresentation(presentation, 'verifier-nonce')); // true
 ```
 
 ## CLI
 
-All operations available from the command line — no code needed:
+The npm package publishes the canonical `aip` binary:
 
 ```bash
-# Identity
-npx @prismer/aip-sdk identity create              # Generate new Ed25519 identity
-npx @prismer/aip-sdk identity from-key <apiKey>   # Derive DID from API key (deterministic)
-npx @prismer/aip-sdk identity show                # Show current identity (requires AIP_PRIVATE_KEY env)
-
-# Resolve
-npx @prismer/aip-sdk resolve <did>                # Resolve did:key → DID Document
-
-# Sign & Verify
-npx @prismer/aip-sdk sign <file>                  # Sign a file (requires AIP_PRIVATE_KEY env)
-npx @prismer/aip-sdk verify <file> --sig <b64> --did <did>   # Verify signature
-
-# Delegation
-npx @prismer/aip-sdk delegate --to <did> --scope read,write --days 90   # Issue delegation
-npx @prismer/aip-sdk delegate verify <delegation.json>                   # Verify delegation chain
-
-# Credentials
-npx @prismer/aip-sdk credential issue --to <did> --type TaskCompletion --claims '{"score":95}'
-npx @prismer/aip-sdk credential verify <vc.json>
-
-# Inspect any AIP artifact
-npx @prismer/aip-sdk inspect <artifact.json>      # Auto-detects VC, VP, Delegation, or Ephemeral
+npx --package @prismer/aip-sdk aip identity create
+npx --package @prismer/aip-sdk aip resolve did:key:z6Mk...
+npx --package @prismer/aip-sdk aip sign ./message.txt
+npx --package @prismer/aip-sdk aip verify ./message.txt --sig <base64> --did <did:key>
 ```
 
-**Environment variables:**
+Signing, delegation, and credential issuance use `AIP_PRIVATE_KEY` (a Base64 Ed25519 seed). `identity from-key` / `AIP_API_KEY` is a deprecated compatibility path.
 
-| Variable | Purpose |
-|----------|---------|
-| `AIP_PRIVATE_KEY` | Base64 Ed25519 private key (for sign, delegate, credential issue) |
-| `AIP_API_KEY` | API key for deterministic identity derivation |
+## Conformance
 
----
+The two implementations consume the same fixtures in `fixtures/`:
 
-## Multi-Language
+```bash
+(cd typescript && npm test)
+(cd python && python -m pytest tests)
+node scripts/verify-conformance-negative.mjs
+```
 
-AIP is interoperable across all SDKs — a signature created in TypeScript can be verified in Python:
+Set `AIP_FIXTURES_DIR` to run either suite against an alternate vector directory. The negative-control script tampers with a copied valid signature and requires both suites to fail on that vector.
 
-| Language | Package | Install |
-|----------|---------|---------|
-| TypeScript | `@prismer/aip-sdk` | `npm install @prismer/aip-sdk` |
-| Python | `prismer` | `from prismer.aip import AIPIdentity` |
-| Go | `prismer-sdk-go` | `prismer.NewAIPIdentity()` |
-| Rust | `prismer-sdk` | `prismer::AIPIdentity::create()` |
+## Prismer Cloud adoption
 
-## Design Principles
+Prismer Cloud currently uses AIP concepts and artifacts at these boundaries:
 
-1. **Agent is a first-class citizen** — not an appendage of a human user or a platform's API caller
-2. **Self-sovereign** — identity exists without any platform's permission; platforms are service providers, not identity providers
-3. **Decentralized verification** — verify a signature with just the DID string, no server call needed
-4. **Human oversight preserved** — delegation chains always trace back to a human principal
-5. **Framework-agnostic** — works with LangChain, CrewAI, Claude Code, OpenCode, or any agent framework
+- identity-key registration and a user's primary DID;
+- DID-bound message signatures;
+- credential storage/presentation endpoints;
+- credential/DID revocation data and status endpoints.
 
-## Standards
+These are adoption points, not ownership: AIP remains a public protocol, while Cloud auth, database models, endpoint authorization, Runtime lifecycle, and task/result schemas stay in their respective products.
 
-AIP builds on established W3C standards:
+## Standards and encoding
 
-- [W3C Decentralized Identifiers (DID) v1.0](https://www.w3.org/TR/did-core/)
-- [W3C Verifiable Credentials Data Model 2.0](https://www.w3.org/TR/vc-data-model-2.0/)
-- [Ed25519 (RFC 8032)](https://tools.ietf.org/html/rfc8032) — signing and verification
-- [Multicodec](https://github.com/multiformats/multicodec) + [Base58btc](https://tools.ietf.org/id/draft-msporny-base58-03.html) — DID encoding
-
-## Prismer Cloud Integration
-
-When used with Prismer Cloud, AIP enables:
-
-- **Auto-DID on registration** — `prismer setup` generates a DID alongside your API key
-- **Signed messages** — every IM message carries a `senderDid` signature
-- **Evolution credentials** — gene success records become portable VCs
-- **Cross-agent trust** — delegation chains enable verified multi-agent collaboration
-
-But AIP works **standalone** — you don't need Prismer Cloud to use agent identity.
+AIP builds on Ed25519, the `did:key` Ed25519 multicodec prefix, Base58btc, W3C DID Core concepts, and W3C Verifiable Credentials Data Model structures. Signed JSON artifacts are verified against their exact compact protocol JSON field order; producers must preserve the encoded artifact rather than reconstructing an equivalent object with arbitrary key reordering.
 
 ## License
 

@@ -37,3 +37,9 @@ build/sync-server/
 # Local agent runtime / settings (not project state)
 .gstack/
 .claude/
+
+/sdk/build/artifacts/
+
+/sdk/aip/python/build/
+
+/sdk/cloud/python/build/

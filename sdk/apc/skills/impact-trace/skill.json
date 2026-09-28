@@ -1,0 +1,104 @@
+{
+  "schemaVersion": 1,
+  "slug": "impact-trace",
+  "name": "Impact Trace",
+  "description": "Given a change point (function/type/endpoint/schema), enumerate its real blast radius — direct callers, contract consumers, persistence writers, dual Prisma schemas, daemon-SDK mirrors, skill/role references — with a grep-cited evidence row per line, and derive the regression test scope. Every impact-table row must trace to a real search hit, never a self-asserted claim.",
+  "category": "analysis",
+  "version": "1.1.0",
+  "license": "MIT",
+  "compatibility": ["claude-code", "prismer-sdk"],
+  "runtime": {
+    "kind": "text-workflow",
+    "requires": {
+      "env": [],
+      "bins": ["rg"],
+      "capabilities": []
+    }
+  },
+  "sampleTasks": [
+    {
+      "title": "Trace the real blast radius of matchAcceptanceCriteria and derive the regression scope",
+      "prompt": "Run the impact-trace skill on this REAL change point in the current repo. CHANGE POINT: the exported function `matchAcceptanceCriteria` (defined in `sdk/prismer/src/bundle/index.ts`). Imagine its signature is about to change. Produce its real blast radius — every impact-table row MUST trace to a real search hit (path:line), never a self-asserted claim. Run these steps from the repo root and report what you actually observed: (1) `rg -n matchAcceptanceCriteria --glob '*.ts'` — this is your evidence set; every impact-table row must cite one of these path:line hits. (2) `rg -c matchAcceptanceCriteria --glob '*.ts'` — reconcile the hit count against your table (no missed real caller, no fabricated one). CAREFUL: `rg -c` prints `path:COUNT`, which is NOT a `path:line` citation. Report those counts as `count=N` (e.g. `src/foo.ts count=12`) or paste the raw `rg -c` output with each entry alone on its own line — never inline a bare `path:<count>` inside a sentence or a table cell, because every `path:<number>` you write in a claim position is re-read off disk as a LINE NUMBER. (3) Walk ALL SIX dimensions by name and answer each. (4) Derive the regression test scope from the layers your hits fall in.\n\n--- YOUR REPORT MUST USE THIS MACHINE-CHECKED OUTPUT CONTRACT (it is re-verified against the filesystem, so an invented path:line is caught):\n\nLine 1 — the change point you traced, exactly this shape:\n`CHANGE-POINT: matchAcceptanceCriteria @ sdk/prismer/src/bundle/index.ts`\n\nThen the impact table — a markdown table, one row per REAL rg hit, the first cell being the `path:line` of that hit (the LINE NUMBER MUST BE THE REAL ONE from your rg output; the cited line is read off disk and must actually contain the symbol):\n```\n| path:line | dimension | contract | risk | regression |\n| --- | --- | --- | --- | --- |\n| sdk/prismer/src/bundle/index.ts:451 | direct-callers | ... | ... | daemon vitest |\n```\n\nThen the six dimensions, EACH on its own line with its exact key. Answer with a real `path:line` citation, or `N/A — <reason ≥20 chars>` when the dimension genuinely does not apply (a dimension may NEVER be silently dropped — the checker looks for the KEYED LINE, so the word appearing elsewhere in your report does not count):\n```\n- [1] direct-callers: <path:line>\n- [2] contract-consumers: <path:line>\n- [3] persistence-writers: <path:line> | N/A — <why>\n- [4] dual-prisma: <path:line> | N/A — <why>\n- [5] daemon-sdk-mirror: <path:line>\n- [6] skill-role-references: <path:line> | N/A — <why>\n```\n\nThen the derived regression scope (which tiers / which files must re-run, and why — from the layers your verified hits fall in).\n\nHARD RULE: every `path:line` anywhere in your report is re-read off disk. A path that does not exist, a line number past end-of-file, or a blank line makes the report FAIL. Do not guess line numbers — copy them from your real rg output.\n\nHARD RULE (BREADTH): the hits you cite must come from at least 3 DIFFERENT files, and no single `path:line` may be the evidence for more than 2 of the six dimensions. Walk the whole rg output — repeating one real hit under every row and every dimension is a one-hit report, not a blast radius, and it FAILS. Citations MUST be repo-root-relative (`sdk/prismer/src/bundle/index.ts:451`, never an abbreviated `runtime/src/bundle/index.ts:451` and never an absolute path).",
+      "expectedArtifacts": [
+        "a `CHANGE-POINT: <symbol> @ <path>` declaration naming the change point actually traced",
+        "impact table: one row per affected site with {path:line, dimension, contract, risk, regression}, each path:line a real rg hit that resolves on disk to a line containing the symbol",
+        "the six keyed dimension lines, each answered with a verifiable citation or an explicit `N/A — reason` (dual-prisma never silently dropped; daemon-sdk-mirror surfaced)",
+        "derived regression test scope (which tiers / which files)"
+      ],
+      "acceptanceCriteria": [
+        {
+          "label": "impact rows cite REAL grep evidence — every path:line re-verified on disk, ≥3 landing on a line that actually contains the traced symbol, spread over ≥3 distinct files, anchored on this task's change point",
+          "type": "structured",
+          "checker": "cited-evidence",
+          "args": {
+            "minRows": 3,
+            "minAnchoredRows": 3,
+            "minDistinctAnchorFiles": 3,
+            "anchorMinLength": 4,
+            "expectedChangePoint": {
+              "symbol": "matchAcceptanceCriteria",
+              "path": "sdk/prismer/src/bundle/index.ts"
+            }
+          },
+          "match": "<structured:cited-evidence>",
+          "required": true
+        },
+        {
+          "label": "all six dimensions answered on their own keyed line — citation verified on disk and not shared by more than 2 dimensions, or explicit N/A with a real reason (dual-prisma can never be silently dropped)",
+          "type": "structured",
+          "checker": "dimension-coverage",
+          "args": {
+            "dimensions": [
+              "direct-callers",
+              "contract-consumers",
+              "persistence-writers",
+              "dual-prisma",
+              "daemon-sdk-mirror",
+              "skill-role-references"
+            ],
+            "minReasonChars": 20,
+            "distinctCitations": { "maxDimensionsPerCitation": 2 }
+          },
+          "match": "<structured:dimension-coverage>",
+          "required": true
+        },
+        {
+          "label": "enumerates callers / blast radius (real caller set, not a vague summary)",
+          "match": "(\\b(caller|call[- ]?site|blast[- ]?radius|impact|affected|import)\\b|调用方|调用点|消费者|影响面|影响)",
+          "type": "regex",
+          "flags": "is",
+          "required": true
+        },
+        {
+          "label": "daemon-SDK mirror dimension surfaced",
+          "match": "\\b(daemon|runtime|sdk|mirror|镜像)\\b",
+          "type": "regex",
+          "flags": "is",
+          "required": true
+        },
+        {
+          "label": "derived regression test scope from affected surfaces",
+          "match": "(regression|回归测试|回归|tier|层级|T[0-4]\\b|test\\s*scope|测试范围|测试层|测试类型|vitest|test\\s*file|\\.test\\.|重跑|重新(运行|跑)|which\\s+(test|tier))",
+          "type": "regex",
+          "flags": "is",
+          "required": true
+        }
+      ]
+    }
+  ],
+  "security": {
+    "dataAccess": ["local-filesystem"],
+    "humanApprovalRequiredFor": []
+  },
+  "provenance": {
+    "sourceKind": "inline-spec",
+    "sourceRefs": [
+      "docs/apc/12-skill-acceptance-tasks.md",
+      "docs/apc/05-devchain-gaps-and-skills.md",
+      "sdk/cloud/src/commands/code-grep.ts",
+      "sdk/prismer/src/bundle/structured-criteria.ts"
+    ],
+    "authoredBy": "prismer-platform",
+    "authoredAt": "2026-07-24T00:00:00Z"
+  }
+}

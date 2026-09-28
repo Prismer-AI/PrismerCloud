@@ -1,0 +1,74 @@
+{
+  "schemaVersion": 1,
+  "vectors": [
+    {
+      "name": "valid-agent-delegation",
+      "expectedValid": true,
+      "delegation": {
+        "@context": ["https://www.w3.org/ns/credentials/v2"],
+        "type": ["VerifiableCredential", "AgentDelegation"],
+        "issuer": "did:key:z6MkehRgf7yJbgaGfYsdoAsKdBPE3dj2CYhowQdcjqSJgvVd",
+        "validFrom": "2020-01-01T00:00:00+00:00",
+        "validUntil": "2099-01-01T00:00:00+00:00",
+        "credentialSubject": {
+          "id": "did:key:z6MkhFwXNFWosLeugvSf4wcL9t3uuRXueGSFTRgSvHhWj5G2",
+          "aip:scope": ["task:read", "task:write"],
+          "aip:role": "worker"
+        },
+        "proof": {
+          "type": "Ed25519Signature2020",
+          "verificationMethod": "did:key:z6MkehRgf7yJbgaGfYsdoAsKdBPE3dj2CYhowQdcjqSJgvVd#keys-1",
+          "proofPurpose": "assertionMethod",
+          "created": "2020-01-01T00:00:00+00:00",
+          "proofValue": "RFCzi3Bh5nM6hPL73LAs5RTqGiF+pKQ+FyIiHKKTvpEkxSZv5YU/ciLMZQ/aB3bH4yhYEpUQfG2ZFhwFz6wyAg=="
+        }
+      }
+    },
+    {
+      "name": "tampered-scope",
+      "expectedValid": false,
+      "delegation": {
+        "@context": ["https://www.w3.org/ns/credentials/v2"],
+        "type": ["VerifiableCredential", "AgentDelegation"],
+        "issuer": "did:key:z6MkehRgf7yJbgaGfYsdoAsKdBPE3dj2CYhowQdcjqSJgvVd",
+        "validFrom": "2020-01-01T00:00:00+00:00",
+        "validUntil": "2099-01-01T00:00:00+00:00",
+        "credentialSubject": {
+          "id": "did:key:z6MkhFwXNFWosLeugvSf4wcL9t3uuRXueGSFTRgSvHhWj5G2",
+          "aip:scope": ["task:admin"],
+          "aip:role": "worker"
+        },
+        "proof": {
+          "type": "Ed25519Signature2020",
+          "verificationMethod": "did:key:z6MkehRgf7yJbgaGfYsdoAsKdBPE3dj2CYhowQdcjqSJgvVd#keys-1",
+          "proofPurpose": "assertionMethod",
+          "created": "2020-01-01T00:00:00+00:00",
+          "proofValue": "RFCzi3Bh5nM6hPL73LAs5RTqGiF+pKQ+FyIiHKKTvpEkxSZv5YU/ciLMZQ/aB3bH4yhYEpUQfG2ZFhwFz6wyAg=="
+        }
+      }
+    },
+    {
+      "name": "expired-agent-delegation",
+      "expectedValid": false,
+      "delegation": {
+        "@context": ["https://www.w3.org/ns/credentials/v2"],
+        "type": ["VerifiableCredential", "AgentDelegation"],
+        "issuer": "did:key:z6MkehRgf7yJbgaGfYsdoAsKdBPE3dj2CYhowQdcjqSJgvVd",
+        "validFrom": "2020-01-01T00:00:00+00:00",
+        "validUntil": "2020-01-02T00:00:00+00:00",
+        "credentialSubject": {
+          "id": "did:key:z6MkhFwXNFWosLeugvSf4wcL9t3uuRXueGSFTRgSvHhWj5G2",
+          "aip:scope": ["task:read", "task:write"],
+          "aip:role": "worker"
+        },
+        "proof": {
+          "type": "Ed25519Signature2020",
+          "verificationMethod": "did:key:z6MkehRgf7yJbgaGfYsdoAsKdBPE3dj2CYhowQdcjqSJgvVd#keys-1",
+          "proofPurpose": "assertionMethod",
+          "created": "2020-01-01T00:00:00+00:00",
+          "proofValue": "KcnWDC1oEr3zI8rFhi9Du9Qh+WNlUh7PR2d7stCBeJu2i+ycKoJ2WQvUQOdd5ErkB0YsD0w72CkmYJV0Dm5ADA=="
+        }
+      }
+    }
+  ]
+}

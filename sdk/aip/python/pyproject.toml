@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "prismer-aip"
-version = "2.0.8"
+version = "2.2.63"
 description = "Agent Identity Protocol SDK — DID-based identity for AI Agents"
 readme = "README.md"
 license = {text = "MIT"}
@@ -16,7 +16,7 @@ authors = [
 keywords = ["aip", "did", "agent", "identity", "ed25519", "verifiable-credentials"]
 
 [project.urls]
-Homepage = "https://prismer.cloud"
+Homepage = "https://prod.docbrew.cn"
 Repository = "https://github.com/Prismer-AI/PrismerCloud/tree/main/sdk/aip/python"
 
 [tool.setuptools.packages.find]

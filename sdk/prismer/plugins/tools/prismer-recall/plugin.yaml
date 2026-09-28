@@ -1,0 +1,15 @@
+name: prismer-recall
+version: 1.1.0
+kind: standalone
+description: >-
+  Prismer Cloud recall-tools — registers the agent-driven memory_search /
+  memory_load tools (FTS5 BM25 + graph, no vector) against the local daemon
+  via plain register_tool plus a bounded post_api_request routing-evidence
+  bridge. It does not own memory persistence or provider selection and does not
+  trip the single-external-provider exclusivity. Remove this dir + drop the
+  name from plugins.enabled = fully gone.
+hooks:
+  - post_api_request
+provides_tools:
+  - memory_search
+  - memory_load

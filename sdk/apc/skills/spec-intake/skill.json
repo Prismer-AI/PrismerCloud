@@ -1,0 +1,93 @@
+{
+  "schemaVersion": 1,
+  "slug": "spec-intake",
+  "name": "Spec Intake",
+  "description": "Turn one atomic feature/gap request into a dispatchable task in a single pass: create the task, write SPEC.md (auto-folded into linkedAssetIds server-side), add acceptance criteria, and record provenance. Two-part epics are refused, not silently split.",
+  "category": "planning",
+  "version": "1.0.0",
+  "license": "MIT",
+  "compatibility": ["claude-code", "prismer-sdk"],
+  "runtime": {
+    "kind": "text-workflow",
+    "requires": {
+      "env": [],
+      "bins": ["cloud"],
+      "capabilities": ["prismer.task.create", "prismer.task.spec", "prismer.task.acceptance", "prismer.task.meta"]
+    }
+  },
+  "sampleTasks": [
+    {
+      "title": "Intake an atomic feature request into a task + SPEC + criteria",
+      "prompt": "Given one atomic feature request, run the spec-intake skill for real: `cloud task create` (kind=work_item, expectations written into --description), `cloud task spec-set` to write SPEC.md (the server folds the SPEC asset into metadata.assets.linkedAssetIds — you never fold it yourself), `cloud task add-criterion` for each acceptance criterion, and `cloud task meta set --set-string` for the provenance sha. Then read back with `cloud task get --json` / `cloud task acceptance --json`. If the request bundles two independent features, REFUSE — do not silently split.\n\n--- YOUR REPORT MUST USE THIS MACHINE-CHECKED OUTPUT CONTRACT. Every id below is RE-READ from the live API (the task row, its metadata and its acceptance view). An id that does not resolve server-side, an asset that is not really in linkedAssetIds, a criterion that is not really on the task, or a sha that is stored as a NUMBER instead of a string all make the report FAIL. There is no wording that can substitute for these lines:\n\n```\nTASK: <the task id cloud task create returned>\nASSET: <the SPEC asset id now inside metadata.assets.linkedAssetIds> | role: spec\nCRITERION: <a criterion id from cloud task acceptance>\nMETA: intake.sourceSha = <the exact value you wrote> | type: string\n```\n\nThen, in prose: the epic-refusal rule you applied (and, if the request had been a two-part epic, that you would have created NO task rather than splitting it), plus the readback output you actually saw.\n\nHARD RULES: copy the ids verbatim from the command output — do not retype or invent them. Declare exactly ONE `TASK:` line. `META:` must carry the value the server stored (read it back), and `type: string` is a claim about the STORED type, so `--set` instead of `--set-string` is caught.",
+      "expectedArtifacts": [
+        "a `TASK: <id>` line carrying the id `cloud task create` returned (re-read from the API)",
+        "an `ASSET: <id> | role: spec` line whose id is really inside metadata.assets.linkedAssetIds (server-side fold)",
+        "a `CRITERION: <id>` line whose id is really on the task's acceptance view",
+        "a `META: intake.sourceSha = <value> | type: string` line matching the stored value AND stored type",
+        "the epic-refusal rule (a two-part request creates no task and is not silently split)"
+      ],
+      "acceptanceCriteria": [
+        {
+          "label": "the declared task really exists server-side, was created by THIS run, is a dispatchable work_item with expectations in its description, and the SPEC asset really folded into metadata.assets.linkedAssetIds",
+          "type": "structured",
+          "checker": "declared-id-readback",
+          "args": {
+            "require": ["task", "asset"],
+            "expect": { "metadata.kind": "work_item", "descriptionMinChars": 40 },
+            "assetsPath": "metadata.assets.linkedAssetIds",
+            "minCriteria": 0,
+            "maxAgeMinutes": 240
+          },
+          "match": "<structured:declared-id-readback>",
+          "required": true
+        },
+        {
+          "label": "the declared criterion ids are really on the task's acceptance view (criteria landed in the DB, not in the prose)",
+          "type": "structured",
+          "checker": "declared-id-readback",
+          "args": {
+            "require": ["task", "criterion"],
+            "minCriteria": 1,
+            "maxAgeMinutes": 240
+          },
+          "match": "<structured:declared-id-readback>",
+          "required": true
+        },
+        {
+          "label": "provenance is stored on the task with the declared value AND as a string — `--set` number-coercion is caught by reading the stored type back",
+          "type": "structured",
+          "checker": "declared-id-readback",
+          "args": {
+            "require": ["task", "meta"],
+            "minCriteria": 0,
+            "maxAgeMinutes": 240
+          },
+          "match": "<structured:declared-id-readback>",
+          "required": true
+        },
+        {
+          "label": "a two-part epic request is refused, not silently split (atomic-only)",
+          "match": "(epic[\\s\\S]{0,120}(refus|reject|拒|split|拆|atomic)|(refus|reject|拒绝|not\\s+split)[\\s\\S]{0,120}epic|atomic[- ]?only|单个原子|两个.{0,10}feature|first\\s+split)",
+          "type": "regex",
+          "flags": "is",
+          "required": true
+        }
+      ]
+    }
+  ],
+  "security": {
+    "dataAccess": ["workspace-tasks"],
+    "humanApprovalRequiredFor": []
+  },
+  "provenance": {
+    "sourceKind": "inline-spec",
+    "sourceRefs": [
+      "docs/apc/05-devchain-gaps-and-skills.md",
+      "docs/apc/12-skill-acceptance-tasks.md",
+      "sdk/cloud/src/commands/task.ts",
+      "src/im/services/task-spec.service.ts"
+    ],
+    "authoredBy": "prismer-platform",
+    "authoredAt": "2026-07-24T00:00:00Z"
+  }
+}

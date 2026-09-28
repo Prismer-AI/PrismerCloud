@@ -1,0 +1,88 @@
+{
+  "schemaVersion": 1,
+  "slug": "design-review",
+  "name": "Design Review",
+  "description": "Five-dimension design audit (frontend UI/UX · server data-model & flow · endpoint spec · daemon-runtime/SDK & local-cache-first · built-in skill/agent-role) executed by a NON-implementing agent. Every dimension must be answered; N/A is allowed only with a stated reason. A dimension the proposal silently skipped must be surfaced as a gap; a proposal that legitimately covers a dimension must not be over-reported.",
+  "category": "review",
+  "version": "1.1.0",
+  "license": "MIT",
+  "compatibility": [
+    "claude-code"
+  ],
+  "runtime": {
+    "kind": "text-workflow",
+    "requires": {
+      "env": [],
+      "bins": [
+        "git",
+        "rg"
+      ],
+      "capabilities": []
+    }
+  },
+  "sampleTasks": [
+    {
+      "title": "Five-dimension audit of a proposal that silently skips the daemon/SDK dimension",
+      "prompt": "Run the design-review skill (five-dimension audit) as a NON-implementing reviewer on the PROPOSAL below. Audit it across ALL FIVE dimensions and, for each, give a one-line verdict (covered / gap / N/A-with-reason) BACKED BY THE REAL REPO: `rg` for the actual file this dimension would touch and cite it as `path:line`. --- PROPOSAL: 'Add a per-user daily LLM spend cap. (1) DB: ADD COLUMN `daily_cap_credits` to `im_users` via a new migration; write path updates it in the settings save handler. (2) Endpoint: new `PATCH /api/im/me/spend-cap` (JWT auth) sets the cap; `GET /api/im/me/spend-cap` reads it. (3) Frontend: a new number field in the Settings > Billing page, with an inline error toast when the value is negative.' --- Note what this proposal does NOT address: the daemon/SDK layer runs LLM calls locally and caches spend locally (local-cache-first), so a cloud-only cap that the daemon never learns about will not be enforced on the daemon's LLM path — yet the proposal says nothing about daemon↔cloud sync, offline fallback, or the local spend cache. It also says nothing about the built-in-skill / agent-role dimension. Your audit MUST: (a) walk all five dimensions by name; (b) mark the daemon-runtime/SDK dimension as a GAP (the enforcement hole) rather than silently passing it; (c) either flag the built-in-skill/agent-role dimension as a gap or mark it N/A WITH a stated reason (do not leave it unanswered); (d) not fabricate blocking problems in the three dimensions the proposal legitimately covers (frontend, data-model, endpoint) — note them as covered, listing only genuine residual questions.\n\n--- YOUR REPORT MUST USE THIS MACHINE-CHECKED OUTPUT CONTRACT. The checker looks for each dimension's OWN KEYED LINE and re-reads every citation off disk, so the word appearing elsewhere in your prose does not count as answering that dimension, and an invented path:line is caught.\n\nFive lines, each with its exact key, opening with the verdict, then the reason, then the evidence:\n```\n- [1] frontend-uiux: covered — <what the proposal covers + residual question> | <path:line>\n- [2] server-data-model: covered — <...> | <path:line>\n- [3] endpoint-spec: covered — <...> | <path:line>\n- [4] daemon-runtime-sdk: gap — <what the hole is and how it actually breaks> | <path:line in the daemon/runtime source that would have to change>\n- [5] skill-agent-role: gap — <...> | <path:line>    (or)    N/A — <reason ≥20 chars>\n```\nRules the checker enforces: a dimension line must OPEN with `covered`, `gap` or `N/A`; a `covered` or `gap` line must carry at least one `path:line` that resolves on disk (real file, line in range, non-blank) — `rg -n` it, do not guess line numbers; an `N/A` line must carry a reason of at least 20 non-space characters. Dimension [4] must carry the verdict `gap` — rubber-stamping it `covered`, or leaving it off its keyed line while saying 'gap' somewhere else in the prose, FAILS. Citations MUST be repo-root-relative (`src/im/api/routes.ts:314`, never an abbreviated `im/api/routes.ts:314` and never an absolute path); a `rg -c` HIT COUNT is not a line number, write counts as `count=N`.\n\nThen your prose summary: the per-dimension verdict table, the load-bearing finding (the silently-skipped daemon/SDK dimension), and `openQuestions[]`.",
+      "expectedArtifacts": [
+        "five keyed dimension lines (frontend-uiux / server-data-model / endpoint-spec / daemon-runtime-sdk / skill-agent-role), each opening with a verdict and backed by a path:line that resolves on disk or an explicit N/A + reason",
+        "the daemon-runtime/SDK dimension carrying the `gap` verdict on its own keyed line (local-cache-first enforcement hole), not silently passed",
+        "the built-in-skill/agent-role dimension answered (gap or N/A-with-reason), not left blank",
+        "prose summary: verdict table, load-bearing finding, openQuestions — the three covered dimensions not over-reported as fabricated blockers"
+      ],
+      "acceptanceCriteria": [
+        {
+          "label": "all five dimensions answered on their own keyed line — each backed by a citation re-verified on disk, or an explicit N/A with a real reason (no dimension may be silently dropped)",
+          "type": "structured",
+          "checker": "dimension-coverage",
+          "args": {
+            "dimensions": [
+              "frontend-uiux",
+              "server-data-model",
+              "endpoint-spec",
+              "daemon-runtime-sdk",
+              "skill-agent-role"
+            ],
+            "minReasonChars": 20
+          },
+          "match": "<structured:dimension-coverage>",
+          "required": true
+        },
+        {
+          "label": "the silently-skipped daemon-runtime/SDK dimension carries the `gap` verdict ON ITS OWN keyed line with on-disk evidence — a `covered` rubber stamp, or the word 'gap' floating elsewhere in the prose, fails",
+          "type": "structured",
+          "checker": "dimension-coverage",
+          "args": {
+            "dimensions": [
+              "daemon-runtime-sdk"
+            ],
+            "requiredVerdicts": {
+              "daemon-runtime-sdk": "gap"
+            },
+            "minReasonChars": 20
+          },
+          "match": "<structured:dimension-coverage:verdict>",
+          "required": true
+        }
+      ]
+    }
+  ],
+  "security": {
+    "dataAccess": [
+      "local-filesystem"
+    ],
+    "humanApprovalRequiredFor": []
+  },
+  "provenance": {
+    "sourceKind": "inline-spec",
+    "sourceRefs": [
+      "docs/apc/12-skill-acceptance-tasks.md",
+      "docs/apc/05-devchain-gaps-and-skills.md",
+      "CLAUDE.md#Five-Dimension-Change-Audit",
+      "sdk/apc/skills/code-review/SKILL.md",
+      "sdk/prismer/src/bundle/structured-criteria.ts"
+    ],
+    "authoredBy": "prismer-platform",
+    "authoredAt": "2026-07-24T00:00:00Z"
+  }
+}

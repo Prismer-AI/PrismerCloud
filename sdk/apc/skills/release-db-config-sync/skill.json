@@ -1,0 +1,109 @@
+{
+  "schemaVersion": 1,
+  "slug": "release-db-config-sync",
+  "name": "Release DB Config Sync",
+  "description": "Compute the remote DB migration + Nacos config diff before a test release: apc release db-config-sync really spawns sync-test-migrations.ts --dry-run (never a stub) and diffs Nacos key dumps, stopping at the write boundary. green(0)/staged(3)/blocked(1). Diff only, never writes the remote.",
+  "category": "release",
+  "version": "1.0.0",
+  "license": "MIT",
+  "compatibility": ["claude-code"],
+  "runtime": {
+    "kind": "text-workflow",
+    "requires": {
+      "env": [],
+      "bins": ["cloud"],
+      "capabilities": []
+    }
+  },
+  "sampleTasks": [
+    {
+      "title": "Dry-run the remote migration plan and Nacos key diff, plus the missing-credential negative control",
+      "prompt": "Compute the remote DB + config diff for a test release WITHOUT writing anything remote, and prove the credential negative control. The `apc` CLI is NOT on PATH — invoke it as `npx tsx sdk/apc/bin/apc.ts <subcommand>` from the repo root (its --json stdout is pure JSON). Steps: (1) CONNECTED RUN — point the local replica credentials at the stand-in test RDS (`REMOTE_MYSQL_HOST=127.0.0.1 REMOTE_MYSQL_PORT=3307 REMOTE_MYSQL_USER=… REMOTE_MYSQL_PASSWORD=… REMOTE_MYSQL_DATABASE=prismer_cloud`) and run `npx tsx sdk/apc/bin/apc.ts release db-config-sync --json`, capturing stdout and the REAL exit code. The verb really spawns `scripts/ops/sync-test-migrations.ts --dry-run` — `migration.exitCode` is that script's own exit code and `migration.pending[]` is the real `src/im/sql/*.sql` ⇄ `_migrations` ledger difference, so every filename in it is a real file under `src/im/sql/`. Read `decision` (green|staged|blocked) and `keyDiff` (either {status:'skipped',reason} or {status:'computed',missing,extra,common}). (2) NEGATIVE CONTROL — rerun the SAME command with the `REMOTE_MYSQL_*` vars UNSET; the real script throws, `migration.exitCode` is 1, `migration.pending[]` is empty and the decision is blocked. This is the injected fault that must turn the verb red — do NOT route around the migration ledger to make it green. (3) Report both runs, the decision→exit mapping (green→0, staged→3, blocked→1), the pending .sql filenames (apply happens only AFTER approval, = M5), and the keyDiff status honestly — if it is 'skipped' say skipped, never claim config was checked when no dump was diffed. State explicitly that this step is dry-run only and wrote nothing to the remote DB or real Nacos.\n\n--- YOUR REPORT MUST USE THIS MACHINE-CHECKED OUTPUT CONTRACT. Both products are re-parsed, the exit code is re-derived from `decision`, and EVERY filename in `migration.pending[]` is stat'ed under `src/im/sql/`. Narrating an outcome the product does not carry FAILS:\n\n```\nMIGRATION-EXIT: 0\nKEYDIFF: <keyDiff.status — skipped | computed>\nRUN-EXIT: <0 if decision green | 3 if staged | 1 if blocked>\nNEG-MIGRATION-EXIT: 1\nNEG-DECISION: blocked\nNEG-RUN-EXIT: 1\n```\n\nfollowed by BOTH raw `--json` products, each verbatim in its own fenced json block (connected run first, then the credential-fault run).\n\nHARD RULES: paste both products UNEDITED — do NOT truncate `migration.pending[]` to \"…and 200 more\"; the whole list is re-read off disk and an invented or abbreviated filename is red. `RUN-EXIT` is a pure function of `decision`. A blocked run must carry a non-empty `blockers[]` and an EMPTY `migration.pending[]` — a plan that survives its own credential fault is a fabricated plan.",
+      "expectedArtifacts": [
+        "both raw `apc release db-config-sync --json` products (connected + credential-fault) pasted verbatim and untruncated",
+        "`MIGRATION-EXIT` / `KEYDIFF` / `RUN-EXIT` equal to the connected product's fields",
+        "`migration.pending[]` = real `src/im/sql/*.sql` filenames (every one re-stat'ed on disk)",
+        "`NEG-*` lines: the credential fault really turns the verb blocked with an empty plan",
+        "explicit statement that nothing was written to the remote DB / real Nacos (dry-run boundary)"
+      ],
+      "acceptanceCriteria": [
+        {
+          "label": "the connected run's plan is real: the sync script exited 0, every filename in migration.pending[] is a real file under src/im/sql/, the prose exit code is derived from the decision, and the keyDiff status is reported as the product actually has it",
+          "type": "structured",
+          "checker": "json-claim",
+          "args": {
+            "equals": { "migration.exitCode": 0, "verb": "db-config-sync" },
+            "require": ["decision", "migration.pending", "keyDiff.status", "blockers", "staged"],
+            "types": { "migration.pending": "array", "blockers": "array", "staged": "array" },
+            "allowed": {
+              "decision": ["green", "staged", "blocked"],
+              "keyDiff.status": ["skipped", "computed"]
+            },
+            "declaredLines": { "MIGRATION-EXIT": "migration.exitCode", "KEYDIFF": "keyDiff.status" },
+            "derivedLines": {
+              "RUN-EXIT": { "from": "decision", "map": { "green": "0", "staged": "3", "blocked": "1" } }
+            },
+            "implications": [
+              {
+                "if": { "path": "decision", "equals": "green" },
+                "then": { "path": "migration.pending", "empty": true }
+              },
+              { "if": { "path": "decision", "equals": "staged" }, "then": { "path": "staged", "nonEmpty": true } }
+            ],
+            "filesExist": { "path": "migration.pending", "dir": "src/im/sql", "min": 1 }
+          },
+          "match": "<structured:json-claim:connected>",
+          "required": true
+        },
+        {
+          "label": "the negative control really fired: with the credentials removed the REAL sync script exits non-zero, the decision is blocked with a non-empty blocker, and the migration plan is EMPTY — a plan that survives its own credential fault would be fabricated",
+          "type": "structured",
+          "checker": "json-claim",
+          "args": {
+            "equals": { "migration.exitCode": 1, "verb": "db-config-sync", "decision": "blocked" },
+            "require": ["migration.stderr", "blockers"],
+            "types": { "migration.stderr": "string", "blockers": "array" },
+            "declaredLines": { "NEG-MIGRATION-EXIT": "migration.exitCode", "NEG-DECISION": "decision" },
+            "derivedLines": {
+              "NEG-RUN-EXIT": { "from": "decision", "map": { "green": "0", "staged": "3", "blocked": "1" } }
+            },
+            "implications": [
+              {
+                "if": { "path": "decision", "equals": "blocked" },
+                "then": { "path": "migration.pending", "empty": true }
+              },
+              { "if": { "path": "decision", "equals": "blocked" }, "then": { "path": "blockers", "nonEmpty": true } }
+            ]
+          },
+          "match": "<structured:json-claim:credential-fault>",
+          "required": true
+        },
+        {
+          "label": "affirms the dry-run boundary — nothing written to remote DB / real Nacos",
+          "match": "(dry[- ]?run|not\\s+writ|never\\s+writ|no\\s+writ|wrote\\s+nothing|write\\s+boundary|未写|不写)[\\s\\S]{0,80}(remote|nacos|db|库|远端|apply)|(remote|nacos|远端)[\\s\\S]{0,40}(not\\s+writ|dry[- ]?run|unchanged)",
+          "type": "regex",
+          "flags": "i",
+          "required": true
+        }
+      ]
+    }
+  ],
+  "security": {
+    "dataAccess": ["local-filesystem", "remote-database-readonly", "nacos-config-readonly"],
+    "humanApprovalRequiredFor": [
+      "applying pending migrations to the remote test RDS (dry-run only here; apply is post-approval)",
+      "writing missing keys to real Nacos (never done by this skill)"
+    ]
+  },
+  "provenance": {
+    "sourceKind": "inline-spec",
+    "sourceRefs": [
+      "docs/apc/01-release-control-plane.md",
+      "docs/apc/05-devchain-gaps-and-skills.md",
+      "sdk/apc/cli/release-db-config-sync.ts",
+      "scripts/ops/sync-test-migrations.ts"
+    ],
+    "authoredBy": "prismer-platform",
+    "authoredAt": "2026-07-24T00:00:00Z"
+  }
+}

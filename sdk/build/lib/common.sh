@@ -8,7 +8,9 @@ _COMMON_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILD_ROOT="$(cd "$_COMMON_DIR/.." && pwd)"
 SDK_ROOT="$(cd "$BUILD_ROOT/.." && pwd)"
 PROJECT_ROOT="$(cd "$SDK_ROOT/.." && pwd)"
-PRISMER_CLOUD="$SDK_ROOT/prismer-cloud"
+CLOUD_SDK="$SDK_ROOT/cloud"
+PRISMER_RUNTIME="$SDK_ROOT/prismer"
+LEGACY_SDK_ROOT="$SDK_ROOT/prismer-cloud"
 AIP_SDK="$SDK_ROOT/aip"
 OPENSRC_ROOT="${OPENSRC_ROOT:-/Users/prismer/workspace/PrismerCloud}"
 OPENSRC_SDK="$OPENSRC_ROOT/sdk"
@@ -33,11 +35,23 @@ parse_common_flags() {
     esac
   done
   REMAINING_ARGS=("${args[@]+"${args[@]}"}")
+
+  case "$SCOPE" in
+    aip|cloud|prismer|all) ;;
+    prismer-cloud)
+      log_warn "--scope prismer-cloud is a deprecated compatibility alias for cloud + prismer; it will be removed in 3.0.0"
+      ;;
+    *)
+      log_error "Invalid scope: $SCOPE (expected aip|cloud|prismer|all)"
+      return 2
+      ;;
+  esac
 }
 
 # ── Scope helpers ─────────────────────────────────────────────────
-scope_includes_aip()    { [[ "$SCOPE" == "all" || "$SCOPE" == "aip" ]]; }
-scope_includes_prismer() { [[ "$SCOPE" == "all" || "$SCOPE" == "prismer-cloud" ]]; }
+scope_includes_aip()     { [[ "$SCOPE" == "all" || "$SCOPE" == "aip" ]]; }
+scope_includes_cloud()   { [[ "$SCOPE" == "all" || "$SCOPE" == "cloud" || "$SCOPE" == "prismer-cloud" ]]; }
+scope_includes_prismer() { [[ "$SCOPE" == "all" || "$SCOPE" == "prismer" || "$SCOPE" == "prismer-cloud" ]]; }
 
 # ── Logging ────────────────────────────────────────────────────────
 log_info()    { echo -e "${BLUE}[INFO]${RESET} $*"; }
@@ -75,7 +89,7 @@ get_version() {
     v="$(tr -d '[:space:]' < "$version_file")"
     if [[ -n "$v" ]]; then echo "$v"; return; fi
   fi
-  local pkg="$PRISMER_CLOUD/typescript/package.json"
+  local pkg="$CLOUD_SDK/package.json"
   if [[ -f "$pkg" ]]; then
     grep '"version"' "$pkg" | head -1 | sed 's/.*"version": *"\([^"]*\)".*/\1/'
   else
@@ -101,10 +115,10 @@ print_results() {
   local pass=0 fail=0 skip=0
   for i in "${!RESULT_NAMES[@]}"; do
     case "${RESULT_STATUSES[$i]}" in
-      pass) echo -e "  ${GREEN}✓${RESET} ${RESULT_NAMES[$i]}"; ((pass++)) ;;
-      fail) echo -e "  ${RED}✗${RESET} ${RESULT_NAMES[$i]}"; ((fail++)) ;;
-      skip) echo -e "  ${YELLOW}–${RESET} ${RESULT_NAMES[$i]} (skipped)"; ((skip++)) ;;
-      warn) echo -e "  ${YELLOW}⚠${RESET} ${RESULT_NAMES[$i]}"; ((pass++)) ;;
+      pass) echo -e "  ${GREEN}✓${RESET} ${RESULT_NAMES[$i]}"; ((pass += 1)) ;;
+      fail) echo -e "  ${RED}✗${RESET} ${RESULT_NAMES[$i]}"; ((fail += 1)) ;;
+      skip) echo -e "  ${YELLOW}–${RESET} ${RESULT_NAMES[$i]} (skipped)"; ((skip += 1)) ;;
+      warn) echo -e "  ${YELLOW}⚠${RESET} ${RESULT_NAMES[$i]}"; ((pass += 1)) ;;
     esac
   done
   echo -e "\n  ${BOLD}Total: ${GREEN}$pass pass${RESET}, ${RED}$fail fail${RESET}, ${YELLOW}$skip skip${RESET}\n"
@@ -112,7 +126,8 @@ print_results() {
 }
 
 # ── Package Lists ──────────────────────────────────────────────────
-NPM_PACKAGES=("typescript" "runtime" "mcp" "opencode-plugin" "claude-code-plugin" "openclaw-channel")
-AIP_NPM_PACKAGES=("typescript")
-ALL_PACKAGES=("typescript" "runtime" "python" "golang" "rust" "mcp" "opencode-plugin" "claude-code-plugin" "openclaw-channel")
-AIP_PACKAGES=("typescript" "python" "golang" "rust")
+AIP_NPM_PACKAGE_DIRS=("aip/typescript")
+CLOUD_NPM_PACKAGE_DIRS=("cloud" "cloud/mcp")
+PRISMER_NPM_PACKAGE_DIRS=("prismer")
+AIP_PYTHON_PACKAGE_DIRS=("aip/python")
+CLOUD_PYTHON_PACKAGE_DIRS=("cloud/python")

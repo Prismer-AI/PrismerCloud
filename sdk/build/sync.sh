@@ -6,8 +6,8 @@ parse_common_flags "$@"
 log_step "Sync SDK → PrismerCloud (WHOLE-DIRECTORY REPLACE)"
 
 # ── Validate ───────────────────────────────────────────────────────
-if [[ ! -d "$PRISMER_CLOUD" ]]; then
-  log_error "Source not found: $PRISMER_CLOUD"
+if [[ ! -d "$CLOUD_SDK" || ! -d "$PRISMER_RUNTIME" ]]; then
+  log_error "Source not found: expected $CLOUD_SDK and $PRISMER_RUNTIME"
   exit 1
 fi
 
@@ -57,13 +57,7 @@ else
   rsync -av --delete "${RSYNC_EXCLUDES[@]}" "$SDK_ROOT/" "$OPENSRC_SDK/" 2>&1
 fi
 
-# ── Step 3: Clean non-publishable build artifacts ──────────────────
-if [[ $DRY_RUN -eq 0 ]]; then
-  rm -f "$OPENSRC_SDK/prismer-cloud/golang/prismer" 2>/dev/null
-  # Keep build/artifacts/ — contains packed tgz/whl/crate for publish
-fi
-
-# ── Step 4: Also sync build/ scripts to open source ────────────────
+# ── Step 3: Also sync build/ scripts to open source ────────────────
 # The open source repo has its own build/ — sync ours as reference
 # but don't overwrite their release.sh/pack.sh (they have registry-specific logic)
 log_step "Step 3: Verify"
@@ -73,11 +67,11 @@ if [[ $DRY_RUN -eq 0 ]]; then
   log_success "Synced: $FILE_COUNT files in $DIR_COUNT directories"
 
   # Verify key packages exist
-  for pkg in typescript python golang rust mcp runtime built-in-skills opencode-plugin claude-code-plugin openclaw-channel; do
-    if [[ -d "$OPENSRC_SDK/prismer-cloud/$pkg" ]]; then
-      log_success "  ✓ prismer-cloud/$pkg"
+  for pkg in cloud prismer cloud/catalog/skills; do
+    if [[ -d "$OPENSRC_SDK/$pkg" ]]; then
+      log_success "  ✓ $pkg"
     else
-      log_error "  ✗ prismer-cloud/$pkg MISSING"
+      log_error "  ✗ $pkg MISSING"
     fi
   done
   if [[ -d "$OPENSRC_SDK/aip" ]]; then

@@ -1,0 +1,175 @@
+{
+  "schemaVersion": 1,
+  "slug": "release-preflight",
+  "name": "Release Preflight",
+  "description": "Run the release hard-precondition gate before any tag/OTA: apc release preflight runs the real tier gate (run.ts), version alignment, and prisma regen check — all read-only. Maps to green(0)/staged(3)/blocked(1). No push, no write.",
+  "category": "release",
+  "version": "1.1.0",
+  "license": "MIT",
+  "compatibility": [
+    "claude-code"
+  ],
+  "runtime": {
+    "kind": "text-workflow",
+    "requires": {
+      "env": [],
+      "bins": [
+        "cloud"
+      ],
+      "capabilities": []
+    }
+  },
+  "sampleTasks": [
+    {
+      "title": "Run the release preflight gate and branch on the decision",
+      "prompt": "Run the release preflight gate. The `apc` CLI is NOT on PATH — invoke it as `npx tsx sdk/apc/bin/apc.ts <subcommand>` from the repo root (its --json stdout is pure JSON). Steps: (1) run `npx tsx sdk/apc/bin/apc.ts release preflight --json` and capture BOTH the stdout JSON and the real process exit code; (2) read the top-level `decision` (green|staged|blocked), the `tier` object (tier.exitCode from run.ts, tier.envBlocked, tier.regressions[]), `version.aligned`, and `prisma.ok`; (3) report the decision AND how it maps to the exit code — green→exit 0, staged→exit 3, blocked→exit 1 — do NOT conflate staged with green. If decision is staged, list the staged[] fix-hints (version.sh / prisma:generate:all) and state you would re-run until green. If decision is blocked, distinguish tier envBlocked (env fault domain, run env-doctor) from tier.exitCode 1 (SUT red, stop and go to bugfix). Report the tier gate exit code and the number of regressions explicitly.\n\n--- YOUR REPORT MUST USE THIS MACHINE-CHECKED OUTPUT CONTRACT. The checker looks for EACH PRECONDITION'S OWN KEYED LINE and re-reads every `path:line` off disk, so 'the word green appears somewhere' no longer answers anything, and an invented citation is caught.\n\nFour lines, each with its exact key, carrying the REAL observed values from the JSON plus the repo line that DEFINES that check (`rg -n` it — do not guess line numbers):\n```\n- [1] tier-gate: exit=<tier.exitCode> envBlocked=<tier.envBlocked> regressions=<n> [names…] | sdk/apc/cli/release-common.ts:179\n- [2] version-alignment: aligned=<version.aligned> /VERSION=<rootVersion> mismatches=<n> [file=found…] | sdk/apc/cli/release-common.ts:110\n- [3] prisma-regen: ok=<prisma.ok> stale=<n> [schema(reason)…] | sdk/apc/cli/release-common.ts:144\n- [4] decision-exit: decision=<decision> → exit=<real process exit code> (green→0 / staged→3 / blocked→1) | sdk/apc/cli/release-preflight.ts:64\n```\nRules the checker enforces: each keyed line's value must carry at least one repo-root-relative `path:line` that resolves on disk (real file, line in range, non-blank), or be an explicit `N/A — <reason ≥20 chars>` — and none of these four is ever legitimately N/A on a real run. Do not open a value with `无`/`N/A`. A `rg -c` HIT COUNT is not a line number; write counts as `count=N`. Then your prose: the decision→exit mapping, the staged[] fix-hints (if staged) or the env_blocked-vs-SUT-red distinction (if blocked).",
+      "expectedArtifacts": [
+        "four keyed precondition lines (tier-gate / version-alignment / prisma-regen / decision-exit), each carrying the real observed values and a path:line that resolves on disk",
+        "apc release preflight --json stdout with decision + tier{exitCode,envBlocked,regressions} + version{aligned} + prisma{ok}",
+        "the real process exit code (0 green / 3 staged / 1 blocked) and the decision→exit mapping",
+        "on staged: the staged[] fix-hints and the intent to re-run until green",
+        "on blocked: whether it is env_blocked (env-doctor) or SUT red (bugfix)"
+      ],
+      "acceptanceCriteria": [
+        {
+          "label": "all four hard preconditions answered on their own keyed line (tier-gate / version-alignment / prisma-regen / decision-exit), each carrying real values + a citation re-verified on disk — no precondition may be silently dropped",
+          "type": "structured",
+          "checker": "dimension-coverage",
+          "args": {
+            "dimensions": [
+              "tier-gate",
+              "version-alignment",
+              "prisma-regen",
+              "decision-exit"
+            ],
+            "minReasonChars": 20
+          },
+          "match": "<structured:dimension-coverage:preflight>",
+          "required": true
+        },
+        {
+          "label": "preflight 的 decision 取自产物、不取自叙述 —— 报告贴出 `apc release preflight --json` 的原始产物，checker 重解析：PREFLIGHT-DECISION 必须逐字等于产物的 decision；green 必须 blockers 为空；tier 空跑(emptyRun)或 env_blocked 必须 decision=blocked（apc/12 §0.12 修法 B 的机器化）",
+          "type": "structured",
+          "checker": "json-claim",
+          "args": {
+            "equals": {
+              "verb": "preflight"
+            },
+            "require": [
+              "decision",
+              "tier",
+              "version",
+              "prisma",
+              "blockers",
+              "staged"
+            ],
+            "types": {
+              "blockers": "array",
+              "staged": "array"
+            },
+            "allowed": {
+              "decision": [
+                "green",
+                "staged",
+                "blocked"
+              ]
+            },
+            "declaredLines": {
+              "PREFLIGHT-DECISION": "decision"
+            },
+            "implications": [
+              {
+                "if": {
+                  "path": "decision",
+                  "equals": "green"
+                },
+                "then": {
+                  "path": "blockers",
+                  "empty": true
+                }
+              },
+              {
+                "if": {
+                  "path": "tier.emptyRun",
+                  "equals": true
+                },
+                "then": {
+                  "path": "decision",
+                  "equals": "blocked"
+                }
+              },
+              {
+                "if": {
+                  "path": "tier.envBlocked",
+                  "equals": true
+                },
+                "then": {
+                  "path": "decision",
+                  "equals": "blocked"
+                }
+              },
+              {
+                "if": {
+                  "path": "decision",
+                  "equals": "blocked"
+                },
+                "then": {
+                  "path": "blockers",
+                  "nonEmpty": true
+                }
+              }
+            ]
+          },
+          "match": "<structured:json-claim>",
+          "required": true
+        },
+        {
+          "label": "reports a machine decision (green/staged/blocked), not vague prose",
+          "match": "\\b(green|staged|blocked)\\b",
+          "type": "regex",
+          "flags": "i",
+          "required": true
+        },
+        {
+          "label": "reports the process exit code as a digit (0/1/3)",
+          "match": "\\bexit(\\s*code)?\\b[^0-9]{0,8}[013]\\b|\\b[013]\\s*[|:=\\-]{0,3}\\s*exit",
+          "type": "regex",
+          "flags": "i",
+          "required": true
+        },
+        {
+          "label": "reports the tier gate result (tier exit code or regressions count)",
+          "match": "tier[\\s\\S]{0,60}(exit|regress|env[_ ]?block)|regress\\w*\\s*[:=|\\-]*\\s*\\d+|env[_ ]?blocked",
+          "type": "regex",
+          "flags": "i",
+          "required": true
+        },
+        {
+          "label": "does not conflate staged with releasable-green (decision→exit mapping stated)",
+          "match": "(green\\s*[\\s\\S]{0,16}\\b0\\b|staged\\s*[\\s\\S]{0,16}\\b3\\b|blocked\\s*[\\s\\S]{0,16}\\b1\\b|decision[\\s\\S]{0,30}exit)",
+          "type": "regex",
+          "flags": "i",
+          "required": false
+        }
+      ]
+    }
+  ],
+  "security": {
+    "dataAccess": [
+      "local-filesystem"
+    ],
+    "humanApprovalRequiredFor": []
+  },
+  "provenance": {
+    "sourceKind": "inline-spec",
+    "sourceRefs": [
+      "docs/apc/01-release-control-plane.md",
+      "docs/apc/05-devchain-gaps-and-skills.md",
+      "sdk/apc/cli/release-preflight.ts",
+      "sdk/apc/cli/release-common.ts",
+      "sdk/prismer/src/bundle/structured-criteria.ts"
+    ],
+    "authoredBy": "prismer-platform",
+    "authoredAt": "2026-07-24T00:00:00Z"
+  }
+}

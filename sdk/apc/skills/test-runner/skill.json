@@ -1,0 +1,103 @@
+{
+  "schemaVersion": 1,
+  "slug": "test-runner",
+  "name": "Test Runner",
+  "description": "Pick the test tier by change surface, run apc test with baseline diff, report only NEW reds vs baseline back to the task's acceptance criterion, and keep env_blocked out of the SUT verdict.",
+  "category": "testing",
+  "version": "1.0.0",
+  "license": "MIT",
+  "compatibility": ["claude-code"],
+  "runtime": {
+    "kind": "text-workflow",
+    "requires": {
+      "env": [],
+      "bins": ["node"],
+      "capabilities": ["prismer.task.verify-criterion"]
+    }
+  },
+  "sampleTasks": [
+    {
+      "title": "Select tier for a change surface, run apc test --diff, classify new reds vs env_blocked",
+      "prompt": "Run the test-runner skill. The `apc` CLI is NOT on PATH — invoke it as `npx tsx sdk/apc/bin/apc.ts <subcommand>` from the repo root (its `--json` stdout is a structured `test203.run/v1` product; the human-readable summary is on stderr). This change touches only apps/desktop, so the matching tier is TD (desktop smoke). Steps: (1) `npx tsx sdk/apc/bin/apc.ts env doctor` first and read the top-level `exitCode` (0 all-green, 78 env_blocked) — a global doctor 78 caused by a check OUTSIDE the tier's own env needs (e.g. a toolchain.node pin drift for a TD/T0 run) is a fault-domain note, NOT a stop; the authoritative per-tier env gate is `apc test`'s own exit 78. (2) `npx tsx sdk/apc/bin/apc.ts test --tier=TD --diff --json` and read its RAW exit code (0 green / 1 SUT red i.e. a NEW red vs baseline under --diff / 78 env_blocked). Parse the JSON: top-level `exitCode`, `envStatus`, `regressions[]` (new reds vs baseline — the --diff verdict), and each `tiers[]` TierResult `{tier, passed, failed, skipped, total, failedNames, envStatus}`. (3) Report a structured TierResult per tier with its passed/failed/skipped counts and envStatus. (4) Apply the verdict rule and state it explicitly: exit 0 => passed; exit 1 => failed with the failedNames + the regressions[] (new reds) list; exit 78 => NOT a failed criterion — surfaced as an environment fault domain (infra/toolchain), never counted as a SUT red. (5) Only NEW reds vs baseline (`regressions[]`) are regressions; baseline known-red entries are NOT reported as new failures. If this run is dispatched inside a kanban task (PRISMER_TASK_ID set) you would finally report the outcome via `npx tsx sdk/cloud/src/cli.ts task verify-criterion \"$PRISMER_TASK_ID\" <criterion-id> --outcome <passed|failed>`; in a plain chat dispatch there is no task criterion, so state that the last-mile report step is N/A here. Report: the tier you selected, the raw apc test exit code, the per-tier pass/fail/skip counts, the regressions[] (new reds) list, and how you classified exit 78 vs a SUT red.\n\n--- YOUR REPORT MUST USE THIS MACHINE-CHECKED OUTPUT CONTRACT. The pasted product is re-parsed, its per-tier arithmetic is recomputed, `regressions[]` is re-derived from the real `scripts/test203/baseline.json`, and the run byproduct on disk is compared against the run's own timestamp. Narrating an outcome the product does not carry FAILS:\n\n```\nRUN-EXIT: <the raw exit code of apc test — 0 | 1 | 78>\nVERDICT: <passed if exit 0 | failed if exit 1 | env-fault if exit 78>\n```\n\nimmediately followed by the RAW `--json` stdout, verbatim, in a fenced json block:\n\n```json\n{ \"schema\": \"test203.run/v1\", \"timestamp\": \"…\", \"envStatus\": \"…\", \"tiers\": [ … ], \"regressions\": [ … ], \"exitCode\": 0 }\n```\n\nHARD RULES: paste the product UNEDITED (do not prune fields, do not pretty-rewrite numbers). `VERDICT` is a pure function of the exit code — 78 is `env-fault`, never `failed`. Do not reorder or re-label `regressions[]`: a NEW red hidden inside the baseline known-reds, or a baseline known-red reported as a regression, are both caught by recomputation.",
+      "expectedArtifacts": [
+        "apc env doctor top-level exitCode (0 or 78) read as a fault-domain note, not an automatic stop",
+        "apc test --tier=TD --diff --json raw exit code (0 green / 1 new-red / 78 env_blocked)",
+        "structured TierResult per tier: tier, passed/failed/skipped/total, failedNames, envStatus",
+        "regressions[] = new reds vs baseline (distinct from baseline known-red); env_blocked kept out of the SUT verdict"
+      ],
+      "acceptanceCriteria": [
+        {
+          "label": "the report pastes the RAW test203.run/v1 product of a run that really happened: the pinned tier is in it, every tier's counts add up, and the run's own byproduct on disk is contemporaneous with the run's timestamp",
+          "type": "structured",
+          "checker": "json-claim",
+          "args": {
+            "equals": { "schema": "test203.run/v1" },
+            "require": ["exitCode", "envStatus", "tiers", "regressions", "timestamp"],
+            "types": { "exitCode": "number", "tiers": "array", "regressions": "array", "timestamp": "string" },
+            "allowed": { "exitCode": [0, 1, 78], "envStatus": ["ok", "env_blocked"] },
+            "declaredLines": { "RUN-EXIT": "exitCode" },
+            "requireItems": { "path": "tiers", "key": "tier", "values": ["TD"] },
+            "eachItem": {
+              "path": "tiers",
+              "sum": { "parts": ["passed", "failed", "skipped"], "total": "total" },
+              "lengths": { "failedNames": "failed" }
+            },
+            "freshArtifacts": {
+              "timestampPath": "timestamp",
+              "paths": ["scripts/test203/artifacts/desktop-shell-skip-evidence.txt"],
+              "skewMinutes": 10
+            }
+          },
+          "match": "<structured:json-claim>",
+          "required": true
+        },
+        {
+          "label": "the verdict is DERIVED from the raw exit code (78 is an env fault domain, never a SUT red) and regressions[] is recomputed from the real baseline.json — a new red cannot be passed off as a known red, nor a known red as a regression",
+          "type": "structured",
+          "checker": "json-claim",
+          "args": {
+            "equals": { "schema": "test203.run/v1" },
+            "derivedLines": {
+              "VERDICT": { "from": "exitCode", "map": { "0": "passed", "1": "failed", "78": "env-fault" } }
+            },
+            "implications": [
+              { "if": { "path": "exitCode", "equals": 78 }, "then": { "path": "envStatus", "equals": "env_blocked" } },
+              { "if": { "path": "exitCode", "equals": 1 }, "then": { "path": "regressions", "nonEmpty": true } },
+              { "if": { "path": "exitCode", "equals": 0 }, "then": { "path": "regressions", "empty": true } }
+            ],
+            "baselineRecompute": {
+              "file": "scripts/test203/baseline.json",
+              "itemsPath": "tiers",
+              "failedNamesKey": "failedNames",
+              "regressionsPath": "regressions"
+            }
+          },
+          "match": "<structured:json-claim>",
+          "required": true
+        },
+        {
+          "label": "last-mile cloud verify-criterion report (task-bound only)",
+          "match": "(verify-criterion|criterion|report\\s+back|last[- ]mile|上报|回报|n/?a)",
+          "type": "regex",
+          "required": false
+        }
+      ]
+    }
+  ],
+  "security": {
+    "dataAccess": ["local-filesystem", "workspace-tasks"],
+    "humanApprovalRequiredFor": []
+  },
+  "provenance": {
+    "sourceKind": "inline-spec",
+    "sourceRefs": [
+      "docs/apc/12-skill-acceptance-tasks.md",
+      "docs/apc/05-devchain-gaps-and-skills.md",
+      "docs/apc/02-test-rebuild.md",
+      "sdk/apc/cli/test-run.ts",
+      "sdk/cloud/src/commands/task.ts"
+    ],
+    "authoredBy": "prismer-platform",
+    "authoredAt": "2026-07-24T00:00:00Z"
+  }
+}

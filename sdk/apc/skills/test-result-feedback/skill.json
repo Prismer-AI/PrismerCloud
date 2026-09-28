@@ -1,0 +1,193 @@
+{
+  "schemaVersion": 1,
+  "slug": "test-result-feedback",
+  "name": "Test Result Feedback",
+  "description": "Consume an apc test TierResult and close the acceptance loop for a task: map EACH criterion to passed/failed/n-a from structured fields (exitCode/failedNames/regressions[]), attach an evidence ref, and write it back. A SUT red is a finding, never softened to green; env_blocked is never counted as a SUT red.",
+  "category": "testing",
+  "version": "1.0.0",
+  "license": "MIT",
+  "compatibility": [
+    "claude-code"
+  ],
+  "runtime": {
+    "kind": "text-workflow",
+    "requires": {
+      "env": [],
+      "bins": [
+        "node"
+      ],
+      "capabilities": [
+        "prismer.task.verify-criterion"
+      ]
+    }
+  },
+  "sampleTasks": [
+    {
+      "title": "Consume a TierResult, map each criterion to an outcome with evidence, never soften a red",
+      "prompt": "Run the test-result-feedback skill: close the acceptance loop by mapping an apc test TierResult onto a task's acceptance criteria. The `apc` CLI is NOT on PATH — invoke it as `npx tsx sdk/apc/bin/apc.ts <subcommand>` from the repo root (its `--json` stdout is a structured `test203.run/v1` product; the human summary is on stderr). Steps: (1) `npx tsx sdk/apc/bin/apc.ts test --tier=T0 --diff --json > /tmp/apc-test.json` and read its RAW top-level exit code (0 green / 1 SUT red i.e. a NEW red vs baseline under --diff / 78 env_blocked). (2) Parse the TierResult from the JSON using the EXACT field names: top-level `exitCode`, `envStatus`, `regressions[]` (new reds vs baseline — the --diff verdict, distinct from baseline known-red), and each `tiers[]` `{tier, passed, failed, skipped, total, failedNames, envStatus}` (note it is `failedNames`, camelCase; command/exitCode live at top level, not per tier). (2b) GROUND THE FIELD NAMES IN THE REAL PRODUCER, do not trust any doc's word for them: `rg -n failedNames scripts/test203/run.ts` — that file is where the TierResult JSON is built, and its hits are your evidence set. Documented field names drift (doc12 recorded a TierResult `command` field that `jsonReport()` never emits); a field you cannot show on a real line of the producer is a field you must not claim to have consumed. (3) Apply the mapping rule and STATE it explicitly for each criterion you would report: a criterion whose covered cases are all green => `passed`; a criterion whose cases entered `regressions[]` (new red) => `failed` — a SUT red is a FINDING and is reported failed, NEVER softened to passed; a criterion blocked by top-level `exitCode=78` env_blocked => NOT failed, surfaced as an environment fault domain (infra/toolchain) and left pending, never counted as a SUT red; a criterion unrelated to the tier run => `n/a`. The outcome must come ONLY from the structured TierResult fields, never from chat narration. (4) Every reported outcome MUST carry an evidence ref (e.g. `taskRun:<id>` or `asset:<id>` after `cloud asset upload /tmp/apc-test.json`); a `passed` with no evidence ref is not allowed. (5) If dispatched inside a kanban task (PRISMER_TASK_ID set) you would report each criterion via `npx tsx sdk/cloud/src/cli.ts task verify-criterion \"$PRISMER_TASK_ID\" <criterion-id> --outcome <passed|failed|n/a> --evidence taskRun:<id> --note <failedNames>` and then `... task acceptance \"$PRISMER_TASK_ID\"` to read back that each criterion status moved from pending to your reported outcome with a non-empty evidence array; in a plain chat dispatch there is no task criterion, so state that the last-mile verify-criterion + acceptance read-back is N/A here.\n\n--- YOUR REPORT MUST USE THIS MACHINE-CHECKED OUTPUT CONTRACT (it is re-verified against the filesystem, so an invented path:line is caught):\n\nLine 1 — the TierResult field you anchored the mapping on, exactly this shape:\n`CHANGE-POINT: failedNames @ scripts/test203/run.ts`\n\nThen the mapping table — one row per criterion class you map, the FIRST CELL being the `path:line` that grounds that row (copy the line number from your own `rg -n` output; the cited line is read off disk and a missing file / out-of-range line / blank line FAILS the report):\n```\n| path:line | criterion-class | TierResult fact | outcome | evidence ref |\n| --- | --- | --- | --- | --- |\n| scripts/test203/run.ts:344 | covered cases all green | not in failedNames, not in regressions[] | passed | taskRun:<id> |\n| scripts/test203/run.ts:382 | covered case entered regressions[] | new red vs baseline | failed | asset:<id> |\n```\nYou need at least 3 mapping rows carrying a verified `path:line`, and at least 2 of your citations must land on a line that LITERALLY CONTAINS `failedNames` — a real line that is not a real search hit is not evidence, so run the `rg -n` above first and cite from its output.\n\nHARD RULE: do not guess line numbers. Every `path:line` anywhere in your report is re-read off disk. Citations MUST be repo-root-relative (`scripts/test203/run.ts:344`, never an abbreviated `test203/run.ts:344` and never an absolute path). A `rg -c` HIT COUNT is not a line number — write counts as `count=N`, never inline as `path:N`.\n\nReport: the raw apc test exit code, the parsed TierResult (per-tier pass/fail/skip counts + failedNames + regressions[]), the mapping table above, the outcome you would assign to each criterion class with its evidence ref, and an explicit statement that a SUT red maps to failed (never passed) and that exit-78 env_blocked is kept out of the SUT verdict.",
+      "expectedArtifacts": [
+        "apc test --tier=T0 --diff --json raw top-level exit code (0 green / 1 new-red / 78 env_blocked)",
+        "parsed TierResult: per-tier passed/failed/skipped/total + failedNames + regressions[] (new reds vs baseline)",
+        "a `CHANGE-POINT: failedNames @ scripts/test203/run.ts` declaration + `rg -n failedNames` evidence set grounding the consumed field names in the real producer",
+        "mapping table: ≥3 rows whose first cell is a `path:line` that resolves on disk, ≥2 of them landing on a line containing `failedNames`",
+        "per-criterion outcome mapping (passed/failed/n-a) derived ONLY from structured fields, each with an evidence ref",
+        "explicit discipline statement: a SUT red maps to failed (never softened to passed); env_blocked (exit 78) is not a SUT red"
+      ],
+      "acceptanceCriteria": [
+        {
+          "label": "consumed structured TierResult fields VERIFIED against the real producer — anchored on `failedNames @ scripts/test203/run.ts`, every path:line re-read off disk, ≥2 citations landing on a line that actually contains the field, ≥3 mapping rows carrying a verified citation",
+          "type": "structured",
+          "checker": "cited-evidence",
+          "args": {
+            "minRows": 3,
+            "minAnchoredRows": 2,
+            "anchorMinLength": 4,
+            "expectedChangePoint": {
+              "symbol": "failedNames",
+              "path": "scripts/test203/run.ts"
+            }
+          },
+          "match": "<structured:cited-evidence>",
+          "required": true
+        },
+        {
+          "label": "TierResult 的 verdict 由 exitCode 派生，不由叙述决定 —— 报告贴出它消费的原始 TierResult JSON，checker 重解析：exitCode 必须与报告声明的 TIER-EXIT 一致；FEEDBACK-VERDICT 必须是 exitCode 派生出的那个（1⇒sut-red 不得写成 passed；78⇒env-blocked 不得写成 sut-red）；per-tier 算术与 exit-code 契约同时复核",
+          "type": "structured",
+          "checker": "json-claim",
+          "args": {
+            "equals": {
+              "schema": "test203.run/v1"
+            },
+            "require": [
+              "exitCode",
+              "envStatus",
+              "tiers",
+              "regressions"
+            ],
+            "types": {
+              "exitCode": "number",
+              "tiers": "array",
+              "regressions": "array"
+            },
+            "allowed": {
+              "exitCode": [
+                0,
+                1,
+                78
+              ],
+              "envStatus": [
+                "ok",
+                "env_blocked"
+              ]
+            },
+            "declaredLines": {
+              "TIER-EXIT": "exitCode"
+            },
+            "derivedLines": {
+              "FEEDBACK-VERDICT": {
+                "from": "exitCode",
+                "map": {
+                  "0": "all-covered-criteria-passed",
+                  "1": "sut-red",
+                  "78": "env-blocked"
+                }
+              }
+            },
+            "implications": [
+              {
+                "if": {
+                  "path": "exitCode",
+                  "equals": 78
+                },
+                "then": {
+                  "path": "envStatus",
+                  "equals": "env_blocked"
+                }
+              },
+              {
+                "if": {
+                  "path": "exitCode",
+                  "equals": 0
+                },
+                "then": {
+                  "path": "regressions",
+                  "empty": true
+                }
+              }
+            ],
+            "eachItem": {
+              "path": "tiers",
+              "sum": {
+                "parts": [
+                  "passed",
+                  "failed",
+                  "skipped"
+                ],
+                "total": "total"
+              },
+              "lengths": {
+                "failedNames": "failed"
+              }
+            }
+          },
+          "match": "<structured:json-claim>",
+          "required": true
+        },
+        {
+          "label": "reports per-criterion / per-tier pass/fail/skip counts",
+          "match": "(pass|fail|skip)\\w*\\s*[:=|\\-]*\\s*\\d+|\\d+\\s*[|:=\\-]*\\s*(pass|fail|skip)",
+          "type": "regex",
+          "required": true
+        },
+        {
+          "label": "maps a criterion to an outcome from the four legal values",
+          "match": "(passed|failed|n/?a|waived|outcome|verify-criterion|criterion)",
+          "type": "regex",
+          "required": true
+        },
+        {
+          "label": "a SUT red is a finding, never softened to green",
+          "match": "(never\\s+(soften|passed|green)|not\\s+soften|红是发现|不软化|不放松|finding|failed\\s+not\\s+passed|map(s|ped)?\\s+to\\s+failed)",
+          "type": "regex",
+          "required": true
+        },
+        {
+          "label": "keeps env_blocked (exit 78) out of the SUT verdict",
+          "match": "(env[_ ]?blocked|\\b78\\b|environment\\s+(fault|domain)|infra|toolchain|环境)",
+          "type": "regex",
+          "required": true
+        },
+        {
+          "label": "attaches an evidence ref to each reported outcome",
+          "match": "(evidence|taskRun:|asset:|--evidence|证据)",
+          "type": "regex",
+          "required": true
+        },
+        {
+          "label": "last-mile verify-criterion + acceptance read-back (task-bound only)",
+          "match": "(verify-criterion|acceptance|read[- ]back|last[- ]mile|n/?a|回读|上报)",
+          "type": "regex",
+          "required": false
+        }
+      ]
+    }
+  ],
+  "security": {
+    "dataAccess": [
+      "local-filesystem",
+      "workspace-tasks"
+    ],
+    "humanApprovalRequiredFor": []
+  },
+  "provenance": {
+    "sourceKind": "inline-spec",
+    "sourceRefs": [
+      "docs/apc/05-devchain-gaps-and-skills.md",
+      "docs/apc/00-INDEX.md",
+      "sdk/apc/skills/FIELD-DICTIONARY.md",
+      "sdk/cloud/src/commands/task.ts"
+    ],
+    "authoredBy": "prismer-platform",
+    "authoredAt": "2026-07-25T00:00:00Z"
+  }
+}

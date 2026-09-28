@@ -5,7 +5,7 @@
  * Usage:
  *   aip identity create              Generate new Ed25519 keypair + DID
  *   aip identity show <did>          Show DID details
- *   aip identity from-key <apiKey>   Derive DID from API key
+ *   aip identity from-key <apiKey>   Legacy deterministic compatibility derivation
  *
  *   aip resolve <did>                Resolve a did:key locally
  *
@@ -21,15 +21,22 @@
  *   aip inspect <signed-message.json>     Parse and display signed message
  */
 
-import { readFileSync, writeFileSync, existsSync } from 'fs';
+import { readFileSync } from 'fs';
 import { resolve } from 'path';
 
 // Lazy imports to keep startup fast
-async function getIdentity() { return (await import('../identity.js')).AIPIdentity; }
-async function getDID() { return await import('../did.js'); }
-async function getDelegation() { return await import('../delegation.js'); }
-async function getCredentials() { return await import('../credentials.js'); }
-async function getResolver() { return (await import('../resolver.js')).KeyResolver; }
+async function getIdentity() {
+  return (await import('../identity.js')).AIPIdentity;
+}
+async function getDelegation() {
+  return await import('../delegation.js');
+}
+async function getCredentials() {
+  return await import('../credentials.js');
+}
+async function getResolver() {
+  return (await import('../resolver.js')).KeyResolver;
+}
 
 const args = process.argv.slice(2);
 const cmd = args[0];
@@ -50,7 +57,7 @@ async function main() {
 
 Commands:
   identity create              Generate new identity
-  identity from-key <apiKey>   Derive from API key
+  identity from-key <apiKey>   Legacy deterministic compatibility derivation
   identity show                Show current identity
 
   resolve <did>                Resolve did:key locally
@@ -88,18 +95,34 @@ Environment:
 
     if (sub === 'from-key') {
       const apiKey = args[2] || process.env.AIP_API_KEY;
-      if (!apiKey) { console.error('Usage: aip identity from-key <apiKey>'); process.exit(1); }
+      if (!apiKey) {
+        console.error('Usage: aip identity from-key <apiKey>');
+        process.exit(1);
+      }
       const id = await AIPIdentity.fromApiKey(apiKey);
       console.log(`DID:         ${id.did}`);
       console.log(`Public Key:  ${id.publicKeyBase64}`);
-      console.log(`(Deterministic — same API key always produces same DID)`);
+      console.error(
+        'Deprecated: from-key is retained for 2.x compatibility. Use `aip identity create` for new identities.',
+      );
+      console.log(`(Compatibility DID — same API key preserves the existing DID)`);
       return;
     }
 
     if (sub === 'show') {
       const key = process.env.AIP_PRIVATE_KEY;
-      if (!key) { console.error('Set AIP_PRIVATE_KEY env'); process.exit(1); }
-      const privBytes = typeof Buffer !== 'undefined' ? new Uint8Array(Buffer.from(key, 'base64')) : new Uint8Array(atob(key).split('').map(c => c.charCodeAt(0)));
+      if (!key) {
+        console.error('Set AIP_PRIVATE_KEY env');
+        process.exit(1);
+      }
+      const privBytes =
+        typeof Buffer !== 'undefined'
+          ? new Uint8Array(Buffer.from(key, 'base64'))
+          : new Uint8Array(
+              atob(key)
+                .split('')
+                .map((c) => c.charCodeAt(0)),
+            );
       const id = await AIPIdentity.fromPrivateKey(privBytes);
       console.log(`DID:         ${id.did}`);
       console.log(`Public Key:  ${id.publicKeyBase64}`);
@@ -114,7 +137,10 @@ Environment:
   // ── resolve ──────────────────────────────────
   if (cmd === 'resolve') {
     const did = sub;
-    if (!did) { console.error('Usage: aip resolve <did>'); process.exit(1); }
+    if (!did) {
+      console.error('Usage: aip resolve <did>');
+      process.exit(1);
+    }
     const KeyResolver = await getResolver();
     const resolver = new KeyResolver();
     const doc = await resolver.resolve(did);
@@ -125,11 +151,24 @@ Environment:
   // ── sign ─────────────────────────────────────
   if (cmd === 'sign') {
     const file = sub;
-    if (!file) { console.error('Usage: aip sign <file>'); process.exit(1); }
+    if (!file) {
+      console.error('Usage: aip sign <file>');
+      process.exit(1);
+    }
     const key = process.env.AIP_PRIVATE_KEY;
-    if (!key) { console.error('Set AIP_PRIVATE_KEY env'); process.exit(1); }
+    if (!key) {
+      console.error('Set AIP_PRIVATE_KEY env');
+      process.exit(1);
+    }
     const AIPIdentity = await getIdentity();
-    const privBytes = typeof Buffer !== 'undefined' ? new Uint8Array(Buffer.from(key, 'base64')) : new Uint8Array(atob(key).split('').map(c => c.charCodeAt(0)));
+    const privBytes =
+      typeof Buffer !== 'undefined'
+        ? new Uint8Array(Buffer.from(key, 'base64'))
+        : new Uint8Array(
+            atob(key)
+              .split('')
+              .map((c) => c.charCodeAt(0)),
+          );
     const id = await AIPIdentity.fromPrivateKey(privBytes);
     const data = readFileSync(resolve(file));
     const sig = await id.sign(new Uint8Array(data));
@@ -143,7 +182,10 @@ Environment:
     const file = sub;
     const sig = flag('sig');
     const did = flag('did');
-    if (!file || !sig || !did) { console.error('Usage: aip verify <file> --sig <b64> --did <did>'); process.exit(1); }
+    if (!file || !sig || !did) {
+      console.error('Usage: aip verify <file> --sig <b64> --did <did>');
+      process.exit(1);
+    }
     const AIPIdentity = await getIdentity();
     const data = readFileSync(resolve(file));
     const valid = await AIPIdentity.verify(new Uint8Array(data), sig, did);
@@ -155,7 +197,10 @@ Environment:
   if (cmd === 'delegate') {
     if (sub === 'verify') {
       const file = args[2];
-      if (!file) { console.error('Usage: aip delegate verify <file.json>'); process.exit(1); }
+      if (!file) {
+        console.error('Usage: aip delegate verify <file.json>');
+        process.exit(1);
+      }
       const { verifyDelegation } = await getDelegation();
       const delegation = JSON.parse(readFileSync(resolve(file), 'utf-8'));
       const valid = await verifyDelegation(delegation);
@@ -168,10 +213,20 @@ Environment:
     const scope = flag('scope');
     const days = flag('days');
     const key = process.env.AIP_PRIVATE_KEY;
-    if (!to || !scope || !key) { console.error('Usage: aip delegate --to <did> --scope <s1,s2> [--days N]\nRequires AIP_PRIVATE_KEY env'); process.exit(1); }
+    if (!to || !scope || !key) {
+      console.error('Usage: aip delegate --to <did> --scope <s1,s2> [--days N]\nRequires AIP_PRIVATE_KEY env');
+      process.exit(1);
+    }
     const AIPIdentity = await getIdentity();
     const { buildDelegation } = await getDelegation();
-    const privBytes = typeof Buffer !== 'undefined' ? new Uint8Array(Buffer.from(key, 'base64')) : new Uint8Array(atob(key).split('').map(c => c.charCodeAt(0)));
+    const privBytes =
+      typeof Buffer !== 'undefined'
+        ? new Uint8Array(Buffer.from(key, 'base64'))
+        : new Uint8Array(
+            atob(key)
+              .split('')
+              .map((c) => c.charCodeAt(0)),
+          );
     const issuer = await AIPIdentity.fromPrivateKey(privBytes);
     const delegation = await buildDelegation({
       issuer,
@@ -187,7 +242,10 @@ Environment:
   if (cmd === 'credential') {
     if (sub === 'verify') {
       const file = args[2];
-      if (!file) { console.error('Usage: aip credential verify <file.json>'); process.exit(1); }
+      if (!file) {
+        console.error('Usage: aip credential verify <file.json>');
+        process.exit(1);
+      }
       const { verifyCredential } = await getCredentials();
       const vc = JSON.parse(readFileSync(resolve(file), 'utf-8'));
       const valid = await verifyCredential(vc);
@@ -200,10 +258,22 @@ Environment:
     const type = flag('type');
     const claims = flag('claims');
     const key = process.env.AIP_PRIVATE_KEY;
-    if (!to || !type || !key) { console.error('Usage: aip credential issue --to <did> --type <type> --claims <json>\nRequires AIP_PRIVATE_KEY env'); process.exit(1); }
+    if (!to || !type || !key) {
+      console.error(
+        'Usage: aip credential issue --to <did> --type <type> --claims <json>\nRequires AIP_PRIVATE_KEY env',
+      );
+      process.exit(1);
+    }
     const AIPIdentity = await getIdentity();
     const { buildCredential } = await getCredentials();
-    const privBytes = typeof Buffer !== 'undefined' ? new Uint8Array(Buffer.from(key, 'base64')) : new Uint8Array(atob(key).split('').map(c => c.charCodeAt(0)));
+    const privBytes =
+      typeof Buffer !== 'undefined'
+        ? new Uint8Array(Buffer.from(key, 'base64'))
+        : new Uint8Array(
+            atob(key)
+              .split('')
+              .map((c) => c.charCodeAt(0)),
+          );
     const issuer = await AIPIdentity.fromPrivateKey(privBytes);
     const vc = await buildCredential({
       issuer,
@@ -218,7 +288,10 @@ Environment:
   // ── inspect ──────────────────────────────────
   if (cmd === 'inspect') {
     const file = sub;
-    if (!file) { console.error('Usage: aip inspect <file.json>'); process.exit(1); }
+    if (!file) {
+      console.error('Usage: aip inspect <file.json>');
+      process.exit(1);
+    }
     const obj = JSON.parse(readFileSync(resolve(file), 'utf-8'));
 
     if (obj.type?.includes('VerifiableCredential')) {
@@ -249,4 +322,7 @@ Environment:
   process.exit(1);
 }
 
-main().catch(e => { console.error(e.message); process.exit(1); });
+main().catch((e) => {
+  console.error(e.message);
+  process.exit(1);
+});

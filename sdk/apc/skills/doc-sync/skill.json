@@ -1,0 +1,81 @@
+{
+  "schemaVersion": 1,
+  "slug": "doc-sync",
+  "name": "Doc Sync",
+  "description": "Before a change merges, mechanize Documentation-First: derive the code delta from git diff, then verify that the required docs are in sync — CHANGELOG, docs/api/<domain>, CLAUDE.md/ROADMAP. Any SDK-package change must carry a matching CHANGELOG entry (+ version files aligned). A change that touched an SDK package but skipped its CHANGELOG must be flagged as a gap; a fully-synced change is released.",
+  "category": "documentation",
+  "version": "1.1.0",
+  "license": "MIT",
+  "compatibility": ["claude-code"],
+  "runtime": {
+    "kind": "text-workflow",
+    "requires": {
+      "env": [],
+      "bins": ["git", "rg"],
+      "capabilities": ["prismer.task.verify-criterion"]
+    }
+  },
+  "sampleTasks": [
+    {
+      "title": "Verify doc sync for a change that edits an SDK package but skips its CHANGELOG",
+      "prompt": "Run the doc-sync skill on this change delta. Mechanize Documentation-First: derive the code delta, classify it, then check each documentation obligation the delta triggers, and flag any required-but-missing doc as a GAP. --- CHANGE DELTA (the `git diff --name-only` for this change is exactly these two files):\n```\nsdk/cloud/src/commands/code-grep.ts\ndocs/api/im-tasks.md\n```\nNote what is NOT in the delta: there is NO `sdk/cloud/CHANGELOG.md` entry. --- Your steps: (1) treat the two lines above as the real `git diff --name-only` output and classify each file (sdk-package source / endpoint doc / schema / other). (2) Derive the documentation obligations THIS delta triggers, and for each name WHY it is required (which part of the delta triggered it): a change to `sdk/<org>/<pkg>/src/**` requires a matching CHANGELOG entry in that package's `CHANGELOG.md` PLUS aligned version files (per CLAUDE.md 'SDK CHANGELOG' rule); a `docs/api/<domain>.md` change carries its own doc obligation. (3) Check each obligation's satisfied? state against the changed-file set (an obligation is satisfied iff its doc file is ITSELF in the delta). (4) Produce the gap list. THE LOAD-BEARING ORACLE: the SDK package `sdk/cloud` had its source (code-grep.ts) changed but its `CHANGELOG.md` was NOT updated → you MUST flag this as a GAP, not pass it.\n\n--- YOUR REPORT MUST USE THIS MACHINE-CHECKED OUTPUT CONTRACT. The checker RECOMPUTES the obligation set and the gap set from the delta and compares them with yours, and it re-reads every declared delta file off disk — so keyword-shaped prose is worth nothing and an invented file is caught.\n\nOne line per changed file (both must appear, and only these two):\n```\nDELTA: sdk/cloud/src/commands/code-grep.ts | class: sdk-package-source\nDELTA: docs/api/im-tasks.md | class: endpoint-doc\n```\n\nOne line per obligation — `required-because` must be real prose (≥20 chars) tracing back to the delta, and `satisfied` must be yes only when that doc file is itself in the delta:\n```\nOBLIGATION: <doc path> | required-because: <why, traced to the delta> | satisfied: yes|no\n```\n\nOne line per gap — exactly the unsatisfied obligations, no more, no fewer:\n```\nGAP: <doc path>\n```\n\nThen your prose summary (classification, obligation table, gap list) as usual.",
+      "expectedArtifacts": [
+        "`DELTA:` lines classifying every changed file of the given diff (and no invented ones)",
+        "`OBLIGATION:` lines covering exactly the obligations derivable from that delta, each with a required-because tracing to the delta and a satisfied flag consistent with the changed-file set",
+        "`GAP:` lines equal to the unsatisfied obligation set — the missing sdk/cloud CHANGELOG must be among them",
+        "prose summary of the classified delta, the obligation table and the gap list"
+      ],
+      "acceptanceCriteria": [
+        {
+          "label": "delta / obligations / gaps recomputed from the real diff and matched — declared delta files re-read off disk, obligation set and gap set recomputed by the checker (missing, invented or mis-flagged obligations all fail)",
+          "type": "structured",
+          "checker": "doc-sync-obligations",
+          "args": {
+            "deltaFiles": ["sdk/cloud/src/commands/code-grep.ts", "docs/api/im-tasks.md"],
+            "minReasonChars": 20
+          },
+          "match": "<structured:doc-sync-obligations>",
+          "required": true
+        },
+        {
+          "label": "delta derived from git diff --name-only and classified",
+          "match": "(git\\s+diff|--name-only|\\bdelta\\b|变更文件|改动文件|classif|分类|归类)",
+          "type": "regex",
+          "flags": "is",
+          "required": true
+        },
+        {
+          "label": "names the real changed SDK package / file",
+          "match": "(sdk/cloud|typescript/src/commands|code-grep\\.ts|prismer-cloud/typescript)",
+          "type": "regex",
+          "flags": "is",
+          "required": true
+        },
+        {
+          "label": "obligation names WHY it is required (traceable to the delta)",
+          "match": "(because|required[- ]?because|triggered\\s+by|触发|obligation|义务|satisfied|因为|由于|所以)",
+          "type": "regex",
+          "flags": "is",
+          "required": true
+        }
+      ]
+    }
+  ],
+  "security": {
+    "dataAccess": ["local-filesystem", "workspace-tasks"],
+    "humanApprovalRequiredFor": []
+  },
+  "provenance": {
+    "sourceKind": "inline-spec",
+    "sourceRefs": [
+      "docs/apc/12-skill-acceptance-tasks.md",
+      "docs/apc/05-devchain-gaps-and-skills.md",
+      "scripts/apc-doc-sync.ts",
+      "sdk/build/version.sh",
+      "sdk/cloud/src/commands/task.ts",
+      "sdk/prismer/src/bundle/structured-criteria.ts"
+    ],
+    "authoredBy": "prismer-platform",
+    "authoredAt": "2026-07-24T00:00:00Z"
+  }
+}

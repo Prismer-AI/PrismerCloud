@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "vectors": [
+    {
+      "name": "seed-00-through-1f",
+      "privateKeyBase64": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+      "publicKeyBase64": "A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=",
+      "did": "did:key:z6MkehRgf7yJbgaGfYsdoAsKdBPE3dj2CYhowQdcjqSJgvVd"
+    },
+    {
+      "name": "seed-20-through-3f",
+      "privateKeyBase64": "ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8=",
+      "publicKeyBase64": "Kay64UG8yvCyLhqU000LxzYeUm0L/hLIl5S8kyKWbdc=",
+      "did": "did:key:z6MkhFwXNFWosLeugvSf4wcL9t3uuRXueGSFTRgSvHhWj5G2"
+    }
+  ],
+  "compatibilityDerivations": [
+    {
+      "apiKey": "test-key",
+      "did": "did:key:z6MkqpLhvq8b8MUMQpLuJpMw8WFWJvgpxwiF8kqQKSC1jpwU"
+    }
+  ],
+  "invalidDids": ["not-a-did", "did:key:z0invalid", "did:web:example.com"]
+}

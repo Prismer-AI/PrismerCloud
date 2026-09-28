@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "upstreamRepository": "https://github.com/earendil-works/pi",
+  "components": [
+    {
+      "package": "@earendil-works/pi-coding-agent",
+      "version": "0.84.2",
+      "integrity": "sha512-l4E+B7hgXKWddRo8bC/eSue2aWZjEgJ9xIpf5p0Og+lq8a2TArCwJ0HCoCPCgaBP/tN4zbYH/wOwvx9pJpeLCA==",
+      "tier": "official",
+      "tools": ["grep", "find", "ls"],
+      "catalogStatus": "curated",
+      "distribution": "runtime-bundle",
+      "provenance": {
+        "author": "Mario Zechner",
+        "repository": "https://github.com/earendil-works/pi",
+        "packageUrl": "https://www.npmjs.com/package/@earendil-works/pi-coding-agent"
+      }
+    },
+    {
+      "package": "pi-mcp-adapter",
+      "version": "2.36.0",
+      "integrity": "sha512-aX7Hf1FMGoHFjjx2Y4t12Hkue83CiBQmZaeQQ0mg+2wxOzbIOYdWzEkh1bmKlLHKiH6zRWlxWitsr+RaiXvoRQ==",
+      "tier": "community",
+      "tools": ["mcp"],
+      "catalogStatus": "curated",
+      "distribution": "runtime-bundle",
+      "provenance": {
+        "author": "Nico Bailon",
+        "repository": "https://github.com/nicobailon/pi-mcp-adapter",
+        "packageUrl": "https://www.npmjs.com/package/pi-mcp-adapter"
+      }
+    },
+    {
+      "package": "pi-web-access",
+      "version": "0.30.0",
+      "integrity": "sha512-BvqLP36JXfH9OBrmLiJ6IXeeCi9LVqJdLxpexeODM+LoVdCBV13vYiVEG8SQ3J+p+egbGmfPxdDQJ6V631LLUg==",
+      "tier": "community",
+      "tools": ["web_search", "source_check", "fetch_content", "get_search_content"],
+      "catalogStatus": "curated",
+      "distribution": "runtime-bundle",
+      "provenance": {
+        "author": "Nico Bailon",
+        "repository": "https://github.com/nicobailon/pi-web-access",
+        "packageUrl": "https://www.npmjs.com/package/pi-web-access"
+      }
+    }
+  ]
+}

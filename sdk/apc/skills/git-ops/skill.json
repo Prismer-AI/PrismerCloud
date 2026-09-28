@@ -1,0 +1,94 @@
+{
+  "schemaVersion": 1,
+  "slug": "git-ops",
+  "name": "Git Ops",
+  "description": "Close out a local coding task on the bound daemon: stage, commit, branch, merge, and push via cloud git — and when a merge conflicts, STOP and escalate with the file list instead of auto-resolving. Push only reaches the bare replica; prod-triggering tags are refused.",
+  "category": "vcs",
+  "version": "1.0.0",
+  "license": "MIT",
+  "compatibility": ["claude-code"],
+  "runtime": {
+    "kind": "text-workflow",
+    "requires": {
+      "env": ["PRISMER_WORKSPACE_ID", "PRISMER_DAEMON_ID"],
+      "bins": ["cloud", "git"],
+      "capabilities": ["prismer.git.exec", "prismer.task.meta"]
+    }
+  },
+  "sampleTasks": [
+    {
+      "title": "Commit the task's files, branch, merge back, record provenance",
+      "prompt": "Close out the coding task's git work FOR REAL, in an ISOLATED scratch repo under `.e2e-tmp/` (never in the shared worktree — it carries other sessions' uncommitted changes; `git stash` / `git checkout` there is forbidden). Set up: `.e2e-tmp/<name>/work` (a git repo whose `origin` remote is a LOCAL bare replica, e.g. `.e2e-tmp/<name>/replica.git`) plus `.e2e-tmp/<name>/conflict` (a repo with a real merge conflict left IN PROGRESS). Then: stage ONLY the task-owned files (`a.txt`, `b.txt`) with `git add`, commit (`cloud git commit` when a workdir-bound daemon is available, plain `git commit` in the scratch repo otherwise — the oracle is the object store, not the transport), create the scoped branch, push the branch to the bare replica, attempt to push a prod-triggering tag (`k8s-prod-*`) and confirm it does NOT land on the replica, and in the conflict repo STOP at the conflict: list the unmerged files and escalate — do NOT `merge --abort`, `reset`, or `-X ours/theirs`. Finally record branch + sha into the task metadata with `cloud task meta set --set-string`.\n\n--- YOUR REPORT MUST USE THIS MACHINE-CHECKED OUTPUT CONTRACT. Every line below is re-read out of the REAL object store with read-only git plumbing (`cat-file`, `show --name-only`, `rev-parse`, `ls-remote`, `diff --diff-filter=U`), and the task metadata is re-read from the live API:\n\n```\nGIT-REPO: .e2e-tmp/<name>/work\nGIT-COMMIT: <full sha> | files: a.txt, b.txt\nGIT-BRANCH: <branch> | head: <full sha>\nGIT-PUSHED: <branch> | remote: origin\nGIT-REFUSED-TAG: k8s-prod-<date>-v<x.y.z> | remote: origin\nGIT-CONFLICT-REPO: .e2e-tmp/<name>/conflict\nGIT-CONFLICT-FILES: c.txt\nTASK: <task id>\nMETA: git.sha = <full sha> | type: string\nMETA: git.branch = <branch> | type: string\n```\n\nHARD RULES: `files:` must be the EXACT file set of that commit — an extra auto-staged file is caught; `GIT-CONFLICT-FILES` must equal git's unmerged set AND `.git/MERGE_HEAD` must still exist (aborting/resolving destroys that evidence and fails the report); the refused tag must be ABSENT from the replica; `META:` values are compared against what the server actually stored, and `type: string` is a claim about the STORED type, so `--set` number-coercion is caught.",
+      "expectedArtifacts": [
+        "`GIT-REPO` / `GIT-COMMIT … | files:` — the real commit and its exact file set (no auto-staged extras)",
+        "`GIT-BRANCH … | head:` and `GIT-PUSHED … | remote:` — branch tip and the local bare replica really carrying it",
+        "`GIT-REFUSED-TAG … | remote:` — the prod-triggering tag is absent from the replica",
+        "`GIT-CONFLICT-REPO` + `GIT-CONFLICT-FILES` — MERGE_HEAD still alive and the unmerged set equals the escalated list",
+        "`TASK:` + `META: git.sha|git.branch … | type: string` — provenance stored as strings"
+      ],
+      "acceptanceCriteria": [
+        {
+          "label": "commit / branch / push / refused-tag are re-read out of the real object store: the commit exists and touches EXACTLY the task-owned files, the branch tip is the declared sha, the local bare replica really carries the branch, and the prod-triggering tag is NOT on it",
+          "type": "structured",
+          "checker": "git-claim-readback",
+          "args": {
+            "require": ["repo", "commit", "branch", "pushed", "refusedTag"],
+            "repoPrefix": ".e2e-tmp/",
+            "ownedFiles": ["a.txt", "b.txt"],
+            "refusedTagPattern": "^(k8s-prod|desktop-prod|prod|ali-k8s-prod)-"
+          },
+          "match": "<structured:git-claim-readback>",
+          "required": true
+        },
+        {
+          "label": "the merge conflict was left IN PLACE and escalated: MERGE_HEAD still exists (so no abort/reset/-X happened) and the declared file list equals git's unmerged set",
+          "type": "structured",
+          "checker": "git-claim-readback",
+          "args": {
+            "require": ["repo", "conflictRepo", "conflictFiles"],
+            "repoPrefix": ".e2e-tmp/"
+          },
+          "match": "<structured:git-claim-readback>",
+          "required": true
+        },
+        {
+          "label": "branch + sha provenance is really on the task and stored as STRINGS (re-read from the live task row; `--set` number-coercion is caught)",
+          "type": "structured",
+          "checker": "declared-id-readback",
+          "args": {
+            "require": ["task", "meta"],
+            "minCriteria": 0
+          },
+          "match": "<structured:declared-id-readback>",
+          "required": true
+        },
+        {
+          "label": "push only to allowlisted bare replica remote; no --force",
+          "match": "(allowlist|bare\\s+(replica|mirror)|remote[\\s\\S]{0,80}(origin|allowlist)|no\\s+--?force|without\\s+force|--force[\\s\\S]{0,40}(reject|refus|禁|not))",
+          "type": "regex",
+          "flags": "is",
+          "required": true
+        }
+      ]
+    }
+  ],
+  "security": {
+    "dataAccess": ["local-filesystem", "workspace-tasks", "git-remote"],
+    "humanApprovalRequiredFor": [
+      "merge conflicts (escalated, never auto-resolved)",
+      "pushing prod-triggering tags (refused daemon-side; the real gate is GitLab protected tags)"
+    ]
+  },
+  "provenance": {
+    "sourceKind": "inline-spec",
+    "sourceRefs": [
+      "docs/apc/05-devchain-gaps-and-skills.md",
+      "docs/apc/12-skill-acceptance-tasks.md",
+      "sdk/cloud/src/commands/git.ts",
+      "sdk/prismer/src/daemon/git-rpc.ts",
+      "src/im/services/git.service.ts"
+    ],
+    "authoredBy": "prismer-platform",
+    "authoredAt": "2026-07-24T00:00:00Z"
+  }
+}

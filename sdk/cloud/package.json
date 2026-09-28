@@ -1,0 +1,104 @@
+{
+  "name": "@prismer/sdk",
+  "version": "2.2.63",
+  "description": "Official TypeScript SDK for Prismer Cloud API",
+  "main": "dist/index.js",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "cloud": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "icon",
+    "smallicon",
+    "dist/pkf-schema.json"
+  ],
+  "scripts": {
+    "prebuild": "CHECK=1 tsx scripts/gen-pkf-role-carrier-policy.ts && node ../build/stage-pkf-core.cjs . --skip-build",
+    "build": "tsup",
+    "dev": "tsup src/index.ts --format cjs,esm --dts --watch",
+    "test": "vitest",
+    "test:integration": "vitest --config vitest.integration.config.ts",
+    "test:v193": "V193_LOCAL_CLOUD=1 vitest --config vitest.v193.config.ts",
+    "test:standalone": "tsx test/sdk-integration.test.ts",
+    "gen:pkf-writing-skill": "tsx scripts/gen-pkf-writing-skill.ts",
+    "gen:pkf-svg-skill": "tsx scripts/gen-pkf-svg-skill.ts",
+    "gen:pkf-role-carrier-policy": "tsx scripts/gen-pkf-role-carrier-policy.ts",
+    "lint": "eslint src/",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "prismer",
+    "ai",
+    "context",
+    "sdk",
+    "api"
+  ],
+  "author": "Prismer",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Prismer-AI/PrismerCloud.git",
+    "directory": "sdk/cloud"
+  },
+  "dependencies": {
+    "@clack/prompts": "^0.9.1",
+    "@iarna/toml": "^2.2.5",
+    "@prismer/aip-sdk": "^2.2.63",
+    "commander": "^12.1.0",
+    "picocolors": "^1.1.1",
+    "qrcode": "^1.5.4"
+  },
+  "devDependencies": {
+    "@prismer/pkf": "0.3.0",
+    "@types/node": "^20.0.0",
+    "@types/qrcode": "^1.5.5",
+    "tsup": "^8.0.0",
+    "tsx": "^4.8.1",
+    "typescript": "^5.0.0",
+    "vitest": "^1.0.0"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    },
+    "./webhook": {
+      "types": "./dist/webhook.d.ts",
+      "import": "./dist/webhook.mjs",
+      "require": "./dist/webhook.js"
+    },
+    "./pkf": {
+      "types": "./dist/pkf.d.ts",
+      "import": "./dist/pkf.mjs",
+      "require": "./dist/pkf.js"
+    },
+    "./environment-contract": {
+      "types": "./dist/environment-contract.d.ts",
+      "import": "./dist/environment-contract.mjs",
+      "require": "./dist/environment-contract.js"
+    },
+    "./environment-stream": {
+      "types": "./dist/environment-stream.d.ts",
+      "import": "./dist/environment-stream.mjs",
+      "require": "./dist/environment-stream.js"
+    }
+  },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/",
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "bundledDependencies": [
+    "@clack/prompts",
+    "@iarna/toml",
+    "@prismer/aip-sdk",
+    "commander",
+    "picocolors",
+    "qrcode"
+  ]
+}

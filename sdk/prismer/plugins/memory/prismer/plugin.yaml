@@ -1,0 +1,8 @@
+name: prismer
+version: 1.0.0
+description: "Prismer Cloud — local-first memory provider. Archive recall via agent-driven memory_search/memory_load tools against the daemon's local FTS5 store; bounded core-inject; automatic extract; built-in MEMORY.md mirroring. Activating it replaces Honcho (Hermes allows one external provider)."
+# All config is provided by the daemon (ensureService) via the profile .env —
+# no external CLI dependency, the daemon HTTP endpoint IS the backend.
+hooks:
+  - on_pre_compress
+  - on_memory_write

@@ -1,0 +1,22 @@
+{
+  "daemonBundle": [
+    "dist/cli.js",
+    "package.json",
+    "built-in-skills/pkf-writing/SKILL.md",
+    "built-in-skills/pkf-svg/SKILL.md",
+    "plugins/memory/prismer/__init__.py",
+    "apc/skills",
+    "node_modules/@prismer/pkf/package.json",
+    "node_modules/@prismer/sdk/package.json",
+    "node_modules/@prismer/sdk/dist/cli.js",
+    "node_modules/@earendil-works/pi-agent-core/package.json",
+    "node_modules/@earendil-works/pi-ai/package.json"
+  ],
+  "k8sPackerExtra": [
+    "components/eaas-pi-components.manifest.json",
+    "node_modules/@prismer/sdk/node_modules/@prismer/aip-sdk/package.json"
+  ],
+  "embeddedRuntimeExtra": [
+    "node_modules/better-sqlite3/build/Release/better_sqlite3.node"
+  ]
+}

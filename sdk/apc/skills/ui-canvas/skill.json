@@ -1,0 +1,127 @@
+{
+  "schemaVersion": 1,
+  "slug": "ui-canvas",
+  "name": "UI Canvas",
+  "description": "Align product journeys and UI/UX actions to directly imported production React components, explicit gaps, bidirectional implementation-spec references, immutable code-defined versions, and task-bound screenshot plus ReportCard evidence.",
+  "category": "design",
+  "version": "2.0.0",
+  "license": "MIT",
+  "compatibility": ["claude-code", "codex"],
+  "runtime": {
+    "kind": "text-workflow",
+    "requires": {
+      "env": [],
+      "bins": ["git", "rg", "node", "npx"],
+      "capabilities": []
+    }
+  },
+  "sampleTasks": [
+    {
+      "title": "Audit and publish task-bound evidence for a Product207 production Frame",
+      "prompt": "Use the ui-canvas skill to audit Product207 v1 and publish visual evidence for S1-01. Read `docs/product207/01-ui-mvp-seven-step-journey-contract.md`, `src/app/ui-canvas/registry/sets/product207/v1.ts`, and `src/app/ui-canvas/registry/component-registry.tsx`. Confirm the spec↔canvas reverse index, count checkpoints exactly once, classify every node as direct production or explicit gap, and verify no source comes from `src/app/ui-kit/sections/**`. Do not mutate aligned v1. Run `npx vitest run src/app/ui-canvas/__tests__`, `npx tsc --noEmit`, and only against local Next run `PRISMER_BASE_URL=http://127.0.0.1:3000 npx playwright test e2e-playwright/specs/ui-canvas.spec.ts --project=chromium`. Then run `npx tsx scripts/ui-canvas-evidence.ts --list`, followed by `npx tsx scripts/ui-canvas-evidence.ts --set product207 --version v1 --journey s1 --node s1-01 --themes light,dark --workspace \"$APC_WORKSPACE_ID\" --task \"$PRISMER_TASK_ID\"`. Read the harness JSON and report exactly these keyed lines with real values:\n\nCANVAS: product207@v1 | route: /ui-canvas?set=product207&version=v1&journey=s1&node=s1-01\nPRODUCTION: <count> | source: <repo-relative production import path:line>\nGAPS: <count> | refs: <drift refs>\nREGISTRY-TEST: npx vitest run src/app/ui-canvas/__tests__ | exit: <code>\nPLAYWRIGHT: <local command> | exit: <code> | passed: <count>\nEVIDENCE: route=/ui-canvas?set=product207&version=v1&journey=s1&node=s1-01 | themes=light,dark | comparison=none\nASSETS: light=<assetId>(bytes=<n>) | dark=<assetId>(bytes=<n>)\nREPORTCARD: pageId=<id> | uri=<prismer uri> | visibility=task:<taskId>\nHARNESS: npx tsx scripts/ui-canvas-evidence.ts ... | exit: <code>\nBOUNDARY: canvas interaction and evidence are not service verification\n\nDo not claim visual correctness or service verification. This sample requires live local cloud, workspace, and task context. If any is unavailable, report `BLOCKED` with the exact reason and state that the sample does not satisfy acceptance; never invent runtime ids.",
+      "expectedArtifacts": [
+        "the exact immutable UI Canvas Frame deep link",
+        "production and gap counts derived from the Canvas registry",
+        "a real production source path:line",
+        "real registry-test and local Playwright results",
+        "light and dark task-bound screenshot asset ids with byte counts",
+        "a persisted task-visible ReportCard pageId and uri",
+        "the harness comparison field verbatim as none",
+        "an explicit boundary that Canvas evidence is not service verification"
+      ],
+      "acceptanceCriteria": [
+        {
+          "label": "declares the audited Canvas set, version, and exact Frame route",
+          "match": "CANVAS\\s*:\\s*product207@v1\\s*\\|\\s*route\\s*:\\s*/ui-canvas\\?set=product207&version=v1&journey=s1&node=s1-01",
+          "type": "regex",
+          "flags": "is",
+          "required": true
+        },
+        {
+          "label": "reports production coverage with a real repo-relative source line",
+          "match": "PRODUCTION\\s*:\\s*\\d+\\s*\\|\\s*source\\s*:\\s*src/app/workspace/components/[^\\n:]+(?:/[^\\n:]+)*\\.tsx:\\d+",
+          "type": "regex",
+          "flags": "is",
+          "required": true
+        },
+        {
+          "label": "reports explicit gaps with drift references",
+          "match": "GAPS\\s*:\\s*[1-9]\\d*\\s*\\|\\s*refs\\s*:\\s*[^\\n]{3,}",
+          "type": "regex",
+          "flags": "is",
+          "required": true
+        },
+        {
+          "label": "reports a successful focused registry test",
+          "match": "REGISTRY-TEST\\s*:[^\\n]*vitest[^\\n]*ui-canvas/__tests__[^\\n]*exit\\s*:\\s*0",
+          "type": "regex",
+          "flags": "is",
+          "required": true
+        },
+        {
+          "label": "reports successful local Playwright evidence with at least one passing test",
+          "match": "PLAYWRIGHT\\s*:[^\\n]*127\\.0\\.0\\.1[^\\n]*\\|\\s*exit\\s*:\\s*0[^\\n]*\\|\\s*passed\\s*:\\s*[1-9]\\d*",
+          "type": "regex",
+          "flags": "is",
+          "required": true
+        },
+        {
+          "label": "identifies the exact Canvas evidence route, both themes, and no computed diff",
+          "match": "EVIDENCE\\s*:\\s*route=/ui-canvas\\?set=product207&version=v1&journey=s1&node=s1-01\\s*\\|\\s*themes=light,dark\\s*\\|\\s*comparison=none",
+          "type": "regex",
+          "flags": "is",
+          "required": true
+        },
+        {
+          "label": "reports different light and dark screenshot asset ids with non-zero byte counts",
+          "match": "ASSETS\\s*:\\s*light=[A-Za-z0-9_-]+\\(bytes=[1-9]\\d*\\)\\s*\\|\\s*dark=[A-Za-z0-9_-]+\\(bytes=[1-9]\\d*\\)",
+          "type": "regex",
+          "flags": "is",
+          "required": true
+        },
+        {
+          "label": "reports a persisted task-visible ReportCard",
+          "match": "REPORTCARD\\s*:\\s*pageId=[A-Za-z0-9_-]+\\s*\\|\\s*uri=prismer://[^\\s]+\\s*\\|\\s*visibility=task:[A-Za-z0-9_-]+",
+          "type": "regex",
+          "flags": "is",
+          "required": true
+        },
+        {
+          "label": "reports the UI Canvas evidence harness success",
+          "match": "HARNESS\\s*:[^\\n]*ui-canvas-evidence\\.ts[^\\n]*\\|\\s*exit\\s*:\\s*0",
+          "type": "regex",
+          "flags": "is",
+          "required": true
+        },
+        {
+          "label": "does not confuse Canvas evidence with service verification",
+          "match": "BOUNDARY\\s*:\\s*canvas interaction and evidence are not service verification",
+          "type": "regex",
+          "flags": "is",
+          "required": true
+        }
+      ]
+    }
+  ],
+  "security": {
+    "dataAccess": ["local-filesystem", "network"],
+    "humanApprovalRequiredFor": []
+  },
+  "provenance": {
+    "sourceKind": "inline-spec",
+    "sourceRefs": [
+      "docs/product207/15-ui-canvas-design.md",
+      "docs/product207/17-ui-canvas-expanded-frames-design.md",
+      "docs/product207/16-ui-canvas-implementation-plan.md",
+      "docs/product207/18-ui-canvas-expanded-frames-implementation-plan.md",
+      "docs/product207/01-ui-mvp-seven-step-journey-contract.md",
+      "src/app/ui-canvas/registry/sets/product207/v1.ts",
+      "src/app/ui-canvas/registry/component-registry.tsx",
+      "scripts/ui-canvas-evidence.ts",
+      "sdk/apc/harness/report-card.ts",
+      "e2e-playwright/specs/ui-canvas.spec.ts"
+    ],
+    "authoredBy": "prismer-platform",
+    "authoredAt": "2026-07-29T00:00:00Z"
+  }
+}

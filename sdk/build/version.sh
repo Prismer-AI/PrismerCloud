@@ -1,161 +1,214 @@
 #!/bin/bash
-# version.sh — Bump version across SDK packages (respects --scope)
+# version.sh — Align every active package to the root X.Y.Z release version
 source "$(dirname "$0")/lib/common.sh"
 parse_common_flags "$@"
 
-# ── Parse version argument ─────────────────────────────────────────
+if [[ "$SCOPE" != "all" ]]; then
+  log_error "Version changes are monorepo-wide; use --scope all"
+  exit 2
+fi
+
 TARGET=""
+BUMP=""
+REPAIR=0
 for arg in "${REMAINING_ARGS[@]+"${REMAINING_ARGS[@]}"}"; do
   case "$arg" in
-    --patch|--minor|--major) ;;  # handled below
-    *)       TARGET="$arg" ;;
+    --patch|--minor|--major) BUMP="$arg" ;;
+    --repair) REPAIR=1 ;;
+    *) TARGET="$arg" ;;
   esac
 done
 
 CURRENT="$(get_version)"
 
-if [[ -z "$TARGET" ]]; then
-  # Semver bump
-  IFS='.' read -r major minor patch <<< "$CURRENT"
-  for arg in "${REMAINING_ARGS[@]+"${REMAINING_ARGS[@]}"}"; do
-    case "$arg" in
-      --patch) patch=$((patch + 1)) ;;
-      --minor) minor=$((minor + 1)); patch=0 ;;
-      --major) major=$((major + 1)); minor=0; patch=0 ;;
-    esac
-  done
-  TARGET="$major.$minor.$patch"
-fi
+is_semver() {
+  [[ "$1" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+}
 
-if [[ "$TARGET" == "$CURRENT" || -z "$TARGET" ]]; then
-  log_error "Version unchanged or invalid. Current: $CURRENT"
-  echo "Usage: version.sh <X.Y.Z> | --patch | --minor | --major [--scope aip|prismer-cloud|all]"
+if ! is_semver "$CURRENT"; then
+  log_error "Root VERSION must be X.Y.Z: $CURRENT"
   exit 1
 fi
 
-log_step "Version Bump: $CURRENT → $TARGET (scope: $SCOPE)"
-
-# ── Write root /VERSION (single source of truth) ───────────────────
-# Only when bumping the full monorepo (scope=all). For scope-limited
-# bumps we still update the file because all SDKs share /VERSION
-# (hotfixes use sdk/build/hotfix.sh instead and do NOT touch /VERSION).
-VERSION_FILE="$PROJECT_ROOT/VERSION"
-if [[ $DRY_RUN -eq 1 ]]; then
-  log_dry "Would write $TARGET to $VERSION_FILE"
-else
-  echo "$TARGET" > "$VERSION_FILE"
-  log_info "Updated: $VERSION_FILE"
+if [[ -n "$TARGET" && -n "$BUMP" ]]; then
+  log_error "Choose an explicit X.Y.Z or one of --patch/--minor/--major"
+  exit 1
 fi
 
-# ── Bump helpers ───────────────────────────────────────────────────
+if [[ -z "$TARGET" && $REPAIR -eq 1 ]]; then
+  TARGET="$CURRENT"
+elif [[ -z "$TARGET" ]]; then
+  IFS='.' read -r major minor patch <<< "$CURRENT"
+  case "${BUMP:---patch}" in
+    --patch) patch=$((patch + 1)) ;;
+    --minor) minor=$((minor + 1)); patch=0 ;;
+    --major) major=$((major + 1)); minor=0; patch=0 ;;
+  esac
+  TARGET="$major.$minor.$patch"
+fi
+
+if ! is_semver "$TARGET"; then
+  log_error "Target version must be X.Y.Z; registry package versions cannot use four segments: $TARGET"
+  exit 1
+fi
+if [[ "$TARGET" == "$CURRENT" && $REPAIR -ne 1 ]]; then
+  log_error "Version unchanged: $CURRENT"
+  exit 1
+fi
+
+IFS='.' read -r target_major target_minor _target_patch <<< "$TARGET"
+NEXT_MINOR="$target_major.$((target_minor + 1)).0"
+
+log_step "Version alignment: $CURRENT → $TARGET"
+
+write_version_file() {
+  local file="$1"
+  if [[ $DRY_RUN -eq 1 ]]; then
+    log_dry "write $TARGET to $file"
+  else
+    printf '%s\n' "$TARGET" > "$file"
+    log_info "Updated: $file"
+  fi
+}
+
 bump_json() {
   local file="$1"
-  if [[ ! -f "$file" ]]; then log_warn "Skip (not found): $file"; return; fi
+  [[ -f "$file" ]] || return 0
   if [[ $DRY_RUN -eq 1 ]]; then
-    log_dry "Would update $file"
-  else
-    sed -i '' "s/\"version\": *\"[^\"]*\"/\"version\": \"$TARGET\"/" "$file"
-    log_info "Updated: $file"
+    log_dry "update JSON version in $file"
+    return
   fi
+  node - "$file" "$TARGET" <<'NODE'
+const fs = require('node:fs');
+const [file, version] = process.argv.slice(2);
+const json = JSON.parse(fs.readFileSync(file, 'utf8'));
+json.version = version;
+if (json.packages?.['']?.version) json.packages[''].version = version;
+fs.writeFileSync(file, `${JSON.stringify(json, null, 2)}\n`);
+NODE
+  log_info "Updated: $file"
 }
 
-bump_toml() {
+set_json_dependency() {
   local file="$1"
-  if [[ ! -f "$file" ]]; then log_warn "Skip (not found): $file"; return; fi
+  local dependency="$2"
+  local range="$3"
+  [[ -f "$file" ]] || return 0
   if [[ $DRY_RUN -eq 1 ]]; then
-    log_dry "Would update $file"
-  else
-    sed -i '' "s/^version = \"[^\"]*\"/version = \"$TARGET\"/" "$file"
-    log_info "Updated: $file"
+    log_dry "set $dependency=$range in $file"
+    return
   fi
+  node - "$file" "$dependency" "$range" <<'NODE'
+const fs = require('node:fs');
+const [file, dependency, range] = process.argv.slice(2);
+const json = JSON.parse(fs.readFileSync(file, 'utf8'));
+if (json.dependencies?.[dependency]) json.dependencies[dependency] = range;
+if (json.packages?.['']?.dependencies?.[dependency]) json.packages[''].dependencies[dependency] = range;
+fs.writeFileSync(file, `${JSON.stringify(json, null, 2)}\n`);
+NODE
+  log_info "Updated dependency: $file"
 }
 
-bump_hardcoded() {
+bump_pyproject() {
   local file="$1"
-  if [[ ! -f "$file" ]]; then log_warn "Skip (not found): $file"; return; fi
+  [[ -f "$file" ]] || return 0
   if [[ $DRY_RUN -eq 1 ]]; then
-    log_dry "Would update $file"
-  else
-    sed -i '' "s/version: '[^']*'/version: '$TARGET'/" "$file"
-    sed -i '' "s/version: \"[^\"]*\"/version: \"$TARGET\"/" "$file"
-    log_info "Updated: $file"
+    log_dry "update Python version in $file"
+    return
   fi
+  node - "$file" "$TARGET" <<'NODE'
+const fs = require('node:fs');
+const [file, version] = process.argv.slice(2);
+const source = fs.readFileSync(file, 'utf8').replace(/^version\s*=\s*"[^"]+"/m, `version = "${version}"`);
+fs.writeFileSync(file, source);
+NODE
+  log_info "Updated: $file"
 }
 
-bump_python_init() {
+set_python_aip_dependency() {
   local file="$1"
-  if [[ ! -f "$file" ]]; then log_warn "Skip (not found): $file"; return; fi
+  local range="prismer-aip>=$TARGET,<$NEXT_MINOR"
   if [[ $DRY_RUN -eq 1 ]]; then
-    log_dry "Would update $file"
-  else
-    sed -i '' "s/__version__ = \"[^\"]*\"/__version__ = \"$TARGET\"/" "$file"
-    log_info "Updated: $file"
+    log_dry "set $range in $file"
+    return
   fi
+  node - "$file" "$range" <<'NODE'
+const fs = require('node:fs');
+const [file, range] = process.argv.slice(2);
+const source = fs.readFileSync(file, 'utf8').replace(/prismer-aip>=[^",]+,<[^"\]]+/, range);
+fs.writeFileSync(file, source);
+NODE
+  log_info "Updated dependency: $file"
 }
 
-# Bumps `const VERSION = '...'` literals (runtime/src/cli/index.ts).
-bump_runtime_cli_version() {
-  local file="$1"
-  if [[ ! -f "$file" ]]; then log_warn "Skip (not found): $file"; return; fi
+bump_generated_sources() {
   if [[ $DRY_RUN -eq 1 ]]; then
-    log_dry "Would update $file"
-  else
-    sed -i '' "s/const VERSION = '[^']*'/const VERSION = '$TARGET'/" "$file"
-    log_info "Updated: $file"
+    log_dry "update src/lib/version.ts, sdk/prismer/src/cli/index.ts, sdk/cloud/mcp/src/index.ts"
+    log_dry "update sdk/cloud/python/prismer/__init__.py"
+    return
   fi
+  node - "$PROJECT_ROOT/src/lib/version.ts" "$TARGET" <<'NODE'
+const fs = require('node:fs');
+const [file, version] = process.argv.slice(2);
+const today = new Date().toISOString().slice(0, 10);
+const source = fs.readFileSync(file, 'utf8');
+// BUILD_DATE only advances when the version itself changes; a --repair run
+// at the same version must be a byte-for-byte no-op for this file.
+const versioned = source.replace(/^export const VERSION = '[^']+'/m, `export const VERSION = '${version}'`);
+const updated =
+  versioned === source
+    ? versioned
+    : versioned.replace(/^export const BUILD_DATE = '[^']+'/m, `export const BUILD_DATE = '${today}'`);
+fs.writeFileSync(file, updated);
+NODE
+  node - "$PRISMER_RUNTIME/src/cli/index.ts" "$TARGET" <<'NODE'
+const fs = require('node:fs');
+const [file, version] = process.argv.slice(2);
+const source = fs.readFileSync(file, 'utf8').replace(/^const VERSION = '[^']+'/m, `const VERSION = '${version}'`);
+fs.writeFileSync(file, source);
+NODE
+  node - "$CLOUD_SDK/mcp/src/index.ts" "$TARGET" <<'NODE'
+const fs = require('node:fs');
+const [file, version] = process.argv.slice(2);
+const source = fs.readFileSync(file, 'utf8').replace(/(name:\s*'prismer',\s*\n\s*version:)\s*'[^']+'/m, `$1 '${version}'`);
+fs.writeFileSync(file, source);
+NODE
+  node - "$CLOUD_SDK/python/prismer/__init__.py" "$TARGET" <<'NODE'
+const fs = require('node:fs');
+const [file, version] = process.argv.slice(2);
+const source = fs.readFileSync(file, 'utf8').replace(/^__version__ = "[^"]+"/m, `__version__ = "${version}"`);
+fs.writeFileSync(file, source);
+NODE
+  log_info "Updated generated source versions"
 }
 
-# ── prismer-cloud suite ────────────────────────────────────────────
-if scope_includes_prismer; then
-  log_step "prismer-cloud packages"
+write_version_file "$PROJECT_ROOT/VERSION"
 
-  # JSON (package.json + plugin.json)
-  bump_json "$PRISMER_CLOUD/typescript/package.json"
-  bump_json "$PRISMER_CLOUD/runtime/package.json"
-  bump_json "$PRISMER_CLOUD/mcp/package.json"
-  bump_json "$PRISMER_CLOUD/opencode-plugin/package.json"
-  bump_json "$PRISMER_CLOUD/claude-code-plugin/package.json"
-  bump_json "$PRISMER_CLOUD/openclaw-channel/package.json"
-  bump_json "$PRISMER_CLOUD/claude-code-plugin/.claude-plugin/plugin.json"
+for manifest in \
+  "$PROJECT_ROOT/package.json" \
+  "$PROJECT_ROOT/apps/desktop/package.json" \
+  "$AIP_SDK/typescript/package.json" \
+  "$CLOUD_SDK/package.json" \
+  "$CLOUD_SDK/mcp/package.json" \
+  "$PRISMER_RUNTIME/package.json"; do
+  bump_json "$manifest"
+done
 
-  # TOML
-  bump_toml "$PRISMER_CLOUD/python/pyproject.toml"
-  bump_toml "$PRISMER_CLOUD/rust/Cargo.toml"
+for lockfile in \
+  "$PROJECT_ROOT/package-lock.json" \
+  "$PROJECT_ROOT/apps/desktop/package-lock.json" \
+  "$AIP_SDK/typescript/package-lock.json" \
+  "$PRISMER_RUNTIME/package-lock.json" \
+  "$CLOUD_SDK/package-lock.json" \
+  "$CLOUD_SDK/mcp/package-lock.json"; do
+  bump_json "$lockfile"
+done
 
-  # Hardcoded version strings
-  bump_hardcoded "$PRISMER_CLOUD/mcp/src/index.ts"
-  bump_runtime_cli_version "$PRISMER_CLOUD/runtime/src/cli/index.ts"
+bump_pyproject "$AIP_SDK/python/pyproject.toml"
+bump_pyproject "$CLOUD_SDK/python/pyproject.toml"
+set_json_dependency "$CLOUD_SDK/package.json" "@prismer/aip-sdk" "^$TARGET"
+set_json_dependency "$CLOUD_SDK/package-lock.json" "@prismer/aip-sdk" "^$TARGET"
+set_python_aip_dependency "$CLOUD_SDK/python/pyproject.toml"
+bump_generated_sources
 
-  # Python __init__.py
-  bump_python_init "$PRISMER_CLOUD/python/prismer/__init__.py"
-fi
-
-# ── aip suite ──────────────────────────────────────────────────────
-if scope_includes_aip; then
-  log_step "aip packages"
-
-  bump_json "$AIP_SDK/typescript/package.json"
-  bump_toml "$AIP_SDK/python/pyproject.toml"
-  bump_toml "$AIP_SDK/rust/Cargo.toml"
-fi
-
-# ── Root package.json + src/lib/version.ts BUILD_DATE ──────────────
-if scope_includes_prismer; then
-  bump_json "$PROJECT_ROOT/package.json"
-  if [[ -f "$PROJECT_ROOT/src/lib/version.ts" ]]; then
-    if [[ $DRY_RUN -eq 1 ]]; then
-      log_dry "Would update VERSION + BUILD_DATE in src/lib/version.ts"
-    else
-      TODAY="$(date +%Y-%m-%d)"
-      sed -i '' "s/^export const VERSION = '[^']*'/export const VERSION = '$TARGET'/" "$PROJECT_ROOT/src/lib/version.ts"
-      sed -i '' "s/^export const BUILD_DATE = '[^']*'/export const BUILD_DATE = '$TODAY'/" "$PROJECT_ROOT/src/lib/version.ts"
-      log_info "Updated VERSION + BUILD_DATE in src/lib/version.ts"
-    fi
-  fi
-fi
-
-# ── Verify ─────────────────────────────────────────────────────────
-log_step "Verify"
-FOUND=$(grep -rl "\"$TARGET\"\|'$TARGET'\|= \"$TARGET\"" "$SDK_ROOT" --include="*.json" --include="*.toml" --include="*.ts" --include="*.py" 2>/dev/null | wc -l | tr -d ' ')
-log_success "Found $TARGET in $FOUND files"
-log_success "Version bumped: $CURRENT → $TARGET"
+log_success "Version alignment prepared: $CURRENT → $TARGET"

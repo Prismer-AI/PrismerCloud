@@ -1,0 +1,257 @@
+{
+  "_generated": {
+    "by": "npx tsx scripts/memory211/generate-memory-tool-contract.ts",
+    "from": "sdk/prismer/src/adapters/memory-tools.ts",
+    "doNotEdit": "Regenerate instead of editing — see scripts/memory211/memory-tool-contract.ts"
+  },
+  "memoryTools": [
+    {
+      "name": "memory_search",
+      "description": "Search workspace memory (prior decisions, user preferences, knowledge pages). Use this only when you have a specific question that you believe past memory would answer — not on every turn. Most queries do not need this. Returns 0–N ranked snippets with prismer:// URIs; empty results are normal. Each hit reports where it sits in the wiki (hubPath, children), how linked it is (inboundLinkCount, outboundPreview) and whether it is distilled knowledge or raw source (tier) — use those to decide whether to load the page or follow a link. When your wording matched nothing, the response instead carries `navigation`: startPoints are NOT answers, they are the INDEX/hub entries to walk from — browse their children, batch-load what looks relevant, then follow links. Pass several related questions at once via `queries` instead of calling this tool repeatedly.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Free-text search query. Whitespace-separated terms are ANDed.",
+            "minLength": 1
+          },
+          "queries": {
+            "type": "array",
+            "description": "Batch recall: up to 8 related questions answered in ONE call, returned grouped in `resultsByQuery`. Prefer this over several separate memory_search calls.",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "maxItems": 8
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Max number of results (default 5, max 20).",
+            "minimum": 1,
+            "maximum": 20,
+            "default": 5
+          },
+          "sourceWorkspaceId": {
+            "type": "string",
+            "description": "Optional granting workspace id. When set, memory_search uses an active cross-workspace memory grant and returns hits tagged tier=grant/sourceWorkspaceId."
+          },
+          "pageType": {
+            "type": "array",
+            "description": "Optional filter on page kind.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "hub",
+                "leaf",
+                "decision",
+                "glossary",
+                "archive"
+              ]
+            }
+          }
+        },
+        "required": [
+          "query"
+        ]
+      }
+    },
+    {
+      "name": "memory_load",
+      "description": "Load a specific memory page by URI (prismer://workspace/<workspaceId>/memory/<path>) or by (workspaceId + path). Returns the full page content plus metadata and the page's outbound links (backlinks included) — served from the local link index even when the cloud is unreachable.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "uri": {
+            "type": "string",
+            "description": "Full prismer:// URI (preferred). Mutually exclusive with workspaceId+path.",
+            "pattern": "^prismer://"
+          },
+          "workspaceId": {
+            "type": "string",
+            "description": "Workspace identifier (used with `path`)."
+          },
+          "sourceWorkspaceId": {
+            "type": "string",
+            "description": "Optional granting workspace id. When set with `path`, memory_load reads through an active cross-workspace memory grant."
+          },
+          "path": {
+            "type": "string",
+            "description": "Workspace-relative memory file path (used with `workspaceId`)."
+          }
+        }
+      }
+    },
+    {
+      "name": "memory_browse",
+      "description": "See the current memory structure BEFORE writing: the INDEX, existing hubs (with what each is about), and pages nearest to your query. Use it to decide placement (attach under a hub via memory_write parentHubPath, extend an existing page, or create a new hub).",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Optional topic — adds the nearest existing pages to the structure view."
+          }
+        }
+      }
+    },
+    {
+      "name": "memory_write",
+      "description": "Write a durable memory page to the workspace knowledge wiki (the WRITE path). Use this to persist a fact, decision, definition, or piece of project context that should survive across sessions. YOU author the page: write the `content` and choose its `path`, deciding placement from the memory structure (call memory_browse FIRST) — extend/replace an existing page by reusing its path, or create a new leaf under the right topic and ATTACH it via `parentHubPath`. An unanchored new leaf is rejected with `placement_required`; create a hub first when no existing hub fits. To extend someone else's existing page, prefer op=append-section (with `section`) over overwriting the whole page. One memory per distinct topic. A returned {\"ok\":true} means the mutation succeeded: for that fact/path, do not call memory_write again in this turn to polish or verify; use memory_load instead. Canonical content is PKF; markdown exists only as a legacy compatibility input and is normalized before storage.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Workspace-relative semantic path for the page, e.g. 'decisions/auth-model.pkf'. Reuse an existing page's path to extend/replace it.",
+            "minLength": 1
+          },
+          "content": {
+            "type": "string",
+            "description": "Canonical PKF page body. Markdown is accepted only for legacy compatibility and is normalized.",
+            "minLength": 1
+          },
+          "title": {
+            "type": "string",
+            "description": "Short page title."
+          },
+          "parentHubPath": {
+            "type": "string",
+            "description": "Attach this page under an existing hub — get hub paths from memory_browse. The daemon records a graph edge (page → hub) so the page nests under the hub instead of hanging flat off INDEX."
+          },
+          "relation": {
+            "type": "string",
+            "description": "Edge type for parentHubPath (default child-of).",
+            "enum": [
+              "child-of",
+              "related"
+            ]
+          },
+          "op": {
+            "type": "string",
+            "description": "Write operation (default replace = whole page). append-section appends a new section to an EXISTING page instead of overwriting it — preferred for extending someone else's page. rewrite-section overwrites just the section addressed by `section`.",
+            "enum": [
+              "replace",
+              "append-section",
+              "rewrite-section"
+            ]
+          },
+          "section": {
+            "type": "string",
+            "description": "Heading id (slug) of the target section. Required for op=append-section / rewrite-section."
+          },
+          "visibility": {
+            "type": "string",
+            "description": "Visibility scope for the page (default workspace). One of: workspace, agent:<imUserId>, private:<imUserId>, role:<slug>, council:<councilId>. role:/council: are for orchestrator writeback (e.g. a council roundtable writing a shared decision as council:<councilId>); a non-orchestrator caller falls back to workspace. Unknown values are treated as workspace."
+          }
+        },
+        "required": [
+          "path",
+          "content"
+        ]
+      }
+    },
+    {
+      "name": "memory_curate",
+      "description": "Curate workspace memory (knowledge-base maintenance). Ops: `candidates` READS what to converge (unplaced leaves + near-duplicate clusters + stale, remote-conflict, and oversized pages) — call this FIRST to decide clusters; `promote_to_hub` turns a leaf page into a hub; `supersede` archives a page and marks it stale; `rebuild_index` rebuilds machine-owned hub TOCs; top INDEX Contents is derived live from the graph. Section-level verbs (memory211 W5): `section_merge` folds one near-duplicate section into another (the cloud lands the supersedes/derived-from provenance edges for you), `section_supersede` retires one section in place, `rewire` re-points a broken or wrong link. `candidates` is read-only (any agent). Every other op is ORCHESTRATOR-ONLY — if you are not the workspace orchestrator they return an error.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "op": {
+            "type": "string",
+            "description": "Curation operation. candidates = READ unplaced/near-dup/stale/conflict/oversized surfaces (call first); promote_to_hub = leaf→hub; supersede = archive+stale; rebuild_index = rebuild hub TOCs (INDEX Contents is derived); section_merge = fold a near-duplicate section into another; section_supersede = retire one section; rewire = re-point a link.",
+            "enum": [
+              "candidates",
+              "promote_to_hub",
+              "supersede",
+              "rebuild_index",
+              "section_merge",
+              "section_supersede",
+              "rewire"
+            ]
+          },
+          "pageId": {
+            "type": "string",
+            "description": "Target page id. Required for promote_to_hub and supersede. For section_merge this is the WINNER page (the section that absorbs the duplicate). For section_supersede this is the page whose section retires."
+          },
+          "childPaths": {
+            "type": "array",
+            "description": "promote_to_hub only — existing page paths to attach under the new hub as its children.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "reason": {
+            "type": "string",
+            "description": "Optional reason recorded by supersede / section_merge / section_supersede."
+          },
+          "kind": {
+            "type": "string",
+            "description": "candidates only — which surface to read (default all).",
+            "enum": [
+              "orphans",
+              "duplicates",
+              "stale",
+              "conflicts",
+              "oversized",
+              "all"
+            ]
+          },
+          "limit": {
+            "type": "integer",
+            "description": "candidates only — max items per kind.",
+            "minimum": 1,
+            "maximum": 500
+          },
+          "section": {
+            "type": "string",
+            "description": "section_supersede only — anchor slug of the section to retire."
+          },
+          "targetSection": {
+            "type": "string",
+            "description": "section_merge only — anchor slug of the WINNER section that absorbs the duplicate."
+          },
+          "sourcePageId": {
+            "type": "string",
+            "description": "section_merge only — id of the LOSER page whose section is folded away."
+          },
+          "sourceSection": {
+            "type": "string",
+            "description": "section_merge only — anchor slug of the LOSER section."
+          },
+          "mergedContent": {
+            "type": "string",
+            "description": "section_merge only — the merged section body to write into the winner (PKF per pkf-writing). The cloud writes the supersedes/derived-from provenance edges automatically."
+          },
+          "supersededByPageId": {
+            "type": "string",
+            "description": "section_supersede only — optional surviving page the retired section points at."
+          },
+          "supersededBySection": {
+            "type": "string",
+            "description": "section_supersede only — anchor slug on supersededByPageId."
+          },
+          "linkId": {
+            "type": "string",
+            "description": "rewire only — id of the link to re-point."
+          },
+          "toPageId": {
+            "type": "string",
+            "description": "rewire only — new target page id (mutually exclusive with toPath)."
+          },
+          "toPath": {
+            "type": "string",
+            "description": "rewire only — new target page path (mutually exclusive with toPageId)."
+          },
+          "toSection": {
+            "type": "string",
+            "description": "rewire only — optional new target section anchor."
+          }
+        },
+        "required": [
+          "op"
+        ]
+      }
+    }
+  ]
+}

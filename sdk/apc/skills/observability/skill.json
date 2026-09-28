@@ -1,0 +1,116 @@
+{
+  "schemaVersion": 1,
+  "slug": "observability",
+  "name": "Observability Sweep",
+  "description": "Periodic health sweep through the canonical read-only Admin v1 logs contract plus the debug pipeline. Partial evidence is never treated as healthy; a real anomaly opens one evidence-backed work item and a healthy sweep opens none.",
+  "category": "observability",
+  "version": "1.3.0",
+  "license": "MIT",
+  "compatibility": ["claude-code", "prismer-sdk"],
+  "runtime": {
+    "kind": "text-workflow",
+    "requires": {
+      "env": [],
+      "bins": ["node"],
+      "capabilities": ["admin.logs.read", "prismer.task.create"]
+    }
+  },
+  "sampleTasks": [
+    {
+      "title": "Sweep the system, distinguish complete from partial evidence, and open a bug only for a real anomaly",
+      "prompt": "Run the observability skill from the repository root. First ACK the skill. Call `npx tsx scripts/debug/admin-observability.ts capabilities`, then query `logs --target-kind=service --target-id=prismer-cloud --since=15m --purpose=periodic-apc-observability-sweep --completeness=require-complete`. For sandbox or daemon evidence, first call `cloud admin log-targets --kind sandbox|daemon --purpose <reason>` and use the returned logical id; never guess a Pod, namespace, or selector. This client must use only canonical Admin v1 read endpoints through the daemon-held credential. Exit 3 from the strict script or exit 2 from `cloud admin logs` means the confidence boundary is partial and must never be reported healthy. SLS offset continuation is best-effort and never proves stable completeness. Never pass or print an API key, run `env`/`printenv`, enable shell tracing, or persist Authorization data. Return an opaque nextCursor unchanged as `--cursor=<opaque>`; never parse or synthesize it. attemptedSourceTiers reports attempts only; availableSourceTiers reports available evidence. In production require-complete, retained evidence must be available, stable, complete, untruncated, and non-duplicating, with productionRetainedRequirement.satisfied=true. Then run `scripts/debug/inventory.ts`, persist the current output under `.e2e-tmp/apc/observability/`, and explicitly adjudicate pods, workspaces, tasks, errors, and daemon. Drill into any suspect with snapshot/bundle/logs. Cite current repo-relative evidence lines for every signal face. Open a `work_item` only for an evidence-backed anomaly and read the task back; otherwise report healthy and open no task. The final report must include contractDigest, principal, requestId, attemptedSourceTiers, availableSourceTiers, per-source outcomes, coverage, partial/truncated, production retained confidence gate, redaction ruleset, evidenceHash, and an explicit confidence boundary.",
+      "expectedArtifacts": [
+        "canonical capabilities and logs-query receipts with contract/principal/request/source/coverage/redaction/evidence metadata",
+        "inventory output persisted at `.e2e-tmp/apc/observability/inventory.md`",
+        "five keyed SIGNAL-pods/workspaces/tasks/errors/daemon lines, each with a current repo-relative citation or explicit N/A reason",
+        "drill-down side-effect slice for every suspect",
+        "explicit anomaly, healthy, or partial-evidence verdict grounded in side effects",
+        "anomaly path: a read-back work_item with evidence; healthy path: explicit no-task statement"
+      ],
+      "acceptanceCriteria": [
+        {
+          "label": "used canonical Admin v1 discovery and logs query",
+          "match": "(admin-observability|/api/admin/v1/capabilities|logs:query|contractDigest)",
+          "type": "regex",
+          "required": true
+        },
+        {
+          "label": "reports completeness and the confidence boundary",
+          "match": "(require-complete|partial|attemptedSourceTiers|availableSourceTiers|productionRetainedRequirement|coverage|confidence)",
+          "type": "regex",
+          "required": true
+        },
+        {
+          "label": "ran the broader debug pipeline",
+          "match": "(inventory|debug/bundle|debug/snapshot|debug/logs|scripts/debug)",
+          "type": "regex",
+          "required": true
+        },
+        {
+          "label": "every signal face was adjudicated from current evidence or explicit N/A",
+          "type": "structured",
+          "checker": "dimension-coverage",
+          "args": {
+            "dimensions": [
+              "SIGNAL-pods",
+              "SIGNAL-workspaces",
+              "SIGNAL-tasks",
+              "SIGNAL-errors",
+              "SIGNAL-daemon"
+            ],
+            "minReasonChars": 20
+          },
+          "match": "<structured:dimension-coverage>",
+          "required": true
+        },
+        {
+          "label": "made an explicit anomaly, healthy, or partial-evidence decision",
+          "match": "(anomal|healthy|partial|无异常|异常|不完整)",
+          "type": "regex",
+          "required": true
+        },
+        {
+          "label": "grounded the verdict in side effects",
+          "match": "(source|error|pod status|terminal|heartbeat|daemon|snapshot|bundle|副作用)",
+          "type": "regex",
+          "required": true
+        },
+        {
+          "label": "does not fabricate a bug on a healthy sweep",
+          "match": "(no task|healthy.*no|不开|未开|无异常)",
+          "type": "regex",
+          "required": false
+        },
+        {
+          "label": "anomaly path creates a work item with evidence",
+          "match": "(work_item|bug task|task create|task id|evidence|asset:)",
+          "type": "regex",
+          "required": false
+        }
+      ]
+    }
+  ],
+  "security": {
+    "dataAccess": [
+      "local-filesystem",
+      "workspace-tasks",
+      "admin-v1-read-endpoints",
+      "admin-debug-endpoints"
+    ],
+    "humanApprovalRequiredFor": [
+      "test/prod sweeps require platform-held admin credentials that are never injected into a coding-agent workdir or command line"
+    ]
+  },
+  "provenance": {
+    "sourceKind": "inline-spec",
+    "sourceRefs": [
+      "docs/acs/admin-control-plane-redesign.md",
+      "scripts/debug/admin-observability.ts",
+      "scripts/debug/inventory.ts",
+      "scripts/debug/bundle.ts",
+      "sdk/cloud/src/commands/task.ts"
+    ],
+    "authoredBy": "prismer-platform",
+    "authoredAt": "2026-08-29T00:00:00Z"
+  }
+}

@@ -1,0 +1,124 @@
+{
+  "schemaVersion": 1,
+  "slug": "code-review",
+  "name": "Code Review",
+  "description": "Review a diff against its acceptance criteria in four segments (convention adherence, correctness/bug scan, historical-context regressions, test-coverage gaps), executed by a NON-implementing agent (reviewer != commit author). Produce findings sorted by severity, each with file:line and a concrete failure scenario. A planted defect must be surfaced; a clean diff must not be over-reported.",
+  "category": "review",
+  "version": "1.1.0",
+  "license": "MIT",
+  "compatibility": [
+    "claude-code"
+  ],
+  "runtime": {
+    "kind": "text-workflow",
+    "requires": {
+      "env": [],
+      "bins": [
+        "git",
+        "rg"
+      ],
+      "capabilities": [
+        "prismer.task.verify-criterion"
+      ]
+    }
+  },
+  "sampleTasks": [
+    {
+      "title": "Four-segment review of a REAL repo diff whose reasoning hides a data-loss defect, by a non-implementer",
+      "prompt": "Run the code-review skill as a NON-implementing reviewer on the diff below. This is a REAL diff from this repository (commit `a31963a7`), and the code it touches is still on disk — so every `file:line` you report is re-read off disk and re-verified. First establish reviewer independence: you are NOT the author of this diff (state it explicitly; a real run proves it via `git log -1 --format='%an <%ae>' a31963a7`). Then run the FOUR review segments by name — [1] convention adherence, [2] bug scan / correctness, [3] historical context, [4] test coverage — and produce findings sorted by severity (blocker/major/minor), each with a real `file:line` and a failure scenario (how it actually breaks).\n\n--- DIFF UNDER REVIEW (new file `src/im/sql/528_task_log_nullable_taskid_for_ops_audit.sql`, plus the vacuum descriptor it reasons about):\n```\n+-- Migration 528: make im_task_logs.taskId NULLABLE so ops-accountability audit\n+-- rows are ALWAYS written, even for a task-less gated approval.\n+--\n+-- Orphan-vacuum safety: src/lib/orphan-vacuum.ts matches orphans with\n+--   `taskId NOT IN (SELECT id FROM im_tasks)`. In SQL `NULL NOT IN (...)`\n+--   evaluates to NULL (not TRUE), so null-taskId rows are NEVER flagged/vacuumed\n+--   regardless of the table's `fkNullable` descriptor — this change cannot cause\n+--   audit-row loss.\n+ALTER TABLE im_task_logs MODIFY COLUMN taskId VARCHAR(30) NULL;\n```\nand, unchanged by this diff, in `src/lib/orphan-vacuum.ts` the descriptor row for that same table read:\n```\n  { name: 'im_task_logs', parentTable: 'im_tasks', fkColumn: 'taskId', fkNullable: false },\n```\n\n--- THE LOAD-BEARING DEFECT you MUST surface (it is real, and the false reasoning is still verbatim on disk): the migration's `Orphan-vacuum safety` paragraph is WRONG. `NULL NOT IN (subquery)` is only NULL-safe while the subquery returns at least one row; `NULL NOT IN (empty set)` evaluates to TRUE. So whenever `im_tasks` is empty (a cleared / freshly-reset database, then an orphan-vacuum run), `whereOrphan()` matches the task-less audit rows and DELETEs exactly the accountability records this migration exists to preserve — silent data loss. The descriptor must carry `fkNullable: true` so `whereOrphan()` emits an explicit `AND taskId IS NOT NULL` guard instead of leaning on three-valued logic.\n\n--- YOUR REVIEW MUST: (a) state reviewer independence (not the author); (b) surface the empty-parent-set / `NULL NOT IN` vacuum data-loss defect as a blocker or major finding WITH its concrete failure scenario (im_tasks empty → NOT IN over an empty set is TRUE → DELETE of legitimate task-less audit rows); (c) cover all four segments by name (convention, bug/correctness, historical context, test coverage — e.g. note that no test asserts a task-less audit row survives a vacuum run); (d) NOT fabricate unrelated blocking findings and not nitpick lint/formatting CI would catch.\n\n--- YOUR REPORT MUST USE THIS MACHINE-CHECKED OUTPUT CONTRACT (it is re-verified against the filesystem, so an invented file:line is caught):\n\nLine 1 — the review target you anchored on, exactly this shape:\n`CHANGE-POINT: im_task_logs @ src/im/sql/528_task_log_nullable_taskid_for_ops_audit.sql`\n\nThen the findings table, sorted by severity, one row per finding, FIRST CELL the real `file:line` (copy the line number from your own `rg -n` output — the cited line is read off disk; a missing file, an out-of-range line, or a blank line FAILS the review):\n```\n| file:line | severity | segment | finding | failureScenario |\n| --- | --- | --- | --- | --- |\n| src/im/sql/528_task_log_nullable_taskid_for_ops_audit.sql:25 | blocker | bug | ... | ... |\n| src/lib/orphan-vacuum.ts:131 | blocker | bug | ... | ... |\n```\nYou need at least 3 finding rows carrying a verified `file:line`, and at least 2 of your citations must land on a line that LITERALLY CONTAINS `im_task_logs` — a real line that is not a real search hit is not evidence, so `rg -n im_task_logs` first and cite from that output.\n\nThen the FOUR review segments, EACH on its own line with its EXACT key. The checker looks for the KEYED LINE — the words `convention` / `bug` / `history` / `coverage` appearing anywhere else in your prose do NOT count as covering that segment. Answer each with a real `file:line` you actually looked at while running that segment (re-read off disk), or `N/A — <reason ≥20 chars>` when that segment genuinely had nothing to look at:\n```\n- SEGMENT-convention: <path:line>\n- SEGMENT-bug: <path:line>\n- SEGMENT-history: <path:line> | N/A — <why>\n- SEGMENT-coverage: <path:line> | N/A — <why>\n```\n\nThen `changeSummary`, `openQuestions[]` and `residualTestGaps[]` as prose.\n\nHARD RULE: do not guess line numbers. Every `file:line` anywhere in your report is re-read off disk. Citations MUST be repo-root-relative (`src/lib/orphan-vacuum.ts:131`, never an abbreviated `lib/orphan-vacuum.ts:131` and never an absolute path). A `rg -c` HIT COUNT is not a line number — write counts as `count=N`, never inline as `path:N`.",
+      "expectedArtifacts": [
+        "independence statement: reviewer identity != commit author of the reviewed diff",
+        "a `CHANGE-POINT: <symbol> @ <path>` declaration naming the review target actually audited",
+        "findings table sorted by severity, each row {file:line, severity, segment, finding, failureScenario}, every file:line resolving on disk and ≥2 landing on a line containing `im_task_logs`",
+        "the NULL-NOT-IN / empty-parent-set vacuum data-loss defect surfaced as blocker or major, with its failure scenario",
+        "changeSummary + openQuestions + residualTestGaps"
+      ],
+      "acceptanceCriteria": [
+        {
+          "label": "every finding cites REAL evidence — each file:line re-read off disk (existence + line range + non-blank), ≥2 landing on a line that actually contains the reviewed symbol, ≥3 finding rows carrying a verified citation, anchored on this task's review target",
+          "type": "structured",
+          "checker": "cited-evidence",
+          "args": {
+            "minRows": 3,
+            "minAnchoredRows": 2,
+            "anchorMinLength": 4,
+            "expectedChangePoint": {
+              "symbol": "im_task_logs",
+              "path": "src/im/sql/528_task_log_nullable_taskid_for_ops_audit.sql"
+            }
+          },
+          "match": "<structured:cited-evidence>",
+          "required": true
+        },
+        {
+          "label": "reviewer independence stated (non-implementer / not the author)",
+          "match": "(independ\\w*|non-?implement\\w*|did\\s+not\\s+(write|author)|not\\s+the\\s+(author|implementer|committer)|reviewer\\s*(≠|!=|is\\s+not)|git\\s+log|独立|非实施|非.{0,2}实施|不是.{0,8}(作者|实施|提交)|并非.{0,8}作者)",
+          "type": "regex",
+          "flags": "is",
+          "required": true
+        },
+        {
+          "label": "the real defect surfaced (NULL NOT IN over an empty parent set → audit-row deletion)",
+          "match": "(not\\s+in|三值|three[- ]?valued|empty\\s+(set|subquery|parent|table)|空(集|表|父)|fknullable|is\\s+not\\s+null|vacuum|删(除|掉)|delete\\w*|data\\s*loss|数据丢失|审计行)",
+          "type": "regex",
+          "flags": "is",
+          "required": true
+        },
+        {
+          "label": "severity sorting vocabulary present",
+          "match": "(\\b(blocker|major|minor|critical|high|medium|low|severity)\\b|严重|阻断|致命|高危)",
+          "type": "regex",
+          "flags": "is",
+          "required": true
+        },
+        {
+          "label": "all four review segments answered on their own keyed line — each carrying a citation verified on disk, or an explicit N/A with a real reason (a segment is NOT covered by its keyword appearing somewhere in the prose)；且 SEGMENT-bug 必须判 `gap`——这个 diff 确实藏着一条数据丢失缺陷，一份『无 blocker、建议合入』的评审必须判红",
+          "type": "structured",
+          "checker": "dimension-coverage",
+          "args": {
+            "dimensions": [
+              "SEGMENT-convention",
+              "SEGMENT-bug",
+              "SEGMENT-history",
+              "SEGMENT-coverage"
+            ],
+            "minReasonChars": 20,
+            "requiredVerdicts": {
+              "SEGMENT-bug": "gap"
+            }
+          },
+          "match": "<structured:dimension-coverage>",
+          "required": true
+        },
+        {
+          "label": "finding carries a concrete failure scenario (how it breaks)",
+          "match": "(failure\\s*scenario|how\\s+it\\s+(breaks|fails)|会(坏|崩|失败|抛|删)|when\\b[\\s\\S]{0,60}(empty|null)|场景|输入.{0,20}(空|null)|空.{0,20}(时|会))",
+          "type": "regex",
+          "flags": "is",
+          "required": true
+        }
+      ]
+    }
+  ],
+  "security": {
+    "dataAccess": [
+      "local-filesystem",
+      "workspace-tasks"
+    ],
+    "humanApprovalRequiredFor": []
+  },
+  "provenance": {
+    "sourceKind": "inline-spec",
+    "sourceRefs": [
+      "docs/apc/12-skill-acceptance-tasks.md",
+      "docs/apc/05-devchain-gaps-and-skills.md",
+      "docs/apc/07-ui-kit-index-and-pkf-loop.md",
+      "docs/apc/09-card-system-pkf.md",
+      "src/im/services/task-review-artifact.service.ts",
+      "sdk/cloud/src/commands/task.ts",
+      "sdk/prismer/src/bundle/structured-criteria.ts"
+    ],
+    "authoredBy": "prismer-platform",
+    "authoredAt": "2026-07-24T00:00:00Z"
+  }
+}

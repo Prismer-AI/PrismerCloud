@@ -1,0 +1,114 @@
+{
+  "schemaVersion": 1,
+  "slug": "ui-align",
+  "name": "UI Align",
+  "description": "Visual-alignment workflow for a new UI need or a UI change: index-first (consult the ui-kit registry to avoid re-building an existing primitive), implement, run the screenshot harness to capture the component in light/dark against the live /ui-kit, then produce a ReportCard (screenshot assets side by side + a written conclusion) the requester reviews visually. The harness computes NO image diff (`comparison` is always \"none\"; --baseline-* is a side-by-side reference, not a diff input). It verifies side effects — screenshots really have pixels, assets uploaded, ReportCard persisted — NOT whether the visual looks good, and never a deviation number; both are human judgments.",
+  "category": "design",
+  "version": "1.2.0",
+  "license": "MIT",
+  "compatibility": [
+    "claude-code"
+  ],
+  "runtime": {
+    "kind": "text-workflow",
+    "requires": {
+      "env": [],
+      "bins": [
+        "node",
+        "npx"
+      ],
+      "capabilities": []
+    }
+  },
+  "sampleTasks": [
+    {
+      "title": "Index-first, then screenshot a ui-kit scope in light/dark and produce a ReportCard",
+      "prompt": "Run the ui-align workflow for a UI-alignment need. The `apc`/harness CLIs are NOT on PATH — invoke via `npx tsx <path>` from the repo root; the harness stdout is pure JSON. Steps: (1) INDEX-FIRST — run `npx tsx sdk/apc/harness/ui-screenshot.ts --list` to read the ui-kit registry index (its stdout is `{ok:true, scopes:[...]}`); state which existing scope your need matches so you do NOT re-build an existing primitive. For this task use the existing scope `basics`. (2) SCREENSHOT + REPORT — run `npx tsx sdk/apc/harness/ui-screenshot.ts --scope basics --themes light,dark --workspace \"$APC_WORKSPACE_ID\" --task \"$PRISMER_TASK_ID\"`. The harness reads the registry to validate the scope (an unknown scope is a STRUCTURED ERROR that produces NO waste card), uses Playwright to open http://127.0.0.1:3000/ui-kit?scope=basics in BOTH light and dark, uploads each screenshot as a task-bound asset, and REUSES the report-card generator to persist ONE ReportCard (pageType=report-card, visibility=task:<id>) embedding both screenshots + a comparison conclusion + a TierResult table. (3) Read the harness JSON and report: the scope, that BOTH light AND dark themes were captured, each theme's screenshot assetId, the ReportCard pageId + uri, and the harness exit code (0 on success). Your report MUST: (a) show you consulted the registry index (the --list scopes) before running; (b) confirm BOTH light and dark screenshots were produced, each with an assetId; (c) give the ReportCard pageId (the persisted evidence card). DO NOT claim the visual 'looks correct' or 'passed visual review' — the harness verifies SIDE EFFECTS (screenshots produced, ReportCard persisted), not visual correctness, which is a human judgment. Report exit code 0 and the reportCard pageId. ALSO: this harness computes NO image diff — its JSON carries `\"comparison\": \"none\"`, and `--baseline-*` is a SIDE-BY-SIDE REFERENCE, not a diff input. Copy `comparison` verbatim and DO NOT report any deviation percentage, changed-pixel count, or 'pixel-level PASS/FAIL' — no such number exists, so writing one is fabrication. Report each theme's `bytes` alongside its assetId, and note that the two assetIds differ (identical bytes would mean the theme never switched; the harness now fails that case instead of producing a card whose two slots point at one blob).\n\n--- THE INDEX-FIRST PART OF YOUR REPORT IS MACHINE-CHECKED AGAINST THE FILESYSTEM. Two lines, each with its exact key, each carrying a repo-root-relative `path:line` that is re-read off disk (a real file, a line in range, non-blank — so an invented citation is caught):\n```\n- [1] index-first: scope=basics matched in the registry index (--list) — reusing it, not re-building a primitive | src/app/ui-kit/registry.ts:69\n- [2] scope-source: the section source that renders ?scope=basics | src/app/ui-kit/sections/basics.tsx:1\n```\nGet those line numbers with `rg -n \"scope: 'basics'\" src/app/ui-kit/registry.ts` — do NOT guess. 'I consulted the index' with no verifiable line is no longer an answer. Do not open either value with `无`/`N/A`; a `rg -c` HIT COUNT is not a line number (write counts as `count=N`). The harness-side evidence (both themes' assetIds, the ReportCard pageId, the exit code) still goes in the report as usual — those are runtime ids, not filesystem citations, so keep them verbatim from the harness JSON and do not dress them up as path:line.",
+      "expectedArtifacts": [
+        "two keyed index-first lines (index-first / scope-source), each citing a path:line in the ui-kit registry / section source that resolves on disk",
+        "the ui-kit registry scopes from --list (index consulted before building)",
+        "both light and dark screenshots, each with a task-bound asset id AND a byte count (the two asset ids must differ)",
+        "a ReportCard pageId (pageType=report-card, visibility=task:<id>) embedding both screenshots side by side + a written conclusion",
+        "the harness's comparison field verbatim (always \"none\" — no image diff is computed, so no deviation number may appear anywhere in the report)",
+        "harness exit code (0 on success); an unknown scope reported as a structured error with no waste card"
+      ],
+      "acceptanceCriteria": [
+        {
+          "label": "index-first is PROVEN, not asserted — the matched scope and its section source each answered on their own keyed line with a path:line re-verified on disk (the #1 anti-pattern of this skill is 不查索引就动手)",
+          "type": "structured",
+          "checker": "dimension-coverage",
+          "args": {
+            "dimensions": ["index-first", "scope-source"],
+            "minReasonChars": 20
+          },
+          "match": "<structured:dimension-coverage:index-first>",
+          "required": true
+        },
+        {
+          "label": "consulted the ui-kit registry index (--list / scopes) before building",
+          "match": "(--?list|registry|scopes?|索引|清单)",
+          "type": "regex",
+          "flags": "is",
+          "required": true
+        },
+        {
+          "label": "captured the light theme",
+          "match": "\\b(light|亮色|浅色|亮态)\\b",
+          "type": "regex",
+          "flags": "is",
+          "required": true
+        },
+        {
+          "label": "captured the dark theme",
+          "match": "\\b(dark|暗色|深色|暗态)\\b",
+          "type": "regex",
+          "flags": "is",
+          "required": true
+        },
+        {
+          "label": "reports a persisted ReportCard (pageId / report-card / ui-align card uri)",
+          "match": "(report[- ]?card|pageid|page\\s*id|prismer://[^\\s]*cards/ui-align|cards/ui-align)",
+          "type": "regex",
+          "flags": "is",
+          "required": true
+        },
+        {
+          "label": "reports a screenshot asset id (task-bound asset produced)",
+          "match": "(assetid|asset\\s*id|asset[_-]|prismer://asset/|截图\\s*asset)",
+          "type": "regex",
+          "flags": "is",
+          "required": true
+        },
+        {
+          "label": "reports harness success (exit 0 / ok:true)",
+          "match": "(exit(\\s*code)?[^0-9]{0,6}0\\b|ok\\s*[:=]\\s*true|\\bok:true\\b|成功|通过)",
+          "type": "regex",
+          "flags": "is",
+          "required": true
+        }
+      ]
+    }
+  ],
+  "security": {
+    "dataAccess": [
+      "local-filesystem",
+      "network"
+    ],
+    "humanApprovalRequiredFor": []
+  },
+  "provenance": {
+    "sourceKind": "inline-spec",
+    "sourceRefs": [
+      "docs/apc/07-ui-kit-index-and-pkf-loop.md",
+      "docs/apc/05-devchain-gaps-and-skills.md",
+      "docs/apc/11-impl-tracker.md#0.23",
+      "sdk/apc/harness/ui-screenshot.ts",
+      "sdk/apc/harness/report-card.ts",
+      "sdk/apc/skills/design-review/skill.json",
+      "src/app/ui-kit/registry.ts",
+      "sdk/prismer-cloud/runtime/src/bundle/structured-criteria.ts"
+    ],
+    "authoredBy": "prismer-platform",
+    "authoredAt": "2026-07-24T00:00:00Z"
+  }
+}

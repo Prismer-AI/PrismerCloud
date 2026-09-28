@@ -1,5 +1,5 @@
 #!/bin/bash
-# test.sh — Build and test all SDK packages (respects --scope)
+# test.sh — Test and build every active SDK package (respects --scope)
 source "$(dirname "$0")/lib/common.sh"
 parse_common_flags "$@"
 
@@ -13,154 +13,114 @@ for i in "${!REMAINING_ARGS[@]}"; do
 done
 
 should_run() {
-  local pkg="$1"
-  if [[ -n "$ONLY" && "$ONLY" != "$pkg" ]]; then return 1; fi
-  if [[ -n "$SKIP" && "$SKIP" == "$pkg" ]]; then return 1; fi
-  return 0
+  local package="$1"
+  [[ -z "$ONLY" || "$ONLY" == "$package" ]] && [[ -z "$SKIP" || "$SKIP" != "$package" ]]
+}
+
+run_step() {
+  local name="$1"
+  shift
+  if run_or_dry "$@"; then
+    record_result "$name" "pass"
+  else
+    record_result "$name" "fail"
+  fi
 }
 
 VERSION="$(get_version)"
-AIP_VERSION="$(get_aip_version)"
-log_step "SDK Test Suite (prismer-cloud: v$VERSION, aip: v$AIP_VERSION, scope: $SCOPE)"
+log_step "SDK Test Suite (v$VERSION, scope: $SCOPE)"
 
-# ── AIP TypeScript SDK ─────────────────────────────────────────────
+# ── AIP TypeScript ─────────────────────────────────────────────────
 if scope_includes_aip && should_run "aip-ts"; then
-  log_step "AIP TypeScript SDK"
+  log_step "AIP TypeScript"
   cd "$AIP_SDK/typescript"
-  if run_or_dry npm run build; then
-    record_result "aip-ts-build" "pass"
-  else
-    record_result "aip-ts-build" "fail"
-  fi
+  run_step "aip-ts-test" npm test
+  run_step "aip-ts-build" npm run build
   cd "$PROJECT_ROOT"
-else
-  record_result "aip-ts-build" "skip"
 fi
 
-# ── TypeScript SDK ─────────────────────────────────────────────────
-if scope_includes_prismer && (should_run "typescript" || should_run "ts"); then
-  log_step "TypeScript SDK"
-  cd "$PRISMER_CLOUD/typescript"
-  if run_or_dry npm run build; then
-    record_result "ts-build" "pass"
+# ── AIP Python ─────────────────────────────────────────────────────
+if scope_includes_aip && should_run "aip-python"; then
+  log_step "AIP Python"
+  cd "$AIP_SDK/python"
+  run_step "aip-python-test" uv run --isolated --python 3.12 --extra dev pytest tests
+  cd "$PROJECT_ROOT"
+fi
+
+# ── Cloud TypeScript ───────────────────────────────────────────────
+if scope_includes_cloud && should_run "cloud-ts"; then
+  log_step "Cloud TypeScript"
+  cd "$CLOUD_SDK"
+  run_step "cloud-ts-test" npm test -- --run \
+    tests/unit \
+    test/commands-apc-ack-meta.test.ts \
+    test/commands-asset.test.ts \
+    test/commands-environment.test.ts \
+    test/commands-service-introspect.test.ts \
+    test/commands-im-contacts-deferred.test.ts \
+    test/v200-content-block-idempotency.test.ts
+  run_step "cloud-ts-build" npm run build
+  cd "$PROJECT_ROOT"
+fi
+
+# ── Cloud Python ───────────────────────────────────────────────────
+CLOUD_PYTHON_TESTS=(
+  unit_tests/test_environment_client.py
+  tests/test_cli_bin_ownership.py
+  tests/test_evolution_cache.py
+  tests/test_hermes_install.py
+  tests/test_hermes_memory_provider.py
+  tests/test_offline.py
+  tests/test_recall_tools_plugin.py
+  tests/test_signal_rules.py
+  tests/test_tasks_events_ws.py
+  tests/test_v200_content_block_idempotency.py
+  tests/test_webhook.py
+)
+if scope_includes_cloud && should_run "cloud-python"; then
+  log_step "Cloud Python"
+  cd "$CLOUD_SDK/python"
+  if [[ $DRY_RUN -eq 1 ]]; then
+    log_dry "PYTHONPATH=$CLOUD_SDK/python:$AIP_SDK/python uv run --no-project --isolated --python 3.12 --with pytest --with pytest-asyncio --with httpx --with pydantic --with websockets --with click --with rich --with tomli-w --with pynacl --with qrcode pytest ${CLOUD_PYTHON_TESTS[*]}"
+    record_result "cloud-python-test" "pass"
+  elif PYTHONPATH="$CLOUD_SDK/python:$AIP_SDK/python" \
+    PRISMER_API_KEY_TEST="${PRISMER_API_KEY_TEST:-test-local-only}" \
+    uv run --no-project --isolated --python 3.12 \
+      --with pytest \
+      --with pytest-asyncio \
+      --with httpx \
+      --with pydantic \
+      --with websockets \
+      --with click \
+      --with rich \
+      --with tomli-w \
+      --with pynacl \
+      --with qrcode \
+      pytest "${CLOUD_PYTHON_TESTS[@]}"; then
+    record_result "cloud-python-test" "pass"
   else
-    record_result "ts-build" "fail"
+    record_result "cloud-python-test" "fail"
   fi
   cd "$PROJECT_ROOT"
-else
-  record_result "ts-build" "skip"
 fi
 
 # ── MCP Server ─────────────────────────────────────────────────────
-if scope_includes_prismer && should_run "mcp"; then
+if scope_includes_cloud && should_run "mcp"; then
   log_step "MCP Server"
-  cd "$PRISMER_CLOUD/mcp"
-  if run_or_dry npm run build; then
-    record_result "mcp-build" "pass"
-  else
-    record_result "mcp-build" "fail"
-  fi
+  cd "$CLOUD_SDK/mcp"
+  run_step "mcp-test" npm test
+  run_step "mcp-build" npm run build
   cd "$PROJECT_ROOT"
-else
-  record_result "mcp-build" "skip"
 fi
 
-# ── OpenCode Plugin ────────────────────────────────────────────────
-if scope_includes_prismer && should_run "opencode"; then
-  log_step "OpenCode Plugin"
-  cd "$PRISMER_CLOUD/opencode-plugin"
-  if run_or_dry npm run build; then
-    record_result "opencode-build" "pass"
-  else
-    record_result "opencode-build" "fail"
-  fi
+# ── Prismer Runtime ────────────────────────────────────────────────
+if scope_includes_prismer && should_run "runtime"; then
+  log_step "Prismer Runtime"
+  cd "$PRISMER_RUNTIME"
+  run_step "runtime-typecheck" npm run typecheck
+  run_step "runtime-test" npm test
+  run_step "runtime-build" npm run build
   cd "$PROJECT_ROOT"
-else
-  record_result "opencode-build" "skip"
-fi
-
-# ── Claude Code Plugin ────────────────────────────────────────────
-if scope_includes_prismer && should_run "claude-code"; then
-  log_step "Claude Code Plugin"
-  if [[ -f "$PRISMER_CLOUD/claude-code-plugin/hooks/hooks.json" ]]; then
-    node -e "JSON.parse(require('fs').readFileSync('$PRISMER_CLOUD/claude-code-plugin/hooks/hooks.json','utf8'))" 2>/dev/null
-    if [[ $? -eq 0 ]]; then
-      record_result "claude-code-validate" "pass"
-    else
-      record_result "claude-code-validate" "fail"
-    fi
-  else
-    record_result "claude-code-validate" "fail"
-  fi
-else
-  record_result "claude-code-validate" "skip"
-fi
-
-# ── Python SDK ─────────────────────────────────────────────────────
-if scope_includes_prismer && (should_run "python" || should_run "py"); then
-  log_step "Python SDK"
-  cd "$PRISMER_CLOUD/python"
-  if command -v python3 &>/dev/null; then
-    if run_or_dry python3 -c "import ast; ast.parse(open('prismer/client.py').read())"; then
-      record_result "python-syntax" "pass"
-    else
-      record_result "python-syntax" "fail"
-    fi
-  else
-    record_result "python-syntax" "skip"
-  fi
-  cd "$PROJECT_ROOT"
-else
-  record_result "python-syntax" "skip"
-fi
-
-# ── Go SDK ─────────────────────────────────────────────────────────
-if scope_includes_prismer && (should_run "golang" || should_run "go"); then
-  log_step "Go SDK"
-  cd "$PRISMER_CLOUD/golang"
-  if command -v go &>/dev/null; then
-    if run_or_dry go build ./...; then
-      record_result "go-build" "pass"
-    else
-      record_result "go-build" "fail"
-    fi
-  else
-    record_result "go-build" "skip"
-  fi
-  cd "$PROJECT_ROOT"
-else
-  record_result "go-build" "skip"
-fi
-
-# ── Rust SDK ───────────────────────────────────────────────────────
-if scope_includes_prismer && should_run "rust"; then
-  log_step "Rust SDK"
-  cd "$PRISMER_CLOUD/rust"
-  if command -v cargo &>/dev/null; then
-    if run_or_dry cargo check; then
-      record_result "rust-check" "pass"
-    else
-      record_result "rust-check" "fail"
-    fi
-  else
-    record_result "rust-check" "skip"
-  fi
-  cd "$PROJECT_ROOT"
-else
-  record_result "rust-check" "skip"
-fi
-
-# ── Next.js Build ──────────────────────────────────────────────────
-if should_run "next" || should_run "server"; then
-  log_step "Next.js Build"
-  cd "$PROJECT_ROOT"
-  if run_or_dry npx next build; then
-    record_result "next-build" "pass"
-  else
-    record_result "next-build" "fail"
-  fi
-else
-  record_result "next-build" "skip"
 fi
 
 print_results

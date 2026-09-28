@@ -1,0 +1,230 @@
+{
+  "schemaVersion": 1,
+  "slug": "release-rollback",
+  "name": "Release Rollback",
+  "description": "Roll a release back for real: apc release rollback flips the current version to pulled and the last good version back to current in the release ledger, and (with --mirror) repoints the bare mirror ref. Behind an approval gate; with no previous good version it BLOCKS instead of spinning green. green(0)/staged(3)/blocked(1).",
+  "category": "release",
+  "version": "1.0.0",
+  "license": "MIT",
+  "compatibility": ["claude-code"],
+  "runtime": {
+    "kind": "text-workflow",
+    "requires": {
+      "env": [],
+      "bins": ["cloud"],
+      "capabilities": []
+    }
+  },
+  "sampleTasks": [
+    {
+      "title": "Dry-run a rollback plan, apply it after approval, read the ledger back, and prove the no-good-version block",
+      "prompt": "Roll a release back using the local substitute ledger, prove the approval gate, and prove the negative control. The `apc` CLI is NOT on PATH — invoke it as `npx tsx sdk/apc/bin/apc.ts <subcommand>` from the repo root (its --json stdout is pure JSON). Use the PINNED paths below — the ledger is read back off disk by the criteria, so a different path scores red. Steps: (1) SEED — write `.e2e-tmp/apc-release-rollback/ledger.json` with three entries where 2.0.5/2.0.6 are status superseded and 2.0.7 is status current (each entry has version, tag, status, ts). (2) DRY-RUN — run `npx tsx sdk/apc/bin/apc.ts release rollback --ledger <abs>/.e2e-tmp/apc-release-rollback/ledger.json --json` WITHOUT --approved; confirm decision=staged (exit 3), applied=false and read plan.from.version → plan.to.version (2.0.7 → 2.0.6). (3) APPLY — rerun WITH `--approved local-token`; confirm decision=green (exit 0) and applied=true, then READ THE LEDGER BACK off disk (`cat`) and confirm 2.0.7 is now pulled and 2.0.6 is now current — the ledger file, not the chat message, is the oracle. (4) NEGATIVE CONTROL — write a SEPARATE single-entry ledger at `.e2e-tmp/apc-release-rollback/ledger-single.json` with only 2.0.7 status current, run rollback against it, and confirm decision=blocked (exit 1) with plan.ok=false and a reason like 'no previous good version' — this proves rollback goes red when there is nothing to roll back to. Do NOT run the apply against the single-entry ledger, and do NOT re-run the apply after step 3 (it would flip the ledger a second time and the read-back would no longer match the product you pasted).\n\n--- YOUR REPORT MUST USE THIS MACHINE-CHECKED OUTPUT CONTRACT. All three products are re-parsed, the exit code is re-derived from `decision`, and `plan.next` is compared FIELD BY FIELD against the ledger file that is actually on disk. Narrating an applied rollback that the file does not hold FAILS:\n\n```\nRUN-AT: <ISO-8601 wall time of the APPLY run, e.g. 2026-07-25T23:32:11.000Z>\nPLAN-FROM: 2.0.7\nPLAN-TO: 2.0.6\nSTAGED-APPLIED: false\nSTAGED-EXIT: 3\nAPPLIED: true\nROLLED-TO: 2.0.6\nAPPLY-EXIT: 0\nNEG-DECISION: blocked\nNEG-PLAN-OK: false\nNEG-EXIT: 1\n```\n\nfollowed by the THREE raw `--json` products, each verbatim in its own fenced json block (dry-run, apply, negative control).\n\nHARD RULES: paste each product UNEDITED. `STAGED-EXIT`/`APPLY-EXIT`/`NEG-EXIT` are a pure function of `decision` (green→0, staged→3, blocked→1). The apply product's `plan.next` must DEEP-EQUAL `.e2e-tmp/apc-release-rollback/ledger.json` as it sits on disk right now, and `RUN-AT` must sit next to that file's mtime — an `applied:true` whose ledger never flipped, or a stale ledger from an earlier run, is red.",
+      "expectedArtifacts": [
+        "three raw `apc release rollback --json` products (dry-run / apply / negative control) pasted verbatim",
+        "`PLAN-FROM`/`PLAN-TO`/`APPLIED`/`ROLLED-TO` equal to the products' fields, and every `*-EXIT` derived from its decision",
+        "ledger read-back: `plan.next` deep-equals `.e2e-tmp/apc-release-rollback/ledger.json` on disk (current→pulled, last-good→current)",
+        "`RUN-AT` contemporaneous with that ledger file's mtime — the write really happened at that moment",
+        "negative control: single-entry ledger → decision=blocked + plan.ok=false + a real reason + applied=false"
+      ],
+      "acceptanceCriteria": [
+        {
+          "label": "the approval gate is real: unapproved is staged(3) with applied=false and a well-formed plan (from→to) — an unapproved rollback may not touch the ledger",
+          "type": "structured",
+          "checker": "json-claim",
+          "args": {
+            "equals": {
+              "decision": "staged",
+              "verb": "rollback",
+              "applied": false,
+              "approved": false,
+              "plan.ok": true
+            },
+            "require": ["plan.from.version", "plan.to.version", "plan.next", "ledgerPath"],
+            "types": {
+              "plan.next": "array"
+            },
+            "declaredLines": {
+              "PLAN-FROM": "plan.from.version",
+              "PLAN-TO": "plan.to.version",
+              "STAGED-APPLIED": "applied"
+            },
+            "derivedLines": {
+              "STAGED-EXIT": {
+                "from": "decision",
+                "map": {
+                  "green": "0",
+                  "staged": "3",
+                  "blocked": "1"
+                }
+              }
+            },
+            "implications": [
+              {
+                "if": {
+                  "path": "approved",
+                  "equals": false
+                },
+                "then": {
+                  "path": "applied",
+                  "equals": false
+                }
+              },
+              {
+                "if": {
+                  "path": "decision",
+                  "equals": "staged"
+                },
+                "then": {
+                  "path": "blockers",
+                  "empty": true
+                }
+              }
+            ]
+          },
+          "match": "<structured:json-claim:staged>",
+          "required": true
+        },
+        {
+          "label": "the apply really landed: the approved product says applied=true AND its plan.next deep-equals the release ledger as it sits on disk (2.0.7→pulled, 2.0.6→current), with the file written at the moment the run claims",
+          "type": "structured",
+          "checker": "json-claim",
+          "args": {
+            "equals": {
+              "decision": "green",
+              "verb": "rollback",
+              "applied": true,
+              "approved": true,
+              "plan.ok": true
+            },
+            "require": ["plan.next", "plan.to.version", "ledgerPath"],
+            "types": {
+              "plan.next": "array"
+            },
+            "declaredLines": {
+              "APPLIED": "applied",
+              "ROLLED-TO": "plan.to.version"
+            },
+            "derivedLines": {
+              "APPLY-EXIT": {
+                "from": "decision",
+                "map": {
+                  "green": "0",
+                  "staged": "3",
+                  "blocked": "1"
+                }
+              }
+            },
+            "implications": [
+              {
+                "if": {
+                  "path": "decision",
+                  "equals": "green"
+                },
+                "then": {
+                  "path": "blockers",
+                  "empty": true
+                }
+              }
+            ],
+            "fileEquals": {
+              "plan.next": {
+                "file": ".e2e-tmp/apc-release-rollback/ledger.json",
+                "json": true
+              }
+            },
+            "freshArtifacts": {
+              "timestampLine": "RUN-AT",
+              "paths": [".e2e-tmp/apc-release-rollback/ledger.json"],
+              "skewMinutes": 20
+            }
+          },
+          "match": "<structured:json-claim:applied>",
+          "required": true
+        },
+        {
+          "label": "the negative control really fired: a ledger with no previous good version yields plan.ok=false + blocked + applied=false + a stated reason — rollback goes red instead of spinning green",
+          "type": "structured",
+          "checker": "json-claim",
+          "args": {
+            "equals": {
+              "plan.ok": false,
+              "verb": "rollback",
+              "decision": "blocked",
+              "applied": false
+            },
+            "require": ["plan.reason", "blockers", "ledgerPath"],
+            "types": {
+              "plan.reason": "string",
+              "blockers": "array"
+            },
+            "declaredLines": {
+              "NEG-DECISION": "decision",
+              "NEG-PLAN-OK": "plan.ok"
+            },
+            "derivedLines": {
+              "NEG-EXIT": {
+                "from": "decision",
+                "map": {
+                  "green": "0",
+                  "staged": "3",
+                  "blocked": "1"
+                }
+              }
+            },
+            "implications": [
+              {
+                "if": {
+                  "path": "plan.ok",
+                  "equals": false
+                },
+                "then": {
+                  "path": "applied",
+                  "equals": false
+                }
+              },
+              {
+                "if": {
+                  "path": "plan.ok",
+                  "equals": false
+                },
+                "then": {
+                  "path": "blockers",
+                  "nonEmpty": true
+                }
+              },
+              {
+                "if": {
+                  "path": "plan.ok",
+                  "equals": false
+                },
+                "then": {
+                  "path": "mirrorRepointed",
+                  "equals": false
+                }
+              }
+            ]
+          },
+          "match": "<structured:json-claim:negative-control>",
+          "required": true
+        }
+      ]
+    }
+  ],
+  "security": {
+    "dataAccess": ["local-filesystem", "git-remote"],
+    "humanApprovalRequiredFor": [
+      "applying a rollback (approval gate; local substitute is --approved token, real approvalId = M5)"
+    ]
+  },
+  "provenance": {
+    "sourceKind": "inline-spec",
+    "sourceRefs": [
+      "docs/apc/01-release-control-plane.md",
+      "docs/apc/05-devchain-gaps-and-skills.md",
+      "sdk/apc/cli/release-rollback.ts",
+      "sdk/apc/cli/release-common.ts"
+    ],
+    "authoredBy": "prismer-platform",
+    "authoredAt": "2026-07-24T00:00:00Z"
+  }
+}

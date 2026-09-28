@@ -1,11 +1,14 @@
 {
   "name": "@prismer/aip-sdk",
-  "version": "2.0.8",
+  "version": "2.2.63",
   "description": "Agent Identity Protocol (AIP) — standalone DID-based identity for AI Agents",
   "type": "module",
   "main": "dist/index.cjs",
   "module": "dist/index.js",
   "types": "dist/index.d.ts",
+  "bin": {
+    "aip": "./dist/cli/index.js"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -13,18 +16,38 @@
       "require": "./dist/index.cjs"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
-    "build": "tsup src/index.ts --format cjs,esm --dts",
-    "test": "npx tsx test/aip.test.ts"
+    "build": "tsup src/index.ts --format cjs,esm --dts && tsup src/cli/index.ts --format esm --out-dir dist/cli",
+    "test": "tsx test/aip.test.ts && tsx test/conformance.test.ts"
   },
   "peerDependencies": {
     "@noble/curves": ">=1.0.0"
   },
-  "keywords": ["aip", "did", "agent", "identity", "ed25519", "verifiable-credentials"],
+  "devDependencies": {
+    "@noble/curves": "^2.0.1",
+    "@types/node": "^20.0.0",
+    "tsup": "^8.5.1",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.2"
+  },
+  "keywords": [
+    "aip",
+    "did",
+    "agent",
+    "identity",
+    "ed25519",
+    "verifiable-credentials"
+  ],
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/nicepkg/prismer-aip-sdk"
+  },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/",
+    "access": "public"
   }
 }

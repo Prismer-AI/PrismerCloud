@@ -1,0 +1,12 @@
+{
+  "//": "sdk/ 被根 tsconfig exclude（Next build 不编译它）。APC 工具链仍要 typecheck —— 跑：npx tsc --noEmit -p sdk/apc/tsconfig.json（形状照 scripts/test204/tsconfig.json）",
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "incremental": false,
+    "strict": true,
+    "types": ["node"]
+  },
+  "include": ["**/*.ts"],
+  "exclude": []
+}

@@ -1,0 +1,209 @@
+{
+  "schemaVersion": 1,
+  "slug": "env-doctor",
+  "name": "Env Doctor",
+  "description": "Diagnose the local dev machine, classify each failure into a fault domain (infra/toolchain/secrets/project — the manifest's four sections), auto-fix the safe ones with apc env up, and fingerprint. Keeps environment faults out of SUT verdicts.",
+  "category": "environment",
+  "version": "1.1.0",
+  "license": "MIT",
+  "compatibility": [
+    "claude-code",
+    "prismer-sdk"
+  ],
+  "runtime": {
+    "kind": "text-workflow",
+    "requires": {
+      "env": [],
+      "bins": [
+        "apc"
+      ],
+      "capabilities": []
+    }
+  },
+  "sampleTasks": [
+    {
+      "title": "Diagnose the machine, classify failures, up, fingerprint",
+      "prompt": "Run env-doctor on this machine. The `apc` CLI is NOT on PATH — invoke it as `npx tsx sdk/apc/bin/apc.ts <subcommand>` from the repo root (its stdout is pure JSON). Steps: (1) `npx tsx sdk/apc/bin/apc.ts env doctor` and read the stdout JSON (per-item {item,section,status,detail,fixHint} plus top-level summary{pass,fail,skip,total} and failed[]); (2) classify every failing check into its fault domain using the item's `section` field (infra / toolchain / secrets / project); (3) `npx tsx sdk/apc/bin/apc.ts env up --safe` to bring up the auto-fixable lightweight items — you MUST pass --safe: never run bare `apc env up`, its docker step runs `colima start` which blocks for minutes in this non-interactive context; heavy steps landing in manual[] is expected; (4) `npx tsx sdk/apc/bin/apc.ts env fingerprint`. Report the doctor exit code (0 or 78), the per-item pass/fail counts (summary), and the fault-domain classification of every failing item. secrets-domain reds are never auto-fixed — report their fixHint only.\n\n--- YOUR REPORT MUST USE THIS MACHINE-CHECKED OUTPUT CONTRACT. The checker looks for EACH ITEM'S OWN KEYED LINE and re-reads every `path:line` off disk, so a summary count no longer stands in for a per-item report, and an invented citation is caught.\n\nEvery manifest item gets ONE line, keyed by its exact item id, carrying: its real observed status, its fault domain, and the line in `sdk/apc/env/manifest.ts` that DECLARES that item (get it with `rg -n \"id: 'toolchain.node'\" sdk/apc/env/manifest.ts` — do NOT guess line numbers):\n```\n- infra.docker-daemon: pass | domain=infra | sdk/apc/env/manifest.ts:165\n- infra.mysql-3307: pass | domain=infra | sdk/apc/env/manifest.ts:178\n- toolchain.node: fail | domain=toolchain | node 23.9.0 major 23 != pin 20 | fixHint: nvm use 20 | sdk/apc/env/manifest.ts:318\n- toolchain.hermes-gateway-models: skip | domain=toolchain | 未检测（无凭据）| sdk/apc/env/manifest.ts:408\n…（21 个固定 item 一个都不能少；`infra.kind-<cluster>` 的 id 随 CLUSTER_NAME 变，也要在表里但不进机器判据）\n```\nThen the four fault-domain roll-ups, each on its own keyed line, citing that section's declaration block in the manifest:\n```\n- domain-infra: 7 项 → pass 7 / fail 0 / skip 0 | sdk/apc/env/manifest.ts:163\n- domain-toolchain: 7 项 → pass 5 / fail 1 / skip 1 | sdk/apc/env/manifest.ts:316\n- domain-secrets: 2 项 → pass 1 / fail 1（凭据永不自动修，只出 fixHint）| sdk/apc/env/manifest.ts:447\n- domain-project: 6 项 → pass 5 / fail 1 | sdk/apc/env/manifest.ts:569\n```\nRules the checker enforces: every keyed line's value must carry at least one repo-root-relative `path:line` that resolves on disk (real file, line in range, non-blank), or be an explicit `N/A — <reason ≥20 chars>`; do NOT open a value with `无` or `N/A` for a real item — start it with the real status (`pass`/`fail`/`skip`). A `rg -c` HIT COUNT is not a line number; write counts as `count=N`. Then give the doctor exit code (0 or 78), the `summary{pass,fail,skip,total}` readback proving total == pass+fail+skip == items.length, the `apc env up --safe` exit code + manual[], and the fingerprint JSON.",
+      "expectedArtifacts": [
+        "one keyed line per manifest item {item id: status | domain | manifest.ts:<declaring line>} — 21 fixed items, none silently dropped",
+        "apc env doctor stdout JSON (per-item {item,section,status,detail,fixHint}; top-level summary/failed[])",
+        "four fault-domain roll-up lines (domain-infra/toolchain/secrets/project), each citing that section's manifest block",
+        "apc env up exit code + idempotent second-run all-skip evidence",
+        "apc env fingerprint JSON"
+      ],
+      "acceptanceCriteria": [
+        {
+          "label": "every manifest item answered on its own keyed line, each citing the manifest line that declares it (re-verified on disk) — a summary count no longer stands in for a per-item report",
+          "type": "structured",
+          "checker": "dimension-coverage",
+          "args": {
+            "dimensions": [
+              "infra.docker-daemon",
+              "infra.mysql-3307",
+              "infra.mysql-migration-ledger",
+              "infra.redis-6380",
+              "infra.nacos",
+              "infra.cloud-dev-server",
+              "toolchain.node",
+              "toolchain.docker-compose",
+              "toolchain.kubectl",
+              "toolchain.kind-cli",
+              "toolchain.claude-code-binary-pin",
+              "toolchain.hermes-binary",
+              "toolchain.hermes-gateway-models",
+              "secrets.env-local-required-keys",
+              "secrets.ota-ui-signing-key",
+              "project.node-modules-lockfile",
+              "project.prisma-clients",
+              "project.mysql-migrations-pending",
+              "project.version-alignment",
+              "project.claude-config-dir",
+              "project.bare-repo-mirror"
+            ],
+            "minReasonChars": 20
+          },
+          "match": "<structured:dimension-coverage:items>",
+          "required": true
+        },
+        {
+          "label": "all four fault domains rolled up on their own keyed line (infra/toolchain/secrets/project), each citing the manifest section it summarizes",
+          "type": "structured",
+          "checker": "dimension-coverage",
+          "args": {
+            "dimensions": [
+              "domain-infra",
+              "domain-toolchain",
+              "domain-secrets",
+              "domain-project"
+            ],
+            "minReasonChars": 20
+          },
+          "match": "<structured:dimension-coverage:domains>",
+          "required": true
+        },
+        {
+          "label": "doctor 的退出码与逐项计数取自产物、不取自叙述 —— 报告贴出 `apc env doctor` 的原始 JSON，checker 重解析：DOCTOR-EXIT/PASS/FAIL/SKIP/TOTAL 五行必须逐字等于产物字段；exitCode 只允许 0|78（其它值=doctor 自己崩了）；78 必须伴随 envStatus=env_blocked；判绿必须 failed 为空；DOCTOR-FAILED-IDS/UNDETECTED-IDS 必须逐字列出产物里的真实 id 集合（把某项 fail 写成 pass 就会与该清单冲突）",
+          "type": "structured",
+          "checker": "json-claim",
+          "args": {
+            "require": [
+              "envStatus",
+              "exitCode",
+              "summary",
+              "failed",
+              "undetected",
+              "items"
+            ],
+            "types": {
+              "exitCode": "number",
+              "items": "array",
+              "failed": "array",
+              "undetected": "array"
+            },
+            "allowed": {
+              "exitCode": [
+                0,
+                78
+              ],
+              "envStatus": [
+                "ok",
+                "env_blocked"
+              ]
+            },
+            "declaredLines": {
+              "DOCTOR-EXIT": "exitCode",
+              "DOCTOR-PASS": "summary.pass",
+              "DOCTOR-FAIL": "summary.fail",
+              "DOCTOR-SKIP": "summary.skip",
+              "DOCTOR-TOTAL": "summary.total",
+              "DOCTOR-FAILED-IDS": "failed",
+              "DOCTOR-UNDETECTED-IDS": "undetected"
+            },
+            "derivedLines": {
+              "DOCTOR-VERDICT": {
+                "from": "exitCode",
+                "map": {
+                  "0": "all-green",
+                  "78": "env-blocked"
+                }
+              }
+            },
+            "implications": [
+              {
+                "if": {
+                  "path": "exitCode",
+                  "equals": 78
+                },
+                "then": {
+                  "path": "envStatus",
+                  "equals": "env_blocked"
+                }
+              },
+              {
+                "if": {
+                  "path": "exitCode",
+                  "equals": 0
+                },
+                "then": {
+                  "path": "failed",
+                  "empty": true
+                }
+              },
+              {
+                "if": {
+                  "path": "envStatus",
+                  "equals": "ok"
+                },
+                "then": {
+                  "path": "failed",
+                  "empty": true
+                }
+              }
+            ]
+          },
+          "match": "<structured:json-claim>",
+          "required": true
+        },
+        {
+          "label": "doctor exit code is 0 or 78 (never a crash)",
+          "match": "\\b(exit(\\s*code)?[^0-9]{0,6}(0|78)|env[_ ]?blocked)\\b",
+          "type": "regex",
+          "required": true
+        },
+        {
+          "label": "reports per-item status counts (pass/fail/skip)",
+          "match": "(pass|fail|skip)\\w*\\s*[:=|\\-]*\\s*\\d+|\\d+\\s*[|:=\\-]*\\s*(pass|fail|skip)",
+          "type": "regex",
+          "required": true
+        },
+        {
+          "label": "secrets are not auto-fixed (fixHint only)",
+          "match": "(fixhint|not\\s+(auto[- ]?)?fix|credential|manual)",
+          "type": "regex",
+          "required": false
+        }
+      ]
+    }
+  ],
+  "security": {
+    "dataAccess": [
+      "local-filesystem"
+    ],
+    "humanApprovalRequiredFor": [
+      "supplying secrets-domain keys (SKILL_CONFIG_ENC_KEY / IDENTITY_KMS_KEY etc.) — never auto-filled"
+    ]
+  },
+  "provenance": {
+    "sourceKind": "inline-spec",
+    "sourceRefs": [
+      "docs/apc/12-skill-acceptance-tasks.md",
+      "docs/apc/05-devchain-gaps-and-skills.md",
+      "docs/apc/06-env-scaffold.md",
+      "sdk/apc/bin/apc.ts",
+      "sdk/apc/env/manifest.ts",
+      "sdk/prismer/src/bundle/structured-criteria.ts"
+    ],
+    "authoredBy": "prismer-platform",
+    "authoredAt": "2026-07-24T00:00:00Z"
+  }
+}

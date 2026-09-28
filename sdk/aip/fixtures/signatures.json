@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "vectors": [
+    {
+      "name": "valid-ed25519-message",
+      "messageUtf8": "AIP conformance message v1",
+      "signerDid": "did:key:z6MkehRgf7yJbgaGfYsdoAsKdBPE3dj2CYhowQdcjqSJgvVd",
+      "signerPrivateKeyBase64": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+      "signatureBase64": "RaAh9FaIueawZe8jlOyuGGn7Je7vvuDKdKoyJ8bciSBhnQKgGehHJXL0NLAwcSYzWmUWRgwOHaih6tFQxAGmAg==",
+      "expectedValid": true
+    },
+    {
+      "name": "tampered-signature",
+      "messageUtf8": "AIP conformance message v1",
+      "signerDid": "did:key:z6MkehRgf7yJbgaGfYsdoAsKdBPE3dj2CYhowQdcjqSJgvVd",
+      "signatureBase64": "SaAh9FaIueawZe8jlOyuGGn7Je7vvuDKdKoyJ8bciSBhnQKgGehHJXL0NLAwcSYzWmUWRgwOHaih6tFQxAGmAg==",
+      "expectedValid": false
+    },
+    {
+      "name": "tampered-message",
+      "messageUtf8": "AIP conformance message v2",
+      "signerDid": "did:key:z6MkehRgf7yJbgaGfYsdoAsKdBPE3dj2CYhowQdcjqSJgvVd",
+      "signatureBase64": "RaAh9FaIueawZe8jlOyuGGn7Je7vvuDKdKoyJ8bciSBhnQKgGehHJXL0NLAwcSYzWmUWRgwOHaih6tFQxAGmAg==",
+      "expectedValid": false
+    },
+    {
+      "name": "wrong-signer",
+      "messageUtf8": "AIP conformance message v1",
+      "signerDid": "did:key:z6MkhFwXNFWosLeugvSf4wcL9t3uuRXueGSFTRgSvHhWj5G2",
+      "signatureBase64": "RaAh9FaIueawZe8jlOyuGGn7Je7vvuDKdKoyJ8bciSBhnQKgGehHJXL0NLAwcSYzWmUWRgwOHaih6tFQxAGmAg==",
+      "expectedValid": false
+    },
+    {
+      "name": "malformed-signer-did",
+      "messageUtf8": "AIP conformance message v1",
+      "signerDid": "not-a-did",
+      "signatureBase64": "RaAh9FaIueawZe8jlOyuGGn7Je7vvuDKdKoyJ8bciSBhnQKgGehHJXL0NLAwcSYzWmUWRgwOHaih6tFQxAGmAg==",
+      "expectedValid": false
+    }
+  ]
+}

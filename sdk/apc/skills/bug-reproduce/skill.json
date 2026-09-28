@@ -1,0 +1,96 @@
+{
+  "schemaVersion": 1,
+  "slug": "bug-reproduce",
+  "name": "Bug Reproduce",
+  "description": "Turn a known bug into a tight, red-capable reproducer (failing test / script), then PROVE the reproducer actually locks that bug with a reversal negative control: reintroduce the bug and the reproducer must go red again. A reproducer that stays green when the bug is put back is a fake and fails the task.",
+  "category": "diagnosis",
+  "version": "1.0.0",
+  "license": "MIT",
+  "compatibility": [
+    "claude-code"
+  ],
+  "runtime": {
+    "kind": "text-workflow",
+    "requires": {
+      "env": [],
+      "bins": [
+        "node",
+        "git"
+      ],
+      "capabilities": []
+    }
+  },
+  "sampleTasks": [
+    {
+      "title": "Reproduce a clamp() lower-bound bug and prove the lock with a reversal",
+      "prompt": "Run the bug-reproduce skill on this known bug. BUG: a `clamp(x, lo, hi)` helper ignores its lower bound — it returns `Math.min(x, hi)` so `clamp(-5, 0, 10)` wrongly returns -5 instead of 0. Build a tight, deterministic reproducer in a throwaway dir and PROVE it locks the bug with a reversal negative control. Run these exact steps and report the observed exit codes: (1) `d=.e2e-tmp/apc/bug-reproduce && rm -rf \"$d\" && mkdir -p \"$d\"` — a clean, deterministic workspace that is REPO-RELATIVE and SURVIVES the run. Do NOT use `mktemp -d`: the reproducer you build IS the evidence and it is re-read off disk after the run, so a temp dir you delete at the end destroys exactly the artifact the acceptance re-verifies (`.e2e-tmp/` is gitignored, so this pollutes nothing); (2) write `\"$d\"/clamp.mjs` containing the BUGGY version: `export const clamp = (x, lo, hi) => Math.min(x, hi);`; (3) write the reproducer `\"$d\"/repro.mjs`: `import assert from 'node:assert'; import { clamp } from './clamp.mjs'; assert.strictEqual(clamp(-5, 0, 10), 0, 'clamp must respect lower bound'); console.log('REPRO OK');`; (4) run the reproducer command `node \"$d\"/repro.mjs; echo \"exit=$?\"` — it MUST fail (AssertionError, non-zero exit): this is the bug reproduced RED; (5) apply the minimal fix — rewrite `\"$d\"/clamp.mjs` to `export const clamp = (x, lo, hi) => Math.max(lo, Math.min(x, hi));` — and re-run `node \"$d\"/repro.mjs; echo \"exit=$?\"`: it MUST now pass (exit 0) GREEN; (6) REVERSAL NEGATIVE CONTROL (load-bearing): revert the fix by EDITING `\"$d\"/clamp.mjs` DIRECTLY back to the buggy one-line body — do NOT use `git stash` / `git checkout` for this: you are in a SHARED working tree with other sessions' uncommitted changes, and stashing would revert THEIR work too. Re-run `node \"$d\"/repro.mjs; echo \"exit=$?\"` — it MUST go RED again (non-zero). This proves the reproducer is red-capable ON THIS bug, not accidentally green; (7) restore the fix, confirm GREEN one last time, and LEAVE `.e2e-tmp/apc/bug-reproduce/` in place — do not delete it.\n\n--- YOUR REPORT MUST USE THIS MACHINE-CHECKED OUTPUT CONTRACT (it is re-verified against the filesystem, so a reproducer you never actually wrote is caught):\n\nLine 1 — the reproducer anchor, exactly this shape (the symbol is re-read off disk and must really occur in that file):\n`CHANGE-POINT: clamp @ .e2e-tmp/apc/bug-reproduce/clamp.mjs`\n\nThen the RED→GREEN→REVERSAL phase table — one row per phase you actually ran, the FIRST CELL being the `path:line` in your reproducer/subject that the phase turns on (copy the line number from `cat -n` or `rg -n` over the files you just wrote; a missing file, an out-of-range line or a blank line FAILS the report):\n```\n| path:line | phase | command | exit | observed |\n| --- | --- | --- | --- | --- |\n| .e2e-tmp/apc/bug-reproduce/repro.mjs:3 | 1 RED (buggy) | node .e2e-tmp/apc/bug-reproduce/repro.mjs | 1 | AssertionError: clamp must respect lower bound |\n| .e2e-tmp/apc/bug-reproduce/clamp.mjs:1 | 2 GREEN (fixed) | node .e2e-tmp/apc/bug-reproduce/repro.mjs | 0 | REPRO OK |\n| .e2e-tmp/apc/bug-reproduce/repro.mjs:3 | 3 REVERSAL RED | node .e2e-tmp/apc/bug-reproduce/repro.mjs | 1 | AssertionError: clamp must respect lower bound |\n```\nYou need at least 3 phase rows carrying a verified `path:line`, and at least 2 of your citations must land on a line that LITERALLY CONTAINS `clamp` — a real line that is not a real hit in the reproducer is not evidence.\n\nHARD RULE: do not guess line numbers. Every `path:line` anywhere in your report is re-read off disk AFTER the run, so the files must still be there. Citations MUST be repo-root-relative (`.e2e-tmp/apc/bug-reproduce/repro.mjs:3`, never an absolute path and never a `/tmp/...` path, which cannot be resolved from the repo root).\n\nReport: the exact reproducer command you ran, the initial RED (exit code + the assertion that failed), the GREEN after the fix (exit 0), and the reversal RED after reintroducing the bug (exit code) — that reversal is the whole point: it is how you know the reproducer locks the bug.",
+      "expectedArtifacts": [
+        "the reproducer left on disk at `.e2e-tmp/apc/bug-reproduce/` (repo-relative, survives the run) + a `CHANGE-POINT: clamp @ .e2e-tmp/apc/bug-reproduce/clamp.mjs` declaration",
+        "RED→GREEN→REVERSAL phase table: ≥3 rows whose first cell is a `path:line` that resolves on disk, ≥2 landing on a line containing `clamp`",
+        "the exact reproducer command (a `node repro.mjs` invocation) that was actually run",
+        "initial RED: the reproducer failed on the buggy code (AssertionError, non-zero exit)",
+        "GREEN after the minimal fix (exit 0)",
+        "reversal negative control: reintroducing the bug makes the reproducer RED again (non-zero exit) — proves the lock"
+      ],
+      "acceptanceCriteria": [
+        {
+          "label": "the reproducer REALLY EXISTS on disk — anchored on `clamp @ .e2e-tmp/apc/bug-reproduce/clamp.mjs`, every path:line re-read off disk, ≥2 citations landing on a line that actually contains the subject symbol, ≥3 phase rows (RED/GREEN/REVERSAL) carrying a verified citation",
+          "type": "structured",
+          "checker": "cited-evidence",
+          "args": {
+            "minRows": 3,
+            "minAnchoredRows": 2,
+            "anchorMinLength": 4,
+            "expectedChangePoint": {
+              "symbol": "clamp",
+              "path": ".e2e-tmp/apc/bug-reproduce/clamp.mjs"
+            }
+          },
+          "match": "<structured:cited-evidence>",
+          "required": true
+        },
+        {
+          "label": "names a concrete runnable reproducer command (node/test invocation)",
+          "match": "\\b(node|npx|tsx|npm|pnpm|yarn|pytest|go\\s+test|cargo\\s+test|apc\\s+test)\\b",
+          "type": "regex",
+          "required": true
+        },
+        {
+          "label": "initial RED: reproducer fails on the bug (assertion / non-zero exit)",
+          "match": "(assert\\w*|assertionerror|❌|✗|fail\\w*|exit(\\s*code)?[^0-9]{0,6}[1-9])",
+          "type": "regex",
+          "required": true
+        },
+        {
+          "label": "GREEN after the fix (pass / exit 0)",
+          "match": "(pass\\w*|✓|✔|success\\w*|repro\\s*ok|green\\b|exit(\\s*code)?[^0-9]{0,6}0)\\b",
+          "type": "regex",
+          "required": true
+        },
+        {
+          "label": "REVERSAL negative control: reintroducing the bug makes the reproducer RED again (the lock)",
+          "match": "((revert|reversal|revers\\w*|reintroduc|re-?inject|re-?insert|put(ting)?\\s+(the\\s+)?bug\\s+back|remov\\w*\\s+the\\s+fix|back\\s?out|stash|undo\\s+the\\s+fix|buggy\\s*(version|body|one-?liner|代码|码|恢复|复原)|反转|复原|放回|重新(注入|引入)|注入回|撤(掉|回|销)\\s*(了\\s*)?(修复|fix))[\\s\\S]{0,220}(fail\\w*|red\\b|❌|✗|assert\\w*|non-?zero|exit(\\s*code)?[^0-9]{0,6}[1-9]))|((fail\\w*|red\\b|❌|✗|assert\\w*|non-?zero|exit(\\s*code)?[^0-9]{0,6}[1-9])[\\s\\S]{0,220}(revert|reversal|revers\\w*|reintroduc|re-?inject|re-?insert|put(ting)?\\s+(the\\s+)?bug\\s+back|remov\\w*\\s+the\\s+fix|back\\s?out|stash|undo\\s+the\\s+fix|buggy\\s*(version|body|one-?liner|代码|码|恢复|复原)|反转|复原|放回|重新(注入|引入)|注入回|撤(掉|回|销)\\s*(了\\s*)?(修复|fix)))",
+          "type": "regex",
+          "flags": "is",
+          "required": true
+        }
+      ]
+    }
+  ],
+  "security": {
+    "dataAccess": [
+      "local-filesystem"
+    ],
+    "humanApprovalRequiredFor": []
+  },
+  "provenance": {
+    "sourceKind": "inline-spec",
+    "sourceRefs": [
+      "docs/apc/12-skill-acceptance-tasks.md",
+      "docs/apc/05-devchain-gaps-and-skills.md",
+      "sdk/prismer-cloud/built-in-skills/diagnosing-bugs/SKILL.md"
+    ],
+    "authoredBy": "prismer-platform",
+    "authoredAt": "2026-07-24T00:00:00Z"
+  }
+}

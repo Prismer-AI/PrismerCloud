@@ -18,6 +18,10 @@ class AIPIdentity:
 
     @classmethod
     def from_api_key(cls, api_key: str) -> "AIPIdentity":
+        """Deprecated 2.x compatibility derivation for existing Cloud DIDs.
+
+        New identities should use ``create()`` and persist the exported key.
+        """
         seed = hashlib.sha256(api_key.encode()).digest()
         return cls(SigningKey(seed))
 

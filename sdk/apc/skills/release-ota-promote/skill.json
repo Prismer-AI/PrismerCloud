@@ -1,0 +1,176 @@
+{
+  "schemaVersion": 1,
+  "slug": "release-ota-promote",
+  "name": "Release OTA Promote",
+  "description": "Promote a runtime OTA over both channels: publish signed Electron UI/daemon bundles to an isolated local feed with atomic manifest switch and digest readback, while constructing (but not POSTing) the K8s drain_respawn rollout. --env prod is refused before writes. The top-level result remains blocked until the real K8s rollout is delivered.",
+  "category": "release",
+  "version": "1.0.0",
+  "license": "MIT",
+  "compatibility": ["claude-code"],
+  "runtime": {
+    "kind": "text-workflow",
+    "requires": {
+      "env": [],
+      "bins": ["cloud"],
+      "capabilities": []
+    }
+  },
+  "sampleTasks": [
+    {
+      "title": "Publish the signed Electron local feed and prove K8s/prod boundaries",
+      "prompt": "From the repo root, remove only `.e2e-tmp/apc-ota-feed`, then run `npx tsx sdk/apc/bin/apc.ts release ota-promote --env dev --desktop-feed-dir .e2e-tmp/apc-ota-feed --desktop-ui-meta apps/desktop/dist-ui/ui.manifest.json --desktop-daemon-meta apps/desktop/dist-ui/daemon.manifest.json --json`. This must copy the signed versioned bundles, atomically publish `manifest.json`, and read the files back. Report `desktop.status=applied`, `desktop.readback.verified=true`, and the real manifest path; do not claim Electron itself has checked/staged/applied the update because this verb only proves feed publication. The same product must say K8s `directive=drain_respawn` and `posted=false`, so top-level `decision=blocked`. Then run the prod command with the same feed arguments and prove it is blocked before any OTA write with `k8s.skipped=true`.\n\nUse this exact report header, followed by both raw JSON products verbatim:\n```\nDIRECTIVE: drain_respawn\nPOSTED: false\nDESKTOP: applied\nDESKTOP-VERIFIED: true\nRUN-EXIT: 1\nPROD-DECISION: blocked\nPROD-K8S-SKIPPED: true\nPROD-RUN-EXIT: 1\n```\nNever report `kill1`, a K8s delivery, or an Electron client apply. The feed path must stay under `.e2e-tmp/`.",
+      "expectedArtifacts": [
+        "both raw `apc release ota-promote --json` products (--env dev and --env prod) pasted verbatim",
+        "`DIRECTIVE` / `POSTED` / `DESKTOP` / `RUN-EXIT` lines equal to the dev product's fields",
+        "k8s{channel:admin-fleet-rollout, directive:drain_respawn, frame:runtime.update.apply, posted:false} — line 3, never line-1 kill1",
+        "desktop.status=applied + desktop.readback.verified=true + a manifest path under .e2e-tmp/",
+        "prod run: decision=blocked + k8s.skipped=true (no rollout request constructed) + non-empty blockers[]"
+      ],
+      "acceptanceCriteria": [
+        {
+          "label": "the dev product proves a real local Electron feed publication by readback while preserving the K8s dry-run boundary",
+          "type": "structured",
+          "checker": "json-claim",
+          "args": {
+            "equals": {
+              "env": "dev",
+              "verb": "ota-promote",
+              "k8s.channel": "admin-fleet-rollout",
+              "k8s.directive": "drain_respawn",
+              "k8s.frame": "runtime.update.apply",
+              "k8s.posted": false,
+              "desktop.status": "applied",
+              "desktop.readback.verified": true
+            },
+            "require": ["decision", "deliveryMode", "k8s.endpoint", "k8s.boundary", "desktop.plan.manifestPath", "desktop.readback", "blockers"],
+            "types": {
+              "desktop.plan.manifestPath": "string",
+              "blockers": "array",
+              "k8s.endpoint": "string"
+            },
+            "allowed": {
+              "decision": ["green", "blocked"]
+            },
+            "declaredLines": {
+              "DIRECTIVE": "k8s.directive",
+              "POSTED": "k8s.posted",
+              "DESKTOP": "desktop.status",
+              "DESKTOP-VERIFIED": "desktop.readback.verified"
+            },
+            "derivedLines": {
+              "RUN-EXIT": {
+                "from": "decision",
+                "map": {
+                  "green": "0",
+                  "blocked": "1"
+                }
+              }
+            },
+            "implications": [
+              {
+                "if": {
+                  "path": "k8s.posted",
+                  "equals": false
+                },
+                "then": {
+                  "path": "decision",
+                  "equals": "blocked"
+                }
+              },
+              {
+                "if": {
+                  "path": "decision",
+                  "equals": "blocked"
+                },
+                "then": {
+                  "path": "blockers",
+                  "nonEmpty": true
+                }
+              }
+            ],
+            "fileEquals": {
+              "k8s.request.version": {
+                "file": "VERSION"
+              }
+            }
+          },
+          "match": "<structured:json-claim:dev>",
+          "required": true
+        },
+        {
+          "label": "the prod human gate fired before any OTA work: --env prod is blocked with the K8s channel SKIPPED (k8s.skipped=true, so no rollout request was ever constructed) and a non-empty blocker",
+          "type": "structured",
+          "checker": "json-claim",
+          "args": {
+            "equals": {
+              "env": "prod",
+              "verb": "ota-promote",
+              "decision": "blocked",
+              "k8s.skipped": true
+            },
+            "require": ["k8s.reason", "blockers"],
+            "types": {
+              "blockers": "array",
+              "k8s.reason": "string"
+            },
+            "declaredLines": {
+              "PROD-DECISION": "decision",
+              "PROD-K8S-SKIPPED": "k8s.skipped"
+            },
+            "derivedLines": {
+              "PROD-RUN-EXIT": {
+                "from": "decision",
+                "map": {
+                  "green": "0",
+                  "blocked": "1"
+                }
+              }
+            },
+            "implications": [
+              {
+                "if": {
+                  "path": "env",
+                  "equals": "prod"
+                },
+                "then": {
+                  "path": "blockers",
+                  "nonEmpty": true
+                }
+              },
+              {
+                "if": {
+                  "path": "k8s.skipped",
+                  "equals": true
+                },
+                "then": {
+                  "path": "decision",
+                  "equals": "blocked"
+                }
+              }
+            ]
+          },
+          "match": "<structured:json-claim:prod>",
+          "required": true
+        }
+      ]
+    }
+  ],
+  "security": {
+    "dataAccess": ["local-filesystem", "kubernetes-cluster"],
+    "humanApprovalRequiredFor": [
+      "promoting an OTA to any fleet (proper delivery = admin rollout endpoint drain_respawn, M5)",
+      "prod OTA promote is refused outright"
+    ]
+  },
+  "provenance": {
+    "sourceKind": "inline-spec",
+    "sourceRefs": [
+      "docs/apc/01-release-control-plane.md",
+      "docs/apc/08-admin-ops-control-plane.md",
+      "sdk/apc/cli/release-ota-promote.ts",
+      "src/im/api/admin.ts"
+    ],
+    "authoredBy": "prismer-platform",
+    "authoredAt": "2026-07-24T00:00:00Z"
+  }
+}

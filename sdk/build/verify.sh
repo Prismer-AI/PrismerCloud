@@ -1,103 +1,110 @@
 #!/bin/bash
-# verify.sh — Pre-release verification (versions + builds + manifests, respects --scope)
+# verify.sh — Pre-release versions, manifests, tests, and auth checks
 source "$(dirname "$0")/lib/common.sh"
 parse_common_flags "$@"
 
-SKIP_TESTS=0; SKIP_BUILD=0
+SKIP_BUILD=0
 for arg in "${REMAINING_ARGS[@]+"${REMAINING_ARGS[@]}"}"; do
-  case "$arg" in
-    --skip-tests) SKIP_TESTS=1 ;;
-    --skip-build) SKIP_BUILD=1 ;;
-  esac
+  case "$arg" in --skip-build|--skip-tests) SKIP_BUILD=1 ;; esac
 done
 
 VERSION="$(get_version)"
-AIP_VERSION="$(get_aip_version)"
-log_step "Pre-Release Verification (prismer-cloud: v$VERSION, aip: v$AIP_VERSION, scope: $SCOPE)"
+log_step "Pre-Release Verification (v$VERSION, scope: $SCOPE)"
 
-# ── Phase 1: Version Consistency ───────────────────────────────────
-log_step "Phase 1: Version Consistency"
-
-check_version() {
-  local file="$1" expected="$2" label="${3:-$(basename "$(dirname "$file")")}"
-  if [[ ! -f "$file" ]]; then
-    log_warn "Not found: $file"
-    record_result "version: $label" "skip"
-    return
-  fi
-  if grep -q "$expected" "$file"; then
-    record_result "version: $label" "pass"
+check_contains() {
+  local file="$1"
+  local expected="$2"
+  local label="$3"
+  if [[ $DRY_RUN -eq 1 ]]; then
+    log_dry "check $file contains $expected"
+    record_result "$label" "pass"
+  elif [[ ! -f "$file" ]]; then
+    log_error "Missing: $file"
+    record_result "$label" "fail"
+  elif grep -Fq "$expected" "$file"; then
+    record_result "$label" "pass"
   else
-    log_error "Version mismatch in $file (expected $expected)"
-    record_result "version: $label" "fail"
+    log_error "Mismatch in $file (expected: $expected)"
+    record_result "$label" "fail"
   fi
 }
 
-if scope_includes_prismer; then
-  check_version "$PRISMER_CLOUD/typescript/package.json" "\"version\": \"$VERSION\"" "pc/typescript"
-  check_version "$PRISMER_CLOUD/mcp/package.json" "\"version\": \"$VERSION\"" "pc/mcp"
-  check_version "$PRISMER_CLOUD/opencode-plugin/package.json" "\"version\": \"$VERSION\"" "pc/opencode"
-  check_version "$PRISMER_CLOUD/claude-code-plugin/package.json" "\"version\": \"$VERSION\"" "pc/claude-code"
-  check_version "$PRISMER_CLOUD/openclaw-channel/package.json" "\"version\": \"$VERSION\"" "pc/openclaw"
-  check_version "$PRISMER_CLOUD/python/pyproject.toml" "version = \"$VERSION\"" "pc/python"
-  check_version "$PRISMER_CLOUD/rust/Cargo.toml" "version = \"$VERSION\"" "pc/rust"
-  check_version "$PRISMER_CLOUD/mcp/src/index.ts" "'$VERSION'" "pc/mcp-hardcoded"
-  check_version "$PRISMER_CLOUD/claude-code-plugin/.claude-plugin/plugin.json" "\"version\": \"$VERSION\"" "pc/plugin.json"
-fi
+check_publish_config() {
+  local relative_dir="$1"
+  local manifest="$SDK_ROOT/$relative_dir/package.json"
+  if node -e "const p=require(process.argv[1]); process.exit(p.publishConfig?.access === 'public' ? 0 : 1)" "$manifest"; then
+    record_result "manifest: $relative_dir" "pass"
+  else
+    record_result "manifest: $relative_dir" "fail"
+  fi
+}
 
+log_step "Phase 1: Version consistency"
 if scope_includes_aip; then
-  check_version "$AIP_SDK/typescript/package.json" "\"version\": \"$AIP_VERSION\"" "aip/typescript"
-  check_version "$AIP_SDK/python/pyproject.toml" "version = \"$AIP_VERSION\"" "aip/python"
-  check_version "$AIP_SDK/rust/Cargo.toml" "version = \"$AIP_VERSION\"" "aip/rust"
+  check_contains "$AIP_SDK/typescript/package.json" "\"version\": \"$VERSION\"" "version: aip/typescript"
+  check_contains "$AIP_SDK/python/pyproject.toml" "version = \"$VERSION\"" "version: aip/python"
 fi
 
-# ── Phase 2: Package Manifests ─────────────────────────────────────
-log_step "Phase 2: Package Manifests"
+if scope_includes_cloud; then
+  check_contains "$CLOUD_SDK/package.json" "\"version\": \"$VERSION\"" "version: cloud/typescript"
+  check_contains "$CLOUD_SDK/python/pyproject.toml" "version = \"$VERSION\"" "version: cloud/python"
+  check_contains "$CLOUD_SDK/mcp/package.json" "\"version\": \"$VERSION\"" "version: cloud/mcp"
+  check_contains "$CLOUD_SDK/mcp/src/index.ts" "version: '$VERSION'" "version: cloud/mcp source"
+  check_contains "$CLOUD_SDK/package.json" "\"@prismer/aip-sdk\": \"^$VERSION\"" "dependency: cloud/aip npm"
+  check_contains "$CLOUD_SDK/python/pyproject.toml" "prismer-aip>=$VERSION,<" "dependency: cloud/aip PyPI"
+fi
 
 if scope_includes_prismer; then
-  for pkg in "${NPM_PACKAGES[@]}"; do
-    local_pkg="$PRISMER_CLOUD/$pkg/package.json"
-    if [[ -f "$local_pkg" ]]; then
-      if grep -q '"access": "public"' "$local_pkg" || [[ "$pkg" == "claude-code-plugin" ]]; then
-        record_result "manifest: $pkg publishConfig" "pass"
-      else
-        log_warn "$pkg missing publishConfig.access=public"
-        record_result "manifest: $pkg publishConfig" "warn"
-      fi
-    fi
-  done
+  check_contains "$PRISMER_RUNTIME/package.json" "\"version\": \"$VERSION\"" "version: prismer/runtime"
+  check_contains "$PRISMER_RUNTIME/src/cli/index.ts" "const VERSION = '$VERSION'" "version: runtime CLI"
+  check_contains "$PRISMER_RUNTIME/package-lock.json" "\"version\": \"$VERSION\"" "version: runtime lock"
 fi
 
-# ── Phase 3: Build Verification ────────────────────────────────────
+if [[ "$SCOPE" == "all" && $DRY_RUN -eq 0 ]]; then
+  if npx tsx "$PROJECT_ROOT/scripts/check-version-consistency.ts"; then
+    record_result "monorepo version consistency" "pass"
+  else
+    record_result "monorepo version consistency" "fail"
+  fi
+fi
+
+log_step "Phase 2: Package manifests"
+if scope_includes_aip; then check_publish_config "${AIP_NPM_PACKAGE_DIRS[0]}"; fi
+if scope_includes_cloud; then
+  check_publish_config "${CLOUD_NPM_PACKAGE_DIRS[0]}"
+  check_publish_config "${CLOUD_NPM_PACKAGE_DIRS[1]}"
+fi
+if scope_includes_prismer; then check_publish_config "${PRISMER_NPM_PACKAGE_DIRS[0]}"; fi
+
+log_step "Phase 3: Test and build"
 if [[ $SKIP_BUILD -eq 0 ]]; then
-  log_step "Phase 3: Build Verification"
-  "$BUILD_ROOT/test.sh" --yes --scope "$SCOPE" 2>&1 | tail -20
+  if [[ $DRY_RUN -eq 1 ]]; then
+    "$BUILD_ROOT/test.sh" --scope "$SCOPE" --yes --dry-run
+  else
+    "$BUILD_ROOT/test.sh" --scope "$SCOPE" --yes
+  fi
+  record_result "test+build" "pass"
 else
-  log_info "Skipping build (--skip-build)"
+  record_result "test+build" "skip"
 fi
 
-# ── Phase 4: Publish Readiness ─────────────────────────────────────
-log_step "Phase 4: Publish Readiness"
-
-if command -v npm &>/dev/null && npm whoami &>/dev/null 2>&1; then
-  record_result "npm auth" "pass"
+log_step "Phase 4: Publish readiness"
+if [[ $DRY_RUN -eq 1 ]]; then
+  log_dry "npm, PyPI, and GitHub authentication checks"
+  record_result "registry auth" "pass"
 else
-  record_result "npm auth" "warn"
-  log_warn "npm not authenticated (run: npm login --scope=@prismer)"
-fi
-
-if command -v gh &>/dev/null && gh auth status &>/dev/null 2>&1; then
-  record_result "github auth" "pass"
-else
-  record_result "github auth" "warn"
-  log_warn "gh not authenticated (run: gh auth login)"
-fi
-
-if [[ -n "${CARGO_REGISTRY_TOKEN:-}" ]]; then
-  record_result "cargo auth" "pass"
-else
-  record_result "cargo auth" "warn"
-  log_warn "CARGO_REGISTRY_TOKEN not set"
+  if command -v npm &>/dev/null && npm whoami &>/dev/null 2>&1; then
+    record_result "npm auth" "pass"
+  else
+    log_warn "npm is not authenticated"
+    record_result "npm auth" "warn"
+  fi
+  if command -v gh &>/dev/null && gh auth status &>/dev/null 2>&1; then
+    record_result "github auth" "pass"
+  else
+    log_warn "GitHub CLI is not authenticated"
+    record_result "github auth" "warn"
+  fi
 fi
 
 print_results

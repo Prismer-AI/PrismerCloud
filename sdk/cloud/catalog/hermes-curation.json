@@ -1,0 +1,2115 @@
+{
+  "schemaVersion": 1,
+  "upstreamRevision": "1a1f4a59e252e1dc0137e7b2e7bcc8b0381d19c4",
+  "scope": "All 58 bundled Hermes skills from the audited snapshot; category descriptions and index caches are audit-only metadata",
+  "entries": [
+    {
+      "upstream": "apple-notes",
+      "sourceRoot": "apple/apple-notes",
+      "targetSlug": "prismer-apple-notes",
+      "targetRoot": "prismer-apple-notes",
+      "decision": "optional",
+      "resources": [
+        {
+          "source": "apple/apple-notes/SKILL.md",
+          "sourceSha256": "1ba042cb17e3aca06a68415526e926ada464bf873c8592c3326125cd72cb397f",
+          "target": "prismer-apple-notes/SKILL.md"
+        }
+      ]
+    },
+    {
+      "upstream": "apple-reminders",
+      "sourceRoot": "apple/apple-reminders",
+      "targetSlug": "prismer-apple-reminders",
+      "targetRoot": "prismer-apple-reminders",
+      "decision": "optional",
+      "resources": [
+        {
+          "source": "apple/apple-reminders/SKILL.md",
+          "sourceSha256": "ee5084f2d7ec196488bef2c74248fb3d8328d1b2e3277ddda3f0de9da6fc7131",
+          "target": "prismer-apple-reminders/SKILL.md"
+        }
+      ]
+    },
+    {
+      "upstream": "findmy",
+      "sourceRoot": "apple/findmy",
+      "targetSlug": "prismer-findmy",
+      "targetRoot": "prismer-findmy",
+      "decision": "optional",
+      "resources": [
+        {
+          "source": "apple/findmy/SKILL.md",
+          "sourceSha256": "e35d4d165daadfd066661df59a202a4159c5df41b77642884d3656830054d6bc",
+          "target": "prismer-findmy/SKILL.md"
+        }
+      ]
+    },
+    {
+      "upstream": "imessage",
+      "sourceRoot": "apple/imessage",
+      "targetSlug": "prismer-imessage",
+      "targetRoot": "prismer-imessage",
+      "decision": "optional",
+      "resources": [
+        {
+          "source": "apple/imessage/SKILL.md",
+          "sourceSha256": "bc68b1648e301409bc25b1084ec26766213ca9f3c1b2fd3d3d6ebe3dbde9e967",
+          "target": "prismer-imessage/SKILL.md"
+        }
+      ]
+    },
+    {
+      "upstream": "claude-code",
+      "sourceRoot": "autonomous-ai-agents/claude-code",
+      "decision": "exclude-entrypoint",
+      "reason": "Runtime owns coding agent lifecycle, authentication and sandbox controls",
+      "resources": [
+        {
+          "source": "autonomous-ai-agents/claude-code/SKILL.md",
+          "sourceSha256": "ec92e627db1f449ea038e2b756ebbaa067880dd673a35497ea64b7e6391cf519",
+          "target": null,
+          "reason": "Excluded original execution entrypoint"
+        }
+      ]
+    },
+    {
+      "upstream": "codex",
+      "sourceRoot": "autonomous-ai-agents/codex",
+      "decision": "exclude-entrypoint",
+      "reason": "Runtime owns coding agent lifecycle, authentication and sandbox controls",
+      "resources": [
+        {
+          "source": "autonomous-ai-agents/codex/SKILL.md",
+          "sourceSha256": "1b15b57bcaba128b83ebe9f050b6873958198a1570bc801d4ca0406fb7e3271d",
+          "target": null,
+          "reason": "Excluded original execution entrypoint"
+        }
+      ]
+    },
+    {
+      "upstream": "computer-use",
+      "sourceRoot": "autonomous-ai-agents/computer-use",
+      "targetSlug": "prismer-computer-use",
+      "targetRoot": "prismer-computer-use",
+      "decision": "optional",
+      "resources": [
+        {
+          "source": "autonomous-ai-agents/computer-use/SKILL.md",
+          "sourceSha256": "778833ecfea4385cab79ec4dda0ffe956e3f4bf9231eb80e52c5d113ee4e6cdf",
+          "target": "prismer-computer-use/SKILL.md"
+        }
+      ]
+    },
+    {
+      "upstream": "hermes-agent",
+      "sourceRoot": "autonomous-ai-agents/hermes-agent",
+      "targetSlug": "prismer-hermes-agent",
+      "targetRoot": "prismer-hermes-agent",
+      "decision": "optional",
+      "resources": [
+        {
+          "source": "autonomous-ai-agents/hermes-agent/references/background-systems.md",
+          "sourceSha256": "70099ca64774cc7e70a33330d180f862cf19a02c0f936dc4c50d51c6d0b73556",
+          "target": "prismer-hermes-agent/references/background-systems.md"
+        },
+        {
+          "source": "autonomous-ai-agents/hermes-agent/references/cli-reference.md",
+          "sourceSha256": "1732000d896879e753740e465936883a06da11e82e3e9830c9b59cff3e4f39d1",
+          "target": "prismer-hermes-agent/references/cli-reference.md"
+        },
+        {
+          "source": "autonomous-ai-agents/hermes-agent/references/configuration.md",
+          "sourceSha256": "d18d4781266563ebdb6602df3b89af760c027ca54281e7714572802969f90331",
+          "target": "prismer-hermes-agent/references/configuration.md"
+        },
+        {
+          "source": "autonomous-ai-agents/hermes-agent/references/contributor-guide.md",
+          "sourceSha256": "7349d28caba6b7b60b863825391e3bc8c7e3cfc82b8550dcc34119b07c06bd79",
+          "target": "prismer-hermes-agent/references/contributor-guide.md"
+        },
+        {
+          "source": "autonomous-ai-agents/hermes-agent/references/delegate-task-concurrency-diagnosis.md",
+          "sourceSha256": "41019dd37c0c048b002d3639fe01455513b5c9aba142a21ff9c3bd4c7718a77b",
+          "target": "prismer-hermes-agent/references/delegate-task-concurrency-diagnosis.md"
+        },
+        {
+          "source": "autonomous-ai-agents/hermes-agent/references/desktop-plugins.md",
+          "sourceSha256": "45880c212f028e27f821308cf3e1770a360b05892bd97e760d6bb1ac5819640e",
+          "target": "prismer-hermes-agent/references/desktop-plugins.md"
+        },
+        {
+          "source": "autonomous-ai-agents/hermes-agent/references/native-mcp.md",
+          "sourceSha256": "d02ad7616664ac4fb817953de42ab51d31220bae5e952952291681e72c015130",
+          "target": "prismer-hermes-agent/references/native-mcp.md"
+        },
+        {
+          "source": "autonomous-ai-agents/hermes-agent/references/petdex.md",
+          "sourceSha256": "2254eabf40c360efb54e4df482f3b84820b54a15e6954c4a7e9e7fee4eb90f77",
+          "target": "prismer-hermes-agent/references/petdex.md"
+        },
+        {
+          "source": "autonomous-ai-agents/hermes-agent/references/portal-auth-for-third-party-apps.md",
+          "sourceSha256": "ca9e357ae5be6e10b677f4de3fd7a09d1efc423fe157dcda5b5a2ce7d39dee2a",
+          "target": "prismer-hermes-agent/references/portal-auth-for-third-party-apps.md"
+        },
+        {
+          "source": "autonomous-ai-agents/hermes-agent/references/project-context-files.md",
+          "sourceSha256": "20b51406102e6498f62ed837978e5c67ebd91a917b985de7bbddfaaf23c1f593",
+          "target": "prismer-hermes-agent/references/project-context-files.md"
+        },
+        {
+          "source": "autonomous-ai-agents/hermes-agent/references/providers-and-models.md",
+          "sourceSha256": "41c9c8e9de3a66c5e7f12c6fe39916d58a13e315be1dfd712fbf8cdaab4af203",
+          "target": "prismer-hermes-agent/references/providers-and-models.md"
+        },
+        {
+          "source": "autonomous-ai-agents/hermes-agent/references/security-privacy.md",
+          "sourceSha256": "f27913f7775915d8065b2dea782197907ff90cf37f07b865135c7f61aee98e83",
+          "target": "prismer-hermes-agent/references/security-privacy.md"
+        },
+        {
+          "source": "autonomous-ai-agents/hermes-agent/references/slash-commands.md",
+          "sourceSha256": "690dc6c2543dfa028bbf2918c229f27f4962e9d897fce25ebb1de67d56f3b822",
+          "target": "prismer-hermes-agent/references/slash-commands.md"
+        },
+        {
+          "source": "autonomous-ai-agents/hermes-agent/references/themes.md",
+          "sourceSha256": "f5a8269a7312173f0caa6736156a3f76d32e56b4e15511e84dc2e902f48e8157",
+          "target": "prismer-hermes-agent/references/themes.md"
+        },
+        {
+          "source": "autonomous-ai-agents/hermes-agent/references/troubleshooting.md",
+          "sourceSha256": "b4d33de1c2c189d23892d043819c7146749a068c688af51919ff58fa8cb399a9",
+          "target": "prismer-hermes-agent/references/troubleshooting.md"
+        },
+        {
+          "source": "autonomous-ai-agents/hermes-agent/references/tui-widgets.md",
+          "sourceSha256": "20e21aabb757a9d3c7d895db8f05a3782fe8b28feef3768ac5550c8860b4a3db",
+          "target": "prismer-hermes-agent/references/tui-widgets.md"
+        },
+        {
+          "source": "autonomous-ai-agents/hermes-agent/references/webhooks.md",
+          "sourceSha256": "a4ef792943b03fbd1769e5176703a1f356c23756554abd37e0070f3885582489",
+          "target": "prismer-hermes-agent/references/webhooks.md"
+        },
+        {
+          "source": "autonomous-ai-agents/hermes-agent/references/windows-quirks.md",
+          "sourceSha256": "69addbf56f70671a97d5abc8d88e90d46681b8d8cdc3d26d2fa90abc210f64cd",
+          "target": "prismer-hermes-agent/references/windows-quirks.md"
+        },
+        {
+          "source": "autonomous-ai-agents/hermes-agent/SKILL.md",
+          "sourceSha256": "a111466ce81ccdad8bccc7f670c7946df9d9f8b639399f28bd2958f5bce92c56",
+          "target": "prismer-hermes-agent/SKILL.md"
+        },
+        {
+          "source": "autonomous-ai-agents/hermes-agent/templates/clock.mjs",
+          "sourceSha256": "44ec25d560e16c7815a633039a783ddbba2d8e8cf1659560c0cd1cddec83f89d",
+          "target": "prismer-hermes-agent/templates/clock.mjs"
+        },
+        {
+          "source": "autonomous-ai-agents/hermes-agent/templates/plugin.js",
+          "sourceSha256": "a63c8f879756854b45373f5d6b1ae0a7fefcdd4a5af840be8a60d83b64724744",
+          "target": "prismer-hermes-agent/templates/plugin.js"
+        },
+        {
+          "source": "autonomous-ai-agents/hermes-agent/templates/skin.yaml",
+          "sourceSha256": "bc8fddd7e5373b074c1c7dd423bb59d6e04769977e8a18354e3a6b3983209994",
+          "target": "prismer-hermes-agent/templates/skin.yaml"
+        }
+      ]
+    },
+    {
+      "upstream": "opencode",
+      "sourceRoot": "autonomous-ai-agents/opencode",
+      "decision": "exclude-entrypoint",
+      "reason": "Runtime owns coding agent lifecycle, authentication and sandbox controls",
+      "resources": [
+        {
+          "source": "autonomous-ai-agents/opencode/SKILL.md",
+          "sourceSha256": "885582e6f2d5b88f431c5a0bc3b69b88f5aab701774f91572487a6f4e4679a0b",
+          "target": null,
+          "reason": "Excluded original execution entrypoint"
+        }
+      ]
+    },
+    {
+      "upstream": "architecture-diagram",
+      "sourceRoot": "creative/architecture-diagram",
+      "targetSlug": "pkf-svg",
+      "targetRoot": "pkf-svg/references/architecture-diagram",
+      "decision": "merge",
+      "resources": [
+        {
+          "source": "creative/architecture-diagram/SKILL.md",
+          "sourceSha256": "0e7e2736aafe052e409c2ad27863d51ef3007c116711e584033787ccb5d99d3f",
+          "target": "pkf-svg/references/architecture-diagram/GUIDE.md"
+        },
+        {
+          "source": "creative/architecture-diagram/templates/template.html",
+          "sourceSha256": "d17a1631a14f108dd469ad16c83d667d917565ebe780f42fad7321be327de442",
+          "target": "pkf-svg/references/architecture-diagram/templates/template.html"
+        }
+      ]
+    },
+    {
+      "upstream": "ascii-video",
+      "sourceRoot": "creative/ascii-video",
+      "targetSlug": "prismer-ascii-video",
+      "targetRoot": "prismer-ascii-video",
+      "decision": "optional",
+      "resources": [
+        {
+          "source": "creative/ascii-video/README.md",
+          "sourceSha256": "a182ea6fd86e9a1a3e1d8e3281e0274b7cd33ef7b15c10bd12064ad4d75fbfae",
+          "target": "prismer-ascii-video/README.md"
+        },
+        {
+          "source": "creative/ascii-video/references/architecture.md",
+          "sourceSha256": "d537a3f6e6263cdd87a9cc71938706e50e8d7cc454aab36231923c319abd4aeb",
+          "target": "prismer-ascii-video/references/architecture.md"
+        },
+        {
+          "source": "creative/ascii-video/references/composition.md",
+          "sourceSha256": "3bdcb525921a3143b9f5e453fe6c4473f2992ac3404faa061d1883b8693da66c",
+          "target": "prismer-ascii-video/references/composition.md"
+        },
+        {
+          "source": "creative/ascii-video/references/effects.md",
+          "sourceSha256": "842f5720af3bf5a2d0ef7f0c9c832b8cc357caf93a9c534030f0f2b156c39f67",
+          "target": "prismer-ascii-video/references/effects.md"
+        },
+        {
+          "source": "creative/ascii-video/references/inputs.md",
+          "sourceSha256": "d9b723aa68f4239e7d306ed9ecd1e45b506e1197fb0c87194fbbe5a96f3d9402",
+          "target": "prismer-ascii-video/references/inputs.md"
+        },
+        {
+          "source": "creative/ascii-video/references/optimization.md",
+          "sourceSha256": "a9e78b131bf7fd6d575759c7eaf121a93e26bd56e2e0f6af67fd9fa766811713",
+          "target": "prismer-ascii-video/references/optimization.md"
+        },
+        {
+          "source": "creative/ascii-video/references/scenes.md",
+          "sourceSha256": "6c9a0293a5be961269f5d02e5b6dc83d4960a10511dfd777bc1033d416ecf093",
+          "target": "prismer-ascii-video/references/scenes.md"
+        },
+        {
+          "source": "creative/ascii-video/references/shaders.md",
+          "sourceSha256": "29cac0af0b4614b3782fbd19c2f2857d8e95fec70c0ea68be86f5c5d0702c669",
+          "target": "prismer-ascii-video/references/shaders.md"
+        },
+        {
+          "source": "creative/ascii-video/references/troubleshooting.md",
+          "sourceSha256": "eb992b11d051ba1ec8bb47d62cb28c329b69fc8ebc5ba38d4f501a9893ae9ebd",
+          "target": "prismer-ascii-video/references/troubleshooting.md"
+        },
+        {
+          "source": "creative/ascii-video/SKILL.md",
+          "sourceSha256": "3bd3f39985a52954e2693866608bd8105f4dc0efbca5b6baa3045c2b641bda26",
+          "target": "prismer-ascii-video/SKILL.md"
+        }
+      ]
+    },
+    {
+      "upstream": "baoyu-infographic",
+      "sourceRoot": "creative/baoyu-infographic",
+      "targetSlug": "prismer-baoyu-infographic",
+      "targetRoot": "prismer-baoyu-infographic",
+      "decision": "adopt",
+      "resources": [
+        {
+          "source": "creative/baoyu-infographic/PORT_NOTES.md",
+          "sourceSha256": "5dd3dbe9e9e713af903c7b29d391e259d93491b1504223880d8296c7a7093d51",
+          "target": "prismer-baoyu-infographic/PORT_NOTES.md"
+        },
+        {
+          "source": "creative/baoyu-infographic/references/analysis-framework.md",
+          "sourceSha256": "666d5682334ffde15bbd095a19d0720aa877b0f8c411cafbb60889f3f16fe71a",
+          "target": "prismer-baoyu-infographic/references/analysis-framework.md"
+        },
+        {
+          "source": "creative/baoyu-infographic/references/base-prompt.md",
+          "sourceSha256": "a0d476aa0042d25d4c757e7f400883a04f586e74920ac822b89a50dffa185d16",
+          "target": "prismer-baoyu-infographic/references/base-prompt.md"
+        },
+        {
+          "source": "creative/baoyu-infographic/references/layouts/bento-grid.md",
+          "sourceSha256": "b8dfb690b90d935483c5bfcfbd1476f31b392990fe81b1b67ad571008f6e6e99",
+          "target": "prismer-baoyu-infographic/references/layouts/bento-grid.md"
+        },
+        {
+          "source": "creative/baoyu-infographic/references/layouts/binary-comparison.md",
+          "sourceSha256": "6740c77e89b4cd120e2da9c96feb447fb707e40ef42ee1774794337c8079c8ee",
+          "target": "prismer-baoyu-infographic/references/layouts/binary-comparison.md"
+        },
+        {
+          "source": "creative/baoyu-infographic/references/layouts/bridge.md",
+          "sourceSha256": "ead9bd74c76c6de214e0fcee0b6bb756764b10f67ccaba52b591d05136bc7e1d",
+          "target": "prismer-baoyu-infographic/references/layouts/bridge.md"
+        },
+        {
+          "source": "creative/baoyu-infographic/references/layouts/circular-flow.md",
+          "sourceSha256": "96c560cdf274e62cebecdd864e7d7a18ce44863c78cbda3ff62f48233839e859",
+          "target": "prismer-baoyu-infographic/references/layouts/circular-flow.md"
+        },
+        {
+          "source": "creative/baoyu-infographic/references/layouts/comic-strip.md",
+          "sourceSha256": "3ed52755443e435304cb28925da1f7465bd6186aac2ac125d9336c8e0afed028",
+          "target": "prismer-baoyu-infographic/references/layouts/comic-strip.md"
+        },
+        {
+          "source": "creative/baoyu-infographic/references/layouts/comparison-matrix.md",
+          "sourceSha256": "77bfeb08fd66287e11db575582262f80a6c8471c5dfa6b9508e3c48e567ae14e",
+          "target": "prismer-baoyu-infographic/references/layouts/comparison-matrix.md"
+        },
+        {
+          "source": "creative/baoyu-infographic/references/layouts/dashboard.md",
+          "sourceSha256": "045514ab6f196ff0ab2c7ead9755e955eff582c5cdedc163eb0a4b18aebee2b6",
+          "target": "prismer-baoyu-infographic/references/layouts/dashboard.md"
+        },
+        {
+          "source": "creative/baoyu-infographic/references/layouts/dense-modules.md",
+          "sourceSha256": "5d73084f494c863b5c6186925f0eec0372a80157b63ebc6021379a5659b10420",
+          "target": "prismer-baoyu-infographic/references/layouts/dense-modules.md"
+        },
+        {
+          "source": "creative/baoyu-infographic/references/layouts/funnel.md",
+          "sourceSha256": "e505f04f334d8da00607972b19b23f9a2e24b6c2cff8cdb8fbe6baa0698c7286",
+          "target": "prismer-baoyu-infographic/references/layouts/funnel.md"
+        },
+        {
+          "source": "creative/baoyu-infographic/references/layouts/hierarchical-layers.md",
+          "sourceSha256": "5fdacc7c543788a32d9e73b4cc26465e54adec498dd4975cdcff85ca2f2d1da9",
+          "target": "prismer-baoyu-infographic/references/layouts/hierarchical-layers.md"
+        },
+        {
+          "source": "creative/baoyu-infographic/references/layouts/hub-spoke.md",
+          "sourceSha256": "d79526313a7f6550e5586652d871dee3b958c2ea400242a9a9c3f2bccf4b57a5",
+          "target": "prismer-baoyu-infographic/references/layouts/hub-spoke.md"
+        },
+        {
+          "source": "creative/baoyu-infographic/references/layouts/iceberg.md",
+          "sourceSha256": "26a21caf9a3d8dd4172565953f2cd060bca0b3ab2afd82f54828dc7542f5e9e3",
+          "target": "prismer-baoyu-infographic/references/layouts/iceberg.md"
+        },
+        {
+          "source": "creative/baoyu-infographic/references/layouts/isometric-map.md",
+          "sourceSha256": "ec0be8d54e5a8db5182696c637fd8769f9b9a6c7f4f190ca9f6f4ea7fc00732a",
+          "target": "prismer-baoyu-infographic/references/layouts/isometric-map.md"
+        },
+        {
+          "source": "creative/baoyu-infographic/references/layouts/jigsaw.md",
+          "sourceSha256": "1b5566cdf0981677bf79437a6c5877749a7ecc22fcf1cccc1bee864c9d865e75",
+          "target": "prismer-baoyu-infographic/references/layouts/jigsaw.md"
+        },
+        {
+          "source": "creative/baoyu-infographic/references/layouts/linear-progression.md",
+          "sourceSha256": "65dea6f3fc3c131c7d3fc32050e541b3f60e5896699adc0e8624d1c5cc469757",
+          "target": "prismer-baoyu-infographic/references/layouts/linear-progression.md"
+        },
+        {
+          "source": "creative/baoyu-infographic/references/layouts/periodic-table.md",
+          "sourceSha256": "8fa5c1823092eecd84e88cf8a3f9547e5ce7389dfeec4fd87b6277154f33f858",
+          "target": "prismer-baoyu-infographic/references/layouts/periodic-table.md"
+        },
+        {
+          "source": "creative/baoyu-infographic/references/layouts/story-mountain.md",
+          "sourceSha256": "251491e38320301caa0e2c29c4d7c73f910f598c8a00f924eb7e58a70cc7f2e8",
+          "target": "prismer-baoyu-infographic/references/layouts/story-mountain.md"
+        },
+        {
+          "source": "creative/baoyu-infographic/references/layouts/structural-breakdown.md",
+          "sourceSha256": "eff60da27c0603113a283488824312e1078140872ff204935bf2c3cfe712c1fc",
+          "target": "prismer-baoyu-infographic/references/layouts/structural-breakdown.md"
+        },
+        {
+          "source": "creative/baoyu-infographic/references/layouts/tree-branching.md",
+          "sourceSha256": "f493c76aa8d5ace6b5cf96a8ca2480f1131ee2ad41d335fdcb82f3ab83d928fc",
+          "target": "prismer-baoyu-infographic/references/layouts/tree-branching.md"
+        },
+        {
+          "source": "creative/baoyu-infographic/references/layouts/venn-diagram.md",
+          "sourceSha256": "c0babb164e540dcdc83f9006835024d04e3e2782665ceac4742e59b02a0cfd48",
+          "target": "prismer-baoyu-infographic/references/layouts/venn-diagram.md"
+        },
+        {
+          "source": "creative/baoyu-infographic/references/layouts/winding-roadmap.md",
+          "sourceSha256": "52dc70d953e795696a71a4331b951cc428283016d8a01e0ffcf9f1d79eb6e4f4",
+          "target": "prismer-baoyu-infographic/references/layouts/winding-roadmap.md"
+        },
+        {
+          "source": "creative/baoyu-infographic/references/structured-content-template.md",
+          "sourceSha256": "d979b8d4fb37746fbf404d5737ec76e5837f066b97f6bd45c9b9b9478bee0877",
+          "target": "prismer-baoyu-infographic/references/structured-content-template.md"
+        },
+        {
+          "source": "creative/baoyu-infographic/references/styles/aged-academia.md",
+          "sourceSha256": "596be4263818615dc491531bb326370a276c3995d13b27a7d3222da7ab8fffd3",
+          "target": "prismer-baoyu-infographic/references/styles/aged-academia.md"
+        },
+        {
+          "source": "creative/baoyu-infographic/references/styles/bold-graphic.md",
+          "sourceSha256": "d7262e681a5d8ca93aea397dbd4f00925724af9d20909adef877f5f117e2dabd",
+          "target": "prismer-baoyu-infographic/references/styles/bold-graphic.md"
+        },
+        {
+          "source": "creative/baoyu-infographic/references/styles/chalkboard.md",
+          "sourceSha256": "d903ffb1bd67b7f05972acbf82fec2305d93c149f458ad434097e4b18ff94df5",
+          "target": "prismer-baoyu-infographic/references/styles/chalkboard.md"
+        },
+        {
+          "source": "creative/baoyu-infographic/references/styles/claymation.md",
+          "sourceSha256": "c55e726c0d1156f2715107dd3b3d3c60af385b48db33b6121cb569494aa59644",
+          "target": "prismer-baoyu-infographic/references/styles/claymation.md"
+        },
+        {
+          "source": "creative/baoyu-infographic/references/styles/corporate-memphis.md",
+          "sourceSha256": "156e6e27009fdc3305e97ef242cb1a45fac65a054f73cd62718ce99bf5171ebf",
+          "target": "prismer-baoyu-infographic/references/styles/corporate-memphis.md"
+        },
+        {
+          "source": "creative/baoyu-infographic/references/styles/craft-handmade.md",
+          "sourceSha256": "91740549239ab391d18532c83317a137c68cb11ab33ea154130db68a791288c0",
+          "target": "prismer-baoyu-infographic/references/styles/craft-handmade.md"
+        },
+        {
+          "source": "creative/baoyu-infographic/references/styles/cyberpunk-neon.md",
+          "sourceSha256": "68fdaa033dbece53c5e788972ab47fc548df621f23c1ab408c7c633b457f6491",
+          "target": "prismer-baoyu-infographic/references/styles/cyberpunk-neon.md"
+        },
+        {
+          "source": "creative/baoyu-infographic/references/styles/hand-drawn-edu.md",
+          "sourceSha256": "f08c3abbdde1b63a8ff8e5a6d82024d2bf961fcff42c032510cf8dd0194e48b8",
+          "target": "prismer-baoyu-infographic/references/styles/hand-drawn-edu.md"
+        },
+        {
+          "source": "creative/baoyu-infographic/references/styles/ikea-manual.md",
+          "sourceSha256": "64816d33fd9fb5c22024d2db48f9e4ca7ca38c64cfad1d020880c7f32ccd5690",
+          "target": "prismer-baoyu-infographic/references/styles/ikea-manual.md"
+        },
+        {
+          "source": "creative/baoyu-infographic/references/styles/kawaii.md",
+          "sourceSha256": "d88bf32f4257c13ee68b6b13e7af733aa67b4eedce14e50182a791272f389f3a",
+          "target": "prismer-baoyu-infographic/references/styles/kawaii.md"
+        },
+        {
+          "source": "creative/baoyu-infographic/references/styles/knolling.md",
+          "sourceSha256": "59302d093c12766b1924e659c406429cc2543055ddf791f0d42760a1b2eaafbd",
+          "target": "prismer-baoyu-infographic/references/styles/knolling.md"
+        },
+        {
+          "source": "creative/baoyu-infographic/references/styles/lego-brick.md",
+          "sourceSha256": "3753f54d30e02bce4de89a1ace9db4ba82bd8395ae8f643c3670449aaaab04c7",
+          "target": "prismer-baoyu-infographic/references/styles/lego-brick.md"
+        },
+        {
+          "source": "creative/baoyu-infographic/references/styles/morandi-journal.md",
+          "sourceSha256": "13d230f40671f05d80c6e8b134e426da1c7f5a463d354ab241ca0f1ee30fec0d",
+          "target": "prismer-baoyu-infographic/references/styles/morandi-journal.md"
+        },
+        {
+          "source": "creative/baoyu-infographic/references/styles/origami.md",
+          "sourceSha256": "58f51438267c1499591d272bd7e434283565799889a4b0c75debf2329f2b919b",
+          "target": "prismer-baoyu-infographic/references/styles/origami.md"
+        },
+        {
+          "source": "creative/baoyu-infographic/references/styles/pixel-art.md",
+          "sourceSha256": "1a1dffbccf818e77fd8b16f7a5872e245a934db77ce2aa2a5b6348268bb2f5f3",
+          "target": "prismer-baoyu-infographic/references/styles/pixel-art.md"
+        },
+        {
+          "source": "creative/baoyu-infographic/references/styles/pop-laboratory.md",
+          "sourceSha256": "c920d07989697c46aa3482fe2b2f4c6387ab803e3f19ca11206a35a2ac7b7ff9",
+          "target": "prismer-baoyu-infographic/references/styles/pop-laboratory.md"
+        },
+        {
+          "source": "creative/baoyu-infographic/references/styles/retro-pop-grid.md",
+          "sourceSha256": "d59faa1639c15a6624c51746d9725de50a40c448dbbeba8faf6eb00ac3468023",
+          "target": "prismer-baoyu-infographic/references/styles/retro-pop-grid.md"
+        },
+        {
+          "source": "creative/baoyu-infographic/references/styles/storybook-watercolor.md",
+          "sourceSha256": "d7067bc69f56f3fad42e3f2671c86317c36962f38fd69a181f9d606d6fd54f88",
+          "target": "prismer-baoyu-infographic/references/styles/storybook-watercolor.md"
+        },
+        {
+          "source": "creative/baoyu-infographic/references/styles/subway-map.md",
+          "sourceSha256": "a122e7f9f5b990f804b717d6e696f916922ff61227e72bfe5e540fd51c66d359",
+          "target": "prismer-baoyu-infographic/references/styles/subway-map.md"
+        },
+        {
+          "source": "creative/baoyu-infographic/references/styles/technical-schematic.md",
+          "sourceSha256": "2b21ce445c6a2b1ef280c2d7b4cb8e87e2f6e720f85cb68a8ba40a5c2d73a12d",
+          "target": "prismer-baoyu-infographic/references/styles/technical-schematic.md"
+        },
+        {
+          "source": "creative/baoyu-infographic/references/styles/ui-wireframe.md",
+          "sourceSha256": "9a27502ab6bba76ad042cfa08834053f9e563c76cc8ffb46456cd3db2a6523a3",
+          "target": "prismer-baoyu-infographic/references/styles/ui-wireframe.md"
+        },
+        {
+          "source": "creative/baoyu-infographic/SKILL.md",
+          "sourceSha256": "89e25da6d8ea1cac79b18d9e6c4c3b8d7a522df2eef559f151f19c6ce5b2a002",
+          "target": "prismer-baoyu-infographic/SKILL.md"
+        }
+      ]
+    },
+    {
+      "upstream": "claude-design",
+      "sourceRoot": "creative/claude-design",
+      "targetSlug": "frontend-design",
+      "targetRoot": "frontend-design/references/claude-design",
+      "decision": "merge",
+      "resources": [
+        {
+          "source": "creative/claude-design/SKILL.md",
+          "sourceSha256": "1582b0d49e48bdf937b2f555098484e0979cdfa285c6cc9fa329ba8e416d347a",
+          "target": "frontend-design/references/claude-design/GUIDE.md"
+        }
+      ]
+    },
+    {
+      "upstream": "design-md",
+      "sourceRoot": "creative/design-md",
+      "targetSlug": "prismer-design-md",
+      "targetRoot": "prismer-design-md",
+      "decision": "adopt",
+      "resources": [
+        {
+          "source": "creative/design-md/SKILL.md",
+          "sourceSha256": "7ed56bba40ffc9573fa51b33b2424f37fb5f774e9ecb7e76e737797afd0b62ae",
+          "target": "prismer-design-md/SKILL.md"
+        },
+        {
+          "source": "creative/design-md/templates/starter.md",
+          "sourceSha256": "587571ab914ebe6c228d786aeb3b531d88b5b53dcffd5295333d609275a0b2d4",
+          "target": "prismer-design-md/templates/starter.md"
+        }
+      ]
+    },
+    {
+      "upstream": "humanizer",
+      "sourceRoot": "creative/humanizer",
+      "targetSlug": "doc-coauthoring",
+      "targetRoot": "doc-coauthoring/references/humanizer",
+      "decision": "merge",
+      "resources": [
+        {
+          "source": "creative/humanizer/LICENSE",
+          "sourceSha256": "4ac4810254ab36d45419141aeb8e69bf50652cfafe5b2dab947d06d44e5cbf96",
+          "target": "doc-coauthoring/references/humanizer/LICENSE"
+        },
+        {
+          "source": "creative/humanizer/SKILL.md",
+          "sourceSha256": "887d5e3467a682da9b166e5293007f8bbbc299f8a6718ae00f26161b7d062b04",
+          "target": "doc-coauthoring/references/humanizer/GUIDE.md"
+        }
+      ]
+    },
+    {
+      "upstream": "manim-video",
+      "sourceRoot": "creative/manim-video",
+      "targetSlug": "prismer-manim-video",
+      "targetRoot": "prismer-manim-video",
+      "decision": "optional",
+      "resources": [
+        {
+          "source": "creative/manim-video/README.md",
+          "sourceSha256": "a30f3ec6105d5b23bc5ec28e8e2809e9ceed49f1fd816570d5b5656d0aa65819",
+          "target": "prismer-manim-video/README.md"
+        },
+        {
+          "source": "creative/manim-video/references/animation-design-thinking.md",
+          "sourceSha256": "87812340f4756f5e2cc653e6e13ec922562a58483bcd66a5317c19ace5e08220",
+          "target": "prismer-manim-video/references/animation-design-thinking.md"
+        },
+        {
+          "source": "creative/manim-video/references/animations.md",
+          "sourceSha256": "e00bf77a8e17bf457b7669175ac5dc9ffa68e93d35b3f092036a6077892ba51d",
+          "target": "prismer-manim-video/references/animations.md"
+        },
+        {
+          "source": "creative/manim-video/references/camera-and-3d.md",
+          "sourceSha256": "36a17d79a0d7b9b11b8e645417f10ebcd2e051228c06867611a3271db7f28ad4",
+          "target": "prismer-manim-video/references/camera-and-3d.md"
+        },
+        {
+          "source": "creative/manim-video/references/decorations.md",
+          "sourceSha256": "dfd7bd79a57a0b1860aae5a5d6d282b1b517445457db4d4493519d77c0f568de",
+          "target": "prismer-manim-video/references/decorations.md"
+        },
+        {
+          "source": "creative/manim-video/references/equations.md",
+          "sourceSha256": "7408d2688b497f423770e33408d883d54e293a1ba3abb892ebb799a698b50e38",
+          "target": "prismer-manim-video/references/equations.md"
+        },
+        {
+          "source": "creative/manim-video/references/graphs-and-data.md",
+          "sourceSha256": "347847bc60f1e5f00ab8ad0f81deede00e8c702b3e1d13a22358e358f370be12",
+          "target": "prismer-manim-video/references/graphs-and-data.md"
+        },
+        {
+          "source": "creative/manim-video/references/mobjects.md",
+          "sourceSha256": "771421e463b526dcc4e2593ae327358ef26919f698c48ee4e32cc7749d32dcda",
+          "target": "prismer-manim-video/references/mobjects.md"
+        },
+        {
+          "source": "creative/manim-video/references/paper-explainer.md",
+          "sourceSha256": "ab67495a01e60f2c45afded7c3c80a4e4501c841a562d1a6d305cc74787a4fc4",
+          "target": "prismer-manim-video/references/paper-explainer.md"
+        },
+        {
+          "source": "creative/manim-video/references/production-quality.md",
+          "sourceSha256": "d9f41d3c58396a94750e6d7c56c9fe5aaa0d067679df059adbe472ceab87d9c0",
+          "target": "prismer-manim-video/references/production-quality.md"
+        },
+        {
+          "source": "creative/manim-video/references/rendering.md",
+          "sourceSha256": "8a326d4081d658018fccb8ee4df34be6a945b40466f08f4675924f98649c6ac2",
+          "target": "prismer-manim-video/references/rendering.md"
+        },
+        {
+          "source": "creative/manim-video/references/scene-planning.md",
+          "sourceSha256": "c54a8cf6cf864ff5a60d4569e4e285f0fca88e40f3cbff1350b70b099af319e0",
+          "target": "prismer-manim-video/references/scene-planning.md"
+        },
+        {
+          "source": "creative/manim-video/references/troubleshooting.md",
+          "sourceSha256": "7ee9880cf32ab2b4e1eeaa289464f211e96e9510004635ade59ee6660a4909df",
+          "target": "prismer-manim-video/references/troubleshooting.md"
+        },
+        {
+          "source": "creative/manim-video/references/updaters-and-trackers.md",
+          "sourceSha256": "96c024dce576750a917277e0f4e09135fa7be25ea7e9248b702d36533b22dae5",
+          "target": "prismer-manim-video/references/updaters-and-trackers.md"
+        },
+        {
+          "source": "creative/manim-video/references/visual-design.md",
+          "sourceSha256": "6703a312d9e35820a84140343b5c484050874ff19daf5c72789fa00cc1644c99",
+          "target": "prismer-manim-video/references/visual-design.md"
+        },
+        {
+          "source": "creative/manim-video/scripts/setup.sh",
+          "sourceSha256": "e7563c458764c1b369c26f874cf94acbe43db8f9a3b1e0d9d735230f5d895bae",
+          "target": "prismer-manim-video/scripts/setup.sh"
+        },
+        {
+          "source": "creative/manim-video/SKILL.md",
+          "sourceSha256": "467376469fc2043e2674a843509f8eea52660791e76fb2e142074ecd4abc7e69",
+          "target": "prismer-manim-video/SKILL.md"
+        }
+      ]
+    },
+    {
+      "upstream": "p5js",
+      "sourceRoot": "creative/p5js",
+      "targetSlug": "prismer-p5js",
+      "targetRoot": "prismer-p5js",
+      "decision": "optional",
+      "resources": [
+        {
+          "source": "creative/p5js/README.md",
+          "sourceSha256": "8251be0e41fbe1bd0a903ac93b38beb2b64375696fd0cd23bb73dd2ef8f8054f",
+          "target": "prismer-p5js/README.md"
+        },
+        {
+          "source": "creative/p5js/references/animation.md",
+          "sourceSha256": "7b71c1fd7c7778bfe3e348e49ae8b4cae59c5eb730a42d9b603acce7801bbe57",
+          "target": "prismer-p5js/references/animation.md"
+        },
+        {
+          "source": "creative/p5js/references/color-systems.md",
+          "sourceSha256": "4c210028c4d6e8cf72df7eb0c730b6faea6ac60d627d333991040c42e7f5d699",
+          "target": "prismer-p5js/references/color-systems.md"
+        },
+        {
+          "source": "creative/p5js/references/core-api.md",
+          "sourceSha256": "8b1278b31bd4e003cb093da1858e4d0753eb304540c8f4e8e567c682222753e7",
+          "target": "prismer-p5js/references/core-api.md"
+        },
+        {
+          "source": "creative/p5js/references/export-pipeline.md",
+          "sourceSha256": "b88e7236c5a674c2541d664c1c1f7cdf2eea0ef7da43c047ac2d45e3fd239667",
+          "target": "prismer-p5js/references/export-pipeline.md"
+        },
+        {
+          "source": "creative/p5js/references/interaction.md",
+          "sourceSha256": "2951d6e9df71c467fe9ac8401c771a0b93b7c648dd4723108743f339d3c82aa3",
+          "target": "prismer-p5js/references/interaction.md"
+        },
+        {
+          "source": "creative/p5js/references/shapes-and-geometry.md",
+          "sourceSha256": "0a468a75d22322552abffec0cb1305d94ee531c850dd8b590584fd1078d48ed2",
+          "target": "prismer-p5js/references/shapes-and-geometry.md"
+        },
+        {
+          "source": "creative/p5js/references/troubleshooting.md",
+          "sourceSha256": "89812ad4fa9f08bde59ee1050107c723bd1b9046a81f8dd0aad94d4a9d8b215f",
+          "target": "prismer-p5js/references/troubleshooting.md"
+        },
+        {
+          "source": "creative/p5js/references/typography.md",
+          "sourceSha256": "d26c532a850750c6d6e64ddaa0465a499bfd44023465a6a19d8909637266654c",
+          "target": "prismer-p5js/references/typography.md"
+        },
+        {
+          "source": "creative/p5js/references/visual-effects.md",
+          "sourceSha256": "644cbaf5f91b44dfa54ec125ccdff44c445f454781ff98edd316d30df258db56",
+          "target": "prismer-p5js/references/visual-effects.md"
+        },
+        {
+          "source": "creative/p5js/references/webgl-and-3d.md",
+          "sourceSha256": "86ce498bccba5ce24ab9ba6d104723ea2739db6da27c2aec4284848ba306860d",
+          "target": "prismer-p5js/references/webgl-and-3d.md"
+        },
+        {
+          "source": "creative/p5js/scripts/export-frames.js",
+          "sourceSha256": "b1de46c977c9edfcc71fc045422f78722f12744c4f8b3d80e0fa6b2681a1dd05",
+          "target": "prismer-p5js/scripts/export-frames.js"
+        },
+        {
+          "source": "creative/p5js/scripts/render.sh",
+          "sourceSha256": "10a5e45d1a9d3dc867fbd7cea3b744f8d335ec03bf85a77d3a1852f315adf9e2",
+          "target": "prismer-p5js/scripts/render.sh"
+        },
+        {
+          "source": "creative/p5js/scripts/serve.sh",
+          "sourceSha256": "65c28a2bff1dbf74f86fe027ead37eaa02da02a146c33cef4af36bc0b51c9917",
+          "target": "prismer-p5js/scripts/serve.sh"
+        },
+        {
+          "source": "creative/p5js/scripts/setup.sh",
+          "sourceSha256": "27750af377cec00485ffa26fcc7bd2452167bdf73f15d4997bda49a8f4b780c3",
+          "target": "prismer-p5js/scripts/setup.sh"
+        },
+        {
+          "source": "creative/p5js/SKILL.md",
+          "sourceSha256": "3b39b75303e082af69b3f4e2deab7a55b27d60293eff6a561fb627188194a33e",
+          "target": "prismer-p5js/SKILL.md"
+        },
+        {
+          "source": "creative/p5js/templates/viewer.html",
+          "sourceSha256": "6a0f3f42fbc6a52cc82cd5990a856474cdbf43d2f157d2183a09b9cec91a331a",
+          "target": "prismer-p5js/templates/viewer.html"
+        }
+      ]
+    },
+    {
+      "upstream": "popular-web-designs",
+      "sourceRoot": "creative/popular-web-designs",
+      "targetSlug": "prismer-popular-web-designs",
+      "targetRoot": "prismer-popular-web-designs",
+      "decision": "optional",
+      "resources": [
+        {
+          "source": "creative/popular-web-designs/SKILL.md",
+          "sourceSha256": "cd89bdb86008bb30b35d9bdd30e06587f75ee54055c54e1a79afb20418264b3d",
+          "target": "prismer-popular-web-designs/SKILL.md"
+        },
+        {
+          "source": "creative/popular-web-designs/templates/airbnb.md",
+          "sourceSha256": "4d6277a1e6432047f25cc7b7443d7eac7a9bde5b483c609cf7bb7f5c9abab70b",
+          "target": "prismer-popular-web-designs/templates/airbnb.md"
+        },
+        {
+          "source": "creative/popular-web-designs/templates/airtable.md",
+          "sourceSha256": "9795a57c10e0773d547a219db6c7d9aa294b7fc8f0b9cec96f9e293655dc5f30",
+          "target": "prismer-popular-web-designs/templates/airtable.md"
+        },
+        {
+          "source": "creative/popular-web-designs/templates/apple.md",
+          "sourceSha256": "9dfce6c8ba40c93b6e9a3d537b24dad8643df56d0839bada58f8cf41f99ecaec",
+          "target": "prismer-popular-web-designs/templates/apple.md"
+        },
+        {
+          "source": "creative/popular-web-designs/templates/bmw.md",
+          "sourceSha256": "f4d82d0acd92db83e63dc21424fdcb198b3c620ce30ea7726a2c0ce4927d6dbe",
+          "target": "prismer-popular-web-designs/templates/bmw.md"
+        },
+        {
+          "source": "creative/popular-web-designs/templates/cal.md",
+          "sourceSha256": "87b5ebb39dfaa2b3d86be692ad2210392476bb5a6b9190e977de61cd3f2d510f",
+          "target": "prismer-popular-web-designs/templates/cal.md"
+        },
+        {
+          "source": "creative/popular-web-designs/templates/claude.md",
+          "sourceSha256": "0644dd065f1167959a157648a420d64756963fef47df8584968c0003dbce56ed",
+          "target": "prismer-popular-web-designs/templates/claude.md"
+        },
+        {
+          "source": "creative/popular-web-designs/templates/clay.md",
+          "sourceSha256": "fc18ca7b88c2840bc35ce574803f6d5ee87415457aad1e116a2e34513fefebe4",
+          "target": "prismer-popular-web-designs/templates/clay.md"
+        },
+        {
+          "source": "creative/popular-web-designs/templates/clickhouse.md",
+          "sourceSha256": "1f92343a51ca05fa742ee012d902c829478b97f7a49c4055e047349730bbb6fa",
+          "target": "prismer-popular-web-designs/templates/clickhouse.md"
+        },
+        {
+          "source": "creative/popular-web-designs/templates/cohere.md",
+          "sourceSha256": "0db7feff1fe45ccf39a6ffe6758620284dea9d235e42db7b7efaab1ae0e3b4c3",
+          "target": "prismer-popular-web-designs/templates/cohere.md"
+        },
+        {
+          "source": "creative/popular-web-designs/templates/coinbase.md",
+          "sourceSha256": "d34fc53bf9d0d68c8a825cde92f6243add31e6e471012ce519bdeb09b7592cf9",
+          "target": "prismer-popular-web-designs/templates/coinbase.md"
+        },
+        {
+          "source": "creative/popular-web-designs/templates/composio.md",
+          "sourceSha256": "2398498177e69c32819695c16718e83eea3d5499798c600d6aa4a025a496f448",
+          "target": "prismer-popular-web-designs/templates/composio.md"
+        },
+        {
+          "source": "creative/popular-web-designs/templates/cursor.md",
+          "sourceSha256": "9c0584ad583057cf88c47f352a395d0e6d508b98f5e844188d0df2a122c7a100",
+          "target": "prismer-popular-web-designs/templates/cursor.md"
+        },
+        {
+          "source": "creative/popular-web-designs/templates/elevenlabs.md",
+          "sourceSha256": "ba0f7455143c2fd89422e09baf3b92030fb55422eb500a46af2432528f72e585",
+          "target": "prismer-popular-web-designs/templates/elevenlabs.md"
+        },
+        {
+          "source": "creative/popular-web-designs/templates/expo.md",
+          "sourceSha256": "513bded0ab8137833488cba76526644f64f6d91de8bce0793253a261e78807cb",
+          "target": "prismer-popular-web-designs/templates/expo.md"
+        },
+        {
+          "source": "creative/popular-web-designs/templates/figma.md",
+          "sourceSha256": "d04a5225723177d265e80125d50c249861c3e0e91ea1f3dab469ba06f61dee70",
+          "target": "prismer-popular-web-designs/templates/figma.md"
+        },
+        {
+          "source": "creative/popular-web-designs/templates/framer.md",
+          "sourceSha256": "4374dc30dd981448936fa7f1d84e34025a0380a909e17ac9f43cc4e41adef0c5",
+          "target": "prismer-popular-web-designs/templates/framer.md"
+        },
+        {
+          "source": "creative/popular-web-designs/templates/hashicorp.md",
+          "sourceSha256": "fc14c7103c6dcd7cb649b92042a5a7fb8b9327d3d35fee665e84f7806a851089",
+          "target": "prismer-popular-web-designs/templates/hashicorp.md"
+        },
+        {
+          "source": "creative/popular-web-designs/templates/ibm.md",
+          "sourceSha256": "328494dcf5266f17b71ccff3fb68b3a7077c8fe1f45d7688c26ba24f0aeae3fd",
+          "target": "prismer-popular-web-designs/templates/ibm.md"
+        },
+        {
+          "source": "creative/popular-web-designs/templates/intercom.md",
+          "sourceSha256": "a8a3f040a170b061d7ea84457fe9f56b7733d282fc6b436d6d498966b7d81275",
+          "target": "prismer-popular-web-designs/templates/intercom.md"
+        },
+        {
+          "source": "creative/popular-web-designs/templates/kraken.md",
+          "sourceSha256": "4c318649813d7293829bda3e26536a33f625546ce6ed530b5af50c7897b91a6c",
+          "target": "prismer-popular-web-designs/templates/kraken.md"
+        },
+        {
+          "source": "creative/popular-web-designs/templates/linear.app.md",
+          "sourceSha256": "0826aef4c683f0d9cefdd5464ae26865e003e827544da9d30d63010471e32835",
+          "target": "prismer-popular-web-designs/templates/linear.app.md"
+        },
+        {
+          "source": "creative/popular-web-designs/templates/lovable.md",
+          "sourceSha256": "c4092616ed94b011142b36eb4a0eeb8611f1e5032ed6d4594663489cb4307779",
+          "target": "prismer-popular-web-designs/templates/lovable.md"
+        },
+        {
+          "source": "creative/popular-web-designs/templates/minimax.md",
+          "sourceSha256": "8b1cfa04f435ed4931cca8d81fa8998d714db5ad193512a6e240862dd517c1a1",
+          "target": "prismer-popular-web-designs/templates/minimax.md"
+        },
+        {
+          "source": "creative/popular-web-designs/templates/mintlify.md",
+          "sourceSha256": "2a1e56e99fbe94835f90240f03e60292b14811bd5712dde696f3622a6aa5bec4",
+          "target": "prismer-popular-web-designs/templates/mintlify.md"
+        },
+        {
+          "source": "creative/popular-web-designs/templates/miro.md",
+          "sourceSha256": "47307a1d603f3e1c9cbfde1bdee2b976bc6a27b75357076bc75e84bfd2bdfa1d",
+          "target": "prismer-popular-web-designs/templates/miro.md"
+        },
+        {
+          "source": "creative/popular-web-designs/templates/mistral.ai.md",
+          "sourceSha256": "82b090855a45a16fca45962c7f9ff78debb7ea3ed064846658e9a21e5fadb70f",
+          "target": "prismer-popular-web-designs/templates/mistral.ai.md"
+        },
+        {
+          "source": "creative/popular-web-designs/templates/mongodb.md",
+          "sourceSha256": "96531df710b4a49a0b68af6f1cf81b8927d48a7ee215315e6ed7e09c7d6b615f",
+          "target": "prismer-popular-web-designs/templates/mongodb.md"
+        },
+        {
+          "source": "creative/popular-web-designs/templates/notion.md",
+          "sourceSha256": "9afd11387e550f2ce085514b38a5e0393d6192a1d9e05a14342356977a832621",
+          "target": "prismer-popular-web-designs/templates/notion.md"
+        },
+        {
+          "source": "creative/popular-web-designs/templates/nvidia.md",
+          "sourceSha256": "9a565542920f930ac743d17fa5226afb2be2e8f921333960b4d03bdbe3f9977d",
+          "target": "prismer-popular-web-designs/templates/nvidia.md"
+        },
+        {
+          "source": "creative/popular-web-designs/templates/ollama.md",
+          "sourceSha256": "56e636e385fd1a9c79e9352f8b3d1a02919c30fa7fe8fe2e14f25f422b64b7e5",
+          "target": "prismer-popular-web-designs/templates/ollama.md"
+        },
+        {
+          "source": "creative/popular-web-designs/templates/opencode.ai.md",
+          "sourceSha256": "fac924b83e1483e46fdf15a56791b10b739c194c1ea9a7b2cf2945de21ba7aec",
+          "target": "prismer-popular-web-designs/templates/opencode.ai.md"
+        },
+        {
+          "source": "creative/popular-web-designs/templates/pinterest.md",
+          "sourceSha256": "eaec9d13e6450e74074198743337f1e9b0d21572123a4ab1ebccdd66e114faf0",
+          "target": "prismer-popular-web-designs/templates/pinterest.md"
+        },
+        {
+          "source": "creative/popular-web-designs/templates/posthog.md",
+          "sourceSha256": "9d17a75b45720763c0107885f3f77f8f2871e4957e145a49696d569ddc5052a2",
+          "target": "prismer-popular-web-designs/templates/posthog.md"
+        },
+        {
+          "source": "creative/popular-web-designs/templates/raycast.md",
+          "sourceSha256": "90304a7a878784920768d8bdd46ac519cdc2258daf157dcb3668cd8e7bc47f67",
+          "target": "prismer-popular-web-designs/templates/raycast.md"
+        },
+        {
+          "source": "creative/popular-web-designs/templates/replicate.md",
+          "sourceSha256": "7753ebfffb73d2a25bbc1abfe84ac7f0d05903a36a7068446f877bd0f097a02f",
+          "target": "prismer-popular-web-designs/templates/replicate.md"
+        },
+        {
+          "source": "creative/popular-web-designs/templates/resend.md",
+          "sourceSha256": "9ee46f856f8d89d8dea4abb3d2c78a210825e8263f126eab3bdd939de0060834",
+          "target": "prismer-popular-web-designs/templates/resend.md"
+        },
+        {
+          "source": "creative/popular-web-designs/templates/revolut.md",
+          "sourceSha256": "1d024aa8105e22a192b4670b9406a9ca73aa4a1b85a65508f9b409864cb9b5ee",
+          "target": "prismer-popular-web-designs/templates/revolut.md"
+        },
+        {
+          "source": "creative/popular-web-designs/templates/runwayml.md",
+          "sourceSha256": "81fe46161ae5501da5b9c473e298f32cb02de2d3b5605b192aa7bb635b7cb269",
+          "target": "prismer-popular-web-designs/templates/runwayml.md"
+        },
+        {
+          "source": "creative/popular-web-designs/templates/sanity.md",
+          "sourceSha256": "174ae98a518f69230f54865b8a47699e475dde7ad822e14e52eb26ecbbf52799",
+          "target": "prismer-popular-web-designs/templates/sanity.md"
+        },
+        {
+          "source": "creative/popular-web-designs/templates/sentry.md",
+          "sourceSha256": "edac951ab2807005002e2619472526ec4118ebb8332aec6698c9f9dfb659fa81",
+          "target": "prismer-popular-web-designs/templates/sentry.md"
+        },
+        {
+          "source": "creative/popular-web-designs/templates/spacex.md",
+          "sourceSha256": "8b91bf24463cb5c8e98aacf43af02305faaeb8f28bf24199d90cfebca7b3c48f",
+          "target": "prismer-popular-web-designs/templates/spacex.md"
+        },
+        {
+          "source": "creative/popular-web-designs/templates/spotify.md",
+          "sourceSha256": "5cc773b31d12a9a3c54a100e10a9729818bb07e611bb837f3891007f88840af6",
+          "target": "prismer-popular-web-designs/templates/spotify.md"
+        },
+        {
+          "source": "creative/popular-web-designs/templates/stripe.md",
+          "sourceSha256": "cdddebb03bc5282ad9eabf2e6fde823d7a2deb828f9dc8ca4ab6f919b42aef05",
+          "target": "prismer-popular-web-designs/templates/stripe.md"
+        },
+        {
+          "source": "creative/popular-web-designs/templates/supabase.md",
+          "sourceSha256": "deeabf2b03efd5a0fc8e1d3876fc3f9bfe0ea480fbf35fddfb3e43f7943f938d",
+          "target": "prismer-popular-web-designs/templates/supabase.md"
+        },
+        {
+          "source": "creative/popular-web-designs/templates/superhuman.md",
+          "sourceSha256": "edbd6f3c175f45cd264a7fbf17ad9a367b68a5eb1068d385639973658730bd93",
+          "target": "prismer-popular-web-designs/templates/superhuman.md"
+        },
+        {
+          "source": "creative/popular-web-designs/templates/together.ai.md",
+          "sourceSha256": "de149f63fd3c7bd0190a86a2d194ab8b2800bb4ec5c0312711d11dca8b07487a",
+          "target": "prismer-popular-web-designs/templates/together.ai.md"
+        },
+        {
+          "source": "creative/popular-web-designs/templates/uber.md",
+          "sourceSha256": "68291d1291680183e2786965d076053f66e4fd68efb47cdb4ba48256ecf2b2b6",
+          "target": "prismer-popular-web-designs/templates/uber.md"
+        },
+        {
+          "source": "creative/popular-web-designs/templates/vercel.md",
+          "sourceSha256": "ad326ef79b6e4415f564e31b4317170384b2cf424a2e582c4cbc4df53dea9705",
+          "target": "prismer-popular-web-designs/templates/vercel.md"
+        },
+        {
+          "source": "creative/popular-web-designs/templates/voltagent.md",
+          "sourceSha256": "e73d9409a63d157774528b260b3249fb52745e6b242efe8bc1ae2e9f04b08827",
+          "target": "prismer-popular-web-designs/templates/voltagent.md"
+        },
+        {
+          "source": "creative/popular-web-designs/templates/warp.md",
+          "sourceSha256": "0a6569a598ca207704ab87fedd76fc1ac2cae537f0da8eb3d9ca5cb843d309ab",
+          "target": "prismer-popular-web-designs/templates/warp.md"
+        },
+        {
+          "source": "creative/popular-web-designs/templates/webflow.md",
+          "sourceSha256": "64c4d2929e2bc906086d6d04e4638cc4f87fd553ac8073d5f3cea7b46a620d13",
+          "target": "prismer-popular-web-designs/templates/webflow.md"
+        },
+        {
+          "source": "creative/popular-web-designs/templates/wise.md",
+          "sourceSha256": "6496785cb61f66b5c3edc74f6a8bf6fe10d4e16ada427bbdd7dc6c92f0a0c656",
+          "target": "prismer-popular-web-designs/templates/wise.md"
+        },
+        {
+          "source": "creative/popular-web-designs/templates/x.ai.md",
+          "sourceSha256": "5454af16b5f3daee9a2f05658d267bb0bd8a025e1870bad996a85677a091d284",
+          "target": "prismer-popular-web-designs/templates/x.ai.md"
+        },
+        {
+          "source": "creative/popular-web-designs/templates/zapier.md",
+          "sourceSha256": "9aac8e73a4a471fecb2d252afead66c82436e7525e7f9d1e6bbe64e375c65160",
+          "target": "prismer-popular-web-designs/templates/zapier.md"
+        }
+      ]
+    },
+    {
+      "upstream": "songwriting-and-ai-music",
+      "sourceRoot": "creative/songwriting-and-ai-music",
+      "targetSlug": "prismer-songwriting-and-ai-music",
+      "targetRoot": "prismer-songwriting-and-ai-music",
+      "decision": "optional",
+      "resources": [
+        {
+          "source": "creative/songwriting-and-ai-music/SKILL.md",
+          "sourceSha256": "5dbf92dc336e9b17be45c35c92a5bb307e4655e39a86617f07b7654678f92583",
+          "target": "prismer-songwriting-and-ai-music/SKILL.md"
+        }
+      ]
+    },
+    {
+      "upstream": "sdlc-review",
+      "sourceRoot": "devops/sdlc-review",
+      "targetSlug": "codebase-design",
+      "targetRoot": "codebase-design/references/sdlc-review",
+      "decision": "merge",
+      "resources": [
+        {
+          "source": "devops/sdlc-review/SKILL.md",
+          "sourceSha256": "ce90e8a3e145cce69c62880dc85921700110879f9290952d6cec28218503155f",
+          "target": "codebase-design/references/sdlc-review/GUIDE.md"
+        }
+      ]
+    },
+    {
+      "upstream": "email-inbox-triage",
+      "sourceRoot": "email/email-inbox-triage",
+      "targetSlug": "prismer-email-inbox-triage",
+      "targetRoot": "prismer-email-inbox-triage",
+      "decision": "adopt",
+      "resources": [
+        {
+          "source": "email/email-inbox-triage/SKILL.md",
+          "sourceSha256": "deeade1bb70f8835b2f3158980030b8aa41bb1ea6f798631451c89cfd632bcc8",
+          "target": "prismer-email-inbox-triage/SKILL.md"
+        }
+      ]
+    },
+    {
+      "upstream": "himalaya",
+      "sourceRoot": "email/himalaya",
+      "targetSlug": "prismer-himalaya",
+      "targetRoot": "prismer-himalaya",
+      "decision": "optional",
+      "resources": [
+        {
+          "source": "email/himalaya/references/configuration.md",
+          "sourceSha256": "ccd540fa964f843903b17400a5f45ef610a16f23fe1e0ca3e625f717fa951b89",
+          "target": "prismer-himalaya/references/configuration.md"
+        },
+        {
+          "source": "email/himalaya/references/message-composition.md",
+          "sourceSha256": "84d889972f5f4243d891405b83e67bddc7e835b2c4e434efd77fdc6bca9fe307",
+          "target": "prismer-himalaya/references/message-composition.md"
+        },
+        {
+          "source": "email/himalaya/SKILL.md",
+          "sourceSha256": "0f6c9bb4c0a5c4f4627e139b6beb2b1ba0addd7145895196528b8125929e3837",
+          "target": "prismer-himalaya/SKILL.md"
+        }
+      ]
+    },
+    {
+      "upstream": "gif-search",
+      "sourceRoot": "media/gif-search",
+      "targetSlug": "prismer-gif-search",
+      "targetRoot": "prismer-gif-search",
+      "decision": "optional",
+      "resources": [
+        {
+          "source": "media/gif-search/SKILL.md",
+          "sourceSha256": "a8349043740a8805d4ebfeb3a21f67ec0e9a9733a84f96403ca142c88a312b5d",
+          "target": "prismer-gif-search/SKILL.md"
+        }
+      ]
+    },
+    {
+      "upstream": "songsee",
+      "sourceRoot": "media/songsee",
+      "targetSlug": "prismer-songsee",
+      "targetRoot": "prismer-songsee",
+      "decision": "optional",
+      "resources": [
+        {
+          "source": "media/songsee/SKILL.md",
+          "sourceSha256": "d9d8d1394c630bd83329cd54cd8f18e0e3cd140debe31c3ccf5d9667f054de07",
+          "target": "prismer-songsee/SKILL.md"
+        }
+      ]
+    },
+    {
+      "upstream": "youtube-content",
+      "sourceRoot": "media/youtube-content",
+      "targetSlug": "prismer-youtube-content",
+      "targetRoot": "prismer-youtube-content",
+      "decision": "adopt",
+      "resources": [
+        {
+          "source": "media/youtube-content/references/output-formats.md",
+          "sourceSha256": "f24e6939b47511a7dfc1257f3087c9dafd027fe7836d0e65b0feb3214f598cd1",
+          "target": "prismer-youtube-content/references/output-formats.md"
+        },
+        {
+          "source": "media/youtube-content/scripts/fetch_transcript.py",
+          "sourceSha256": "462f96320f641d3372fb54dd34d5e4892c185cb48096f9c5e97b05a77ac02467",
+          "target": "prismer-youtube-content/scripts/fetch_transcript.py"
+        },
+        {
+          "source": "media/youtube-content/SKILL.md",
+          "sourceSha256": "52349e30ac74a3c2693c43588e9392a53236526b4b7d92769a64045a9782308e",
+          "target": "prismer-youtube-content/SKILL.md"
+        }
+      ]
+    },
+    {
+      "upstream": "obsidian",
+      "sourceRoot": "note-taking/obsidian",
+      "targetSlug": "prismer-obsidian",
+      "targetRoot": "prismer-obsidian",
+      "decision": "optional",
+      "resources": [
+        {
+          "source": "note-taking/obsidian/SKILL.md",
+          "sourceSha256": "7aea4e8f89f94ab2876d79898d10a5d4cdab31390c53f72ad6934b071179f826",
+          "target": "prismer-obsidian/SKILL.md"
+        }
+      ]
+    },
+    {
+      "upstream": "airtable",
+      "sourceRoot": "productivity/airtable",
+      "targetSlug": "prismer-airtable",
+      "targetRoot": "prismer-airtable",
+      "decision": "optional",
+      "resources": [
+        {
+          "source": "productivity/airtable/SKILL.md",
+          "sourceSha256": "28253f1e20c4d250725eb7f475c886952a4c6a1ef43ef6900c2dc0e75ebb40e6",
+          "target": "prismer-airtable/SKILL.md"
+        }
+      ]
+    },
+    {
+      "upstream": "box",
+      "sourceRoot": "productivity/box",
+      "targetSlug": "prismer-box",
+      "targetRoot": "prismer-box",
+      "decision": "optional",
+      "resources": [
+        {
+          "source": "productivity/box/references/bulk-operations.md",
+          "sourceSha256": "873a14840a01048004ca0dfa9fd3eb6015a9b4d5d5ed00c4701ac9235280e331",
+          "target": "prismer-box/references/bulk-operations.md"
+        },
+        {
+          "source": "productivity/box/references/cli-guide.md",
+          "sourceSha256": "a94496da79df7aceb8d92bf285069cd3b80034649da62ce23eb076e2da39ae7e",
+          "target": "prismer-box/references/cli-guide.md"
+        },
+        {
+          "source": "productivity/box/references/content-workflows.md",
+          "sourceSha256": "703bc320272cc93d93d67330ab1c082f88985b1e0095117099c4693683d042ad",
+          "target": "prismer-box/references/content-workflows.md"
+        },
+        {
+          "source": "productivity/box/references/hubs.md",
+          "sourceSha256": "61909fa5e550f6cd51c8d2c069a95e01f79f28c24a5780fe16e63e3b1eee890a",
+          "target": "prismer-box/references/hubs.md"
+        },
+        {
+          "source": "productivity/box/references/oauth-setup.md",
+          "sourceSha256": "6506cef6a6e44c5b5f8e483642595feb2ca2b93799ebd5e60ba9f08ddd8459a5",
+          "target": "prismer-box/references/oauth-setup.md"
+        },
+        {
+          "source": "productivity/box/references/rest-api.md",
+          "sourceSha256": "3afe53c5bcfda288f3727de3ff1fa05773e24b7fdd964373280831218bb6b5d2",
+          "target": "prismer-box/references/rest-api.md"
+        },
+        {
+          "source": "productivity/box/references/sdk-development.md",
+          "sourceSha256": "96886f989937399fa80d1841be2c99eb006f180bc1f8538c628f23a4c584cb8c",
+          "target": "prismer-box/references/sdk-development.md"
+        },
+        {
+          "source": "productivity/box/references/search-and-ai.md",
+          "sourceSha256": "6bfca0afc9cd35d5312261f0c5947b9387d5ec100473f4739cda9d432e040e1a",
+          "target": "prismer-box/references/search-and-ai.md"
+        },
+        {
+          "source": "productivity/box/references/troubleshooting.md",
+          "sourceSha256": "a7c394e219a429ff3b04e76a1cbe5a97ce71ae6a2a7eed1eea7888d2eeb8b922",
+          "target": "prismer-box/references/troubleshooting.md"
+        },
+        {
+          "source": "productivity/box/references/webhooks-and-events.md",
+          "sourceSha256": "5c1382adf41d8b3cecfd922f815ed85b10740d826924cf33def5250da934c6c5",
+          "target": "prismer-box/references/webhooks-and-events.md"
+        },
+        {
+          "source": "productivity/box/SKILL.md",
+          "sourceSha256": "e9672412333de4feff348e6dc387d9022d32005247360347a10a7131fb87eb13",
+          "target": "prismer-box/SKILL.md"
+        }
+      ]
+    },
+    {
+      "upstream": "document-to-action-items",
+      "sourceRoot": "productivity/document-to-action-items",
+      "targetSlug": "document-actions",
+      "targetRoot": "document-actions",
+      "decision": "adopt",
+      "resources": [
+        {
+          "source": "productivity/document-to-action-items/SKILL.md",
+          "sourceSha256": "8a7556754aca2a7d04d38847131fb4db8d6705fa2106fcb154279e26117b41ee",
+          "target": "document-actions/SKILL.md"
+        }
+      ]
+    },
+    {
+      "upstream": "docx",
+      "sourceRoot": "productivity/docx",
+      "targetSlug": "office-artifacts",
+      "targetRoot": "office-artifacts/references/docx",
+      "decision": "merge",
+      "resources": [
+        {
+          "source": "productivity/docx/LICENSE",
+          "sourceSha256": "8aa3c7717d57a68490c31eef4b57b6887e892f0566ff866078ebd76113d357e2",
+          "target": "office-artifacts/references/docx/LICENSE"
+        },
+        {
+          "source": "productivity/docx/references/revisions-and-comments.md",
+          "sourceSha256": "cd861f6e9ea77767b1a5e2ec3f48dd620b0664811d8f204c59c61571b408e9ba",
+          "target": "office-artifacts/references/docx/references/revisions-and-comments.md"
+        },
+        {
+          "source": "productivity/docx/scripts/docx_comments.py",
+          "sourceSha256": "6687c2f8b8e4cdd2ea9d70da668417e8c26f30dead2b1a4b7bda07e34fbf67cf",
+          "target": "office-artifacts/references/docx/scripts/docx_comments.py"
+        },
+        {
+          "source": "productivity/docx/scripts/docx_common.py",
+          "sourceSha256": "5f915ce8138d19344f80b218b3e81aac8332dc6b560774a6f2a9757f4fc2eaea",
+          "target": "office-artifacts/references/docx/scripts/docx_common.py"
+        },
+        {
+          "source": "productivity/docx/scripts/docx_create.py",
+          "sourceSha256": "8391869c97ab804374dddadff4fbebc060120c0b973d06133f84487cc2c442d5",
+          "target": "office-artifacts/references/docx/scripts/docx_create.py"
+        },
+        {
+          "source": "productivity/docx/scripts/docx_edit.py",
+          "sourceSha256": "00feef0a58a318406077020a017dd0b2673daaef93e0bda81fa9437b237180ff",
+          "target": "office-artifacts/references/docx/scripts/docx_edit.py"
+        },
+        {
+          "source": "productivity/docx/scripts/docx_read.py",
+          "sourceSha256": "4760617eea1b17d648f7a46f6718c22ec4a76a359e8f0ee9f6ffe921df9129de",
+          "target": "office-artifacts/references/docx/scripts/docx_read.py"
+        },
+        {
+          "source": "productivity/docx/scripts/docx_revisions.py",
+          "sourceSha256": "0b835b76b86a1a7bf607c7724a09a71af788cacec48058ae99b04dba6950b938",
+          "target": "office-artifacts/references/docx/scripts/docx_revisions.py"
+        },
+        {
+          "source": "productivity/docx/scripts/docx_template.py",
+          "sourceSha256": "aed1b1db212b72995bd47a28e6c9928a4d02d7596615f1dadf12cd43a4f34219",
+          "target": "office-artifacts/references/docx/scripts/docx_template.py"
+        },
+        {
+          "source": "productivity/docx/scripts/docx_validate.py",
+          "sourceSha256": "64d4197ac4aa555384efaefa1cc392a863e2d05489acc04776c33ab1a591d024",
+          "target": "office-artifacts/references/docx/scripts/docx_validate.py"
+        },
+        {
+          "source": "productivity/docx/SKILL.md",
+          "sourceSha256": "9678b14d5e7841d588b969f6a4696cd46bcc46c3e4ac1479edc7656a051aa5ff",
+          "target": "office-artifacts/references/docx/GUIDE.md"
+        },
+        {
+          "source": "productivity/docx/tests/test_docx_skill.py",
+          "sourceSha256": "a6e5ef3595d2168b15a655c366dcebbcc3e2ced73a0e2e5f741c626148c8566d",
+          "target": "office-artifacts/references/docx/tests/test_docx_skill.py"
+        }
+      ]
+    },
+    {
+      "upstream": "google-workspace",
+      "sourceRoot": "productivity/google-workspace",
+      "targetSlug": "prismer-google-workspace",
+      "targetRoot": "prismer-google-workspace",
+      "decision": "optional",
+      "resources": [
+        {
+          "source": "productivity/google-workspace/references/daily-brief.md",
+          "sourceSha256": "d4b78bad4121fea470dfe1aa92b2fc0ae2368af6ffbdd0b29ef40c7c8f99067c",
+          "target": "prismer-google-workspace/references/daily-brief.md"
+        },
+        {
+          "source": "productivity/google-workspace/references/gmail-search-syntax.md",
+          "sourceSha256": "340b78000fba67b9c5373978185446eb549a474870decf8c439edb03b3883bc5",
+          "target": "prismer-google-workspace/references/gmail-search-syntax.md"
+        },
+        {
+          "source": "productivity/google-workspace/scripts/_hermes_home.py",
+          "sourceSha256": "4d0f4393059688353bf8a3cca8118f08548edbae6f3c6ed477ff9f2d1205cff0",
+          "target": "prismer-google-workspace/scripts/_hermes_home.py"
+        },
+        {
+          "source": "productivity/google-workspace/scripts/google_api.py",
+          "sourceSha256": "a8f7f55db105155a8a5beda1558ede39e27c649150e2a412c31c78c203e832a6",
+          "target": "prismer-google-workspace/scripts/google_api.py"
+        },
+        {
+          "source": "productivity/google-workspace/scripts/gws_bridge.py",
+          "sourceSha256": "6bba56ab6d49ddab3cd16c2e189950633cbf1a9f4907cb7db5225ebe28313aee",
+          "target": "prismer-google-workspace/scripts/gws_bridge.py"
+        },
+        {
+          "source": "productivity/google-workspace/scripts/setup.py",
+          "sourceSha256": "ace45d12de9bbc408f03b88e78b8d5ed2a37f36e992164bcbe9708c5ba49883d",
+          "target": "prismer-google-workspace/scripts/setup.py"
+        },
+        {
+          "source": "productivity/google-workspace/SKILL.md",
+          "sourceSha256": "c22194d932d9d96f3b6d7001b5d7680348163279af64d4c2c12aa09e32ea2267",
+          "target": "prismer-google-workspace/SKILL.md"
+        }
+      ]
+    },
+    {
+      "upstream": "maps",
+      "sourceRoot": "productivity/maps",
+      "targetSlug": "prismer-maps",
+      "targetRoot": "prismer-maps",
+      "decision": "optional",
+      "resources": [
+        {
+          "source": "productivity/maps/scripts/maps_client.py",
+          "sourceSha256": "94960e451d549766070c999f4979bd69ea956381b40c4d5b05bfa6c0501e7ffb",
+          "target": "prismer-maps/scripts/maps_client.py"
+        },
+        {
+          "source": "productivity/maps/SKILL.md",
+          "sourceSha256": "775ef9f79be9cd147bc81e0c4a4ef952230a04736a6082f44dbac78554ef89ab",
+          "target": "prismer-maps/SKILL.md"
+        }
+      ]
+    },
+    {
+      "upstream": "meeting-action-items",
+      "sourceRoot": "productivity/meeting-action-items",
+      "targetSlug": "meeting-actions",
+      "targetRoot": "meeting-actions",
+      "decision": "adopt",
+      "resources": [
+        {
+          "source": "productivity/meeting-action-items/SKILL.md",
+          "sourceSha256": "1902f782551da96ee1f9b34d6f13af627f06150a498d874b0cc2a75d06d35aa8",
+          "target": "meeting-actions/SKILL.md"
+        }
+      ]
+    },
+    {
+      "upstream": "notion",
+      "sourceRoot": "productivity/notion",
+      "targetSlug": "prismer-notion",
+      "targetRoot": "prismer-notion",
+      "decision": "optional",
+      "resources": [
+        {
+          "source": "productivity/notion/references/block-types.md",
+          "sourceSha256": "530379beca84804b53fe71834628f8d80ca14a6763dcbf53ff654a246fe67a78",
+          "target": "prismer-notion/references/block-types.md"
+        },
+        {
+          "source": "productivity/notion/SKILL.md",
+          "sourceSha256": "e5aaf194f2688223890cb2eb6cf5ce866e6390082f1dff845c9e37a25fe0bfee",
+          "target": "prismer-notion/SKILL.md"
+        }
+      ]
+    },
+    {
+      "upstream": "pdf",
+      "sourceRoot": "productivity/pdf",
+      "targetSlug": "office-artifacts",
+      "targetRoot": "office-artifacts/references/pdf",
+      "decision": "merge",
+      "resources": [
+        {
+          "source": "productivity/pdf/LICENSE",
+          "sourceSha256": "8aa3c7717d57a68490c31eef4b57b6887e892f0566ff866078ebd76113d357e2",
+          "target": "office-artifacts/references/pdf/LICENSE"
+        },
+        {
+          "source": "productivity/pdf/references/forms.md",
+          "sourceSha256": "471517e0b154fb765d04416f089b7e999103804b964a84675af49e2d53ee8da0",
+          "target": "office-artifacts/references/pdf/references/forms.md"
+        },
+        {
+          "source": "productivity/pdf/references/nano-pdf-editing.md",
+          "sourceSha256": "2f0b15bd1ebbd45cf37ed257723ad63aa70b623b97f5242c886c14f8968cd773",
+          "target": "office-artifacts/references/pdf/references/nano-pdf-editing.md"
+        },
+        {
+          "source": "productivity/pdf/references/ocr-extraction.md",
+          "sourceSha256": "1bba1451fbaa50842890e7b75a1ad226dfe9791619cb4df3d705e2a38b606da6",
+          "target": "office-artifacts/references/pdf/references/ocr-extraction.md"
+        },
+        {
+          "source": "productivity/pdf/scripts/_raster.py",
+          "sourceSha256": "17ecfb8dd78b006e904d0f29e28172ce308a34588db99ec80b0f085d2a37b518",
+          "target": "office-artifacts/references/pdf/scripts/_raster.py"
+        },
+        {
+          "source": "productivity/pdf/scripts/extract_marker.py",
+          "sourceSha256": "a115ee1da5b88f7ab61c480ef9efb2b371350bed8f1cface7668898ba80aae38",
+          "target": "office-artifacts/references/pdf/scripts/extract_marker.py"
+        },
+        {
+          "source": "productivity/pdf/scripts/extract_pymupdf.py",
+          "sourceSha256": "784d233ee9849ce78cddc8253c87172c06a0b62c41aff7215fd97b77766babc8",
+          "target": "office-artifacts/references/pdf/scripts/extract_pymupdf.py"
+        },
+        {
+          "source": "productivity/pdf/scripts/pdf_create.py",
+          "sourceSha256": "2a7a7c06c608e82cc11684bb67ff9cdb3bf8cbe6df38c6f4b1096dd2686f993c",
+          "target": "office-artifacts/references/pdf/scripts/pdf_create.py"
+        },
+        {
+          "source": "productivity/pdf/scripts/pdf_fill_form.py",
+          "sourceSha256": "d66d504d7f7fcb85c28881065c47dfbc6ac9b47294471531a7f013178c72a1ad",
+          "target": "office-artifacts/references/pdf/scripts/pdf_fill_form.py"
+        },
+        {
+          "source": "productivity/pdf/scripts/pdf_form_layout.py",
+          "sourceSha256": "f654e386a8b1e5a26a1530b16d36177310dd48c6cb589ec6cf3dc1898a8ccdf9",
+          "target": "office-artifacts/references/pdf/scripts/pdf_form_layout.py"
+        },
+        {
+          "source": "productivity/pdf/scripts/pdf_make_form.py",
+          "sourceSha256": "a194791f2d6504da9e629976620ac227a18a6ea14784d428c4cf4f57fafd6c3d",
+          "target": "office-artifacts/references/pdf/scripts/pdf_make_form.py"
+        },
+        {
+          "source": "productivity/pdf/scripts/pdf_merge.py",
+          "sourceSha256": "c1cf231f73b02790069227a4f711475b4b329c91e30e77826f24c05935674248",
+          "target": "office-artifacts/references/pdf/scripts/pdf_merge.py"
+        },
+        {
+          "source": "productivity/pdf/scripts/pdf_meta.py",
+          "sourceSha256": "989c2564bb31d8b20abd53a4d7f86a603c930bd868e0201ad4cdec92d5487460",
+          "target": "office-artifacts/references/pdf/scripts/pdf_meta.py"
+        },
+        {
+          "source": "productivity/pdf/scripts/pdf_page_image.py",
+          "sourceSha256": "40ad843fd50bd6bd91af1fd53de1cff1faf885921294afd304d0abf0fe93e4e2",
+          "target": "office-artifacts/references/pdf/scripts/pdf_page_image.py"
+        },
+        {
+          "source": "productivity/pdf/scripts/pdf_read.py",
+          "sourceSha256": "7d623cbbb6319f9f161dd769972250b08c426c291ed0af1a8304bec20437bfb2",
+          "target": "office-artifacts/references/pdf/scripts/pdf_read.py"
+        },
+        {
+          "source": "productivity/pdf/scripts/pdf_secure.py",
+          "sourceSha256": "65d0ba6733cb945e6147e4b46e0b6db0816096440b0f4fe24cc953307805e01b",
+          "target": "office-artifacts/references/pdf/scripts/pdf_secure.py"
+        },
+        {
+          "source": "productivity/pdf/scripts/pdf_split.py",
+          "sourceSha256": "1e3d8f8e9aa8aa5445f8587e402e3bab65c785eb5b4aea120bc5b6216cb57cba",
+          "target": "office-artifacts/references/pdf/scripts/pdf_split.py"
+        },
+        {
+          "source": "productivity/pdf/scripts/pdf_stamp.py",
+          "sourceSha256": "e3bf6e29634be35ff99fee8a21a3e5f4f610298cb158942496d0949f0a941390",
+          "target": "office-artifacts/references/pdf/scripts/pdf_stamp.py"
+        },
+        {
+          "source": "productivity/pdf/scripts/pdf_watermark.py",
+          "sourceSha256": "d903977ee37194ad18bba205d2d96eefbbe6670519bcd8ae285f619645005ae2",
+          "target": "office-artifacts/references/pdf/scripts/pdf_watermark.py"
+        },
+        {
+          "source": "productivity/pdf/SKILL.md",
+          "sourceSha256": "c16b9c159a3a0b49353bfcd10c498b02aef3d319207b1019aa7dc8db129d06ab",
+          "target": "office-artifacts/references/pdf/GUIDE.md"
+        },
+        {
+          "source": "productivity/pdf/tests/test_pdf_skill.py",
+          "sourceSha256": "a2f6dd5be18f4c63a90fe4688d717145e74821d83afdd9e781adc815806a9119",
+          "target": "office-artifacts/references/pdf/tests/test_pdf_skill.py"
+        }
+      ]
+    },
+    {
+      "upstream": "powerpoint",
+      "sourceRoot": "productivity/powerpoint",
+      "targetSlug": "office-artifacts",
+      "targetRoot": "office-artifacts/references/powerpoint",
+      "decision": "merge",
+      "resources": [
+        {
+          "source": "productivity/powerpoint/LICENSE",
+          "sourceSha256": "8aa3c7717d57a68490c31eef4b57b6887e892f0566ff866078ebd76113d357e2",
+          "target": "office-artifacts/references/powerpoint/LICENSE"
+        },
+        {
+          "source": "productivity/powerpoint/scripts/pptx_create.py",
+          "sourceSha256": "90e60c1fad8c5e7c209acf6ecdebee43c26609bbcf9a7dc063207ad8a3091485",
+          "target": "office-artifacts/references/powerpoint/scripts/pptx_create.py"
+        },
+        {
+          "source": "productivity/powerpoint/scripts/pptx_edit.py",
+          "sourceSha256": "feb5b09546f9f7fb5dfb4c9b2596b3acbaff9c021faf1985c42f618be0476f3f",
+          "target": "office-artifacts/references/powerpoint/scripts/pptx_edit.py"
+        },
+        {
+          "source": "productivity/powerpoint/scripts/pptx_from_template.py",
+          "sourceSha256": "8537205a777ba541c826082a4395066881dfa63c3033151127b82a8fd82fdb8f",
+          "target": "office-artifacts/references/powerpoint/scripts/pptx_from_template.py"
+        },
+        {
+          "source": "productivity/powerpoint/scripts/pptx_read.py",
+          "sourceSha256": "b2a6e246e40a6728e5e0e8bf2c4cbe4f788ab8c40bdb1b89e339571a34fdbc71",
+          "target": "office-artifacts/references/powerpoint/scripts/pptx_read.py"
+        },
+        {
+          "source": "productivity/powerpoint/scripts/pptx_render.py",
+          "sourceSha256": "49ebe77fa453b5fb21e0a39c0601187399c26f60a399726744277ee098f06dd7",
+          "target": "office-artifacts/references/powerpoint/scripts/pptx_render.py"
+        },
+        {
+          "source": "productivity/powerpoint/SKILL.md",
+          "sourceSha256": "b71d29d9809c4464d7f8d10afabf4f22f6a26c647cf7aacb6f9faf196ebe82f2",
+          "target": "office-artifacts/references/powerpoint/GUIDE.md"
+        },
+        {
+          "source": "productivity/powerpoint/tests/test_powerpoint_skill.py",
+          "sourceSha256": "da3262b8daa31ba2425845a8ce74adc033c89b8d2cf7b99f95a107f7e96b27f1",
+          "target": "office-artifacts/references/powerpoint/tests/test_powerpoint_skill.py"
+        }
+      ]
+    },
+    {
+      "upstream": "product-price-monitor",
+      "sourceRoot": "productivity/product-price-monitor",
+      "targetSlug": "prismer-product-price-monitor",
+      "targetRoot": "prismer-product-price-monitor",
+      "decision": "optional",
+      "resources": [
+        {
+          "source": "productivity/product-price-monitor/SKILL.md",
+          "sourceSha256": "b87bf2102fed13d2c7c64759fa153f24f5e43a0afcf6f8ec5e13def92a6642ef",
+          "target": "prismer-product-price-monitor/SKILL.md"
+        }
+      ]
+    },
+    {
+      "upstream": "teams-meeting-pipeline",
+      "sourceRoot": "productivity/teams-meeting-pipeline",
+      "targetSlug": "prismer-teams-meeting-pipeline",
+      "targetRoot": "prismer-teams-meeting-pipeline",
+      "decision": "optional",
+      "resources": [
+        {
+          "source": "productivity/teams-meeting-pipeline/SKILL.md",
+          "sourceSha256": "ae1b08f044d7dfd9abb01c643cac3b69e4a3a1cbe7fd5782dd17785964cdc441",
+          "target": "prismer-teams-meeting-pipeline/SKILL.md"
+        }
+      ]
+    },
+    {
+      "upstream": "weekly-review-planning",
+      "sourceRoot": "productivity/weekly-review-planning",
+      "targetSlug": "weekly-review",
+      "targetRoot": "weekly-review",
+      "decision": "adopt",
+      "resources": [
+        {
+          "source": "productivity/weekly-review-planning/SKILL.md",
+          "sourceSha256": "a689257facb937cfca9bc5507dd9e729f287f0cd3f6abbf73448eb25f73fbaab",
+          "target": "weekly-review/SKILL.md"
+        }
+      ]
+    },
+    {
+      "upstream": "xlsx",
+      "sourceRoot": "productivity/xlsx",
+      "targetSlug": "office-artifacts",
+      "targetRoot": "office-artifacts/references/xlsx",
+      "decision": "merge",
+      "resources": [
+        {
+          "source": "productivity/xlsx/LICENSE",
+          "sourceSha256": "8aa3c7717d57a68490c31eef4b57b6887e892f0566ff866078ebd76113d357e2",
+          "target": "office-artifacts/references/xlsx/LICENSE"
+        },
+        {
+          "source": "productivity/xlsx/references/restructuring.md",
+          "sourceSha256": "cef18a6ce1835c0c95c447db57491ec9b84a75d6137e0002499eb626abc77626",
+          "target": "office-artifacts/references/xlsx/references/restructuring.md"
+        },
+        {
+          "source": "productivity/xlsx/scripts/csv_to_xlsx.py",
+          "sourceSha256": "c92331ed358a8ba762a67b408c594d4c12f19f571087a3605203fb68d8c8ca70",
+          "target": "office-artifacts/references/xlsx/scripts/csv_to_xlsx.py"
+        },
+        {
+          "source": "productivity/xlsx/scripts/xlsx_create.py",
+          "sourceSha256": "29d797b1cdb6a51ed72e13aca5e891fc4d281825344f895719136ab360a4e92f",
+          "target": "office-artifacts/references/xlsx/scripts/xlsx_create.py"
+        },
+        {
+          "source": "productivity/xlsx/scripts/xlsx_edit.py",
+          "sourceSha256": "05e9c12fa66610bf53909691c6852a7ee38216a6ffd018c0e4ac2da173ae6bd4",
+          "target": "office-artifacts/references/xlsx/scripts/xlsx_edit.py"
+        },
+        {
+          "source": "productivity/xlsx/scripts/xlsx_read.py",
+          "sourceSha256": "5f8dc99437e4b65d72cac4f99ef25d383b477926d5ae31e0e8aae6fa3266d935",
+          "target": "office-artifacts/references/xlsx/scripts/xlsx_read.py"
+        },
+        {
+          "source": "productivity/xlsx/scripts/xlsx_recalc.py",
+          "sourceSha256": "e61d8ab12a330a1efd4339bcc419a2a2793bd9a64b87f264580f732cae62dbfa",
+          "target": "office-artifacts/references/xlsx/scripts/xlsx_recalc.py"
+        },
+        {
+          "source": "productivity/xlsx/scripts/xlsx_restructure.py",
+          "sourceSha256": "062871f70d1c09d105f4aa4b1d3b420238b2997c8d52d1cfaa8e8cacdb1756db",
+          "target": "office-artifacts/references/xlsx/scripts/xlsx_restructure.py"
+        },
+        {
+          "source": "productivity/xlsx/scripts/xlsx_to_csv.py",
+          "sourceSha256": "1be6a866b20199e2b42e8937ad2ecfa2055c9877a34dac1b597bfa1d930720ea",
+          "target": "office-artifacts/references/xlsx/scripts/xlsx_to_csv.py"
+        },
+        {
+          "source": "productivity/xlsx/SKILL.md",
+          "sourceSha256": "b302d7ac997843a757ab3c11513ea012889ebdae32f842edb44faa9a4485f19b",
+          "target": "office-artifacts/references/xlsx/GUIDE.md"
+        },
+        {
+          "source": "productivity/xlsx/tests/test_xlsx_skill.py",
+          "sourceSha256": "b842edca940a1daf30aa141d4240fe815c85e37638d6784e7b1c539fa1665797",
+          "target": "office-artifacts/references/xlsx/tests/test_xlsx_skill.py"
+        }
+      ]
+    },
+    {
+      "upstream": "arxiv",
+      "sourceRoot": "research/arxiv",
+      "targetSlug": "research-arxiv",
+      "targetRoot": "research-arxiv",
+      "decision": "adopt",
+      "resources": [
+        {
+          "source": "research/arxiv/scripts/search_arxiv.py",
+          "sourceSha256": "68f0bcc09ef1f59ecd9be8a7693e47239fd99b19d62cecb80a92b8c476cca371",
+          "target": "research-arxiv/scripts/search_arxiv.py"
+        },
+        {
+          "source": "research/arxiv/SKILL.md",
+          "sourceSha256": "9b41877bcb64166dc2355a43aedd3198c3e5214af67f09e1d1b717a989d92f72",
+          "target": "research-arxiv/SKILL.md"
+        }
+      ]
+    },
+    {
+      "upstream": "competitor-news-monitor",
+      "sourceRoot": "research/competitor-news-monitor",
+      "targetSlug": "competitor-intelligence",
+      "targetRoot": "competitor-intelligence",
+      "decision": "adopt",
+      "resources": [
+        {
+          "source": "research/competitor-news-monitor/SKILL.md",
+          "sourceSha256": "d8fd2a3a26ff45455709595132a092825a48f6c9dd3bcc98b06c1a43eaa7fcca",
+          "target": "competitor-intelligence/SKILL.md"
+        }
+      ]
+    },
+    {
+      "upstream": "grounded-citations",
+      "sourceRoot": "research/grounded-citations",
+      "targetSlug": "evidence-citations",
+      "targetRoot": "evidence-citations",
+      "decision": "adopt",
+      "resources": [
+        {
+          "source": "research/grounded-citations/references/citation-formats.md",
+          "sourceSha256": "209312a46dd9516e44e78f617589f789e07d54660e347b6b3882e8ac60097d04",
+          "target": "evidence-citations/references/citation-formats.md"
+        },
+        {
+          "source": "research/grounded-citations/references/grounding-rationale.md",
+          "sourceSha256": "2835754857ea05a1c801e88a50d4c2b4cc6ebd52cc4cc1f5741dba05f5af73c1",
+          "target": "evidence-citations/references/grounding-rationale.md"
+        },
+        {
+          "source": "research/grounded-citations/scripts/_hermes_home.py",
+          "sourceSha256": "4bfa31ce48ffaca3ae3fdd2ba5f093a2bedc34b057eec22a38f46e2d68b333d4",
+          "target": null,
+          "reason": "Hermes shared-home resolver replaced by task-specific ledger paths in sources.py"
+        },
+        {
+          "source": "research/grounded-citations/scripts/sources.py",
+          "sourceSha256": "a867ae6ba99166b4114bfef1c15b57036e286fe22c48534caec28cc8335bde0c",
+          "target": "evidence-citations/scripts/sources.py"
+        },
+        {
+          "source": "research/grounded-citations/SKILL.md",
+          "sourceSha256": "19fba3a4ceedf768af6851e094b268a66b62af750d4d0689c5d62d5d50c032b6",
+          "target": "evidence-citations/SKILL.md"
+        }
+      ]
+    },
+    {
+      "upstream": "llm-wiki",
+      "sourceRoot": "research/llm-wiki",
+      "targetSlug": "memory",
+      "targetRoot": "memory/references/llm-wiki",
+      "decision": "merge",
+      "resources": [
+        {
+          "source": "research/llm-wiki/SKILL.md",
+          "sourceSha256": "0229e37c1783fcac5b77cfb3242703666cf4aa472d2ae85b6bd5279756b515b6",
+          "target": "memory/references/llm-wiki/GUIDE.md"
+        }
+      ]
+    },
+    {
+      "upstream": "xurl",
+      "sourceRoot": "social-media/xurl",
+      "targetSlug": "prismer-xurl",
+      "targetRoot": "prismer-xurl",
+      "decision": "optional",
+      "resources": [
+        {
+          "source": "social-media/xurl/SKILL.md",
+          "sourceSha256": "5457319ee337284b1152dc9f60146c72685ade489299afed08e0b46ca5a97080",
+          "target": "prismer-xurl/SKILL.md"
+        }
+      ]
+    },
+    {
+      "upstream": "codebase-inspection",
+      "sourceRoot": "software-development/codebase-inspection",
+      "targetSlug": "prismer-codebase-inspection",
+      "targetRoot": "prismer-codebase-inspection",
+      "decision": "optional",
+      "resources": [
+        {
+          "source": "software-development/codebase-inspection/SKILL.md",
+          "sourceSha256": "d62554263461919dff7d77c3c0c284c2190c894f312a84d7a770a030dab642dc",
+          "target": "prismer-codebase-inspection/SKILL.md"
+        }
+      ]
+    },
+    {
+      "upstream": "dogfood",
+      "sourceRoot": "software-development/dogfood",
+      "targetSlug": "webapp-qa",
+      "targetRoot": "webapp-qa",
+      "decision": "merge",
+      "resources": [
+        {
+          "source": "software-development/dogfood/references/issue-taxonomy.md",
+          "sourceSha256": "b90546fab5b59494ebea35b957ccc1d98bab8eaeaaa3529a142b15ea96df2b31",
+          "target": "webapp-qa/references/issue-taxonomy.md"
+        },
+        {
+          "source": "software-development/dogfood/SKILL.md",
+          "sourceSha256": "1b2793734493dbc624a1d1f1c0667cb510e191fa79b1c740d866706550190560",
+          "target": "webapp-qa/references/dogfood/GUIDE.md"
+        },
+        {
+          "source": "software-development/dogfood/templates/dogfood-report-template.md",
+          "sourceSha256": "6db9127715d3d1482542e48dd2d71fcb25238e614b1e5739ec193fa143962a26",
+          "target": "webapp-qa/templates/dogfood-report-template.md"
+        }
+      ]
+    },
+    {
+      "upstream": "github",
+      "sourceRoot": "software-development/github",
+      "targetSlug": "prismer-github",
+      "targetRoot": "prismer-github",
+      "decision": "optional",
+      "resources": [
+        {
+          "source": "software-development/github/references/auth.md",
+          "sourceSha256": "eba9d0edf896036718612bb557ec7a6432532a9395bd66277c3b7417d8960a37",
+          "target": "prismer-github/references/auth.md"
+        },
+        {
+          "source": "software-development/github/references/ci-troubleshooting.md",
+          "sourceSha256": "ada022d91c8abff55a15505fe630ba02abdece5afa3751433fa4014a33defa23",
+          "target": "prismer-github/references/ci-troubleshooting.md"
+        },
+        {
+          "source": "software-development/github/references/code-review.md",
+          "sourceSha256": "11ad06e6d49bcfc3433530b40f95b72f568cae0a2d7ca6e2450b22d3e0626d7b",
+          "target": "prismer-github/references/code-review.md"
+        },
+        {
+          "source": "software-development/github/references/conventional-commits.md",
+          "sourceSha256": "2d71a3b701b08c2e5ed5248d17928eb11e27d7b357f9e2dca27caee9cc017aab",
+          "target": "prismer-github/references/conventional-commits.md"
+        },
+        {
+          "source": "software-development/github/references/github-api-cheatsheet.md",
+          "sourceSha256": "a9081d4a108b67b4edd3c92c73d823fd1730e37e23be6f069d9bd67dd3b32486",
+          "target": "prismer-github/references/github-api-cheatsheet.md"
+        },
+        {
+          "source": "software-development/github/references/issue-to-pr.md",
+          "sourceSha256": "9fc6de82f9b8e65a1611a5e3eee9f6f35cc9118a90a9df3de547cb65f2766dab",
+          "target": "prismer-github/references/issue-to-pr.md"
+        },
+        {
+          "source": "software-development/github/references/issues.md",
+          "sourceSha256": "86cf4a98232ee6362cd7893e76bed6ed25c21eb660e878432c6df3286c02d6d8",
+          "target": "prismer-github/references/issues.md"
+        },
+        {
+          "source": "software-development/github/references/pr-workflow.md",
+          "sourceSha256": "f75f8cc23266a3675a67c8d06385c561befab23a8e6a9683b5418c8b656bb2b5",
+          "target": "prismer-github/references/pr-workflow.md"
+        },
+        {
+          "source": "software-development/github/references/repo-management.md",
+          "sourceSha256": "e5b92a6d2edf1dc317ed4d4ba1b37734b78f391438d58f3f86139df398996301",
+          "target": "prismer-github/references/repo-management.md"
+        },
+        {
+          "source": "software-development/github/references/review-output-template.md",
+          "sourceSha256": "4560662913e8f89d558c7ba4f34daf77a35a88367c2d480ad86de7085cbcaf34",
+          "target": "prismer-github/references/review-output-template.md"
+        },
+        {
+          "source": "software-development/github/scripts/gh-env.sh",
+          "sourceSha256": "eb04179d859635b56cdd0da71da59cd5d94d7a69c9a856f9f562d1cd5cb9412f",
+          "target": "prismer-github/scripts/gh-env.sh"
+        },
+        {
+          "source": "software-development/github/scripts/git-credential-token.py",
+          "sourceSha256": "4c0f3dfdc75df9043fe7b62b0807e7b4392c59ee81082d2fcc8d39b75c593efb",
+          "target": "prismer-github/scripts/git-credential-token.py"
+        },
+        {
+          "source": "software-development/github/SKILL.md",
+          "sourceSha256": "9d70e7c842fe7db75b5a50526552a69862f5bcfc1e59aa93785241649a09d5a3",
+          "target": "prismer-github/SKILL.md"
+        },
+        {
+          "source": "software-development/github/templates/bug-report.md",
+          "sourceSha256": "4b3144ccf47a85dcec889c7610d6b739a7ae6f19aa8d4709942112ef09e11a5b",
+          "target": "prismer-github/templates/bug-report.md"
+        },
+        {
+          "source": "software-development/github/templates/feature-request.md",
+          "sourceSha256": "43962f5a398b4badeeb94280299ba4511940ad0e32afcfce5f2a6e1afd21c7a8",
+          "target": "prismer-github/templates/feature-request.md"
+        },
+        {
+          "source": "software-development/github/templates/pr-body-bugfix.md",
+          "sourceSha256": "e8c31915b87dba0454d7520a3aa45ef8650fd0e50e48e277db855ff919e6251a",
+          "target": "prismer-github/templates/pr-body-bugfix.md"
+        },
+        {
+          "source": "software-development/github/templates/pr-body-feature.md",
+          "sourceSha256": "875e815da6e0e3df2763a85c9c2a56a776461da39d4181a1487333c0bf5b9276",
+          "target": "prismer-github/templates/pr-body-feature.md"
+        }
+      ]
+    },
+    {
+      "upstream": "hermes-agent-skill-authoring",
+      "sourceRoot": "software-development/hermes-agent-skill-authoring",
+      "targetSlug": "skill-creator",
+      "targetRoot": "skill-creator/references/hermes-agent-skill-authoring",
+      "decision": "merge",
+      "resources": [
+        {
+          "source": "software-development/hermes-agent-skill-authoring/SKILL.md",
+          "sourceSha256": "8c54eb31a49bf301ac1dc1756ac3426a6a6a0ef20d9804febcfe24538cd47a3a",
+          "target": "skill-creator/references/hermes-agent-skill-authoring/GUIDE.md"
+        }
+      ]
+    },
+    {
+      "upstream": "inspecting-hermes-desktop-dom",
+      "sourceRoot": "software-development/inspecting-hermes-desktop-dom",
+      "targetSlug": "diagnosing-bugs",
+      "targetRoot": "diagnosing-bugs/references/desktop-dom",
+      "decision": "merge",
+      "resources": [
+        {
+          "source": "software-development/inspecting-hermes-desktop-dom/SKILL.md",
+          "sourceSha256": "8dfdcf2fe3797beec4297ce629e62395d7a69ec2691fc00ef25bc6273139cbc4",
+          "target": "diagnosing-bugs/references/desktop-dom/GUIDE.md"
+        }
+      ]
+    },
+    {
+      "upstream": "node-inspect-debugger",
+      "sourceRoot": "software-development/node-inspect-debugger",
+      "targetSlug": "prismer-node-inspect-debugger",
+      "targetRoot": "prismer-node-inspect-debugger",
+      "decision": "optional",
+      "resources": [
+        {
+          "source": "software-development/node-inspect-debugger/SKILL.md",
+          "sourceSha256": "422eed9a0997182c5b197a8879ab194647799d69e573000e53b65b8708cf3a77",
+          "target": "prismer-node-inspect-debugger/SKILL.md"
+        }
+      ]
+    },
+    {
+      "upstream": "python-debugpy",
+      "sourceRoot": "software-development/python-debugpy",
+      "targetSlug": "prismer-python-debugpy",
+      "targetRoot": "prismer-python-debugpy",
+      "decision": "optional",
+      "resources": [
+        {
+          "source": "software-development/python-debugpy/SKILL.md",
+          "sourceSha256": "f31a02ca7256aeefb1280f56f8d5ef67f7b2e5d9b4ed91b73d7835304b4ff736",
+          "target": "prismer-python-debugpy/SKILL.md"
+        }
+      ]
+    },
+    {
+      "upstream": "requesting-code-review",
+      "sourceRoot": "software-development/requesting-code-review",
+      "targetSlug": "codebase-design",
+      "targetRoot": "codebase-design/references/requesting-code-review",
+      "decision": "merge",
+      "resources": [
+        {
+          "source": "software-development/requesting-code-review/SKILL.md",
+          "sourceSha256": "1e26ced9f05e357950e035b93ad1a937dd8a9e578a44d3c8d4fa734a09b7f814",
+          "target": "codebase-design/references/requesting-code-review/GUIDE.md"
+        }
+      ]
+    },
+    {
+      "upstream": "simplify-code",
+      "sourceRoot": "software-development/simplify-code",
+      "targetSlug": "codebase-design",
+      "targetRoot": "codebase-design/references/simplify-code",
+      "decision": "merge",
+      "resources": [
+        {
+          "source": "software-development/simplify-code/SKILL.md",
+          "sourceSha256": "9ee977c3362a1c07f2e327198e066ddb3c0ed67709706fc410165ee820b2ca01",
+          "target": "codebase-design/references/simplify-code/GUIDE.md"
+        }
+      ]
+    },
+    {
+      "upstream": "spike",
+      "sourceRoot": "software-development/spike",
+      "targetSlug": "prismer-spike",
+      "targetRoot": "prismer-spike",
+      "decision": "adopt",
+      "resources": [
+        {
+          "source": "software-development/spike/SKILL.md",
+          "sourceSha256": "573d8fc0d6699eaf5308e742402bc02c883152ffeebe14607f164c6c538495c2",
+          "target": "prismer-spike/SKILL.md"
+        }
+      ]
+    },
+    {
+      "upstream": "systematic-debugging",
+      "sourceRoot": "software-development/systematic-debugging",
+      "targetSlug": "diagnosing-bugs",
+      "targetRoot": "diagnosing-bugs/references/systematic-debugging",
+      "decision": "merge",
+      "resources": [
+        {
+          "source": "software-development/systematic-debugging/SKILL.md",
+          "sourceSha256": "bd480f51a2e9969c88544003c30b7539b7df0b7358703f99b0495514c2dd878a",
+          "target": "diagnosing-bugs/references/systematic-debugging/GUIDE.md"
+        }
+      ]
+    },
+    {
+      "upstream": "test-driven-development",
+      "sourceRoot": "software-development/test-driven-development",
+      "targetSlug": "tdd",
+      "targetRoot": "tdd/references/test-driven-development",
+      "decision": "merge",
+      "resources": [
+        {
+          "source": "software-development/test-driven-development/SKILL.md",
+          "sourceSha256": "649e6ab89bd8aaad2f9b162c60321f227cff8a8cda56393f07a81d1c6825a692",
+          "target": "tdd/references/test-driven-development/GUIDE.md"
+        }
+      ]
+    },
+    {
+      "upstream": "blocked-page-recovery",
+      "sourceRoot": "web/blocked-page-recovery",
+      "targetSlug": "prismer-blocked-page-recovery",
+      "targetRoot": "prismer-blocked-page-recovery",
+      "decision": "optional",
+      "resources": [
+        {
+          "source": "web/blocked-page-recovery/scripts/recover_page.py",
+          "sourceSha256": "22b996996ae2bf252b31cfd2636231f08936729a381dce7ba8bfa4afb8ffe8c6",
+          "target": "prismer-blocked-page-recovery/scripts/recover_page.py"
+        },
+        {
+          "source": "web/blocked-page-recovery/SKILL.md",
+          "sourceSha256": "b71179e82ff27c002e6593e792d9a64dad9a444901b8938f30204fa115592061",
+          "target": "prismer-blocked-page-recovery/SKILL.md"
+        }
+      ]
+    }
+  ]
+}
