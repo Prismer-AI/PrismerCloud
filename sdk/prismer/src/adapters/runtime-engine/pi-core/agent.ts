@@ -197,6 +197,8 @@ interface ActiveRun {
   canceled?: boolean;
   servedModel?: string;
   servedProvider?: string;
+  callCount?: number;
+  modelCall?: { sequence: number; startedAt: number; clock: number; firstTextMs: number | null };
 }
 
 type BoundTool = PiAgentTool & {
@@ -844,17 +846,25 @@ function thinkingText(message: PiAgentMessage): string {
 
 function mapUsage(usage: PiUsage | undefined): AgentRunResult["usage"] | undefined {
   if (!usage) return undefined;
+  const measured = (value: number | undefined): number | undefined =>
+    typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
   return {
-    inputTokens: usage.input,
-    cachedInputTokens: usage.cacheRead,
-    outputTokens: usage.output,
-    totalCostUsd: usage.cost.total,
-    contextWindowUsedTokens: usage.totalTokens,
+    inputTokens: measured(usage.input),
+    cachedInputTokens: measured(usage.cacheRead),
+    cacheWriteTokens: measured(usage.cacheWrite),
+    outputTokens: measured(usage.output),
+    totalCostUsd: measured(usage.cost?.total),
+    contextWindowUsedTokens: measured(usage.totalTokens),
   };
 }
 
 function extractAssistantUsage(message: PiAgentMessage): ReturnType<typeof mapUsage> | undefined {
-  return message.role === "assistant" ? mapUsage(message.usage) : undefined;
+  if (message.role !== 'assistant') return undefined;
+  // PI synthesizes an all-zero usage record when transport fails/aborts before
+  // a provider usage frame. It is not evidence of a free request.
+  if ((message.stopReason === 'error' || message.stopReason === 'aborted') &&
+    ![message.usage?.input, message.usage?.output, message.usage?.cacheRead, message.usage?.cacheWrite].some(value => typeof value === 'number' && value > 0)) return undefined;
+  return mapUsage(message.usage);
 }
 
 function modelDefinition(model: Model<Api>): AgentModelDefinition {
@@ -1246,7 +1256,15 @@ export class PiAgentCoreSession implements AgentSession {
           };
         }),
       },
-      streamFn: options.models.streamSimple.bind(options.models),
+      streamFn: (...args) => {
+        const run = this.activeRun;
+        if (run) {
+          run.callCount = (run.callCount ?? 0) + 1;
+          run.modelCall = { sequence: run.callCount, startedAt: Date.now(), clock: performance.now(), firstTextMs: null };
+          this.emitObservation({ type: 'model_request_started', provider: this.provider, startedAt: run.modelCall.startedAt, turnId: run.turnId });
+        }
+        return options.models.streamSimple(...args);
+      },
       sessionId: this.id,
       convertToLlm: (messages) => messages.filter(isProviderMessage),
       toolExecution: "parallel",
@@ -1261,7 +1279,7 @@ export class PiAgentCoreSession implements AgentSession {
       // 「模型请求了一个不存在的工具」不会产生 tool_started——事件面只记真实执行。
       beforeToolCall: async (context, signal) => {
         if (sink) {
-          this.toolStartedAt.set(context.toolCall.id, Date.now());
+          this.toolStartedAt.set(context.toolCall.id, performance.now());
           emitToolEvent(sink, {
             kind: "tool_started",
             name: context.toolCall.name,
@@ -1284,7 +1302,7 @@ export class PiAgentCoreSession implements AgentSession {
           this.toolStartedAt.delete(context.toolCall.id);
           if (sink) emitToolEvent(sink, {
             kind: "tool_finished", name, isError: true, resultSummary: reason,
-            ...(startedAt !== undefined ? { durationMs: Date.now() - startedAt } : {}),
+            ...(startedAt !== undefined ? { durationMs: performance.now() - startedAt } : {}),
           });
           return { block: true, reason };
         }
@@ -1299,7 +1317,7 @@ export class PiAgentCoreSession implements AgentSession {
             name: context.toolCall.name,
             resultSummary: summarizeToolResult(context.result, secrets),
             isError: context.isError,
-            ...(startedAt !== undefined ? { durationMs: Date.now() - startedAt } : {}),
+            ...(startedAt !== undefined ? { durationMs: performance.now() - startedAt } : {}),
           });
         }
         return undefined;
@@ -1426,6 +1444,12 @@ export class PiAgentCoreSession implements AgentSession {
     for (const subscriber of this.subscribers) subscriber(event);
   }
 
+  private emitObservation(event: Extract<AgentStreamEvent, { type: 'model_request_started' | 'model_call_observed' }>): void {
+    for (const subscriber of this.subscribers) {
+      try { void Promise.resolve(subscriber(event)).catch(() => undefined); } catch { /* Diagnostic listeners never change execution. */ }
+    }
+  }
+
   private recordTimeline(item: AgentTimelineItem): void {
     this.activeRun?.timeline.push(item);
     this.emit({
@@ -1451,6 +1475,9 @@ export class PiAgentCoreSession implements AgentSession {
         // settled message.
         const sub = event.assistantMessageEvent;
         if (sub.type === "text_delta" || sub.type === "thinking_delta") {
+          if (sub.type === 'text_delta' && sub.delta && run?.modelCall && run.modelCall.firstTextMs === null) {
+            run.modelCall.firstTextMs = performance.now() - run.modelCall.clock;
+          }
           this.emit({
             type: "text_delta",
             provider: this.provider,
@@ -1460,7 +1487,7 @@ export class PiAgentCoreSession implements AgentSession {
           });
           break;
         }
-        this.handleMessageEvent(event.message);
+        this.handleMessageEvent(event.message, false);
         break;
       }
       case "message_end":
@@ -1499,7 +1526,7 @@ export class PiAgentCoreSession implements AgentSession {
     }
   }
 
-  private handleMessageEvent(message: PiAgentMessage): void {
+  private handleMessageEvent(message: PiAgentMessage, settled = true): void {
     const run = this.activeRun;
     if (!run) return;
     if (message.role !== "assistant") return;
@@ -1512,8 +1539,31 @@ export class PiAgentCoreSession implements AgentSession {
       run.finalText = text;
       this.recordTimeline({ type: "assistant_message", text });
     }
-    const usage = extractAssistantUsage(message);
-    if (usage) run.usage = usage;
+    // message_update carries cumulative partial usage for the same call. Only
+    // message_end contributes spend; context occupancy remains the latest call.
+    const usage = settled ? extractAssistantUsage(message) : undefined;
+    if (settled && !usage) run.usage = {};
+    if (usage) {
+      const previous = run.usage;
+      run.usage = { ...usage };
+      for (const field of ['inputTokens', 'outputTokens', 'cachedInputTokens', 'cacheWriteTokens', 'totalCostUsd'] as const) {
+        if (previous?.[field] !== undefined && usage[field] !== undefined) {
+          run.usage[field] = previous[field] + usage[field];
+        } else if (previous) {
+          delete run.usage[field];
+        }
+      }
+    }
+    if (settled && run.modelCall) {
+      const call = run.modelCall;
+      delete run.modelCall;
+      this.emitObservation({ type: 'model_call_observed', provider: this.provider, turnId: run.turnId, call: {
+        sequence: call.sequence, source: 'pi-engine', provider: message.provider, model: message.responseModel ?? message.model,
+        startedAt: call.startedAt, durationMs: performance.now() - call.clock, firstTextMs: call.firstTextMs,
+        status: message.stopReason === 'error' ? 'failed' : message.stopReason === 'aborted' ? 'canceled' : 'completed',
+        usage: usage ?? null,
+      } });
+    }
     run.servedModel = message.responseModel ?? message.model;
     run.servedProvider = message.provider;
   }

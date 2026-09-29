@@ -91,9 +91,10 @@ function makeFakeSession(script: {
 }): { handle: TurnSessionHandle; envs: Array<Record<string, string>>; closed: number } {
   const envs: Array<Record<string, string>> = [];
   const state = { closed: 0 };
-  const subscribers: Array<(e: { type: string; deltaKind?: string; delta?: string }) => void> = [];
+  const subscribers: Array<Parameters<TurnSessionHandle['subscribe']>[0]> = [];
   const handle: TurnSessionHandle = {
     async run() {
+      for (const sub of subscribers) sub({ type: 'model_request_started', startedAt: Date.now() });
       if (script.emitToolCall) {
         // 与 pi-core 的真实事件面同形：recordTimeline → emit({type:'timeline', item})
         for (const sub of subscribers) sub({ type: 'timeline', item: { type: 'tool_call' } });

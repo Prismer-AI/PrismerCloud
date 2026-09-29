@@ -221,10 +221,25 @@ export interface AgentRunOptions {
 export interface AgentUsage {
   inputTokens?: number;
   cachedInputTokens?: number;
+  /** PI cache creation tokens, separate from uncached input and cache reads. */
+  cacheWriteTokens?: number;
   outputTokens?: number;
   totalCostUsd?: number;
   contextWindowMaxTokens?: number;
   contextWindowUsedTokens?: number;
+}
+
+/** Measurements at the PI engine boundary, not a provider billing receipt. */
+export interface ModelCallObservation {
+  sequence: number;
+  source: 'pi-engine';
+  provider: string;
+  model: string;
+  startedAt: number;
+  durationMs: number;
+  firstTextMs: number | null;
+  status: 'completed' | 'failed' | 'canceled';
+  usage: AgentUsage | null;
 }
 
 export const TOOL_CALL_ICON_NAMES = [
@@ -402,6 +417,8 @@ export type AgentTimelineItem =
   | CompactionTimelineItem;
 
 export type AgentStreamEvent =
+  | { type: 'model_request_started'; provider: AgentProvider; startedAt: number; turnId?: string }
+  | { type: 'model_call_observed'; provider: AgentProvider; call: ModelCallObservation; turnId?: string }
   | { type: "thread_started"; sessionId: string; provider: AgentProvider }
   | { type: "turn_started"; provider: AgentProvider; turnId?: string }
   | { type: "turn_completed"; provider: AgentProvider; usage?: AgentUsage; turnId?: string }

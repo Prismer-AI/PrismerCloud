@@ -21,6 +21,7 @@ import { appendFileSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { INGEST_SYSTEM_PROMPT, ingestPrompt, ingestResult } from './maintenance.js';
 import type { PiCoreToolPolicy } from '../adapters/runtime-engine/pi-core/agent.js';
+import type { AgentUsage, ModelCallObservation } from '../adapters/coding/shared/agent-sdk-types.js';
 import type { TenantComponentBinding, TenantComponentHost, TenantComponentSelection } from '../components/tenant-runtime.js';
 import {
   TURN_EVENTS_FILENAME,
@@ -41,6 +42,7 @@ import {
   type TurnEnvelopeV1,
   type TurnErrorCode,
   type TurnResultV2,
+  type TurnObservation,
   type TurnToolSummary,
 } from './protocol.js';
 
@@ -61,7 +63,7 @@ export interface TurnSessionHandle {
     options?: { messageId?: string },
   ): Promise<{
     finalText: string;
-    usage?: { inputTokens?: number; outputTokens?: number };
+    usage?: AgentUsage;
     timeline: Array<{ type: string }>;
     canceled?: boolean;
     servedModel?: string;
@@ -73,6 +75,8 @@ export interface TurnSessionHandle {
       deltaKind?: string;
       delta?: string;
       item?: { type?: string };
+      startedAt?: number;
+      call?: ModelCallObservation;
     }) => void,
   ): () => void;
   interrupt(): Promise<void>;
@@ -339,6 +343,22 @@ export async function runTurnOnce(
   deps: RunTurnDeps = {},
   onToolEvent?: (event: ToolEventInput) => void,
 ): Promise<TurnResultV2> {
+  const started = performance.now();
+  const observation: TurnObservation = { version: 1, source: 'runtime', sessionInitMs: null,
+    totalMs: 0, modelCalls: [], droppedModelCalls: 0 };
+  const result = await runTurnExecution(envelope, egress, deps, onToolEvent, observation);
+  observation.totalMs = performance.now() - started;
+  result.observation = observation;
+  return result;
+}
+
+async function runTurnExecution(
+  envelope: TurnEnvelopeV1,
+  egress: TurnEgressV1,
+  deps: RunTurnDeps,
+  onToolEvent: ((event: ToolEventInput) => void) | undefined,
+  observation: TurnObservation,
+): Promise<TurnResultV2> {
   const createSession = deps.createSession ?? defaultCreateSession;
   const version = runtimeVersion();
   const env = egressSessionEnv(envelope, egress);
@@ -347,7 +367,9 @@ export async function runTurnOnce(
   let session: TurnSessionHandle | null = null;
   let t8: number | null = null;
   let timedOut = false;
-  const t7 = Date.now();
+  let t7: number | null = null;
+  let sawRequest = false;
+  const initStarted = performance.now();
   try {
     let tenantComponents: TenantComponentBinding | undefined;
     if (envelope.tenantComponents?.length) {
@@ -372,12 +394,21 @@ export async function runTurnOnce(
       ...(onToolEvent ? { onToolEvent } : {}),
     });
     session.subscribe((event) => {
+      if (event.type === 'model_request_started' && !sawRequest && typeof event.startedAt === 'number') {
+        t7 = event.startedAt;
+        sawRequest = true;
+      }
+      if (event.type === 'model_call_observed' && event.call) {
+        if (observation.modelCalls.length < 128) observation.modelCalls.push(event.call);
+        else observation.droppedModelCalls += 1;
+      }
       if (timedOut || t8 !== null) return;
       if (event.type === 'text_delta' && event.deltaKind === 'text' && event.delta) {
         // t8 = 首个非空可呈现 delta（协议 spec §5 的首 token 时点）。
         t8 = Date.now();
       }
     });
+    observation.sessionInitMs = performance.now() - initStarted;
     const timer = setTimeout(() => {
       timedOut = true;
       void session?.interrupt().catch(() => undefined);
@@ -446,7 +477,7 @@ function timeoutResult(
   model: string,
   providerId: string,
   version: string,
-  t7: number,
+  t7: number | null,
   t8: number | null,
 ): TurnResultV2 {
   return errorResult(

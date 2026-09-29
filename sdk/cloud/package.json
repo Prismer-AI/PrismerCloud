@@ -1,6 +1,6 @@
 {
   "name": "@prismer/sdk",
-  "version": "2.2.63",
+  "version": "2.2.64",
   "description": "Official TypeScript SDK for Prismer Cloud API",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
@@ -45,7 +45,7 @@
   "dependencies": {
     "@clack/prompts": "^0.9.1",
     "@iarna/toml": "^2.2.5",
-    "@prismer/aip-sdk": "^2.2.63",
+    "@prismer/aip-sdk": "^2.2.64",
     "commander": "^12.1.0",
     "picocolors": "^1.1.1",
     "qrcode": "^1.5.4"

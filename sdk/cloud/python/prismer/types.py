@@ -1365,6 +1365,8 @@ class EaasRunEvent(BaseModel):
 
 
 class EaasRunView(BaseModel):
+    # Engine-reported diagnostics; absent on older Cloud and unmeasured runs.
+    observation: Optional[Dict[str, Any]] = None
     run_id: str = Field(alias="runId")
     status: str
     recovery_state: str = Field(alias="recoveryState")

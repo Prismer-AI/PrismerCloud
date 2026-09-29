@@ -5249,6 +5249,7 @@ export class PrismerClient {
   private readonly baseUrl: string;
   private readonly timeout: number;
   private readonly fetchFn: typeof fetch;
+  private readonly onRequestObservation?: PrismerConfig['onRequestObservation'];
   private readonly imAgent?: string;
   private readonly imWorkspace?: string;
   private _offlineManager: OfflineManager | null = null;
@@ -5296,6 +5297,7 @@ export class PrismerClient {
     // fetch 必须绑到 globalThis 再存字段：浏览器里解绑调用直接
     // "Illegal invocation"（UIKit eaas-sdk 真栈实测）；Node 绑定无副作用。
     this.fetchFn = config.fetch ?? fetch.bind(globalThis);
+    this.onRequestObservation = config.onRequestObservation;
     this.imAgent = config.imAgent;
     this.imWorkspace = config.imWorkspace;
 
@@ -5525,6 +5527,12 @@ export class PrismerClient {
   ): Promise<T> {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+    const observation: import('./types').RequestObservation = {
+      method, path: path.split('?')[0], retry: _isRetry === true, status: null, requestId: null, contentType: null,
+      headersMs: null, durationMs: 0, outcome: 'transport_error',
+    };
+    const started = performance.now();
+    let attemptFinished: number | undefined;
 
     try {
       let url = `${this.baseUrl}${path}`;
@@ -5558,7 +5566,15 @@ export class PrismerClient {
       }
 
       const response = await this.fetchFn(url, init);
+      observation.headersMs = performance.now() - started;
+      observation.status = response.status;
+      observation.requestId = response.headers.get('x-request-id');
+      observation.contentType = response.headers.get('content-type');
+      observation.outcome = 'decode_error';
       const data = await response.json();
+      attemptFinished = performance.now();
+      observation.requestId = typeof data?.requestId === 'string' ? data.requestId : observation.requestId;
+      observation.outcome = response.ok ? 'success' : 'http_error';
 
       // h-contact-system-refactor §9-SDK — 202 ACTION_DEFERRED 契约（跨台联系人
       // 审批等）：提升 deferred/approvalId 到 result 顶层，调用方（offline ack /
@@ -5595,6 +5611,7 @@ export class PrismerClient {
       return data as T;
     } catch (error) {
       if (error instanceof Error && error.name === 'AbortError') {
+        observation.outcome = 'timeout';
         return { success: false, ok: false, error: { code: 'timeout', message: 'Request timed out' } } as T;
       }
       return {
@@ -5604,6 +5621,8 @@ export class PrismerClient {
       } as T;
     } finally {
       clearTimeout(timeoutId);
+      observation.durationMs = (attemptFinished ?? performance.now()) - started;
+      try { void Promise.resolve(this.onRequestObservation?.(observation)).catch(() => undefined); } catch { /* Observability must not change request results. */ }
     }
   }
 

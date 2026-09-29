@@ -18,7 +18,22 @@ export const ENVIRONMENTS: Record<Environment, string> = {
 // Config
 // ============================================================================
 
+/** One JSON HTTP attempt. Excludes credentials, query strings, bodies, and streaming APIs. */
+export interface RequestObservation {
+  method: string;
+  path: string;
+  retry: boolean;
+  status: number | null;
+  requestId: string | null;
+  contentType: string | null;
+  headersMs: number | null;
+  durationMs: number;
+  outcome: 'success' | 'http_error' | 'transport_error' | 'decode_error' | 'timeout';
+}
+
 export interface PrismerConfig {
+  /** Best-effort measurement hook for JSON API attempts; a throwing observer is ignored. */
+  onRequestObservation?: (observation: RequestObservation) => void;
   /** API Key (starts with sk-prismer-) or IM JWT token. Optional for anonymous IM registration. */
   apiKey?: string;
   /** Environment preset (default: 'production'). Sets the base URL automatically. */

@@ -659,7 +659,42 @@ export interface EaasAssetUploadResult {
   deduplicated: boolean;
 }
 
+/** PI counters are engine-reported, not billing receipts. Input/cache read/cache write are disjoint. */
+export interface EaasTokenObservation {
+  inputTokens: number | null;
+  outputTokens: number | null;
+  cachedInputTokens: number | null;
+  cacheWriteTokens: number | null;
+}
+
+export interface EaasRunObservation {
+  version: 1;
+  runtime: {
+    version: 1;
+    source: 'runtime';
+    sessionInitMs: number | null;
+    totalMs: number;
+    droppedModelCalls: number;
+    modelCalls: Array<{
+      sequence: number;
+      source: 'pi-engine';
+      provider: string;
+      model: string;
+      startedAt: number | null;
+      durationMs: number | null;
+      firstTextMs: number | null;
+      status: 'completed' | 'failed' | 'canceled';
+      usage: EaasTokenObservation;
+    }>;
+    totals: EaasTokenObservation & { cacheReadRatio: number | null; complete: boolean };
+  } | null;
+  runtimeMissingReason: 'not_reported' | 'invalid' | null;
+  cloudSteps: Array<{ name: string; durationMs: number }>;
+}
+
 export interface EaasRunView {
+  /** Absent on older Cloud, null when this run has no measured Runtime result. */
+  observation?: EaasRunObservation | null;
   runId: string;
   status: 'queued' | 'running' | 'canceling' | 'completed' | 'failed' | 'canceled' | 'awaiting_input' | (string & {});
   recoveryState: 'none' | 'recovering' | 'needs_review' | 'unrecoverable';

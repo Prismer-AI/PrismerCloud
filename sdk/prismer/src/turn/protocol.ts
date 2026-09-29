@@ -30,6 +30,42 @@
  */
 import { parseAssetIngestMaintenance, parseAssetIngestResult, type AssetIngestMaintenance, type AssetIngestResult } from './maintenance.js';
 import { parseTenantComponentReferences, type TenantComponentReference } from '../components/tenant-runtime.js';
+import type { ModelCallObservation } from '../adapters/coding/shared/agent-sdk-types.js';
+
+export interface TurnObservation {
+  version: 1;
+  source: 'runtime';
+  sessionInitMs: number | null;
+  totalMs: number;
+  modelCalls: ModelCallObservation[];
+  /** Calls beyond the bounded observation budget are counted, never silently hidden. */
+  droppedModelCalls: number;
+}
+
+function parseTurnObservation(raw: unknown): TurnObservation | undefined {
+  const number = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value >= 0;
+  if (!isPlainObject(raw) || raw.version !== 1 || raw.source !== 'runtime' || !number(raw.totalMs) ||
+    !number(raw.droppedModelCalls) || !Number.isSafeInteger(raw.droppedModelCalls) ||
+    !Array.isArray(raw.modelCalls) || raw.modelCalls.length > 128) return undefined;
+  const modelCalls: ModelCallObservation[] = [];
+  for (const value of raw.modelCalls) {
+    if (!isPlainObject(value) || value.sequence !== modelCalls.length + 1 || value.source !== 'pi-engine' ||
+      typeof value.provider !== 'string' || value.provider.length > 128 || typeof value.model !== 'string' || value.model.length > 256 ||
+      !number(value.startedAt) || !number(value.durationMs) ||
+      !['completed', 'failed', 'canceled'].includes(String(value.status))) return undefined;
+    const usage: NonNullable<ModelCallObservation['usage']> = {};
+    if (isPlainObject(value.usage)) {
+      for (const key of ['inputTokens', 'outputTokens', 'cachedInputTokens', 'cacheWriteTokens', 'totalCostUsd', 'contextWindowUsedTokens', 'contextWindowMaxTokens'] as const) {
+        if (number(value.usage[key])) usage[key] = value.usage[key];
+      }
+    }
+    modelCalls.push({ sequence: value.sequence as number, source: 'pi-engine', provider: value.provider, model: value.model,
+      startedAt: value.startedAt, durationMs: value.durationMs, firstTextMs: number(value.firstTextMs) ? value.firstTextMs : null,
+      status: value.status as ModelCallObservation['status'], usage: isPlainObject(value.usage) ? usage : null });
+  }
+  return { version: 1, source: 'runtime', totalMs: raw.totalMs,
+    sessionInitMs: number(raw.sessionInitMs) ? raw.sessionInitMs : null, droppedModelCalls: raw.droppedModelCalls, modelCalls };
+}
 
 export const TURN_PROTOCOL_VERSION = 2;
 
@@ -344,6 +380,7 @@ function parseToolSummary(raw: unknown, index: number): TurnToolSummary {
 }
 
 export interface TurnResultV2 {
+  observation?: TurnObservation;
   maintenanceResult?: AssetIngestResult;
   protocolVersion: typeof TURN_PROTOCOL_VERSION;
   turnId: string;
@@ -541,6 +578,8 @@ export function parseTurnResult(raw: unknown): TurnResultV2 {
   }
   if (typeof raw.replyText === 'string') result.replyText = raw.replyText;
   const usage = raw.usage;
+  const observation = parseTurnObservation(raw.observation);
+  if (observation) result.observation = observation;
   if (isPlainObject(usage)) {
     result.usage = {
       promptTokens: typeof usage.promptTokens === 'number' ? usage.promptTokens : null,
