@@ -16,7 +16,6 @@
 
 import { Command } from 'commander';
 import { TURN_EXIT_INFRA, TURN_EXIT_OK, TURN_PROTOCOL_VERSION, TURN_MAX_HISTORY_MESSAGES, TURN_MAX_IMAGES } from '../../turn/protocol.js';
-import { runTurnFile } from '../../turn/runner.js';
 
 /** 本 increment 唯一承载的引擎（envelope 协议与 adapter 正交，后续引擎走同一文件契约）。 */
 const SUPPORTED_ADAPTERS = ['pi-core'] as const;
@@ -54,6 +53,7 @@ export function buildTurnCommand(): Command {
           process.stderr.write(`[turn] --deadline-ms must be a positive number, got '${opts.deadlineMs}'\n`);
           process.exit(TURN_EXIT_INFRA);
         }
+        const { runTurnFile } = await import('../../turn/runner.js');
         const code = await runTurnFile({
           inputPath: opts.input,
           outputPath: opts.output,

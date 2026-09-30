@@ -18,7 +18,9 @@ export default defineConfig({
   // if you need to debug a release build.
   sourcemap: false,
   target: 'node22',
-  splitting: false,
+  // ESM chunks keep turn probes from loading unrelated CLI dependencies.
+  // Runtime bundles ship the complete dist directory, including these chunks.
+  splitting: true,
   outDir: 'dist',
   // Native module: better-sqlite3 ships .node binaries per platform; require it
   // from node_modules at runtime, never bundle.

@@ -395,6 +395,25 @@ function spawnAndWait(args: string[], timeoutMs: number): Promise<{ status: numb
 }
 
 describe('真进程：node dist/cli.js turn run（本地假 egress 端点，全链不触外网）', () => {
+  it('capability probes load no engine or unrelated CLI dependencies, including common flags', () => {
+    const dir = makeTurnDir();
+    const loader = join(dir, 'observe-imports.mjs');
+    writeFileSync(loader, `export async function resolve(specifier, context, next) {
+      if (/pi-coding-agent|pi-ai|better-sqlite3|ioredis|mysql2|claude-agent-sdk/.test(specifier)) {
+        process.stderr.write('HEAVY_IMPORT:' + specifier + '\\n');
+      }
+      return next(specifier, context);
+    }`);
+    for (const args of [['turn', 'capabilities'], ['--json', 'turn', 'capabilities'], ['turn', 'capabilities', '--quiet']]) {
+      const child = spawnSync(process.execPath, ['--experimental-loader', loader, CLI, ...args], {
+        encoding: 'utf8', timeout: 10_000,
+      });
+      expect(child.status, child.stderr).toBe(0);
+      expect(JSON.parse(child.stdout).protocolVersion).toBe(TURN_PROTOCOL_VERSION);
+      expect(child.stderr).not.toContain('HEAVY_IMPORT:');
+    }
+  });
+
   it('产出合法 output.json：status=ok + 模型回复 + spans + engine + 出口归因', async () => {
     const egressSrv = await startFakeProvider(['本地', '假', '出口']);
     const dir = makeTurnDir();

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "prismer"
-version = "2.2.64"
+version = "2.2.65"
 description = "Official Python SDK for Prismer Cloud API"
 readme = "README.md"
 license = {text = "MIT"}
@@ -24,7 +24,7 @@ classifiers = [
 keywords = ["prismer", "ai", "context", "sdk", "api"]
 requires-python = ">=3.10"
 dependencies = [
-    "prismer-aip>=2.2.64,<2.3.0",
+    "prismer-aip>=2.2.65,<2.3.0",
     "httpx>=0.24.0",
     "pydantic>=2.0.0",
     "websockets>=12.0",

@@ -1,5 +1,10 @@
 # Changelog — @prismer/runtime
 
+## 2.2.65 — 2026-09-30
+
+- `turn capabilities` 按需加载 CLI，`turn run` 才加载 runner；保留通用输出参数。
+- ESM/CJS 分块随完整 Runtime bundle 分发；能力协议保持兼容。
+
 ## 2.2.62 — 2026-09-23
 
 - **Session recall + grant-aware recall policy**：daemon 新增
@@ -4530,3 +4535,6 @@ The runtime tree was scaffolded across the `feat/refactoring` branch. There were
   Write the bare provider name (`prismer`); verified in-pod that
   `_resolve_runtime_agent_kwargs` then resolves api_key + base_url correctly.
 ## 2.2.9
+# Unreleased
+
+- EaaS turn CLI uses a lightweight entry and loads the runner only for execution, reducing capability probe startup work.
