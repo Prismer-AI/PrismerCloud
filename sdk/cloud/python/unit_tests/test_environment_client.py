@@ -202,6 +202,13 @@ def test_gate_b_response_models_parse_camel_case_wire_fields():
         "completedAt": "2026-09-09T00:00:01.000Z",
     })
     assert run.artifact_refs == []
+    assert run.error is None  # Older Cloud omits the additive field.
+    failed = EaasRunView.model_validate({
+        **run.model_dump(by_alias=True),
+        "status": "failed",
+        "error": {"code": "runtime_unavailable"},
+    })
+    assert failed.error == {"code": "runtime_unavailable"}
     key = EaasCreatedPublishableKey.model_validate({
         "id": "eak_1", "key": "pk-eaas-full", "keyPrefix": "pk-eaas", "name": "browser", "version": 1, "scopes": []
     })
@@ -1401,3 +1408,30 @@ async def test_async_skills_client_matches_the_sync_wire_contract():
     assert calls[0]["params"] == {"status": "published"}
     assert calls[1]["json"] == {"slug": "s", "name": "n", "content": "c"}
     assert calls[2]["path"] == "/api/v1/skills/eskl_1/publish"
+
+
+def test_model_directory_and_message_selection():
+    calls = []
+    def request(method, path, **kwargs):
+        calls.append((method, path, kwargs))
+        return {"success": True, "data": {}}
+    client = EnvironmentsClient(request)
+    client.list_agent_models()
+    choice = {"channel": "deepseek", "model": "deepseek-flash"}
+    client.send_message("env", "conv", "hello", model_selection=choice, idempotency_key="choice")
+    assert calls[0][:2] == ("GET", "/api/v1/agent-models")
+    assert calls[1][2]["json"] == {"content": "hello", "modelSelection": choice}
+
+
+@pytest.mark.asyncio
+async def test_async_model_directory_and_message_selection():
+    calls = []
+    async def request(method, path, **kwargs):
+        calls.append((method, path, kwargs))
+        return {"success": True, "data": {}}
+    client = AsyncEnvironmentsClient(request)
+    await client.list_agent_models()
+    choice = {"channel": "deepseek", "model": "deepseek-flash"}
+    await client.send_message("env", "conv", "hello", model_selection=choice, idempotency_key="choice")
+    assert calls[0][:2] == ("GET", "/api/v1/agent-models")
+    assert calls[1][2]["json"] == {"content": "hello", "modelSelection": choice}

@@ -62,6 +62,8 @@ import type {
   EaasRunCancelResult,
   EaasRunEventPage,
   EaasRunView,
+  EaasModelSelection,
+  EaasAgentModelDirectory,
   EaasSendMessageResult,
   EaasArtifactGetResult,
   EaasArtifactList,
@@ -3435,6 +3437,10 @@ export class EnvironmentsClient {
   }
 
 
+  async listAgentModels(): Promise<EaasApiEnvelope<EaasAgentModelDirectory>> {
+    return this._r('GET', '/api/v1/agent-models');
+  }
+
   /** Exchange a publishable key for a principal session (`POST /api/v1/sessions`). */
   async issueSession(body: EaasIssueSessionBody = {}): Promise<EaasApiEnvelope<EaasIssuedSession>> {
     return this._r('POST', '/api/v1/sessions', body);
@@ -3457,7 +3463,7 @@ export class EnvironmentsClient {
   async sendMessage(
     id: string,
     conversationId: string,
-    body: { content: string; contentBlocks?: EaasContentBlockInput[]; answer?: EaasAnswerInput },
+    body: { content: string; contentBlocks?: EaasContentBlockInput[]; answer?: EaasAnswerInput; modelSelection?: EaasModelSelection },
     opts?: EaasIdempotencyOptions,
   ): Promise<EaasApiEnvelope<EaasSendMessageResult>> {
     return this._r(

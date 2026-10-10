@@ -140,6 +140,12 @@ export class SandboxesClient {
     await ready(this.low, environmentId, deadline(options.timeoutMs));
     return new SandboxHandle(this.low, environmentId);
   }
+  /** Resume deletion after a client restart; GET deliberately hides owned tombstones. */
+  async kill(environmentId: string, options: { timeoutMs?: number } = {}): Promise<void> {
+    if (typeof environmentId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(environmentId))
+      throw new SandboxError('invalid_request', 'environmentId must be an opaque resource id');
+    await new SandboxHandle(this.low, environmentId).kill(options);
+  }
   async list(options?: { cursor?: string; limit?: number }) {
     return unwrap(await this.low.list(options));
   }

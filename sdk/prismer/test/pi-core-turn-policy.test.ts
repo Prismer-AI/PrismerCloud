@@ -1,4 +1,5 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { setTimeout as delay } from 'node:timers/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -36,6 +37,58 @@ describe('EaaS runner declaration-to-execution policy', () => {
 
   it('pins the legacy tool surface when tools is absent, not an unrestricted policy', () => {
     expect(turnSessionClientOptions().toolPolicy).toEqual({ allow: ['read', 'write', 'edit', 'bash'], deny: [] });
+  });
+
+  it('cancels the actual Pi shell tool and prevents its delayed write', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'pi-turn-cancel-'));
+    roots.push(cwd);
+    const faux = fauxProvider({ provider: 'faux', api: 'faux', models: [{ id: 'test', name: 'Cancel test' }] });
+    state.models = createModels();
+    state.models.setProvider(faux.provider);
+    faux.setResponses([
+      fauxAssistantMessage(fauxToolCall('bash', { command: 'trap "" TERM; printf ready > started; sleep 1.5; printf late > leaked' }, { id: 'cancel-call' }), { stopReason: 'toolUse' }),
+      fauxAssistantMessage('unexpected completion'),
+    ]);
+    const envelope = parseTurnEnvelope({
+      protocolVersion: 2, turnId: 'cancel-turn', message: { text: 'run the shell command' }, history: [],
+      systemPrompt: 'test', tools: [builtin('bash')], workdir: cwd, deadlineMs: 5000, cancelFile: join(cwd, 'cancel'),
+    });
+    const running = runTurnOnce(envelope, {
+      protocolVersion: 2, url: 'http://unused.invalid/v1', token: 'test-egress', model: 'faux/test', provider: 'faux',
+    });
+    try {
+      const deadline = Date.now() + 3000;
+      while (!existsSync(join(cwd, 'started')) && Date.now() < deadline) await delay(10);
+      expect(existsSync(join(cwd, 'started'))).toBe(true);
+      writeFileSync(envelope.cancelFile, '');
+      expect((await running).status).toBe('canceled');
+      await delay(1800);
+      expect(existsSync(join(cwd, 'leaked'))).toBe(false);
+    } finally {
+      writeFileSync(envelope.cancelFile, '');
+      await running;
+    }
+  });
+
+  it('owns background descendants after their shell has completed', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'pi-background-cancel-'));
+    roots.push(cwd);
+    const faux = fauxProvider({ provider: 'faux', api: 'faux', models: [{ id: 'test', name: 'Background' }] });
+    state.models = createModels();
+    state.models.setProvider(faux.provider);
+    const abort = new AbortController();
+    faux.setResponses([
+      fauxAssistantMessage(fauxToolCall('bash', { command: '(sleep 0.8; printf escaped > leaked) >/dev/null 2>&1 &' }, { id: 'background' }), { stopReason: 'toolUse' }),
+      () => { abort.abort(); return fauxAssistantMessage('done'); },
+    ]);
+    const envelope = parseTurnEnvelope({ protocolVersion: 2, turnId: 'background-turn', message: { text: 'run' },
+      history: [], tools: [builtin('bash')], systemPrompt: 'test', workdir: cwd, deadlineMs: 5000, cancelFile: join(cwd, 'cancel') });
+    const result = await runTurnOnce(envelope, {
+      protocolVersion: 2, url: 'http://unused.invalid/v1', token: 'test', model: 'faux/test', provider: 'faux',
+    }, { signal: abort.signal });
+    await delay(1200);
+    expect(existsSync(join(cwd, 'leaked'))).toBe(false);
+    expect(result.status).toBe('canceled');
   });
 
   it('delivers prior conversation roles and media to the actual provider once', async () => {

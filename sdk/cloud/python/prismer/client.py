@@ -5077,12 +5077,16 @@ class EnvironmentsClient:
         return self._request("POST", f"/api/v1/environments/{_url_quote(environment_id, safe='')}/conversations",
                              json={"newConversation": True})
 
+    def list_agent_models(self) -> Dict[str, Any]:
+        return self._request("GET", "/api/v1/agent-models")
+
     def list_conversations(self, environment_id: str) -> Dict[str, Any]:
         return self._request("GET", f"/api/v1/environments/{_url_quote(environment_id, safe='')}/conversations")
 
     def send_message(self, environment_id: str, conversation_id: str, content: str, *,
                      content_blocks: Optional[List[Dict[str, Any]]] = None,
                      answer: Optional[Dict[str, Any]] = None,
+                     model_selection: Optional[Dict[str, str]] = None,
                      idempotency_key: Optional[str] = None) -> Dict[str, Any]:
         """Send a message; default body stays exactly ``{"content": content}``.
 
@@ -5095,6 +5099,8 @@ class EnvironmentsClient:
             body["contentBlocks"] = content_blocks
         if answer is not None:
             body["answer"] = answer
+        if model_selection is not None:
+            body["modelSelection"] = model_selection
         return self._request(
             "POST",
             f"/api/v1/environments/{_url_quote(environment_id, safe='')}/conversations/{_url_quote(conversation_id, safe='')}/messages",
@@ -5615,18 +5621,24 @@ class AsyncEnvironmentsClient:
         return await self._request("POST", f"/api/v1/environments/{_url_quote(environment_id, safe='')}/conversations",
                                    json={"newConversation": True})
 
+    async def list_agent_models(self) -> Dict[str, Any]:
+        return await self._request("GET", "/api/v1/agent-models")
+
     async def list_conversations(self, environment_id: str) -> Dict[str, Any]:
         return await self._request("GET", f"/api/v1/environments/{_url_quote(environment_id, safe='')}/conversations")
 
     async def send_message(self, environment_id: str, conversation_id: str, content: str, *,
                      content_blocks: Optional[List[Dict[str, Any]]] = None,
                      answer: Optional[Dict[str, Any]] = None,
+                     model_selection: Optional[Dict[str, str]] = None,
                      idempotency_key: Optional[str] = None) -> Dict[str, Any]:
         body: Dict[str, Any] = {"content": content}
         if content_blocks is not None:
             body["contentBlocks"] = content_blocks
         if answer is not None:
             body["answer"] = answer
+        if model_selection is not None:
+            body["modelSelection"] = model_selection
         return await self._request(
             "POST",
             f"/api/v1/environments/{_url_quote(environment_id, safe='')}/conversations/{_url_quote(conversation_id, safe='')}/messages",

@@ -23,6 +23,37 @@ function setup() {
 }
 afterEach(() => vi.useRealTimers());
 describe('single-key sandbox facade', () => {
+  it('resumes deletion by saved id without reconnecting to a hidden tombstone', async () => {
+    vi.useFakeTimers();
+    const { low, api } = setup();
+    low.get.mockResolvedValue({ success: false, error: { code: 'not_owned', message: 'tombstoned' } });
+    low.delete.mockResolvedValueOnce(ok({ state: 'stopping' })).mockResolvedValue(ok({ state: 'stopped' }));
+    let stopped = false;
+    const pending = api.kill('env-1').then(() => { stopped = true; });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(stopped).toBe(false);
+    await vi.advanceTimersByTimeAsync(1000);
+    await pending;
+    expect(stopped).toBe(true);
+    expect(low.get).not.toHaveBeenCalled();
+    expect(low.create).not.toHaveBeenCalled();
+    expect(low.delete.mock.calls).toEqual([['env-1'], ['env-1']]);
+  });
+  it('does not treat a 404 during resumed deletion as stopped', async () => {
+    const { low, api } = setup();
+    low.delete.mockResolvedValue({ success: false, error: { code: 'not_owned', message: 'missing' } });
+    await expect(api.kill('env-1')).rejects.toMatchObject({ code: 'not_owned' });
+  });
+  it.each(['', '../env-1', 'env/1', 'x'.repeat(129)])('rejects invalid saved environment id %s', async (id) => {
+    const { low, api } = setup();
+    await expect(api.kill(id)).rejects.toMatchObject({ code: 'invalid_request' });
+    expect(low.delete).not.toHaveBeenCalled();
+  });
+  it('validates resumed deletion timeout before sending DELETE', async () => {
+    const { low, api } = setup();
+    await expect(api.kill('env-1', { timeoutMs: 0 })).rejects.toMatchObject({ code: 'invalid_request' });
+    expect(low.delete).not.toHaveBeenCalled();
+  });
   it('uses server defaults and waits for basic readiness without requiring an agent', async () => {
     const { low, api } = setup();
     const sandbox = await api.create({ idempotencyKey: 'create-once' });

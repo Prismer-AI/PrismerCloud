@@ -40,6 +40,25 @@ python -m prismer --help
 
 Requires Python 3.8+.
 
+## EaaS: one project key
+
+`prismer==2.2.66` is published on PyPI. Server-side EaaS uses a project `sk-eaas-*` key and a deployment URL, with tenant/project and environment defaults selected by the service. No platform signing private key or cloud credentials are required. AIP identity/signing is a separate feature.
+
+```python
+import os
+from prismer import PrismerClient
+
+client = PrismerClient(
+    api_key=os.environ["PRISMER_API_KEY"],
+    base_url=os.environ["PRISMER_BASE_URL"],  # https://test.docbrew.cn for test
+)
+context = client.eaas.context()  # optional identity/default/capability discovery
+```
+
+Follow the [EaaS cookbook](../../../docs/cookbook/eaas-sdk-integration.md) for default creation, readiness, conversations and bounded deletion. DELETE acceptance or GET 404 does not prove physical cleanup; wait for stopped and use independent platform checks when reclamation must be verified. Keep project keys on the server.
+
+Python `environments.list_events()` is JSON replay, not an SSE/WS subscriber. HITL callers must poll for the matching question message after the run reaches `awaiting_input`. The [2026-10-09 real ACS feature acceptance](../../../docs/organization/specs/10-eaas-critical-feature-regression-20261009.md) used the installed TypeScript SDK; Python/CLI full business parity was not rerun.
+
 ## Quick Start
 
 ### Sync Client

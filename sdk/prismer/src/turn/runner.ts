@@ -17,7 +17,7 @@
  * cloud 侧换源则不会（每次 turn 的副作用都在 pod，重试发生在单次 HTTP 请求内）。
  */
 
-import { appendFileSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { INGEST_SYSTEM_PROMPT, ingestPrompt, ingestResult } from './maintenance.js';
 import type { PiCoreToolPolicy } from '../adapters/runtime-engine/pi-core/agent.js';
@@ -85,6 +85,8 @@ export interface TurnSessionHandle {
 
 /** 测试缝隙：注入 scripted session（不触网）。 */
 export interface RunTurnDeps {
+  /** CLI termination is scoped to this turn; library callers may supply their own signal. */
+  signal?: AbortSignal;
   /** Authenticated host adapter only; CLI disk inputs cannot install this authority. */
   resolveTenantComponents?: (selection: TenantComponentSelection) => Promise<TenantComponentHost>;
   createSession?: (args: {
@@ -332,7 +334,8 @@ function classifyProviderError(message: string): TurnErrorCode {
 
 /**
  * 跑一轮 turn：单一出口目标，成功、超时或失败即定格结果。
- * 返回 TurnResultV2（status:'ok' | 'error'），不抛（除 promptFromEnvelope 的协议错误）。
+ * 返回 TurnResultV2（ok/error/canceled）。工具清理失败会抛出基础设施错误，
+ * CLI 不会据此写出 canceled 回执。
  *
  * `onToolEvent` 是工具事件的观察面（§3.2）：引擎侧 hook 只上报、不拦截；不传 =
  * 本轮不产事件（sink 与 turn 结果解耦——事件面永远不改 turn 语义）。
@@ -369,8 +372,37 @@ async function runTurnExecution(
   let timedOut = false;
   let t7: number | null = null;
   let sawRequest = false;
+  let canceled = false;
+  let closing: Promise<void> | undefined;
+  let cleanupFailed = false;
+  let notifyCanceled!: () => void;
+  const cancellation = new Promise<void>((resolve) => { notifyCanceled = resolve; });
+  const closeSession = () => {
+    if (session && !closing) closing = Promise.resolve().then(() => session!.close()).catch(() => { cleanupFailed = true; });
+    return closing;
+  };
+  const requestCancellation = () => {
+    canceled = true;
+    // Pi shell tools own detached process groups. Interrupt the engine AND close
+    // its execution environment; killing the CLI PID alone leaves those groups alive.
+    if (session && !closing) {
+      void session.interrupt().catch(() => undefined);
+      void closeSession();
+    }
+    notifyCanceled();
+  };
+  const checkCancellation = () => {
+    if (canceled || deps.signal?.aborted || existsSync(envelope.cancelFile)) requestCancellation();
+  };
+  const canceledResult = (): TurnResultV2 => ({
+    protocolVersion: TURN_PROTOCOL_VERSION, turnId: envelope.turnId, status: 'canceled',
+  });
+  const cancelTimer = setInterval(checkCancellation, 100);
+  deps.signal?.addEventListener('abort', requestCancellation, { once: true });
   const initStarted = performance.now();
   try {
+    checkCancellation();
+    if (canceled) return canceledResult();
     let tenantComponents: TenantComponentBinding | undefined;
     if (envelope.tenantComponents?.length) {
       if (envelope.maintenance || !deps.resolveTenantComponents) throw new Error('tenant component authority unavailable');
@@ -393,6 +425,8 @@ async function runTurnExecution(
       workdir: envelope.workdir,
       ...(onToolEvent ? { onToolEvent } : {}),
     });
+    checkCancellation();
+    if (canceled) return canceledResult();
     session.subscribe((event) => {
       if (event.type === 'model_request_started' && !sawRequest && typeof event.startedAt === 'number') {
         t7 = event.startedAt;
@@ -415,7 +449,14 @@ async function runTurnExecution(
     }, Math.max(1, envelope.deadlineMs));
     let result: Awaited<ReturnType<TurnSessionHandle['run']>>;
     try {
-      result = await session.run(envelope.maintenance ? ingestPrompt(envelope.maintenance) : promptFromEnvelope(envelope), { messageId: envelope.turnId });
+      const outcome = await Promise.race([
+        session.run(envelope.maintenance ? ingestPrompt(envelope.maintenance) : promptFromEnvelope(envelope), { messageId: envelope.turnId })
+          .then((value) => ({ kind: 'completed' as const, value })),
+        cancellation.then(() => ({ kind: 'canceled' as const })),
+      ]);
+      checkCancellation();
+      if (outcome.kind === 'canceled' || canceled) return canceledResult();
+      result = outcome.value;
     } finally {
       clearTimeout(timer);
     }
@@ -452,6 +493,7 @@ async function runTurnExecution(
       providerSource: result.servedProvider || providerId,
     };
   } catch (err) {
+    if (canceled) return canceledResult();
     const message = err instanceof Error ? err.message : String(err);
     // 引擎在 abort 时不抛而是回 canceled —— 这里兜底同语义。
     if (timedOut) {
@@ -468,7 +510,10 @@ async function runTurnExecution(
       message,
     );
   } finally {
-    if (session) await session.close().catch(() => undefined);
+    clearInterval(cancelTimer);
+    deps.signal?.removeEventListener('abort', requestCancellation);
+    await closeSession();
+    if (cleanupFailed) throw new Error("owned tool cleanup failed; cancellation unverified");
   }
 }
 
@@ -531,12 +576,22 @@ export interface RunTurnFileOptions {
  * egress 文件**读完即删**（凭据窗口 = turn 窗口；端口侧另有 0600 与 turn 目录清理兜底）。
  */
 export async function runTurnFile(opts: RunTurnFileOptions): Promise<number> {
+  const termination = new AbortController();
+  const onTerminate = () => termination.abort();
+  process.on('SIGTERM', onTerminate);
+  process.on('SIGINT', onTerminate);
   // I-2：投递文件的删除必须在**最外层 finally**——envelope 解析失败（最早的 return
   // 路径）此前直接返回 70 而把凭据文件留在盘上，而 turn 目录在 agent 文件工具的 jail
   // 内，下一轮 turn 的模型可以读到并把它带进回复。
   try {
-    return await runTurnFileInner(opts);
+    return await runTurnFileInner({
+      ...opts,
+      deps: { ...opts.deps, signal: opts.deps?.signal
+        ? AbortSignal.any([termination.signal, opts.deps.signal]) : termination.signal },
+    });
   } finally {
+    process.removeListener('SIGTERM', onTerminate);
+    process.removeListener('SIGINT', onTerminate);
     try {
       rmSync(opts.egressFilePath, { force: true });
     } catch {

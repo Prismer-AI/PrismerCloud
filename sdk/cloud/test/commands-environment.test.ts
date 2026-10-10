@@ -592,3 +592,12 @@ describe('cloud publishable-key commands', () => {
     expect(created.stdout).toContain('copy now');
   });
 });
+
+it('selects an agent channel/model per message and discovers the directory', async () => {
+  const { fetchFn, calls } = makeFetchMock(() => okEnvelope({ models: [], messageId: 'msg' }));
+  const client = makeClient(fetchFn);
+  await runCli(client, ['environment', 'agent-models', '--json']);
+  expect(calls[0].url).toContain('/api/v1/agent-models');
+  await runCli(client, ['environment', 'message-send', 'env', 'conv', 'hello', '--channel', 'deepseek', '--model', 'deepseek-flash', '--json']);
+  expect(JSON.parse(calls[1].body as string).modelSelection).toEqual({ channel: 'deepseek', model: 'deepseek-flash' });
+});

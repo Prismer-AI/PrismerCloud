@@ -1,3 +1,4 @@
+import { OwnedExecutionEnv } from "./owned-execution-env.js";
 import { randomUUID } from "node:crypto";
 import { loadTenantRuntimeTools, type TenantComponentBinding } from '../../../components/tenant-runtime.js';
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
@@ -1099,7 +1100,9 @@ function createBoundTools(
   runtimeTools: AgentSessionConfig["runtimeTools"] | undefined,
   tenantTools: PiAgentTool[] = [],
 ): BoundTool[] {
-  const rawEnv = new NodeExecutionEnv({ cwd, shellEnv: mergedEnv(launchEnv) });
+  const rawEnv = allowShell
+    ? new OwnedExecutionEnv({ cwd, shellEnv: mergedEnv(launchEnv) })
+    : new NodeExecutionEnv({ cwd, shellEnv: mergedEnv(launchEnv) });
   const env = new CwdJailedExecutionEnv(rawEnv, cwd, allowShell);
   const context: ExecutionToolContext = { env };
   const cleanup = () => env.cleanup();
@@ -1433,7 +1436,8 @@ export class PiAgentCoreSession implements AgentSession {
   async close(): Promise<void> {
     this.agent.abort();
     const cleanups = new Set(this.tools.map((tool) => tool.cleanup).filter((cleanup): cleanup is () => Promise<void> => !!cleanup));
-    await Promise.allSettled([...cleanups].map((cleanup) => cleanup()));
+    const results = await Promise.allSettled([...cleanups].map((cleanup) => Promise.resolve().then(cleanup)));
+    if (results.some(result => result.status === "rejected")) throw new Error("owned tool cleanup failed");
   }
 
   async listCommands(): Promise<AgentSlashCommand[]> {

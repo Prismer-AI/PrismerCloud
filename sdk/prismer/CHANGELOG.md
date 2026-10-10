@@ -1,5 +1,11 @@
 # Changelog — @prismer/runtime
 
+## 2.2.67 (2026-10-11)
+
+- POSIX Pi shell supervisors retain ownership of background descendants after commands complete. Cleanup failures propagate as infrastructure failures instead of a canceled acknowledgement; Windows remains on the upstream executor.
+
+- EaaS turns observe cancellation sentinels and CLI termination, interrupt the engine and clean its detached shell process groups before returning canceled. A preexisting cancellation prevents dispatch; independent turns remain unaffected.
+
 ## 2.2.65 — 2026-09-30
 
 - `turn capabilities` 按需加载 CLI，`turn run` 才加载 runner；保留通用输出参数。
@@ -31,7 +37,7 @@
 - Runtime version bumped 2.2.12 → 2.2.13 because daemon sources changed
   since the 2.2.12 GA publish (immutable content-addressed releases).
 
-## Unreleased
+## 2.2.67 (2026-10-11)
 
 - Sandbox manager executes directly when already running as the target non-root
   user, retaining sudo for cross-user launches. Restricted EaaS carriers use

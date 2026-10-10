@@ -962,3 +962,15 @@ describe('client.projects.warmPool', () => {
     if (!res.success) expect(res.error.code).toBe('not_owned');
   });
 });
+
+describe('agent model selection', () => {
+  it('discovers models using the project key and forwards a per-message choice', async () => {
+    const fetcher = vi.fn().mockResolvedValue(okEnvelope({ models: [] }));
+    const client = makeClient(fetcher);
+    await client.environments.listAgentModels();
+    expect(fetcher.mock.calls[0][0]).toContain('/api/v1/agent-models');
+    const modelSelection = { channel: 'deepseek', model: 'deepseek-flash' };
+    await client.environments.sendMessage('env', 'conv', { content: 'hello', modelSelection }, { idempotencyKey: 'selected-model' });
+    expect(JSON.parse(fetcher.mock.calls[1][1].body)).toEqual({ content: 'hello', modelSelection });
+  });
+});

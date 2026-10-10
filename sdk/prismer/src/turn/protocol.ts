@@ -384,7 +384,7 @@ export interface TurnResultV2 {
   maintenanceResult?: AssetIngestResult;
   protocolVersion: typeof TURN_PROTOCOL_VERSION;
   turnId: string;
-  /** canceled = 包装器命中取消哨兵后写下（引擎被 TERM/KILL，无回复）。 */
+  /** canceled = Runtime 收到取消信号并完成 session close 后写下（无回复）；包装器不伪造该回执。 */
   status: 'ok' | 'error' | 'canceled';
   replyText?: string;
   usage?: { promptTokens: number | null; completionTokens: number | null };

@@ -645,15 +645,26 @@ export function register(parent: Command, getIMClient: ClientFactory, getAPIClie
       });
     });
 
+  environment.command('agent-models').description('List available agent channels and models')
+    .option('--json', 'Output JSON')
+    .action(async (opts: { json?: boolean }) => {
+      const res = await getIMClient().environments.listAgentModels();
+      if (!res.success) fail(`${res.error.code}: ${res.error.message}`);
+      emit(res.data, opts.json === true, () => process.stdout.write(`${JSON.stringify(res.data, null, 2)}\n`));
+    });
+
   environment
     .command('message-send <environmentId> <conversationId> <content>')
     .description('Send a message to the environment agent (returns durable runId)')
+    .option('--channel <channel>', 'Select a channel from agent-models (requires --model)')
+    .option('--model <model>', 'Select a model from agent-models (requires --channel)')
     .option('--idempotency-key <k>', 'Reuse a key to retry the same message safely')
     .option('--image <assetId>', 'Attach an image asset (repeatable, max 4; the server derives the actual mime from the asset row)', (v: string, acc: string[]) => [...acc, v], [] as string[])
     .option('--answer-question <questionId>', 'Treat this message as the answer to a pending agent question')
     .option('--answer-option <optionId>', 'Chosen option id for --answer-question')
     .option('--json', 'Output JSON')
-    .action(async (environmentId: string, conversationId: string, content: string, opts: { idempotencyKey?: string; image?: string[]; answerQuestion?: string; answerOption?: string; json?: boolean }) => {
+    .action(async (environmentId: string, conversationId: string, content: string, opts: { channel?: string; model?: string; idempotencyKey?: string; image?: string[]; answerQuestion?: string; answerOption?: string; json?: boolean }) => {
+      if (Boolean(opts.channel) !== Boolean(opts.model)) fail('--channel and --model must be supplied together');
       const contentBlocks = (opts.image ?? []).map((assetId) => ({ kind: 'image' as const, assetId, mediaType: 'image/png' }));
       const answer = opts.answerQuestion !== undefined
         ? (opts.answerOption !== undefined ? { questionId: opts.answerQuestion, optionId: opts.answerOption } : { questionId: opts.answerQuestion })
@@ -665,6 +676,7 @@ export function register(parent: Command, getIMClient: ClientFactory, getAPIClie
           content,
           ...(contentBlocks.length > 0 ? { contentBlocks } : {}),
           ...(answer !== undefined ? { answer } : {}),
+          ...(opts.channel && opts.model ? { modelSelection: { channel: opts.channel, model: opts.model } } : {}),
         },
         { idempotencyKey: opts.idempotencyKey },
       );

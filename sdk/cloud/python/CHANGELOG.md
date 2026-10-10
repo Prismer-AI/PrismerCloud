@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### EaaS run failure code
+
+- `EaasRunView.error` mirrors the server's known public failure code for failed
+  runs; absent on older Cloud and null when unavailable or not failed.
+
 ### EaaS configured sizing and mapping projection
 
 - Create specs accept registry profile IDs such as `4c8g`; availability remains

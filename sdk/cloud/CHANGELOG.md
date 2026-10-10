@@ -1,20 +1,17 @@
-## 2.2.62 — 2026-09-23
+## 2.2.67 (2026-10-11)
 
-- **Skill catalog curation（bugfix223）**：catalog 批量更新 + 新增内置 skills
-  （prismer-* 家族/webapp-qa/weekly-review 等）与 `references/` 资源引用；
-  `hermes-curation.json` 策展清单；document-generation 退役。bundle 资源交付
-  以 `skill-bundle-resources` / `test:skill-resources` 契约测试钉住。
-- **IM contacts deferred 面**：`cloud im contacts --external` 枚举外部联系人边；
-  `IMResult` 202 `ACTION_DEFERRED` 契约（deferred/approvalId 顶层提升）；
-  offline outbox 对 deferred 不 ack（待审批重发）。
-- **Memory grant operator recall**：`cloud memory-grant` 补 `search`/`load`
-  子命令（external recall channel，授权来源标注）。
-- **Environment stream / storage**：WS 失败改抛 `EaasClientError`（typed error
-  path）；offline storage 契约与 browser-storage-native 契约测试；
-  `effectiveBudget.periodEnd` 入 payload。
-- **MCP**：`send-message` 工具扩展。
+- EaaS model discovery: `environments.listAgentModels()`, message `modelSelection`, and run `modelSelection`; Python sync/async and CLI equivalents. Cloud keeps project-scoped accepted routes fixed across dispatch/HITL/egress and defaults new node20-web/node20-json-transform recipes to DeepSeek/deepseek-flash. Requires matching Cloud.
 
-## [Unreleased]
+- EaaS context now distinguishes `no_authorized_pool` from provider/pricing outages. Unavailable authorized pools retain their diagnostics; a nullable default pool does not imply allocation is open.
+
+### EaaS run failure code and resumable deletion
+
+- `EaasRunView.error` carries a known public failure code (`runtime_unavailable`
+  etc.) for failed runs; absent on older Cloud, null when unavailable or not
+  failed. Raw messages, logs and credentials never cross this boundary.
+- `sandboxes.kill(savedEnvironmentId, { timeoutMs })` resumes deletion by saved
+  id without reconnecting (GET hides owned tombstones). It waits for a confirmed
+  `stopped` and never infers completion from a 404.
 
 ### EaaS configured sizing and mapping projection
 
@@ -39,6 +36,24 @@
   and unreachable writes fail visibly. Legacy `warm-pool` methods are unchanged;
   their updated server contract affects only the default preference and shared
   budget, not other pools, the project ceiling or fallback order.
+
+
+## 2.2.62 — 2026-09-23
+
+- **Skill catalog curation（bugfix223）**：catalog 批量更新 + 新增内置 skills
+  （prismer-* 家族/webapp-qa/weekly-review 等）与 `references/` 资源引用；
+  `hermes-curation.json` 策展清单；document-generation 退役。bundle 资源交付
+  以 `skill-bundle-resources` / `test:skill-resources` 契约测试钉住。
+- **IM contacts deferred 面**：`cloud im contacts --external` 枚举外部联系人边；
+  `IMResult` 202 `ACTION_DEFERRED` 契约（deferred/approvalId 顶层提升）；
+  offline outbox 对 deferred 不 ack（待审批重发）。
+- **Memory grant operator recall**：`cloud memory-grant` 补 `search`/`load`
+  子命令（external recall channel，授权来源标注）。
+- **Environment stream / storage**：WS 失败改抛 `EaasClientError`（typed error
+  path）；offline storage 契约与 browser-storage-native 契约测试；
+  `effectiveBudget.periodEnd` 入 payload。
+- **MCP**：`send-message` 工具扩展。
+
 
 ## 2.2.63 — 2026-09-24
 

@@ -8,6 +8,7 @@ Prismer Cloud provides AI agents with fast, cached access to web content, docume
 
 - [Installation](#installation)
 - [Quick Start](#quick-start)
+- [EaaS: one project key](#eaas-one-project-key)
 - [Constructor](#constructor)
 - [Context API](#context-api)
   - [load()](#loadinput-options)
@@ -111,6 +112,29 @@ if (pdf.success && pdf.document) {
 ```
 
 ---
+
+## EaaS: one project key
+
+For server-side EaaS, use the public `@prismer/sdk@2.2.66` package with a project `sk-eaas-*` key and your deployment URL (`https://test.docbrew.cn` for test). Tenant/project and default template/pool are derived by the service. A platform signing private key, cloud credentials, publishable key or principal session is not required for this path. The AIP identity/signing sections below describe a separate feature.
+
+```typescript
+import { PrismerClient } from '@prismer/sdk';
+
+const client = new PrismerClient({
+  apiKey: process.env.PRISMER_API_KEY!,
+  baseUrl: process.env.PRISMER_BASE_URL!,
+});
+const sandbox = await client.sandboxes.create();
+try {
+  console.log(await sandbox.commands.run('printf hello'));
+} finally {
+  await sandbox.kill(); // waits for stopped; a 404 alone is not cleanup evidence
+}
+```
+
+Use the [standalone single-key example](examples/eaas-single-key.mjs) for an actual AI conversation and API deletion, and the [EaaS cookbook](../../docs/cookbook/eaas-sdk-integration.md) for events, ACL, HITL, memory and artifacts. Independent platform resource checks are needed to prove physical reclamation. `context()` is optional discovery; use returned capabilities before invoking provider-specific actions.
+
+The installed TypeScript SDK passed real ACS test critical-feature journeys on 2026-10-09: full WS/SSE/REST event equality, delegated access/revocation, HITL question decisions, memory grant/revoke, skill resource use, artifacts and budget continuity across key rotation. See [scope and receipts](../../docs/organization/specs/10-eaas-critical-feature-regression-20261009.md). Wait for the actual question message after a run parks; status and message delivery are separate writes. Never put the project key in browser code.
 
 ## Constructor
 

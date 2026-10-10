@@ -148,7 +148,7 @@ export interface EaasContextProjection {
   };
   capabilities: {
     /** Identity discovery succeeded, but platform admission is unavailable. Never a write permit. */
-    unavailableReason?: 'provider_unavailable' | 'pricing_unavailable';
+    unavailableReason?: 'provider_unavailable' | 'pricing_unavailable' | 'no_authorized_pool';
     templates: string[];
     profiles: string[];
     /** Actions common to all enabled, allowed project placements and this key. */
@@ -693,6 +693,9 @@ export interface EaasRunObservation {
 }
 
 export interface EaasRunView {
+  modelSelection?: EaasModelSelection;
+  /** Known public failure code only. Absent on older Cloud; null when unavailable or not failed. */
+  error?: { code: EaasErrorCode } | null;
   /** Absent on older Cloud, null when this run has no measured Runtime result. */
   observation?: EaasRunObservation | null;
   runId: string;
@@ -892,4 +895,12 @@ export interface EaasMemoryGrantResult {
   targetWorkspaceId: string;
   grantId: string | null;
   status: 'active' | 'revoked' | 'absent';
+}
+
+/** Agent choices are accepted per message/run; omitted choices use the template default. */
+export interface EaasModelSelection { channel: string; model: string }
+export interface EaasAgentModelDirectory {
+  revision: string;
+  defaults: { agentModel: EaasModelSelection };
+  models: Array<EaasModelSelection & { name: string; vision?: boolean; available: boolean; unavailableReason: 'provider_unavailable' | null }>;
 }

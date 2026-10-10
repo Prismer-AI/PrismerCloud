@@ -1364,7 +1364,15 @@ class EaasRunEvent(BaseModel):
     payload: Any = None
 
 
+class EaasModelSelection(BaseModel):
+    channel: str
+    model: str
+
+
 class EaasRunView(BaseModel):
+    model_selection: Optional[EaasModelSelection] = Field(default=None, alias="modelSelection")
+    # Public failure code only; absent on older Cloud, null when unavailable/not failed.
+    error: Optional[Dict[str, str]] = None
     # Engine-reported diagnostics; absent on older Cloud and unmeasured runs.
     observation: Optional[Dict[str, Any]] = None
     run_id: str = Field(alias="runId")
