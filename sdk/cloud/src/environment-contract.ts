@@ -68,6 +68,8 @@ export interface EaasErrorBody {
    * **响应头**，不入 body）。保留仅为容忍未来 body 面扩展。
    */
   retryable?: boolean;
+  /** SDK-derived Retry-After hint in milliseconds; absence means no valid header. Not a recovery guarantee. */
+  retryAfterMs?: number;
 }
 
 export interface EaasSuccessEnvelope<T> {
@@ -870,6 +872,7 @@ export class EaasClientError extends Error {
   constructor(
     public code: EaasErrorCode | 'timeout' | (string & {}),
     message: string,
+    public retryAfterMs?: number,
   ) {
     super(message);
     this.name = 'EaasClientError';

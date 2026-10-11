@@ -1,3 +1,10 @@
+## 2.2.68 (2026-10-11)
+
+- EaaS failures expose optional `error.retryAfterMs` from a valid HTTP Retry-After header. TypeScript and Python preserve it for JSON, file/asset/artifact errors; TS SSE connection errors and high-level errors retain the hint. Python exceptions use `retry_after_ms`.
+- `cloud environment`, pool-policy, pools and warm-pool commands preserve structured failure envelopes with `--json` and exit nonzero. Text output includes a supplied wait hint.
+- Delta-seconds and all HTTP-date forms use UTC/calendar validation. Missing or invalid headers do not create a countdown. Quota exhaustion remains distinct from rate limiting; no automatic create/message retries were added.
+- Correctly return HTTP failures with retry metadata for non-JSON EaaS gateway responses, preserving request ID when supplied by header.
+
 ## 2.2.67 (2026-10-11)
 
 - EaaS model discovery: `environments.listAgentModels()`, message `modelSelection`, and run `modelSelection`; Python sync/async and CLI equivalents. Cloud keeps project-scoped accepted routes fixed across dispatch/HITL/egress and defaults new node20-web/node20-json-transform recipes to DeepSeek/deepseek-flash. Requires matching Cloud.

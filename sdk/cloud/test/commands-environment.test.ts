@@ -601,3 +601,22 @@ it('selects an agent channel/model per message and discovers the directory', asy
   await runCli(client, ['environment', 'message-send', 'env', 'conv', 'hello', '--channel', 'deepseek', '--model', 'deepseek-flash', '--json']);
   expect(JSON.parse(calls[1].body as string).modelSelection).toEqual({ channel: 'deepseek', model: 'deepseek-flash' });
 });
+
+it('CLI JSON errors expose the Retry-After hint and preserve nonzero exit', async () => {
+  const {fetchFn,calls}=makeFetchMock(()=>new Response(JSON.stringify({success:false,error:{code:'quota_exceeded',message:'full',details:null},requestId:'req-retry'}),{status:429,headers:{'Retry-After':'60','Content-Type':'application/json'}}));
+  const result=await runCli(makeClient(fetchFn),['environment','create','--json']);
+  expect(result.exitCode).toBe(1);
+  expect(JSON.parse(result.stdout)).toMatchObject({success:false,error:{code:'quota_exceeded',retryAfterMs:60000},requestId:'req-retry'});
+  expect(calls).toHaveLength(1);
+});
+
+it.each([
+  ['pool-policy','get','project','--json'],
+  ['pool-policy','patch','project','--policy','{}','--config-revision','revision','--revision','1','--json'],
+  ['pools','list','project','--json'],
+])('operator command %j preserves JSON retry errors',async(...argv)=>{
+  const {fetchFn}=makeFetchMock(()=>new Response(JSON.stringify({success:false,error:{code:'rate_limited',message:'slow down',details:null},requestId:'req-retry'}),{status:429,headers:{'Retry-After':'5'}}));
+  const result=await runCli(makeClient(fetchFn),argv);
+  expect(result.exitCode).toBe(1);
+  expect(JSON.parse(result.stdout)).toMatchObject({error:{code:'rate_limited',retryAfterMs:5000},requestId:'req-retry'});
+});

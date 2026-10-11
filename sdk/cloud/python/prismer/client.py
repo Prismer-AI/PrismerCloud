@@ -3,6 +3,7 @@
 from typing import Any, AsyncIterator, BinaryIO, Callable, Dict, Iterator, List, Optional, Union
 from urllib.parse import quote as _url_quote
 import asyncio
+from datetime import datetime, timezone
 import mimetypes
 import os
 import time
@@ -4794,6 +4795,49 @@ def _eaas_header_get(headers: Any, name: str) -> Optional[str]:
     return None
 
 
+def _eaas_http_date(raw: str) -> float:
+    """UTC calendar validation shared with the TypeScript HTTP-date contract."""
+    months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    standard = re.fullmatch(r"(?:Mon(?:day)?|Tue(?:sday)?|Wed(?:nesday)?|Thu(?:rsday)?|Fri(?:day)?|Sat(?:urday)?|Sun(?:day)?), ([0-9]{1,2})[ -]([A-Z][a-z]{2})[ -]([0-9]{2}|[0-9]{4}) ([0-9]{2}):([0-9]{2}):([0-9]{2}) GMT", raw)
+    old = re.fullmatch(r"(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) ([A-Z][a-z]{2}) +([0-9]{1,2}) ([0-9]{2}):([0-9]{2}):([0-9]{2}) ([0-9]{4})", raw)
+    if standard:
+        day, month, year, hour, minute, second = standard.groups()
+    elif old:
+        month, day, hour, minute, second, year = old.groups()
+    else:
+        raise ValueError("invalid HTTP-date")
+    full_year = int(year)
+    if len(year) == 2:
+        current_year = datetime.fromtimestamp(time.time(), timezone.utc).year
+        full_year += (current_year // 100) * 100
+        if full_year > current_year + 50:
+            full_year -= 100
+    return datetime(full_year, months.index(month) + 1, int(day), int(hour), int(minute), int(second), tzinfo=timezone.utc).timestamp()
+
+
+def _eaas_retry_metadata(body: Dict[str, Any], response: Any) -> Dict[str, Any]:
+    """Public, serializable server hint. Never an instruction to retry a write."""
+    error = body.get("error")
+    if not isinstance(error, dict):
+        return body
+    error.pop("retryAfterMs", None)
+    raw = (_eaas_header_get(getattr(response, "headers", {}), "Retry-After") or "").strip()
+    if not raw:
+        return body
+    try:
+        if re.fullmatch(r"[0-9]+", raw):
+            delay = int(raw) * 1000
+        elif re.match(r"^(Mon|Tue|Wed|Thu|Fri|Sat|Sun)", raw):
+            delay = max(0, int(_eaas_http_date(raw) * 1000) - int(time.time() * 1000))
+        else:
+            return body
+        if 0 <= delay <= 9007199254740991:
+            error["retryAfterMs"] = delay
+    except (ValueError, TypeError, OverflowError):
+        pass
+    return body
+
+
 def _eaas_fail_from_raw(raw_response: Any, action: str) -> Dict[str, Any]:
     """非 2xx 响应 → fail envelope（对齐 TS `eaasFailFromResponse`）。
 
@@ -4805,13 +4849,13 @@ def _eaas_fail_from_raw(raw_response: Any, action: str) -> Dict[str, Any]:
     except Exception:
         body = None
     if is_eaas_error_envelope(body):
-        return body
+        return _eaas_retry_metadata(body, raw_response)
     status = getattr(raw_response, "status_code", None)
-    return {
+    return _eaas_retry_metadata({
         "success": False,
         "error": {"code": "http_error", "message": f"{action} failed with status {status}"},
-        "requestId": "",
-    }
+        "requestId": _eaas_header_get(getattr(raw_response, "headers", {}), "x-request-id") or "",
+    }, raw_response)
 
 
 def _eaas_file_path(environment_id: str, path: str) -> str:
@@ -5282,6 +5326,7 @@ class EnvironmentsClient:
                 raise EaasClientError(
                     error.get("code", "http_error"),
                     error.get("message", "wait_until_ready failed"),
+                    retry_after_ms=error.get("retryAfterMs"),
                 )
             data = response.get("data") or {}
             if (data.get("readiness") or {}).get(capability):
@@ -5792,6 +5837,7 @@ class AsyncEnvironmentsClient:
                 raise EaasClientError(
                     error.get("code", "http_error"),
                     error.get("message", "wait_until_ready failed"),
+                    retry_after_ms=error.get("retryAfterMs"),
                 )
             data = response.get("data") or {}
             if (data.get("readiness") or {}).get(capability):
@@ -6193,12 +6239,19 @@ class PrismerClient:
             response = self._client.request(
                 method, path, json=json, params=params, headers=headers,
             )
-            data = response.json()
+            try:
+                data = response.json()
+            except ValueError:
+                if not response.is_success and path.startswith("/api/v1/"):
+                    return _eaas_fail_from_raw(response, "request")
+                raise
             if not response.is_success:
                 err = data.get("error", {"code": "HTTP_ERROR", "message": f"HTTP {response.status_code}"})
                 data.setdefault("success", False)
                 data.setdefault("ok", False)
                 data["error"] = err
+                if path.startswith("/api/v1/"):
+                    _eaas_retry_metadata(data, response)
             return data
         except httpx.TimeoutException:
             return {"success": False, "ok": False, "error": {"code": "TIMEOUT", "message": "Request timed out"}}
@@ -6570,12 +6623,19 @@ class AsyncPrismerClient:
             response = await self._client.request(
                 method, path, json=json, params=params, headers=headers,
             )
-            data = response.json()
+            try:
+                data = response.json()
+            except ValueError:
+                if not response.is_success and path.startswith("/api/v1/"):
+                    return _eaas_fail_from_raw(response, "request")
+                raise
             if not response.is_success:
                 err = data.get("error", {"code": "HTTP_ERROR", "message": f"HTTP {response.status_code}"})
                 data.setdefault("success", False)
                 data.setdefault("ok", False)
                 data["error"] = err
+                if path.startswith("/api/v1/"):
+                    _eaas_retry_metadata(data, response)
             return data
         except httpx.TimeoutException:
             return {"success": False, "ok": False, "error": {"code": "TIMEOUT", "message": "Request timed out"}}

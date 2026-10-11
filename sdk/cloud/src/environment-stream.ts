@@ -25,6 +25,7 @@
  */
 
 import { EaasClientError, isEaasErrorEnvelope } from './environment-contract';
+import { retryAfterDelay } from './eaas-response-meta';
 import type { EaasEventEnvelope } from './environment-contract';
 
 export interface EaasEventFilters {
@@ -166,7 +167,7 @@ async function connectSse(options: EaasStreamOptions): Promise<EaasStreamHandle>
     } catch {
       /* bare 404 / HTML error page / no json body */
     }
-    throw new EaasClientError(code, message);
+    throw new EaasClientError(code, message, retryAfterDelay(response));
   }
 
   let resyncResolve!: () => void;

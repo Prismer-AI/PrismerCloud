@@ -3410,12 +3410,13 @@ async function eaasFailFromResponse(response: Response, action: string): Promise
   } catch {
     /* empty body / HTML error page */
   }
-  if (isEaasErrorEnvelope(body)) return body;
-  return {
+  const failure: EaasFailEnvelope = isEaasErrorEnvelope(body) ? body : {
     success: false,
     error: { code: 'http_error', message: `${action} failed with status ${response.status}` },
-    requestId: '',
+    requestId: response.headers.get('x-request-id') ?? '',
   };
+  rememberRetryAfter(failure, response);
+  return failure;
 }
 
 /**
@@ -3836,7 +3837,7 @@ export class EnvironmentsClient {
     for (;;) {
       const res = await this.get(id);
       if (!res.success) {
-        throw new EaasClientError(res.error.code, res.error.message);
+        throw new EaasClientError(res.error.code, res.error.message, res.error.retryAfterMs);
       }
       if (res.data.readiness[capability]) {
         return res.data;
@@ -5577,7 +5578,14 @@ export class PrismerClient {
       observation.requestId = response.headers.get('x-request-id');
       observation.contentType = response.headers.get('content-type');
       observation.outcome = 'decode_error';
-      const data = await response.json();
+      const data = await response.json().catch((error: unknown) => {
+        if (!response.ok && path.startsWith('/api/v1/')) return {
+          success: false,
+          error: { code: 'http_error', message: `Request failed with status ${response.status}` },
+          requestId: response.headers.get('x-request-id') ?? '',
+        };
+        throw error;
+      });
       attemptFinished = performance.now();
       observation.requestId = typeof data?.requestId === 'string' ? data.requestId : observation.requestId;
       observation.outcome = response.ok ? 'success' : 'http_error';

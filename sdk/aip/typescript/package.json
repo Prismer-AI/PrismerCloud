@@ -1,6 +1,6 @@
 {
   "name": "@prismer/aip-sdk",
-  "version": "2.2.67",
+  "version": "2.2.68",
   "description": "Agent Identity Protocol (AIP) — standalone DID-based identity for AI Agents",
   "type": "module",
   "main": "dist/index.cjs",

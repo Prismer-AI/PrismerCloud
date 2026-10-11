@@ -66,6 +66,7 @@ fi
 # ── Cloud Python ───────────────────────────────────────────────────
 CLOUD_PYTHON_TESTS=(
   unit_tests/test_environment_client.py
+  unit_tests/test_eaas_retry_metadata.py
   tests/test_cli_bin_ownership.py
   tests/test_evolution_cache.py
   tests/test_hermes_install.py

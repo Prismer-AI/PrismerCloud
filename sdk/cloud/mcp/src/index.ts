@@ -106,7 +106,7 @@ if (process.argv.includes('--setup')) {
 
 const server = new McpServer({
   name: 'prismer',
-  version: '2.2.67',
+  version: '2.2.68',
 });
 
 export type ToolRegistration = { name: string; register: (server: McpServer) => void };

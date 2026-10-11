@@ -238,7 +238,7 @@ describe('connectEaasEvents — SSE', () => {
   });
 
   it('throws when the SSE response is not ok (e.g. FF off 404)', async () => {
-    const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 404 } as unknown as Response);
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 404 }));
     await expect(
       connectEaasEvents({
         baseUrl: 'https://eaas.example.com',

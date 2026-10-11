@@ -48,8 +48,9 @@ export class SandboxError extends EaasClientError {
     public environmentId?: string,
     public requestId?: string,
     public idempotencyKey?: string,
+    retryAfterMs?: number,
   ) {
-    super(code, message);
+    super(code, message, retryAfterMs);
     this.name = 'SandboxError';
   }
 }
@@ -93,7 +94,7 @@ async function bounded<T>(request: () => Promise<T>, until: number, id?: string,
   }
 }
 function unwrap<T>(result: EaasApiEnvelope<T>, id?: string, key?: string): T {
-  if (!result.success) throw new SandboxError(result.error.code, result.error.message, id, result.requestId, key);
+  if (!result.success) throw new SandboxError(result.error.code, result.error.message, id, result.requestId, key, result.error.retryAfterMs);
   return result.data;
 }
 async function pause(until: number): Promise<void> {
@@ -206,7 +207,7 @@ export class SandboxHandle {
     read: async (path: string): Promise<string> => {
       validateFilePath(path);
       const result = await bounded(() => this.low.getFile(this.id, path), deadline(), this.id);
-      if (!result.success) throw new SandboxError(result.error.code, result.error.message, this.id, result.requestId);
+      if (!result.success) throw new SandboxError(result.error.code, result.error.message, this.id, result.requestId, undefined, result.error.retryAfterMs);
       return new TextDecoder('utf-8', { fatal: true }).decode(result.bytes);
     },
     write: async (path: string, content: string): Promise<void> => {

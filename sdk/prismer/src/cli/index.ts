@@ -34,7 +34,7 @@ import { applyCommonFlags, setUI, UI } from './ui.js';
 
 // Kept in sync with /VERSION + sdk/prismer/package.json via
 // sdk/build/version.sh. If you bump one place, bump them together.
-const VERSION = '2.2.67';
+const VERSION = '2.2.68';
 
 export function buildProgram(): Command {
   const program = new Command('prismer')

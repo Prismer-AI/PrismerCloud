@@ -933,8 +933,9 @@ EaasErrorCode = str
 class EaasClientError(Exception):
     """`code` 取 EAAS_ERROR_CODES 键或 ``'timeout'``（及客户端合成 ``http_error``）。"""
 
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(self, code: str, message: str, retry_after_ms: Optional[int] = None) -> None:
         super().__init__(message)
+        self.retry_after_ms = retry_after_ms
         self.code = code
         self.message = message
 
@@ -956,6 +957,7 @@ class EaasErrorBody(BaseModel):
     message: str
     details: Optional[Any] = None
     retryable: Optional[bool] = None
+    retry_after_ms: Optional[int] = Field(default=None, alias="retryAfterMs")
 
 
 class EaasSuccessEnvelope(BaseModel):

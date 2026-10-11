@@ -39,6 +39,7 @@
  */
 
 import { Command } from 'commander';
+import type { EaasFailEnvelope } from '../environment-contract';
 import type {
   PrismerClient,
   EnvironmentStatus,
@@ -59,6 +60,15 @@ type ClientFactory = () => PrismerClient;
 function fail(message: string): never {
   process.stderr.write(`Error: ${message}\n`);
   process.exit(1);
+}
+
+function failEaas(response: EaasFailEnvelope, json: boolean): never {
+  if (json) {
+    process.stdout.write(JSON.stringify(response, null, 2) + '\n');
+    process.exit(1);
+  }
+  const hint = response.error.retryAfterMs;
+  return fail(`${response.error.code}: ${response.error.message}${hint === undefined ? '' : ` (Retry-After: ${hint} ms)`}`);
 }
 
 function emit(data: unknown, json: boolean, lines: () => void): void {
@@ -165,7 +175,7 @@ export function register(parent: Command, getIMClient: ClientFactory, getAPIClie
     .option('--json', 'Output JSON')
     .action(async (opts: { json?: boolean }) => {
       const res = await getAPIClient().eaas.context();
-      if (!res.success) fail(`${res.error.code}: ${res.error.message}`);
+      if (!res.success) failEaas(res, opts.json === true);
       emit(res.data, opts.json === true, () => printRows([res.data], 'No context found.'));
     });
 
@@ -189,7 +199,7 @@ export function register(parent: Command, getIMClient: ClientFactory, getAPIClie
         ...(opts.scope.length ? { scopes: opts.scope } : {}),
         ...(opts.ttl !== undefined ? { ttlSeconds: opts.ttl } : {}),
       }, { idempotencyKey: opts.idempotencyKey });
-      if (!res.success) fail(`${res.error.code}: ${res.error.message}`);
+      if (!res.success) failEaas(res, opts.json === true);
       const { token, ...metadata } = res.data;
       if (opts.showToken) process.stderr.write('Sensitive bearer token: do not log or share this output.\n');
       else process.stderr.write('Token hidden; --show-token explicitly enables sensitive output. Retry only with the same explicit idempotency key.\n');
@@ -204,7 +214,7 @@ export function register(parent: Command, getIMClient: ClientFactory, getAPIClie
     .option('--json', 'Output JSON')
     .action(async (environmentId: string, opts: { limit?: number; cursor?: string; json?: boolean }) => {
       const res = await getAPIClient().environments.listAccessSessions(environmentId, { limit: opts.limit, cursor: opts.cursor });
-      if (!res.success) fail(`${res.error.code}: ${res.error.message}`);
+      if (!res.success) failEaas(res, opts.json === true);
       emit(res.data, opts.json === true, () => {
         printRows(res.data.sessions, 'No delegated sessions found.');
         if (res.data.nextCursor) process.stdout.write(`Next cursor: ${res.data.nextCursor}\n`);
@@ -216,7 +226,7 @@ export function register(parent: Command, getIMClient: ClientFactory, getAPIClie
     .option('--json', 'Output JSON')
     .action(async (environmentId: string, sessionId: string, opts: { json?: boolean }) => {
       const res = await getAPIClient().environments.revokeAccessSession(environmentId, sessionId);
-      if (!res.success) fail(`${res.error.code}: ${res.error.message}`);
+      if (!res.success) failEaas(res, opts.json === true);
       emit(res.data, opts.json === true, () => process.stdout.write(`Session ${res.data.id} revoked at ${res.data.revokedAt}\n`));
     });
 
@@ -275,7 +285,7 @@ export function register(parent: Command, getIMClient: ClientFactory, getAPIClie
 
       const client = getIMClient();
       const res = await client.environments.create(spec, { idempotencyKey: opts.idempotencyKey });
-      if (!res.success) fail(`${res.error.code}: ${res.error.message}`);
+      if (!res.success) failEaas(res, opts.json === true);
       emit(res.data, opts.json === true, () => printStatus(res.data, 'Environment created'));
     });
 
@@ -287,7 +297,7 @@ export function register(parent: Command, getIMClient: ClientFactory, getAPIClie
     .action(async (environmentId: string, opts: { json?: boolean }) => {
       const client = getIMClient();
       const res = await client.environments.get(environmentId);
-      if (!res.success) fail(`${res.error.code}: ${res.error.message}`);
+      if (!res.success) failEaas(res, opts.json === true);
       emit(res.data, opts.json === true, () => printStatus(res.data));
     });
 
@@ -301,7 +311,7 @@ export function register(parent: Command, getIMClient: ClientFactory, getAPIClie
     .action(async (opts: { cursor?: string; limit?: number; json?: boolean }) => {
       const client = getIMClient();
       const res = await client.environments.list({ cursor: opts.cursor, limit: opts.limit });
-      if (!res.success) fail(`${res.error.code}: ${res.error.message}`);
+      if (!res.success) failEaas(res, opts.json === true);
       emit(res.data, opts.json === true, () => {
         const page = res.data;
         if (page.environments.length === 0) {
@@ -346,7 +356,7 @@ export function register(parent: Command, getIMClient: ClientFactory, getAPIClie
         },
         { revision: opts.revision },
       );
-      if (!res.success) fail(`${res.error.code}: ${res.error.message}`);
+      if (!res.success) failEaas(res, opts.json === true);
       emit(res.data, opts.json === true, () => printStatus(res.data, 'Environment updated'));
     });
 
@@ -371,7 +381,7 @@ export function register(parent: Command, getIMClient: ClientFactory, getAPIClie
         const res = await client.environments[method](environmentId, {
           idempotencyKey: opts.idempotencyKey,
         });
-        if (!res.success) fail(`${res.error.code}: ${res.error.message}`);
+        if (!res.success) failEaas(res, opts.json === true);
         emit(res.data, opts.json === true, () => printLifecycle(res.data, verb === 'delete' ? 'deleted' : `${verb}ed`));
       });
   }
@@ -395,7 +405,7 @@ export function register(parent: Command, getIMClient: ClientFactory, getAPIClie
         { command, ...(timeoutMs !== undefined ? { timeoutMs } : {}) },
         { idempotencyKey: opts.idempotencyKey },
       );
-      if (!res.success) fail(`${res.error.code}: ${res.error.message}`);
+      if (!res.success) failEaas(res, opts.json === true);
       emit(res.data, opts.json === true, () => printExecView(res.data));
     });
 
@@ -407,7 +417,7 @@ export function register(parent: Command, getIMClient: ClientFactory, getAPIClie
     .action(async (environmentId: string, execId: string, opts: { cursor?: number; json?: boolean }) => {
       const client = getIMClient();
       const res = await client.environments.getExec(environmentId, execId, { cursor: opts.cursor });
-      if (!res.success) fail(`${res.error.code}: ${res.error.message}`);
+      if (!res.success) failEaas(res, opts.json === true);
       emit(res.data, opts.json === true, () => {
         const v: EaasExecReadView = res.data;
         process.stdout.write(`Exec ${v.execId} status=${v.status} exit=${v.exitCode ?? '-'}\n`);
@@ -431,7 +441,7 @@ export function register(parent: Command, getIMClient: ClientFactory, getAPIClie
       const res = await getIMClient().environments.createSnapshot(environmentId, {
         idempotencyKey: opts.idempotencyKey,
       });
-      if (!res.success) fail(`${res.error.code}: ${res.error.message}`);
+      if (!res.success) failEaas(res, opts.json === true);
       emit(res.data, opts.json === true, () => {
         process.stdout.write(`Snapshot: ${res.data.snapshotId}\n`);
         process.stdout.write(`  state        ${res.data.state}\n`);
@@ -445,7 +455,7 @@ export function register(parent: Command, getIMClient: ClientFactory, getAPIClie
     .option('--json', 'Output JSON')
     .action(async (environmentId: string, opts: { json?: boolean }) => {
       const res = await getIMClient().environments.listSnapshots(environmentId);
-      if (!res.success) fail(`${res.error.code}: ${res.error.message}`);
+      if (!res.success) failEaas(res, opts.json === true);
       emit(res.data, opts.json === true, () => printRows(res.data.snapshots, 'No snapshots found.'));
     });
 
@@ -458,7 +468,7 @@ export function register(parent: Command, getIMClient: ClientFactory, getAPIClie
       const res = await getIMClient().environments.restore(environmentId, snapshotId, {
         idempotencyKey: opts.idempotencyKey,
       });
-      if (!res.success) fail(`${res.error.code}: ${res.error.message}`);
+      if (!res.success) failEaas(res, opts.json === true);
       emit(res.data, opts.json === true, () => printLifecycle(res.data, 'restored'));
     });
 
@@ -469,7 +479,7 @@ export function register(parent: Command, getIMClient: ClientFactory, getAPIClie
     .option('--json', 'Output JSON')
     .action(async (environmentId: string, opts: { json?: boolean }) => {
       const res = await getIMClient().environments.listServices(environmentId);
-      if (!res.success) fail(`${res.error.code}: ${res.error.message}`);
+      if (!res.success) failEaas(res, opts.json === true);
       emit(res.data, opts.json === true, () => {
         const v: EaasServicesProjection = res.data;
         process.stdout.write(`Services (${v.environmentId}):\n`);
@@ -488,7 +498,7 @@ export function register(parent: Command, getIMClient: ClientFactory, getAPIClie
     .option('--json', 'Output JSON metadata (sha256/size) instead of human summary; byte stream unchanged')
     .action(async (environmentId: string, path: string, opts: { out?: string; json?: boolean }) => {
       const res = await getIMClient().environments.getFile(environmentId, path);
-      if (!res.success) fail(`${res.error.code}: ${res.error.message}`);
+      if (!res.success) failEaas(res, opts.json === true);
       if (opts.out !== undefined) {
         const fsMod = await import('fs');
         fsMod.writeFileSync(opts.out, res.bytes);
@@ -513,7 +523,7 @@ export function register(parent: Command, getIMClient: ClientFactory, getAPIClie
       const fsMod = await import('fs');
       const bytes = fsMod.readFileSync(localFile);
       const res = await getIMClient().environments.putFile(environmentId, path, new Uint8Array(bytes));
-      if (!res.success) fail(`${res.error.code}: ${res.error.message}`);
+      if (!res.success) failEaas(res, opts.json === true);
       emit(res.data, opts.json === true, () => {
         process.stdout.write(`Uploaded: ${res.data.path}\n`);
         process.stdout.write(`  size    ${res.data.size}\n`);
@@ -537,7 +547,7 @@ export function register(parent: Command, getIMClient: ClientFactory, getAPIClie
         cursor: opts.cursor,
         limit: opts.limit,
       });
-      if (!res.success) fail(`${res.error.code}: ${res.error.message}`);
+      if (!res.success) failEaas(res, opts.json === true);
       emit(res.data, opts.json === true, () => {
         const v: EaasUsagePage = res.data;
         process.stdout.write(
@@ -563,7 +573,7 @@ export function register(parent: Command, getIMClient: ClientFactory, getAPIClie
         cursor: opts.cursor,
         limit: opts.limit,
       });
-      if (!res.success) fail(`${res.error.code}: ${res.error.message}`);
+      if (!res.success) failEaas(res, opts.json === true);
       emit(res.data, opts.json === true, () => {
         const v: EaasBillingPage = res.data;
         process.stdout.write(`Billing total=${v.totals.credits} warm=${v.totals.warmCredits} active=${v.totals.activeCredits} settlement=${v.settlement.status}\n`);
@@ -588,7 +598,7 @@ export function register(parent: Command, getIMClient: ClientFactory, getAPIClie
       if (opts.environment !== undefined) body.environmentId = opts.environment;
       if (opts.ttl !== undefined) body.ttlSeconds = opts.ttl;
       const res = await getIMClient().environments.issueSession(body);
-      if (!res.success) fail(`${res.error.code}: ${res.error.message}`);
+      if (!res.success) failEaas(res, opts.json === true);
       emit(res.data, opts.json === true, () => {
         process.stdout.write(`Principal session: ${res.data.principalId}\n`);
         process.stdout.write(`  token      ${res.data.token}\n`);
@@ -603,7 +613,7 @@ export function register(parent: Command, getIMClient: ClientFactory, getAPIClie
     .option('--json', 'Output JSON')
     .action(async (environmentId: string, opts: { json?: boolean }) => {
       const res = await getIMClient().environments.listConversations(environmentId);
-      if (!res.success) fail(`${res.error.code}: ${res.error.message}`);
+      if (!res.success) failEaas(res, opts.json === true);
       emit(res.data, opts.json === true, () => printRows(res.data.conversations, 'No conversations found.'));
     });
 
@@ -613,7 +623,7 @@ export function register(parent: Command, getIMClient: ClientFactory, getAPIClie
     .option('--json', 'Output JSON')
     .action(async (environmentId: string, opts: { json?: boolean }) => {
       const res = await getIMClient().environments.ensureConversation(environmentId);
-      if (!res.success) fail(`${res.error.code}: ${res.error.message}`);
+      if (!res.success) failEaas(res, opts.json === true);
       emit(res.data, opts.json === true, () => process.stdout.write(`Conversation: ${res.data.conversationId} (${res.data.agentName})\n`));
     });
 
@@ -635,7 +645,7 @@ export function register(parent: Command, getIMClient: ClientFactory, getAPIClie
       const mediaType = opts.mediaType ?? extMedia[pathMod.extname(file).toLowerCase()] ?? 'image/png';
       const bytes = fsMod.readFileSync(file);
       const res = await getIMClient().environments.uploadAsset(environmentId, bytes, mediaType);
-      if (!res.success) fail(`${res.error.code}: ${res.error.message}`);
+      if (!res.success) failEaas(res, opts.json === true);
       emit(res.data, opts.json === true, () => {
         process.stdout.write(`Asset: ${res.data.assetId}\n`);
         process.stdout.write(`  contentHash  ${res.data.contentHash}\n`);
@@ -649,7 +659,7 @@ export function register(parent: Command, getIMClient: ClientFactory, getAPIClie
     .option('--json', 'Output JSON')
     .action(async (opts: { json?: boolean }) => {
       const res = await getIMClient().environments.listAgentModels();
-      if (!res.success) fail(`${res.error.code}: ${res.error.message}`);
+      if (!res.success) failEaas(res, opts.json === true);
       emit(res.data, opts.json === true, () => process.stdout.write(`${JSON.stringify(res.data, null, 2)}\n`));
     });
 
@@ -680,7 +690,7 @@ export function register(parent: Command, getIMClient: ClientFactory, getAPIClie
         },
         { idempotencyKey: opts.idempotencyKey },
       );
-      if (!res.success) fail(`${res.error.code}: ${res.error.message}`);
+      if (!res.success) failEaas(res, opts.json === true);
       emit(res.data, opts.json === true, () => {
         process.stdout.write(`Message: ${res.data.messageId}\n`);
         process.stdout.write(`  conversationId ${res.data.conversationId}\n`);
@@ -696,7 +706,7 @@ export function register(parent: Command, getIMClient: ClientFactory, getAPIClie
     .option('--json', 'Output JSON')
     .action(async (environmentId: string, conversationId: string, opts: { limit?: number; json?: boolean }) => {
       const res = await getIMClient().environments.listMessages(environmentId, conversationId, { limit: opts.limit });
-      if (!res.success) fail(`${res.error.code}: ${res.error.message}`);
+      if (!res.success) failEaas(res, opts.json === true);
       emit(res.data, opts.json === true, () => printRows(res.data.messages, 'No messages found.'));
     });
 
@@ -706,7 +716,7 @@ export function register(parent: Command, getIMClient: ClientFactory, getAPIClie
     .option('--json', 'Output JSON')
     .action(async (environmentId: string, runId: string, opts: { json?: boolean }) => {
       const res = await getIMClient().environments.getRun(environmentId, runId);
-      if (!res.success) fail(`${res.error.code}: ${res.error.message}`);
+      if (!res.success) failEaas(res, opts.json === true);
       emit(res.data, opts.json === true, () => {
         process.stdout.write(`Run: ${res.data.runId}\n`);
         process.stdout.write(`  status     ${res.data.status}\n`);
@@ -720,7 +730,7 @@ export function register(parent: Command, getIMClient: ClientFactory, getAPIClie
     .option('--json', 'Output JSON')
     .action(async (environmentId: string, runId: string, opts: { json?: boolean }) => {
       const res = await getIMClient().environments.cancelRun(environmentId, runId);
-      if (!res.success) fail(`${res.error.code}: ${res.error.message}`);
+      if (!res.success) failEaas(res, opts.json === true);
       emit(res.data, opts.json === true, () => process.stdout.write(`Run ${res.data.runId}: ${res.data.status}\n`));
     });
 
@@ -732,7 +742,7 @@ export function register(parent: Command, getIMClient: ClientFactory, getAPIClie
     .option('--json', 'Output JSON')
     .action(async (environmentId: string, runId: string, opts: { cursor?: string; limit?: number; json?: boolean }) => {
       const res = await getIMClient().environments.listRunEvents(environmentId, runId, { cursor: opts.cursor, limit: opts.limit });
-      if (!res.success) fail(`${res.error.code}: ${res.error.message}`);
+      if (!res.success) failEaas(res, opts.json === true);
       emit(res.data, opts.json === true, () => printRows(res.data.events, 'No run events found.'));
     });
 
@@ -743,7 +753,7 @@ export function register(parent: Command, getIMClient: ClientFactory, getAPIClie
     .option('--json', 'Output JSON')
     .action(async (environmentId: string, opts: { limit?: number; json?: boolean }) => {
       const res = await getIMClient().environments.listSessions(environmentId, { limit: opts.limit });
-      if (!res.success) fail(`${res.error.code}: ${res.error.message}`);
+      if (!res.success) failEaas(res, opts.json === true);
       emit(res.data, opts.json === true, () => printRows(res.data.sessions, 'No principal sessions found.'));
     });
 
@@ -753,7 +763,7 @@ export function register(parent: Command, getIMClient: ClientFactory, getAPIClie
     .option('--json', 'Output JSON')
     .action(async (environmentId: string, sessionId: string, opts: { json?: boolean }) => {
       const res = await getIMClient().environments.revokeSession(environmentId, sessionId);
-      if (!res.success) fail(`${res.error.code}: ${res.error.message}`);
+      if (!res.success) failEaas(res, opts.json === true);
       emit(res.data, opts.json === true, () => process.stdout.write(`Session ${res.data.id} revoked at ${res.data.revokedAt}\n`));
     });
 
@@ -769,7 +779,7 @@ export function register(parent: Command, getIMClient: ClientFactory, getAPIClie
     .option('--json', 'Output JSON')
     .action(async (projectId: string, opts: { limit?: number; json?: boolean }) => {
       const res = await getIMClient().projects.publishableKeys.list(projectId, { limit: opts.limit });
-      if (!res.success) fail(`${res.error.code}: ${res.error.message}`);
+      if (!res.success) failEaas(res, opts.json === true);
       emit(res.data, opts.json === true, () => printRows(res.data.keys, 'No publishable keys found.'));
     });
 
@@ -782,7 +792,7 @@ export function register(parent: Command, getIMClient: ClientFactory, getAPIClie
     .action(async (projectId: string, opts: { name?: string; scope?: string[]; json?: boolean }) => {
       const scopes = opts.scope && opts.scope.length > 0 ? opts.scope : undefined;
       const res = await getIMClient().projects.publishableKeys.create(projectId, { name: opts.name, scopes });
-      if (!res.success) fail(`${res.error.code}: ${res.error.message}`);
+      if (!res.success) failEaas(res, opts.json === true);
       emit(res.data, opts.json === true, () => {
         process.stdout.write(`Publishable key: ${res.data.id}\n`);
         process.stdout.write(`  key        ${res.data.key}\n`);
@@ -797,16 +807,16 @@ export function register(parent: Command, getIMClient: ClientFactory, getAPIClie
     .option('--json', 'Output JSON')
     .action(async (projectId: string, keyId: string, opts: { json?: boolean }) => {
       const res = await getIMClient().projects.publishableKeys.revoke(projectId, keyId);
-      if (!res.success) fail(`${res.error.code}: ${res.error.message}`);
+      if (!res.success) failEaas(res, opts.json === true);
       emit(res.data, opts.json === true, () => process.stdout.write(`Publishable key ${res.data.id} revoked at ${res.data.revokedAt}\n`));
     });
 
   const poolPolicy = parent.command('pool-policy').description('EaaS project multi-pool policy (operator only)');
   poolPolicy.command('get <projectId>')
     .option('--json', 'Output JSON')
-    .action(async (projectId: string) => {
+    .action(async (projectId: string, opts: { json?: boolean }) => {
       const res = await getIMClient().projects.poolPolicy.get(projectId);
-      if (!res.success) fail(`${res.error.code}: ${res.error.message}`);
+      if (!res.success) failEaas(res, opts.json === true);
       process.stdout.write(JSON.stringify(res.data, null, 2) + '\n');
     });
   poolPolicy.command('patch <projectId>')
@@ -817,7 +827,7 @@ export function register(parent: Command, getIMClient: ClientFactory, getAPIClie
     .option('--dry-run', 'Validate without writing or advancing revision')
     .option('--idempotency-key <key>', 'Reuse for retries of the same replacement')
     .option('--json', 'Output JSON')
-    .action(async (projectId: string, opts: { policy: string; configRevision: string; revision: number; dryRun?: boolean; idempotencyKey?: string }) => {
+    .action(async (projectId: string, opts: { policy: string; configRevision: string; revision: number; dryRun?: boolean; idempotencyKey?: string; json?: boolean }) => {
       if (!Number.isSafeInteger(opts.revision) || opts.revision < 0) fail('--revision must be a non-negative safe integer');
       let policy: ProjectPoolManagement;
       try { policy = JSON.parse(opts.policy); } catch { fail('--policy must be valid JSON'); }
@@ -826,7 +836,7 @@ export function register(parent: Command, getIMClient: ClientFactory, getAPIClie
         configRevision: opts.configRevision, policy,
         ...(opts.dryRun !== undefined ? { dryRun: opts.dryRun } : {}),
       }, { revision: opts.revision, idempotencyKey: opts.idempotencyKey });
-      if (!res.success) fail(`${res.error.code}: ${res.error.message}`);
+      if (!res.success) failEaas(res, opts.json === true);
       process.stdout.write(JSON.stringify(res.data, null, 2) + '\n');
     });
   parent.command('pools').description('EaaS project pool inventory (operator only)')
@@ -834,10 +844,10 @@ export function register(parent: Command, getIMClient: ClientFactory, getAPIClie
     .option('--cursor <cursor>', 'Cursor from the preceding page')
     .option('--limit <n>', 'Page size 1..100', Number)
     .option('--json', 'Output JSON')
-    .action(async (projectId: string, opts: { cursor?: string; limit?: number }) => {
+    .action(async (projectId: string, opts: { cursor?: string; limit?: number; json?: boolean }) => {
       if (opts.limit !== undefined && (!Number.isSafeInteger(opts.limit) || opts.limit < 1 || opts.limit > 100)) fail('--limit must be an integer 1..100');
       const res = await getIMClient().projects.pools.list(projectId, opts);
-      if (!res.success) fail(`${res.error.code}: ${res.error.message}`);
+      if (!res.success) failEaas(res, opts.json === true);
       process.stdout.write(JSON.stringify(res.data, null, 2) + '\n');
     });
 
@@ -853,7 +863,7 @@ export function register(parent: Command, getIMClient: ClientFactory, getAPIClie
     .action(async (projectId: string, opts: { json?: boolean }) => {
       const client = getIMClient();
       const res = await client.projects.warmPool.get(projectId);
-      if (!res.success) fail(`${res.error.code}: ${res.error.message}`);
+      if (!res.success) failEaas(res, opts.json === true);
       emit(res.data, opts.json === true, () => printWarmPool(res.data));
     });
 
@@ -926,7 +936,7 @@ export function register(parent: Command, getIMClient: ClientFactory, getAPIClie
       // explicit CAS for scripts instead). Scripts that want the raw partial
       // write can use the SDK's WarmPoolClient.patch directly.
       const read = await client.projects.warmPool.get(projectId);
-      if (!read.success) fail(`${read.error.code}: ${read.error.message}`);
+      if (!read.success) failEaas(read, opts.json === true);
       const policy: Partial<WarmPoolPolicy> = { ...read.data.desired };
       if (overrides.minReady !== undefined) policy.minReady = overrides.minReady;
       if (overrides.maxReady !== undefined) policy.maxReady = overrides.maxReady;
@@ -946,7 +956,7 @@ export function register(parent: Command, getIMClient: ClientFactory, getAPIClie
           idempotencyKey: opts.idempotencyKey,
         },
       );
-      if (!res.success) fail(`${res.error.code}: ${res.error.message}`);
+      if (!res.success) failEaas(res, opts.json === true);
       emit(res.data, opts.json === true, () => {
         if (opts.dryRun) {
           process.stdout.write(

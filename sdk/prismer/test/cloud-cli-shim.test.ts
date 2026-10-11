@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { chmodSync, existsSync, lstatSync, mkdtempSync, mkdirSync, readlinkSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -6,12 +6,35 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { ensureCloudCliShim, resolveBundledCloudCli } from '../src/adapters/persistence/hermes/cloud-cli-shim.js';
 
+// Exercise the unlinked-checkout fallback regardless of a developer's installed SDK.
+const resolution = vi.hoisted(() => ({ unlinkedCheckout: false }));
+vi.mock('node:module', async (importOriginal) => {
+  const original = await importOriginal<typeof import('node:module')>();
+  return {
+    ...original,
+    createRequire: (...args: Parameters<typeof original.createRequire>) => {
+      const require = original.createRequire(...args);
+      const resolve = require.resolve.bind(require);
+      require.resolve = Object.assign((id: string, options?: { paths?: string[] }) => {
+        if (resolution.unlinkedCheckout && id === '@prismer/sdk') {
+          throw Object.assign(new Error('fixture: SDK is not linked'), { code: 'MODULE_NOT_FOUND' });
+        }
+        return resolve(id, options);
+      }, { paths: require.resolve.paths });
+      return require;
+    },
+  };
+});
+
 const here = dirname(fileURLToPath(import.meta.url));
 const realCloudCli = resolve(here, '..', '..', 'cloud', 'dist', 'cli.js');
 
 describe('managed Cloud CLI shim', () => {
   const cleanup: string[] = [];
-  afterEach(() => cleanup.splice(0).forEach((dir) => rmSync(dir, { recursive: true, force: true })));
+  afterEach(() => {
+    resolution.unlinkedCheckout = false;
+    cleanup.splice(0).forEach((dir) => rmSync(dir, { recursive: true, force: true }));
+  });
 
   it('creates a direct managed symlink and a stable shell-visible alias', () => {
     const home = mkdtempSync(join(tmpdir(), 'prismer-cloud-shim-'));
@@ -74,11 +97,13 @@ describe('managed Cloud CLI shim', () => {
   // finds nothing and the capability receipt used to report
   // `cloudCli: unavailable`. The sibling-path fallback must find the real CLI.
   it('resolves the sibling sdk/cloud CLI in a repo checkout (local CLI-daemon mode)', () => {
+    resolution.unlinkedCheckout = true;
     expect(existsSync(realCloudCli), 'build sdk/cloud before this Runtime contract test').toBe(true);
     expect(resolveBundledCloudCli()).toBe(realCloudCli);
   });
 
   it('ensureCloudCliShim succeeds in a repo checkout WITHOUT an explicit cloudCliPath', () => {
+    resolution.unlinkedCheckout = true;
     expect(existsSync(realCloudCli), 'build sdk/cloud before this Runtime contract test').toBe(true);
     const home = mkdtempSync(join(tmpdir(), 'prismer-cloud-shim-checkout-'));
     cleanup.push(home);
