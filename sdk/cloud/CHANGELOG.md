@@ -1,3 +1,21 @@
+## 2.2.69 (2026-10-14)
+
+### EaaS `waitUntilReady` fails fast and waits for the sandbox after wake
+
+- `environments.waitUntilReady(id, { capability: 'sandbox' })` waits until
+  exec/files are usable. Use it after `wake`. Default `'services'` is unchanged.
+- It throws `state_conflict` on the first poll if readiness cannot change without
+  a lifecycle action: `paused`, `stopping`, `stopped`, `errored`, or `degraded`
+  when waiting for `'services'`. Previously it polled until the timeout, and older
+  Cloud returned the pre-pause readiness of a `paused` environment, so it could
+  even resolve early.
+- `rate_limited` polls wait for the server's Retry-After (or `pollMs` without
+  one) and keep polling inside `timeoutMs`. If the wait would pass the deadline,
+  it throws `rate_limited` with `retryAfterMs`. No other failure is retried.
+- `capability: 'agent'` is still rejected (`capability_unavailable`). The message
+  now says why: the first turn waits for the runtime itself.
+- Python `wait_until_ready` (sync and async) matches this behavior.
+
 ## 2.2.68 (2026-10-11)
 
 - EaaS failures expose optional `error.retryAfterMs` from a valid HTTP Retry-After header. TypeScript and Python preserve it for JSON, file/asset/artifact errors; TS SSE connection errors and high-level errors retain the hint. Python exceptions use `retry_after_ms`.

@@ -690,6 +690,83 @@ def test_wait_until_ready_propagates_the_server_code():
     assert excinfo.value.code == "not_owned"
 
 
+@pytest.mark.parametrize("state", ["paused", "stopping", "stopped", "errored"])
+def test_wait_until_ready_rejects_states_that_cannot_become_ready(state):
+    # 老服务端未屏蔽的 true readiness 也不放行：先判状态。
+    request_fn, calls = _make_recorder(
+        {"success": True, "data": _ok_data({"state": state, "readiness": {"sandbox": True, "services": True, "agent": True}}), "requestId": "r"}
+    )
+    client = EnvironmentsClient(request_fn, BASE, lambda: dict(AUTH))
+    for capability in ("sandbox", "services"):
+        with pytest.raises(EaasClientError) as excinfo:
+            client.wait_until_ready("env_testwaitstate000001", capability=capability, timeout_ms=5000, poll_ms=1)
+        assert excinfo.value.code == "state_conflict"
+    assert len(calls) == 2
+
+
+def test_wait_until_ready_degraded_rejects_services_but_admits_sandbox():
+    request_fn, calls = _make_recorder(
+        {"success": True, "data": _ok_data({"state": "degraded", "readiness": {"sandbox": True, "services": False, "agent": None}}), "requestId": "r"}
+    )
+    client = EnvironmentsClient(request_fn, BASE, lambda: dict(AUTH))
+    with pytest.raises(EaasClientError) as excinfo:
+        client.wait_until_ready("env_testwaitdegraded001", timeout_ms=5000, poll_ms=1)
+    assert excinfo.value.code == "state_conflict"
+    status = client.wait_until_ready("env_testwaitdegraded001", capability="sandbox", timeout_ms=5000, poll_ms=1)
+    assert status["state"] == "degraded"
+    assert len(calls) == 2
+
+
+def test_wait_until_ready_sandbox_polls_through_the_wake_window_and_transitional_states():
+    # pending → provisioning → running(sandbox:false，wake 恢复窗形状) → running(sandbox:true)
+    frames = [
+        ("pending", False),
+        ("provisioning", False),
+        ("running", False),
+        ("running", True),
+    ]
+    calls = {"n": 0}
+
+    def request_fn(method, path, *, json=None, params=None, headers=None):
+        state, sandbox = frames[min(calls["n"], len(frames) - 1)]
+        calls["n"] += 1
+        return {
+            "success": True,
+            "data": _ok_data({"state": state, "readiness": {"sandbox": sandbox, "services": False, "agent": None}}),
+            "requestId": "r",
+        }
+
+    client = EnvironmentsClient(request_fn, BASE, lambda: dict(AUTH))
+    status = client.wait_until_ready("env_testwaitsandbox0001", capability="sandbox", timeout_ms=5000, poll_ms=1)
+    assert status["readiness"]["sandbox"] is True
+    assert calls["n"] == 4
+
+
+def test_wait_until_ready_backs_off_on_rate_limited_within_the_deadline():
+    limited = {"success": False, "error": {"code": "rate_limited", "message": "slow down", "retryAfterMs": 0}, "requestId": "r"}
+    ready = {"success": True, "data": _ok_data({"state": "running", "readiness": {"sandbox": True, "services": True, "agent": None}}), "requestId": "r"}
+    queue = [limited, ready]
+    calls = {"n": 0}
+
+    def request_fn(method, path, *, json=None, params=None, headers=None):
+        calls["n"] += 1
+        return queue.pop(0) if len(queue) > 1 else queue[0]
+
+    client = EnvironmentsClient(request_fn, BASE, lambda: dict(AUTH))
+    status = client.wait_until_ready("env_testwaitratelim0001", timeout_ms=5000, poll_ms=1)
+    assert status["readiness"]["services"] is True
+    assert calls["n"] == 2
+
+    slow = {"success": False, "error": {"code": "rate_limited", "message": "slow down", "retryAfterMs": 60000}, "requestId": "r"}
+    request_slow, slow_calls = _make_recorder(slow)
+    client2 = EnvironmentsClient(request_slow, BASE, lambda: dict(AUTH))
+    with pytest.raises(EaasClientError) as excinfo:
+        client2.wait_until_ready("env_testwaitratelim0002", timeout_ms=200, poll_ms=1)
+    assert excinfo.value.code == "rate_limited"
+    assert excinfo.value.retry_after_ms == 60000
+    assert len(slow_calls) == 1
+
+
 # ---------------------------------------------------------------------------
 # WarmPoolClient — If-Match bare revision + 503 fail-through
 # ---------------------------------------------------------------------------
@@ -910,6 +987,23 @@ async def test_async_wait_until_ready_rejects_agent_capability():
         await client.wait_until_ready("env_1", capability="agent")
     assert excinfo.value.code == "capability_unavailable"
     assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_async_wait_until_ready_rejects_paused_and_admits_degraded_sandbox():
+    paused = {"success": True, "data": _ok_data({"state": "paused", "readiness": {"sandbox": True, "services": True, "agent": None}}), "requestId": "r"}
+    request_fn, calls = _make_async_recorder(paused)
+    client = AsyncEnvironmentsClient(request_fn, BASE, lambda: dict(AUTH))
+    with pytest.raises(EaasClientError) as excinfo:
+        await client.wait_until_ready("env_1", capability="sandbox", timeout_ms=5000, poll_ms=1)
+    assert excinfo.value.code == "state_conflict"
+    assert len(calls) == 1
+
+    degraded = {"success": True, "data": _ok_data({"state": "degraded", "readiness": {"sandbox": True, "services": False, "agent": None}}), "requestId": "r"}
+    request_fn2, _ = _make_async_recorder(degraded)
+    client2 = AsyncEnvironmentsClient(request_fn2, BASE, lambda: dict(AUTH))
+    status = await client2.wait_until_ready("env_1", capability="sandbox", timeout_ms=5000, poll_ms=1)
+    assert status["state"] == "degraded"
 
 
 # ---------------------------------------------------------------------------

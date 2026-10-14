@@ -4858,6 +4858,48 @@ def _eaas_fail_from_raw(raw_response: Any, action: str) -> Dict[str, Any]:
     }, raw_response)
 
 
+def _eaas_wait_capability(capability: str) -> None:
+    """``wait_until_ready`` 前置：agent 不是等待目标（低频 best-effort 探针）。"""
+    if capability == "agent":
+        raise EaasClientError(
+            "capability_unavailable",
+            "capability 'agent' is not a wait target (readiness.agent is a low-frequency "
+            "best-effort probe; the first turn waits for the runtime itself)",
+        )
+
+
+def _eaas_wait_ready(data: Dict[str, Any], capability: str) -> bool:
+    """readiness 命中返回 True；状态不会自行就绪时抛 ``state_conflict``（对齐 TS）。
+
+    先判状态再看 readiness：老服务端对 paused 环境不屏蔽 readiness。
+    """
+    state = data.get("state")
+    if state in ("paused", "stopping", "stopped", "errored") or (
+        state == "degraded" and capability == "services"
+    ):
+        raise EaasClientError(
+            "state_conflict",
+            f"wait_until_ready: environment is {state}; readiness.{capability} "
+            "will not become true without a lifecycle action",
+        )
+    return bool((data.get("readiness") or {}).get(capability))
+
+
+def _eaas_wait_backoff_s(response: Dict[str, Any], poll_ms: int, deadline: float) -> float:
+    """fail envelope：``rate_limited`` 在死线内返回退避秒数，其余（或越过死线）原样抛出。"""
+    error = response.get("error") or {}
+    retry_after_ms = error.get("retryAfterMs")
+    if error.get("code") == "rate_limited":
+        delay_ms = retry_after_ms if retry_after_ms is not None else poll_ms
+        if time.monotonic() + delay_ms / 1000.0 < deadline:
+            return delay_ms / 1000.0
+    raise EaasClientError(
+        error.get("code", "http_error"),
+        error.get("message", "wait_until_ready failed"),
+        retry_after_ms=retry_after_ms,
+    )
+
+
 def _eaas_file_path(environment_id: str, path: str) -> str:
     """Catch-all `[...path]` route — each segment encoded individually."""
     encoded = "/".join(_url_quote(segment, safe="") for segment in path.split("/"))
@@ -5309,27 +5351,25 @@ class EnvironmentsClient:
     ) -> Dict[str, Any]:
         """Poll ``get()`` until ``readiness[capability]`` flips true.
 
+        ``'sandbox'`` = exec/files usable (wait for it after wake);
+        ``'services'`` (default) = every template service probed ready.
         ``capability='agent'`` raises IMMEDIATELY with ``capability_unavailable``
-        (only 'services' is readiness-driven). Timeout → ``EaasClientError``
-        with code ``'timeout'``；poll 命中 fail envelope → 以服务端 code 抛出.
+        (readiness.agent is a low-frequency best-effort probe, not a wait
+        target; the first turn waits for the runtime itself). Raises
+        ``state_conflict`` as soon as readiness cannot flip on its own: paused /
+        stopping / stopped / errored, or degraded while waiting for services.
+        ``rate_limited`` backs off by Retry-After within the deadline. Timeout →
+        ``EaasClientError`` with code ``'timeout'``；其余 fail envelope → 以服务端 code 抛出.
         """
-        if capability == "agent":
-            raise EaasClientError(
-                "capability_unavailable",
-                "capability 'agent' is not available (only 'services' is readiness-driven)",
-            )
+        _eaas_wait_capability(capability)
         deadline = time.monotonic() + timeout_ms / 1000.0
         while True:
             response = self.get(environment_id)
             if not response.get("success"):
-                error = response.get("error") or {}
-                raise EaasClientError(
-                    error.get("code", "http_error"),
-                    error.get("message", "wait_until_ready failed"),
-                    retry_after_ms=error.get("retryAfterMs"),
-                )
+                time.sleep(_eaas_wait_backoff_s(response, poll_ms, deadline))
+                continue
             data = response.get("data") or {}
-            if (data.get("readiness") or {}).get(capability):
+            if _eaas_wait_ready(data, capability):
                 return data
             if time.monotonic() >= deadline:
                 raise EaasClientError(
@@ -5824,23 +5864,15 @@ class AsyncEnvironmentsClient:
         timeout_ms: int = 120000,
         poll_ms: int = 1000,
     ) -> Dict[str, Any]:
-        if capability == "agent":
-            raise EaasClientError(
-                "capability_unavailable",
-                "capability 'agent' is not available (only 'services' is readiness-driven)",
-            )
+        _eaas_wait_capability(capability)
         deadline = time.monotonic() + timeout_ms / 1000.0
         while True:
             response = await self.get(environment_id)
             if not response.get("success"):
-                error = response.get("error") or {}
-                raise EaasClientError(
-                    error.get("code", "http_error"),
-                    error.get("message", "wait_until_ready failed"),
-                    retry_after_ms=error.get("retryAfterMs"),
-                )
+                await asyncio.sleep(_eaas_wait_backoff_s(response, poll_ms, deadline))
+                continue
             data = response.get("data") or {}
-            if (data.get("readiness") or {}).get(capability):
+            if _eaas_wait_ready(data, capability):
                 return data
             if time.monotonic() >= deadline:
                 raise EaasClientError(

@@ -887,6 +887,111 @@ describe('client.environments.waitUntilReady', () => {
       client.environments.waitUntilReady('env_testwaitnotowned01', { timeoutMs: 500, pollMs: 10 }),
     ).rejects.toMatchObject({ code: 'not_owned' });
   });
+
+  it.each(['paused', 'stopping', 'stopped', 'errored'] as const)(
+    'rejects state_conflict on the first poll when the environment is %s（老服务端未屏蔽的 true readiness 也不放行）',
+    async (state) => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValue(okEnvelope(statusPreset({ state, readiness: { sandbox: true, services: true, agent: true } })));
+      const client = makeClient(fetchMock as unknown as typeof fetch);
+
+      for (const capability of ['sandbox', 'services'] as const) {
+        await expect(
+          client.environments.waitUntilReady('env_testwaitstate000001', { capability, timeoutMs: 5000, pollMs: 5 }),
+        ).rejects.toMatchObject({ code: 'state_conflict' });
+      }
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it("degraded：等 services 立刻 state_conflict；等 sandbox 直接放行", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        okEnvelope(statusPreset({ state: 'degraded', readiness: { sandbox: true, services: false, agent: null } })),
+      );
+    const client = makeClient(fetchMock as unknown as typeof fetch);
+
+    await expect(
+      client.environments.waitUntilReady('env_testwaitdegraded001', { timeoutMs: 5000, pollMs: 5 }),
+    ).rejects.toMatchObject({ code: 'state_conflict' });
+    const status = await client.environments.waitUntilReady('env_testwaitdegraded001', {
+      capability: 'sandbox',
+      timeoutMs: 5000,
+      pollMs: 5,
+    });
+    expect(status.state).toBe('degraded');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("capability 'sandbox'：wake 恢复窗（running + sandbox:false）持续轮询，sandbox 翻 true 即返回", async () => {
+    let calls = 0;
+    const fetchMock = vi.fn().mockImplementation(() => {
+      calls++;
+      const sandbox = calls >= 3;
+      return Promise.resolve(
+        okEnvelope(statusPreset({ state: 'running', readiness: { sandbox, services: false, agent: null } })),
+      );
+    });
+    const client = makeClient(fetchMock as unknown as typeof fetch);
+
+    const status = await client.environments.waitUntilReady('env_testwaitsandbox0001', {
+      capability: 'sandbox',
+      timeoutMs: 5000,
+      pollMs: 5,
+    });
+    expect(status.readiness.sandbox).toBe(true);
+    expect(calls).toBe(3);
+  });
+
+  it('pending / provisioning 是过渡态：继续轮询直到 running 就绪（负控：不被状态门误杀）', async () => {
+    const states = ['pending', 'provisioning', 'running'] as const;
+    let calls = 0;
+    const fetchMock = vi.fn().mockImplementation(() => {
+      const state = states[Math.min(calls, states.length - 1)];
+      calls++;
+      const ready = state === 'running';
+      return Promise.resolve(
+        okEnvelope(statusPreset({ state, readiness: { sandbox: ready, services: ready, agent: null } })),
+      );
+    });
+    const client = makeClient(fetchMock as unknown as typeof fetch);
+
+    const status = await client.environments.waitUntilReady('env_testwaittransit0001', { timeoutMs: 5000, pollMs: 5 });
+    expect(status.state).toBe('running');
+    expect(calls).toBe(3);
+  });
+
+  it('rate_limited 在死线内按 Retry-After 退避后继续轮询；退避会越过死线时原样 reject', async () => {
+    const limited = {
+      ok: false,
+      status: 429,
+      headers: new Headers({ 'Retry-After': '0' }),
+      json: () =>
+        Promise.resolve({ success: false, error: { code: 'rate_limited', message: 'slow down' }, requestId: 'req-rl' }),
+    } as unknown as Response;
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(limited)
+      .mockResolvedValue(okEnvelope(statusPreset({ state: 'running', readiness: { sandbox: true, services: true, agent: null } })));
+    const client = makeClient(fetchMock as unknown as typeof fetch);
+
+    const status = await client.environments.waitUntilReady('env_testwaitratelim0001', { timeoutMs: 5000, pollMs: 5 });
+    expect(status.readiness.services).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    const slow = {
+      ...limited,
+      headers: new Headers({ 'Retry-After': '60' }),
+    } as unknown as Response;
+    const fetchSlow = vi.fn().mockResolvedValue(slow);
+    const client2 = makeClient(fetchSlow as unknown as typeof fetch);
+    await expect(
+      client2.environments.waitUntilReady('env_testwaitratelim0002', { timeoutMs: 200, pollMs: 5 }),
+    ).rejects.toMatchObject({ code: 'rate_limited', retryAfterMs: 60000 });
+    expect(fetchSlow).toHaveBeenCalledTimes(1);
+  });
 });
 
 // ---------------------------------------------------------------------------

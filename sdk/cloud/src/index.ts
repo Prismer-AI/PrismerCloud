@@ -3816,19 +3816,25 @@ export class EnvironmentsClient {
 
   /**
    * Poll `get()` until `readiness[capability]` flips true（readiness 驱动）.
-   * `capability: 'agent'` rejects IMMEDIATELY with `capability_unavailable`
-   * （Gate A 不探 agent readiness，绝不轮询）. Timeout → `EaasClientError`
-   * with code `'timeout'`；poll 命中 fail envelope → 以服务端 code/message reject.
+   * `'sandbox'` = exec/files 可用（wake 后先等它）；`'services'`（默认）= 模板
+   * service 全部探活。`capability: 'agent'` rejects IMMEDIATELY with
+   * `capability_unavailable`（readiness.agent 是低频 best-effort 探针，不是等待
+   * 目标；首个 turn 自己等 runtime）. 状态不会自行变成就绪时立刻以
+   * `state_conflict` reject：paused / stopping / stopped / errored（需要 wake /
+   * 新建 / 删除），以及等 services 时的 degraded（service 探活已失败）。
+   * `rate_limited` 在死线内按 Retry-After 退避后继续轮询. Timeout →
+   * `EaasClientError` with code `'timeout'`；其余 fail envelope → 以服务端
+   * code/message reject.
    */
   async waitUntilReady(
     id: string,
-    options?: { capability?: 'services' | 'agent'; timeoutMs?: number; pollMs?: number },
+    options?: { capability?: 'sandbox' | 'services' | 'agent'; timeoutMs?: number; pollMs?: number },
   ): Promise<EnvironmentStatus> {
     const capability = options?.capability ?? 'services';
     if (capability === 'agent') {
       throw new EaasClientError(
         'capability_unavailable',
-        "capability 'agent' is not available in Gate A (only 'services' is readiness-driven)",
+        "capability 'agent' is not a wait target (readiness.agent is a low-frequency best-effort probe; the first turn waits for the runtime itself)",
       );
     }
     const timeoutMs = options?.timeoutMs ?? 120000;
@@ -3837,7 +3843,26 @@ export class EnvironmentsClient {
     for (;;) {
       const res = await this.get(id);
       if (!res.success) {
-        throw new EaasClientError(res.error.code, res.error.message, res.error.retryAfterMs);
+        const delay = res.error.code === 'rate_limited' ? (res.error.retryAfterMs ?? pollMs) : undefined;
+        if (delay === undefined || Date.now() + delay >= deadline) {
+          throw new EaasClientError(res.error.code, res.error.message, res.error.retryAfterMs);
+        }
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        continue;
+      }
+      const { state } = res.data;
+      // 先判状态再看 readiness：老服务端对 paused 环境不屏蔽 readiness（仍是暂停前的 true）。
+      if (
+        state === 'paused' ||
+        state === 'stopping' ||
+        state === 'stopped' ||
+        state === 'errored' ||
+        (state === 'degraded' && capability === 'services')
+      ) {
+        throw new EaasClientError(
+          'state_conflict',
+          `waitUntilReady: environment is ${state}; readiness.${capability} will not become true without a lifecycle action`,
+        );
       }
       if (res.data.readiness[capability]) {
         return res.data;

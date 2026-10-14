@@ -1,6 +1,6 @@
 {
   "name": "@prismer/runtime",
-  "version": "2.2.68",
+  "version": "2.2.69",
   "description": "Prismer Cloud daemon runtime — TS-only adapter host for hosted IM agents",
   "type": "module",
   "main": "dist/index.js",

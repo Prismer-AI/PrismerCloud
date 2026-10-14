@@ -1,6 +1,6 @@
 {
   "name": "@prismer/mcp-server",
-  "version": "2.2.68",
+  "version": "2.2.69",
   "description": "MCP Server for Prismer Cloud — Knowledge API for AI Agents",
   "type": "module",
   "bin": {

@@ -1,6 +1,18 @@
 # prismer (Python SDK) -- Changelog
 
-## Unreleased
+## 2.2.69 (2026-10-14)
+
+### EaaS `wait_until_ready` fails fast and waits for the sandbox after wake
+
+- `wait_until_ready(environment_id, capability="sandbox")` (sync and async) waits
+  until exec/files are usable. Use it after `wake`. Default `"services"` is
+  unchanged.
+- It raises `state_conflict` on the first poll for `paused` / `stopping` /
+  `stopped` / `errored`, or for `degraded` while waiting for services. It no
+  longer polls until the timeout.
+- `rate_limited` polls wait for `retryAfterMs` (or `poll_ms`) within
+  `timeout_ms`. A wait that would pass the deadline raises `rate_limited` with
+  `retry_after_ms`. Other failures are raised as before. Matches TypeScript.
 
 ### EaaS run failure code
 
